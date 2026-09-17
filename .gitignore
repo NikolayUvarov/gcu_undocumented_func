@@ -1,0 +1,21 @@
+
+# Rust build artifacts
+target/
+Cargo.lock
+**/target/
+**/Cargo.lock
+
+# OS / editor / temp files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+*.bin
+.vscode/
+.idea/
+
+# Local VM / UEFI artifacts
+OVMF.fd
+usb_root/
