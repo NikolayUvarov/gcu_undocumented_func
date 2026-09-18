@@ -1,24 +1,49 @@
-
-# Rust build artifacts
+# --- Артефакты сборки Rust ---
 target/
-Cargo.lock
 **/target/
+Cargo.lock
 **/Cargo.lock
 
-# OS / editor / temp files
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
+# --- Промежуточные бинарники прошивки ---
+# Плоские образы, встраиваемые в загрузчик (02_build.sh)
+*.bin
+# Собранный загрузчик и модули, раскладываемые по usb_root
+*.efi
+*.EFI
+*.elf
+
+# --- Локальные образы VM / UEFI ---
+OVMF.fd
+*.fd
+usb_root/
+NvVars
+
+# --- Сгенерированные дампы и выгрузки ---
+# Склейка исходников для передачи в контекст (code_concat.sh)
+code_context.txt
+code_context*.txt
+
+# --- История патчей (не версионируется) ---
+legacy/**
+patches_seq/patch_*.sh
+issues/**
+
+# --- Остатки правок и патчей ---
+*.orig
+*.rej
+*.bak
+*~
+
+# --- Временные файлы и логи ---
 *.tmp
 *.log
-*.bin
+*.swp
+*.swo
+nohup.out
+
+# --- Служебное: ОС и редакторы ---
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
-
-# Local VM / UEFI artifacts
-OVMF.fd
-usb_root/
-legacy/**
-patches_seq/p**
-
+.lavish/

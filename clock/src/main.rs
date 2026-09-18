@@ -10,12 +10,12 @@ mod abi;
 use abi::{BootInfo, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_RTC_TIME};
 #[path = "../../common/font.rs"]
 mod font;
+#[path = "../../common/wait.rs"]
+mod wait;
 use font::FONT;
 
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
-// Only the polling interval uses TSC. Displayed time always comes from the RTC.
-const POLL_INTERVAL_TSC: usize = 25_000_000;
 
 fn os_read(mailbox: *mut SyscallMailbox, syscall_num: usize) -> usize {
     unsafe {
@@ -82,7 +82,7 @@ fn time_text(seconds: usize) -> [u8; 8] {
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
-    os_print(mailbox, b"\r\n[CLOCK] STARTED. PRESS ESC TO EXIT.\r\n");
+    os_print(mailbox, b"\r\n[CLOCK] STARTED. CTRL+Z: SHELL, ESC: EXIT.\r\n");
     for y in 0..info.height {
         for x in 0..info.width {
             unsafe {
@@ -91,14 +91,13 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
         }
     }
     draw_text(info, 24, 24, b"CLOCK", 2, FOREGROUND);
-    draw_text(info, 24, 56, b"ESC: RETURN TO SHELL", 1, 0x00FFFFFF);
+    draw_text(info, 24, 56, b"CTRL+Z: SHELL / ESC: EXIT", 1, 0x00FFFFFF);
 
     let scale = (info.width / 80).min(info.height / 32).clamp(1, 8);
     let x = info.width.saturating_sub(64 * scale) / 2;
     let y = info.height.saturating_sub(8 * scale) / 2;
     draw_text(info, x, y, b"--:--:--", scale, FOREGROUND);
     let mut previous_time = None;
-    let mut last_poll = os_read(mailbox, 1).wrapping_sub(POLL_INTERVAL_TSC);
 
     loop {
         let key = os_read(mailbox, 2);
@@ -106,13 +105,6 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
             os_print(mailbox, b"[CLOCK] RETURNING TO KERNEL.\r\n");
             return;
         }
-        let ticks = os_read(mailbox, 1);
-        if ticks.wrapping_sub(last_poll) < POLL_INTERVAL_TSC {
-            core::hint::spin_loop();
-            continue;
-        }
-        last_poll = ticks;
-
         let seconds = os_read(mailbox, SYSCALL_RTC_TIME);
         // An RTC update in progress is transient: keep the last valid display.
         if seconds == RTC_UNAVAILABLE || seconds >= 24 * 3600 {
@@ -120,6 +112,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
                 os_print(mailbox, b"[CLOCK] WAITING FOR RTC...\r\n");
                 previous_time = Some(RTC_UNAVAILABLE);
             }
+            wait::wait(mailbox, 100);
             continue;
         }
         if previous_time != Some(seconds) {
@@ -130,6 +123,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
             os_print(mailbox, b"\r\n");
             previous_time = Some(seconds);
         }
+        wait::wait(mailbox, 100);
     }
 }
 

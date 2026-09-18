@@ -1,0 +1,171 @@
+use super::{outb, serial_write_byte};
+use core::arch::asm;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+const TICK_MS: u64 = 10;
+static TICKS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+struct IdtEntry {
+    offset_low: u16,
+    selector: u16,
+    ist: u8,
+    type_attr: u8,
+    offset_mid: u16,
+    offset_high: u32,
+    zero: u32,
+}
+#[repr(C, packed)]
+struct IdtPtr {
+    limit: u16,
+    base: u64,
+}
+#[repr(C)]
+pub struct InterruptFrame {
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
+static mut IDT: [IdtEntry; 256] = [IdtEntry {
+    offset_low: 0,
+    selector: 0,
+    ist: 0,
+    type_attr: 0,
+    offset_mid: 0,
+    offset_high: 0,
+    zero: 0,
+}; 256];
+
+unsafe fn set_handler(index: usize, address: u64, cs: u16) {
+    IDT[index] = IdtEntry {
+        offset_low: address as u16,
+        selector: cs,
+        ist: 0,
+        type_attr: 0x8E,
+        offset_mid: (address >> 16) as u16,
+        offset_high: (address >> 32) as u32,
+        zero: 0,
+    };
+}
+
+fn fatal(message: &[u8], frame: &InterruptFrame) -> ! {
+    unsafe {
+        asm!("cli");
+        for &byte in message {
+            serial_write_byte(byte);
+        }
+        for shift in (0..16).rev() {
+            let digit = ((frame.rip >> (shift * 4)) & 0xF) as u8;
+            serial_write_byte(if digit < 10 {
+                b'0' + digit
+            } else {
+                b'A' + digit - 10
+            });
+        }
+        serial_write_byte(b'\r');
+        serial_write_byte(b'\n');
+        loop {
+            asm!("hlt");
+        }
+    }
+}
+
+extern "x86-interrupt" fn fault(frame: &mut InterruptFrame) {
+    fatal(b"KERNEL EXCEPTION AT RIP=", frame);
+}
+extern "x86-interrupt" fn fault_with_code(frame: &mut InterruptFrame, _code: u64) {
+    fatal(b"KERNEL EXCEPTION (ERROR CODE) AT RIP=", frame);
+}
+pub fn advance() {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+}
+extern "x86-interrupt" fn spurious_master(_frame: &mut InterruptFrame) {}
+extern "x86-interrupt" fn spurious_slave(_frame: &mut InterruptFrame) {
+    unsafe {
+        outb(0x20, 0x20);
+    }
+}
+
+pub unsafe fn init() {
+    asm!("cli");
+    let cs: u16;
+    asm!("mov {0:x}, cs", out(reg) cs);
+    for index in 0..256 {
+        set_handler(index, fault as *const () as u64, cs);
+    }
+    for index in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
+        set_handler(index, fault_with_code as *const () as u64, cs);
+    }
+    set_handler(
+        0x20,
+        super::context::task_timer_entry as *const () as u64,
+        cs,
+    );
+    set_handler(0x27, spurious_master as *const () as u64, cs);
+    set_handler(0x2F, spurious_slave as *const () as u64, cs);
+    set_handler(
+        0x80,
+        super::context::task_syscall_entry as *const () as u64,
+        cs,
+    );
+    let idtr = IdtPtr {
+        limit: (core::mem::size_of::<[IdtEntry; 256]>() - 1) as u16,
+        base: core::ptr::addr_of!(IDT) as u64,
+    };
+    asm!("lidt [{}]", in(reg) &idtr);
+
+    // The kernel currently runs on the BSP only. Use the legacy PIC route,
+    // disabling the firmware's local APIC on this CPU (including its timer).
+    // Other virtual CPUs remain parked; this is not an SMP scheduler.
+    let mut lo: u32;
+    let hi: u32;
+    asm!("rdmsr", in("ecx") 0x1Bu32, out("eax") lo, out("edx") hi);
+    lo &= !((1 << 11) | (1 << 10));
+    asm!("wrmsr", in("ecx") 0x1Bu32, in("eax") lo, in("edx") hi);
+
+    // Remap the 8259 PICs away from CPU exceptions; unmask only PIT IRQ0.
+    for (port, value) in [
+        (0x20, 0x11),
+        (0xA0, 0x11),
+        (0x21, 0x20),
+        (0xA1, 0x28),
+        (0x21, 4),
+        (0xA1, 2),
+        (0x21, 1),
+        (0xA1, 1),
+        (0x21, 0xFE),
+        (0xA1, 0xFF),
+    ] {
+        outb(port, value);
+        outb(0x80, 0); // I/O delay for PIC initialization.
+    }
+    // PIT channel 0, square-wave mode, approximately 100 Hz.
+    let divisor: u16 = 11932;
+    outb(0x43, 0x36);
+    outb(0x40, divisor as u8);
+    outb(0x40, (divisor >> 8) as u8);
+    asm!("sti");
+}
+
+pub fn milliseconds() -> u64 {
+    TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS)
+}
+
+// Used around shell access to scheduler state. Timer preemption is disabled
+// inside interrupt gates already; restore the caller's original IF afterwards.
+pub fn without<T>(f: impl FnOnce() -> T) -> T {
+    unsafe {
+        let flags: u64;
+        asm!("pushfq", "pop {}", out(reg) flags);
+        asm!("cli");
+        let result = f();
+        if flags & (1 << 9) != 0 {
+            asm!("sti");
+        }
+        result
+    }
+}

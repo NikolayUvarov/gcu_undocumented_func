@@ -7,15 +7,16 @@ use core::panic::PanicInfo;
 
 #[path = "../../common/abi.rs"]
 mod abi;
-use abi::{BootInfo, SyscallMailbox};
+use abi::{BootInfo, SyscallMailbox, SYSCALL_UPTIME};
 #[path = "../../common/font.rs"]
 mod font;
+#[path = "../../common/wait.rs"]
+mod wait;
 use font::FONT;
 
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
-// TSC pacing for this demo; actual frame duration depends on the CPU frequency.
-const FRAME_INTERVAL_TSC: usize = 50_000_000;
+const FRAME_INTERVAL_MS: usize = 30;
 
 fn os_print(mb: *mut SyscallMailbox, message: &[u8]) {
     unsafe {
@@ -95,18 +96,20 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
     );
     os_print(
         mailbox,
-        b"[APP2] BOUNCING SQUARE AND FRAME COUNTER. PRESS ESC TO EXIT.\r\n",
+        b"[APP2] BOUNCING SQUARE. CTRL+Z: SHELL, ESC: EXIT.\r\n",
     );
 
     // All state is local so every RUN APP2 starts a fresh animation and counter.
     let mut frame: usize = 0;
-    let mut last_frame_ticks = os_read(mailbox, 1).wrapping_sub(FRAME_INTERVAL_TSC);
+    let mut last_frame_ms = os_read(mailbox, SYSCALL_UPTIME).wrapping_sub(FRAME_INTERVAL_MS);
     let top = 120.min(info.height);
     let size = 64
         .min(info.width.saturating_sub(48))
         .min(info.height.saturating_sub(top + 24));
     let travel_x = info.width.saturating_sub(size + 48);
     let travel_y = info.height.saturating_sub(top + size + 24);
+    let mut previous_square = None;
+    fill_rect(info, 0, 0, info.width, info.height, BACKGROUND);
 
     loop {
         // The existing input syscall returns either a PS/2 scancode or a UART byte.
@@ -116,20 +119,26 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
             return;
         }
 
-        let ticks = os_read(mailbox, 1);
-        if ticks.wrapping_sub(last_frame_ticks) < FRAME_INTERVAL_TSC {
-            core::hint::spin_loop();
+        let now = os_read(mailbox, SYSCALL_UPTIME);
+        let elapsed = now.wrapping_sub(last_frame_ms);
+        if elapsed < FRAME_INTERVAL_MS {
+            wait::wait(mailbox, FRAME_INTERVAL_MS - elapsed);
             continue;
         }
-        last_frame_ticks = ticks;
+        last_frame_ms = now;
+        let ticks = os_read(mailbox, 1);
         let mut frame_buffer = [0u8; 20];
         let frame_text = decimal(frame, &mut frame_buffer);
         let mut tick_buffer = [0u8; 20];
         let tick_text = decimal(ticks, &mut tick_buffer);
 
-        fill_rect(info, 0, 0, info.width, info.height, BACKGROUND);
+        if let Some((x, y)) = previous_square {
+            fill_rect(info, x, y, size, size, BACKGROUND);
+        }
+        fill_rect(info, 96, 72, 160, 8, BACKGROUND);
+        fill_rect(info, 96, 96, 160, 8, BACKGROUND);
         draw_text(info, 24, 24, b"SECOND APP (ELF) - RUN APP2", FOREGROUND);
-        draw_text(info, 24, 48, b"ESC: RETURN TO SHELL", 0x00FFFFFF);
+        draw_text(info, 24, 48, b"CTRL+Z: SHELL / ESC: EXIT", 0x00FFFFFF);
         draw_text(info, 24, 72, b"FRAMES:", FOREGROUND);
         draw_text(info, 96, 72, frame_text, 0x00FFFFFF);
         draw_text(info, 24, 96, b"TSC:", FOREGROUND);
@@ -142,6 +151,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
             size,
             FOREGROUND,
         );
+        previous_square = Some((24 + bounce(frame, travel_x), top + bounce(frame, travel_y)));
 
         // Log periodically instead of flooding the UART on every redraw.
         if frame % 30 == 0 {

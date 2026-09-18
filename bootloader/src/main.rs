@@ -10,7 +10,15 @@ use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 
 #[path = "../../common/abi.rs"]
 mod abi;
-use abi::BootInfo;
+use abi::{BootInfo, ProgramImage};
+mod elf_reloc;
+
+fn keep_program(services: &uefi::table::boot::BootServices, data: &[u8]) -> ProgramImage {
+    let address = services.allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA,
+        data.len().div_ceil(4096)).unwrap();
+    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), address as *mut u8, data.len()); }
+    ProgramImage { data: address as *const u8, len: data.len() }
+}
 
 #[repr(C)]
 struct Elf64_Ehdr {
@@ -58,11 +66,18 @@ fn load_elf(boot_services: &uefi::table::boot::BootServices, file_data: &[u8]) -
             }
         }
     }
+    let image = unsafe { core::slice::from_raw_parts_mut(base_addr as *mut u8, total_size as usize) };
+    for phdr in phdrs {
+        if phdr.p_type == 2 { // PT_DYNAMIC
+            elf_reloc::apply(image, min_vaddr, base_addr, phdr.p_vaddr, phdr.p_filesz as usize)
+                .expect("Invalid ELF relocations");
+        }
+    }
     base_addr + ehdr.e_entry - min_vaddr
 }
 
 #[entry]
-fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
+fn main(_image: Handle, system_table: SystemTable<Boot>) -> Status {
     let (boot_info, kernel_entry) = {
         let boot_services = system_table.boot_services();
 
@@ -85,19 +100,25 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let a_handle = root.open(a_name, FileMode::Read, FileAttribute::empty()).unwrap();
         let mut a_file = match a_handle.into_type().unwrap() { FileType::Regular(f) => f, _ => panic!("err") };
         let a_size = a_file.read(file_buf).unwrap();
-        let app_entry = load_elf(boot_services, &file_buf[..a_size]);
+        let app = keep_program(boot_services, &file_buf[..a_size]);
 
         let a2_name = uefi::CStr16::from_str_with_buf("app2.elf", &mut name_buf).unwrap();
         let a2_handle = root.open(a2_name, FileMode::Read, FileAttribute::empty()).unwrap();
         let mut a2_file = match a2_handle.into_type().unwrap() { FileType::Regular(f) => f, _ => panic!("err") };
         let a2_size = a2_file.read(file_buf).unwrap();
-        let app2_entry = load_elf(boot_services, &file_buf[..a2_size]);
+        let app2 = keep_program(boot_services, &file_buf[..a2_size]);
 
         let clock_name = uefi::CStr16::from_str_with_buf("clock.elf", &mut name_buf).unwrap();
         let clock_handle = root.open(clock_name, FileMode::Read, FileAttribute::empty()).unwrap();
         let mut clock_file = match clock_handle.into_type().unwrap() { FileType::Regular(f) => f, _ => panic!("err") };
         let clock_size = clock_file.read(file_buf).unwrap();
-        let clock_entry = load_elf(boot_services, &file_buf[..clock_size]);
+        let clock = keep_program(boot_services, &file_buf[..clock_size]);
+
+        // Reserve RAM while UEFI still owns the memory map. Runtime allocations
+        // (including each program's private image/stack/screen) stay in this arena.
+        let heap_len = 64 * 1024 * 1024;
+        let heap_ptr = boot_services.allocate_pages(AllocateType::AnyPages,
+            MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8;
 
         let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap();
         let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
@@ -106,7 +127,8 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         (
             BootInfo {
                 fb_ptr: gop.frame_buffer().as_mut_ptr().cast(), width: mode.resolution().0,
-                height: mode.resolution().1, stride: mode.stride(), app_entry, app2_entry, clock_entry,
+                height: mode.resolution().1, stride: mode.stride(),
+                programs: [app, app2, clock], heap_ptr, heap_len,
             },
             kernel_entry
         )

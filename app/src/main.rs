@@ -8,15 +8,17 @@ use core::ffi::c_void;
 #[path = "../../common/abi.rs"]
 mod abi;
 use abi::{BootInfo, SyscallMailbox};
+#[path = "../../common/wait.rs"]
+mod wait;
 
 fn os_print(mb: *mut SyscallMailbox, msg: &[u8]) {
-    unsafe { (*mb).syscall_num = 3; (*mb).arg1 = msg.as_ptr() as usize; (*mb).arg2 = msg.len(); asm!("int 0x80", options(nostack)); }
+    unsafe { (*mb).syscall_num = 3; (*mb).arg1 = msg.as_ptr() as usize; (*mb).arg2 = msg.len(); asm!("int 0x80"); }
 }
 fn get_os_ticks(mb: *mut SyscallMailbox) -> usize {
-    unsafe { (*mb).syscall_num = 1; asm!("int 0x80", options(nostack)); (*mb).result }
+    unsafe { (*mb).syscall_num = 1; asm!("int 0x80"); (*mb).result }
 }
 fn get_os_key(mb: *mut SyscallMailbox) -> u8 {
-    unsafe { (*mb).syscall_num = 2; asm!("int 0x80", options(nostack)); (*mb).result as u8 }
+    unsafe { (*mb).syscall_num = 2; asm!("int 0x80"); (*mb).result as u8 }
 }
 
 static mut MAIN_SP: u64 = 0;
@@ -29,7 +31,7 @@ static mut THREAD_STACK: ThreadStack = ThreadStack { data: [0; 1024] };
 
 #[unsafe(naked)]
 extern "sysv64" fn yield_task(_old_sp: *mut u64, _new_sp: u64) {
-    unsafe { core::arch::naked_asm!("push rbx", "push rbp", "push r12", "push r13", "push r14", "push r15", "mov [rdi], rsp", "mov rsp, rsi", "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx", "ret"); }
+    core::arch::naked_asm!("push rbx", "push rbp", "push r12", "push r13", "push r14", "push r15", "mov [rdi], rsp", "mov rsp, rsi", "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx", "ret");
 }
 
 fn background_task() {
@@ -42,6 +44,8 @@ fn background_task() {
 unsafe fn init_thread() {
     let stack_ptr = core::ptr::addr_of_mut!(THREAD_STACK.data) as *mut u64;
     let mut sp = stack_ptr.add(1024) as u64;
+    // A SysV function starts with RSP % 16 == 8 after its return address.
+    sp -= 8;
     sp -= 8; *(sp as *mut u64) = background_task as *const () as u64;
     for _ in 0..6 { sp -= 8; *(sp as *mut u64) = 0; }
     core::ptr::write_volatile(core::ptr::addr_of_mut!(THREAD_SP), sp);
@@ -81,7 +85,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
     unsafe { init_thread(); }
     
     os_print(mb_ptr, b"\r\n========================================\r\n");
-    os_print(mb_ptr, b"[SYSTEM] USERSPACE STARTED. PRESS ESC TO EXIT.\r\n");
+    os_print(mb_ptr, b"[APP] STARTED. CTRL+Z: SHELL, ESC: EXIT.\r\n");
     os_print(mb_ptr, b"========================================\r\n\r\n");
 
     let mut frame_counter: usize = 0; 
@@ -90,6 +94,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
 
     let mut color_theme: u32 = 0x0000FFFF; // Бирюзовый по умолчанию
     let mut last_seen_key: u8 = 0;
+    for i in 0..total_pixels { unsafe { core::ptr::write_volatile(info.fb_ptr.add(i), 0x00111111); } }
 
     loop {
         unsafe { yield_task(core::ptr::addr_of_mut!(MAIN_SP), core::ptr::read_volatile(core::ptr::addr_of!(THREAD_SP))); }
@@ -113,11 +118,18 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
             }
         } else if os_key >= 0x80 { last_seen_key = os_key; }
 
-        for i in 0..total_pixels { unsafe { core::ptr::write_volatile(info.fb_ptr.add(i), 0x00111111); } }
+        // Erase only the square's drawing area and changing counters.
+        for y in (cy - 150).max(0)..(cy + 150).min(info.height as isize) {
+            for x in (cx - 150).max(0)..(cx + 150).min(info.width as isize) {
+                unsafe { core::ptr::write_volatile(info.fb_ptr.add(y as usize * info.stride + x as usize), 0x00111111); }
+            }
+        }
+        for y in 40..168.min(info.height) { for x in 40..340.min(info.width) {
+            unsafe { core::ptr::write_volatile(info.fb_ptr.add(y * info.stride + x), 0x00111111); }
+        } }
 
         let size: isize = 120;
-        let mut t_temp = frame_counter; 
-        while t_temp >= 36 { t_temp -= 36; }
+        let t_temp = frame_counter % 36;
         let sin_a = SIN_TABLE[t_temp];
         let mut cos_angle = t_temp + 9; if cos_angle >= 36 { cos_angle -= 36; }
         let cos_a = SIN_TABLE[cos_angle];
@@ -135,6 +147,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
         }
 
         draw_string(info.fb_ptr, info.stride, 40, 40, b"USERSPACE APP (ELF)", color_theme);
+        draw_string(info.fb_ptr, info.stride, 40, 190, b"CTRL+Z: SHELL / ESC: EXIT", 0x00FFFFFF);
 
         let mut f_buf = [0u8; 30]; let f_len = usize_to_str(frame_counter, &mut f_buf);
         draw_string(info.fb_ptr, info.stride, 40, 70, b"FRAMES:", 0x00FFFFFF); draw_string(info.fb_ptr, info.stride, 120, 70, &f_buf[0..f_len], 0x00FFFF00);
@@ -150,8 +163,8 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
         let mut k_buf = [0u8; 30]; let k_len = usize_to_str(last_seen_key as usize, &mut k_buf);
         draw_string(info.fb_ptr, info.stride, 40, 160, b"LAST KEY:", 0x00FFFFFF); draw_string(info.fb_ptr, info.stride, 140, 160, &k_buf[0..k_len], 0x00FFFF00);
 
-        frame_counter += 1;
-        for _ in 0..5_000_000 { unsafe { asm!("nop"); } }
+        frame_counter = frame_counter.wrapping_add(1);
+        wait::wait(mb_ptr, 30);
     }
 }
 #[panic_handler] fn panic(_info: &PanicInfo) -> ! { loop {} }
