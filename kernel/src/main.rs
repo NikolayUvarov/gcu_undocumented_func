@@ -2,27 +2,28 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc; 
+
 use core::arch::asm;
 use core::panic::PanicInfo;
 use core::ffi::c_void;
+use linked_list_allocator::LockedHeap;
+use alloc::format;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+static mut HEAP_MEMORY: [u8; 1024 * 1024] = [0; 1024 * 1024];
 
 #[repr(C)]
-pub struct BootInfo { pub fb_ptr: *mut u8, pub width: usize, pub height: usize, pub stride: usize, pub app_ptr: *const u8 }
-
-// Добавили arg2 для передачи длины строки
+pub struct BootInfo { pub fb_ptr: *mut u8, pub width: usize, pub height: usize, pub stride: usize, pub app_entry: u64 }
 #[repr(C)]
 pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize }
 
 unsafe fn outb(port: u16, val: u8) { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack)); }
-unsafe fn inb(port: u16) -> u8 {
-    let mut val: u8; asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack)); val
-}
+unsafe fn inb(port: u16) -> u8 { let mut val: u8; asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack)); val }
 
 const COM1: u16 = 0x3F8;
-unsafe fn init_serial() {
-    outb(COM1 + 1, 0x00); outb(COM1 + 3, 0x80); outb(COM1 + 0, 0x03); outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x03); outb(COM1 + 2, 0xC7); outb(COM1 + 4, 0x0B);
-}
+unsafe fn init_serial() { outb(COM1 + 1, 0x00); outb(COM1 + 3, 0x80); outb(COM1 + 0, 0x03); outb(COM1 + 1, 0x00); outb(COM1 + 3, 0x03); outb(COM1 + 2, 0xC7); outb(COM1 + 4, 0x0B); }
 unsafe fn serial_has_data() -> bool { (inb(COM1 + 5) & 1) != 0 }
 unsafe fn serial_read_byte() -> u8 { if serial_has_data() { inb(COM1) } else { 0 } }
 unsafe fn serial_is_transmit_empty() -> bool { (inb(COM1 + 5) & 0x20) != 0 }
@@ -33,7 +34,6 @@ unsafe fn serial_write_byte(b: u8) { while !serial_is_transmit_empty() {} outb(C
 struct IdtEntry { offset_low: u16, selector: u16, ist: u8, type_attr: u8, offset_mid: u16, offset_high: u32, zero: u32 }
 #[repr(C, packed)]
 struct IdtPtr { limit: u16, base: u64 }
-
 #[repr(C)]
 pub struct InterruptFrame { pub rip: u64, pub cs: u64, pub rflags: u64, pub rsp: u64, pub ss: u64 }
 
@@ -46,29 +46,19 @@ extern "x86-interrupt" fn syscall_handler(_frame: &mut InterruptFrame) {
     unsafe {
         let mb = core::ptr::addr_of_mut!(MAILBOX);
         if (*mb).syscall_num == 1 {
-            let mut lo: u32; let mut hi: u32;
-            asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack));
+            let mut lo: u32; let mut hi: u32; asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack));
             (*mb).result = (((hi as u64) << 32) | (lo as u64)) as usize;
         } else if (*mb).syscall_num == 2 {
-            if serial_has_data() {
-                (*mb).result = serial_read_byte() as usize;
-            } else {
-                let mut status: u8;
-                asm!("in al, 0x64", out("al") status, options(nomem, nostack));
-                if (status & 1) == 1 {
-                    let mut scancode: u8;
-                    asm!("in al, 0x60", out("al") scancode, options(nomem, nostack));
-                    (*mb).result = scancode as usize;
-                } else { (*mb).result = 0; }
+            if serial_has_data() { (*mb).result = serial_read_byte() as usize; } 
+            else {
+                let mut status: u8; asm!("in al, 0x64", out("al") status, options(nomem, nostack));
+                if (status & 1) == 1 { let mut scancode: u8; asm!("in al, 0x60", out("al") scancode, options(nomem, nostack)); (*mb).result = scancode as usize; } 
+                else { (*mb).result = 0; }
             }
         } else if (*mb).syscall_num == 3 {
-            // Системный вызов 3: Вывод строки в UART COM1 от имени Userspace
-            let ptr = (*mb).arg1 as *const u8;
-            let len = (*mb).arg2;
-            for i in 0..len {
-                serial_write_byte(core::ptr::read_volatile(ptr.add(i)));
-            }
-            (*mb).result = len; // Возвращаем количество записанных байт
+            let ptr = (*mb).arg1 as *const u8; let len = (*mb).arg2;
+            for i in 0..len { serial_write_byte(core::ptr::read_volatile(ptr.add(i))); }
+            (*mb).result = len;
         }
     }
 }
@@ -107,12 +97,8 @@ struct Console { fb: *mut u32, width: usize, height: usize, stride: usize, cx: u
 impl Console {
     fn scroll(&mut self) {
         let limit = self.height - 10;
-        for y in 10..limit {
-            for x in 0..self.width { unsafe { core::ptr::write_volatile(self.fb.add((y - 10) * self.stride + x), core::ptr::read_volatile(self.fb.add(y * self.stride + x))); } }
-        }
-        for y in (limit - 10)..limit {
-            for x in 0..self.width { unsafe { core::ptr::write_volatile(self.fb.add(y * self.stride + x), self.bg_color); } }
-        }
+        for y in 10..limit { for x in 0..self.width { unsafe { core::ptr::write_volatile(self.fb.add((y - 10) * self.stride + x), core::ptr::read_volatile(self.fb.add(y * self.stride + x))); } } }
+        for y in (limit - 10)..limit { for x in 0..self.width { unsafe { core::ptr::write_volatile(self.fb.add(y * self.stride + x), self.bg_color); } } }
         self.cy -= 10;
     }
     fn print_char(&mut self, ch: u8) {
@@ -143,12 +129,7 @@ impl Console {
     }
 }
 
-fn streq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
-    for i in 0..a.len() { if a[i] != b[i] { return false; } }
-    true
-}
-
+fn streq(a: &[u8], b: &[u8]) -> bool { if a.len() != b.len() { return false; } for i in 0..a.len() { if a[i] != b[i] { return false; } } true }
 #[no_mangle] pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void { let s_u8 = s as *mut u8; for i in 0..n { core::ptr::write_volatile(s_u8.add(i), c as u8); } s }
 #[no_mangle] pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void { let d_u8 = dest as *mut u8; let s_u8 = src as *const u8; for i in 0..n { core::ptr::write_volatile(d_u8.add(i), core::ptr::read_volatile(s_u8.add(i))); } dest }
 #[no_mangle] pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32 { let s1_u8 = s1 as *const u8; let s2_u8 = s2 as *const u8; for i in 0..n { let a = core::ptr::read_volatile(s1_u8.add(i)); let b = core::ptr::read_volatile(s2_u8.add(i)); if a != b { return (a as i32) - (b as i32); } } 0 }
@@ -156,11 +137,17 @@ fn streq(a: &[u8], b: &[u8]) -> bool {
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
-    unsafe { init_serial(); init_idt(); }
+    unsafe { 
+        init_serial(); 
+        init_idt(); 
+        ALLOCATOR.lock().init(HEAP_MEMORY.as_mut_ptr(), HEAP_MEMORY.len());
+    }
 
     let mut term = Console { fb: info.fb_ptr as *mut u32, width: info.width, height: info.height, stride: info.stride, cx: 0, cy: 0, bg_color: 0x001E1E2E, fg_color: 0x00A6E3A1 };
     term.clear();
-    term.print("MIND CORE. SYSTEM READY.\n");
+    term.print("MIND CORE. FAT32 ELF LOADER ACTIVE.\n");
+    let msg = format!("MEMORY MANAGER INITIALIZED: 1 MB HEAP ALLOCATED.\n");
+    term.print(&msg);
     term.print("MIND> ");
 
     let mut input_buf = [0u8; 128];
@@ -168,6 +155,11 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
     let mut last_scancode = 0;
 
     loop {
+        unsafe {
+            let ptr = core::ptr::addr_of_mut!(SYSTEM_TICKS);
+            core::ptr::write_volatile(ptr, core::ptr::read_volatile(ptr) + 1);
+        }
+
         let mut ascii_input: u8 = 0;
         let serial_byte = unsafe { serial_read_byte() };
         if serial_byte != 0 {
@@ -190,18 +182,25 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
                 term.print("\n");
                 let cmd = &input_buf[0..input_len];
                 if input_len > 0 {
-                    if streq(cmd, b"help") { term.print("- help\n- clear\n- boot\n- stop\n"); } 
+                    if streq(cmd, b"help") { term.print("- help\n- clear\n- boot\n- heap\n- stop\n"); } 
                     else if streq(cmd, b"clear") { term.clear(); } 
                     else if streq(cmd, b"stop") {
                         term.print("SYSTEM HALTED. CPU GOING TO SLEEP...\n");
-                        // Глушим прерывания и останавливаем процессор инструкцией hlt
                         unsafe { asm!("cli"); loop { asm!("hlt"); } }
+                    }
+                    else if streq(cmd, b"heap") {
+                        let dyn_str = format!("Dynamic allocation works! System ticks: {}\n", unsafe { SYSTEM_TICKS });
+                        term.print(&dyn_str);
                     }
                     else if streq(cmd, b"boot") {
                         term.print("TRANSFERRING CONTROL TO USERSPACE...\n");
                         for _ in 0..10_000_000 { unsafe { asm!("nop"); } }
-                        let app_entry: extern "sysv64" fn(&BootInfo, *mut SyscallMailbox) -> ! = unsafe { core::mem::transmute(info.app_ptr) };
+                        
+                        let app_entry: extern "sysv64" fn(&BootInfo, *mut SyscallMailbox) -> () = unsafe { core::mem::transmute(info.app_entry as usize) };
                         app_entry(info, unsafe { core::ptr::addr_of_mut!(MAILBOX) });
+                        
+                        term.clear();
+                        term.print("USERSPACE EXITED. KERNEL REPL RESUMED.\n");
                     } else { term.print("UNKNOWN COMMAND\n"); }
                 }
                 input_len = 0; term.print("MIND> ");
