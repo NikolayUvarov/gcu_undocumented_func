@@ -8,5 +8,16 @@ SECTIONS {
     .rodata : { *(.rodata .rodata.*) }
     .data : { *(.data .data.*) }
     .bss : { *(.bss .bss.*) }
-    /DISCARD/ : { *(.eh_frame) }
+    /DISCARD/ : {
+        *(.eh_frame)
+        *(.note.gnu.build-id)
+        *(.dynamic)
+        *(.dynsym)
+        *(.hash)
+        *(.gnu.hash)
+        *(.dynstr)
+        *(.rela.dyn)
+        *(.got)
+        *(.got.plt)
+    }
 }
