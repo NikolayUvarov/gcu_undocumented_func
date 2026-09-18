@@ -6,8 +6,11 @@ SECTIONS {
         *(.text .text.*)
     }
     .rodata : { *(.rodata .rodata.*) }
-    .data : { *(.data .data.*) }
-    .bss : { *(.bss .bss.*) }
+    .data : {
+        BYTE(0xFF); /* Форсируем флаг PROGBITS для секции */
+        *(.data .data.*)
+        *(.bss .bss.*)
+    }
     /DISCARD/ : {
         *(.eh_frame)
         *(.note.gnu.build-id)
