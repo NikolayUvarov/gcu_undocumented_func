@@ -12,4 +12,4 @@ if not exist "%QEMU_PATH%" (
     exit /b
 )
 
-"%QEMU_PATH%" -bios OVMF.fd -drive format=raw,file=fat:rw:usb_root -m 512 -serial stdio
+"%QEMU_PATH%" -bios OVMF.fd -drive format=raw,file=fat:rw:usb_root -m 512 -serial stdio -rtc base=localtime

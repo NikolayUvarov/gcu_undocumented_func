@@ -14,10 +14,10 @@ use alloc::format;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 static mut HEAP_MEMORY: [u8; 1024 * 1024] = [0; 1024 * 1024];
 
-#[repr(C)]
-pub struct BootInfo { pub fb_ptr: *mut u8, pub width: usize, pub height: usize, pub stride: usize, pub app_entry: u64 }
-#[repr(C)]
-pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize }
+#[path = "../../common/abi.rs"]
+mod abi;
+use abi::{BootInfo, SyscallMailbox, SYSCALL_RTC_TIME, RTC_UNAVAILABLE};
+mod rtc;
 
 unsafe fn outb(port: u16, val: u8) { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack)); }
 unsafe fn inb(port: u16) -> u8 { let mut val: u8; asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack)); val }
@@ -59,6 +59,8 @@ extern "x86-interrupt" fn syscall_handler(_frame: &mut InterruptFrame) {
             let ptr = (*mb).arg1 as *const u8; let len = (*mb).arg2;
             for i in 0..len { serial_write_byte(core::ptr::read_volatile(ptr.add(i))); }
             (*mb).result = len;
+        } else if (*mb).syscall_num == SYSCALL_RTC_TIME {
+            (*mb).result = rtc::read_time().unwrap_or(RTC_UNAVAILABLE);
         }
     }
 }
@@ -72,24 +74,9 @@ unsafe fn init_idt() {
     asm!("lidt [{}]", in(reg) &idt_ptr);
 }
 
-const FONT: [u64; 64] = [
-    0x0000000000000000, 0x1818181818001800, 0x6C6C000000000000, 0x36367F367F363600,
-    0x183E603C067C1800, 0x60660C1830660600, 0x386C6C386CA6CC78, 0x1818300000000000,
-    0x0C18303030180C00, 0x30180C0C0C183000, 0x00663CFF3C660000, 0x0018187E18180000,
-    0x0000000000181830, 0x0000007E00000000, 0x0000000000181800, 0x060C183060C08000,
-    0x3C666E7666663C00, 0x1838181818187E00, 0x3C66061C30607E00, 0x3C66061C06663C00,
-    0x1C3C6CccFE0C0C00, 0x7E607C0606663C00, 0x3C607C6666663C00, 0x7E060C1830303000,
-    0x3C66663C66663C00, 0x3C66663E06063C00, 0x0018180000181800, 0x0018180000181830,
-    0x060C1830180C0600, 0x00007E007E000000, 0x30180C060C183000, 0x3C66060C18001800,
-    0x3C666E6E60663C00, 0x183C66667E666600, 0x7C66667C66667C00, 0x3C66606060663C00,
-    0x786C6666666C7800, 0x7E60607C60607E00, 0x7E60607C60606000, 0x3C66606E66663E00,
-    0x6666667E66666600, 0x3E18181818183E00, 0x0606060606663C00, 0x666C7870786C6600,
-    0x6060606060607E00, 0xC6EEDBc6c6c6c600, 0x66767E7E6E666600, 0x3C66666666663C00,
-    0x7C66667C60606000, 0x3C6666666E3C0200, 0x7C66667C6C666600, 0x3C66603C06663C00,
-    0x7E18181818181800, 0x6666666666663C00, 0x66666666663C1800, 0xC6C6C6D6FEEEC600,
-    0x66663C183C666600, 0x6666663C18181800, 0x7E060C1830607E00, 0x3C30303030303C00,
-    0x6030180C06030100, 0x3C0C0C0C0C0C3C00, 0x183C660000000000, 0x00000000000000FF 
-];
+#[path = "../../common/font.rs"]
+mod font;
+use font::FONT;
 
 const SCANCODE_TO_ASCII: &[u8] = b"??1234567890-=?\tqwertyuiop[]\n?asdfghjkl;'`?\\zxcvbnm,./?*? ?";
 
@@ -129,7 +116,22 @@ impl Console {
     }
 }
 
-fn streq(a: &[u8], b: &[u8]) -> bool { if a.len() != b.len() { return false; } for i in 0..a.len() { if a[i] != b[i] { return false; } } true }
+fn streq(a: &[u8], b: &[u8]) -> bool { a.eq_ignore_ascii_case(b) }
+
+fn list_programs(term: &mut Console) {
+    term.print("PROGRAMS:\n");
+    term.print("  app   - ROTATING SQUARE\n");
+    term.print("  app2  - BOUNCING SQUARE AND COUNTERS\n");
+    term.print("  clock - DIGITAL CLOCK\n");
+    term.print("USE: RUN <NAME>. ESC RETURNS TO THE SHELL.\n");
+}
+
+fn launch_app(term: &mut Console, info: &BootInfo, entry: u64) {
+    let app_entry: extern "sysv64" fn(&BootInfo, *mut SyscallMailbox) = unsafe { core::mem::transmute(entry as usize) };
+    app_entry(info, core::ptr::addr_of_mut!(MAILBOX));
+    term.clear();
+    term.print("USERSPACE EXITED. KERNEL REPL RESUMED.\n");
+}
 #[no_mangle] pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void { let s_u8 = s as *mut u8; for i in 0..n { core::ptr::write_volatile(s_u8.add(i), c as u8); } s }
 #[no_mangle] pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void { let d_u8 = dest as *mut u8; let s_u8 = src as *const u8; for i in 0..n { core::ptr::write_volatile(d_u8.add(i), core::ptr::read_volatile(s_u8.add(i))); } dest }
 #[no_mangle] pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32 { let s1_u8 = s1 as *const u8; let s2_u8 = s2 as *const u8; for i in 0..n { let a = core::ptr::read_volatile(s1_u8.add(i)); let b = core::ptr::read_volatile(s2_u8.add(i)); if a != b { return (a as i32) - (b as i32); } } 0 }
@@ -148,6 +150,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
     term.print("MIND CORE. FAT32 ELF LOADER ACTIVE.\n");
     let msg = format!("MEMORY MANAGER INITIALIZED: 1 MB HEAP ALLOCATED.\n");
     term.print(&msg);
+    term.print("LIST: PROGRAMS. RUN <NAME>: LAUNCH. HELP: COMMANDS.\n");
     term.print("MIND> ");
 
     let mut input_buf = [0u8; 128];
@@ -180,9 +183,14 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
             if ascii_input == 0x08 { if input_len > 0 { input_len -= 1; term.print_char(0x08); } } 
             else if ascii_input == b'\n' { 
                 term.print("\n");
-                let cmd = &input_buf[0..input_len];
-                if input_len > 0 {
-                    if streq(cmd, b"help") { term.print("- help\n- clear\n- boot\n- heap\n- stop\n"); } 
+                let line = input_buf[0..input_len].trim_ascii();
+                let split = line.iter().position(|b| b.is_ascii_whitespace()).unwrap_or(line.len());
+                let cmd = &line[..split];
+                let args = line[split..].trim_ascii();
+                if !cmd.is_empty() {
+                    if !streq(cmd, b"run") && !args.is_empty() { term.print("THIS COMMAND TAKES NO ARGUMENTS.\n"); }
+                    else if streq(cmd, b"help") { term.print("- help\n- list: show programs\n- run <name>: launch a program\n- boot: alias for run app\n- clear\n- heap\n- stop\nESC RETURNS FROM ANY APP.\n"); }
+                    else if streq(cmd, b"list") { list_programs(&mut term); }
                     else if streq(cmd, b"clear") { term.clear(); } 
                     else if streq(cmd, b"stop") {
                         term.print("SYSTEM HALTED. CPU GOING TO SLEEP...\n");
@@ -193,14 +201,23 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
                         term.print(&dyn_str);
                     }
                     else if streq(cmd, b"boot") {
-                        term.print("TRANSFERRING CONTROL TO USERSPACE...\n");
-                        for _ in 0..10_000_000 { unsafe { asm!("nop"); } }
-                        
-                        let app_entry: extern "sysv64" fn(&BootInfo, *mut SyscallMailbox) -> () = unsafe { core::mem::transmute(info.app_entry as usize) };
-                        app_entry(info, unsafe { core::ptr::addr_of_mut!(MAILBOX) });
-                        
-                        term.clear();
-                        term.print("USERSPACE EXITED. KERNEL REPL RESUMED.\n");
+                        term.print("STARTING APP...\n");
+                        launch_app(&mut term, info, info.app_entry);
+                    }
+                    else if streq(cmd, b"run") {
+                        let entry = if streq(args, b"app") { Some(info.app_entry) }
+                            else if streq(args, b"app2") { Some(info.app2_entry) }
+                            else if streq(args, b"clock") { Some(info.clock_entry) }
+                            else { None };
+                        if let Some(entry) = entry {
+                            term.print("STARTING PROGRAM...\n");
+                            launch_app(&mut term, info, entry);
+                        } else if args.is_empty() {
+                            term.print("USAGE: RUN <NAME>\n");
+                            list_programs(&mut term);
+                        } else {
+                            term.print("UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.\n");
+                        }
                     } else { term.print("UNKNOWN COMMAND\n"); }
                 }
                 input_len = 0; term.print("MIND> ");

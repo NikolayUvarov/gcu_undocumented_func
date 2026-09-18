@@ -8,11 +8,9 @@ use uefi::table::boot::{AllocateType, MemoryType};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 
-#[repr(C)]
-pub struct BootInfo {
-    pub fb_ptr: *mut u8, pub width: usize, pub height: usize, pub stride: usize,
-    pub app_entry: u64,
-}
+#[path = "../../common/abi.rs"]
+mod abi;
+use abi::BootInfo;
 
 #[repr(C)]
 struct Elf64_Ehdr {
@@ -89,14 +87,26 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let a_size = a_file.read(file_buf).unwrap();
         let app_entry = load_elf(boot_services, &file_buf[..a_size]);
 
+        let a2_name = uefi::CStr16::from_str_with_buf("app2.elf", &mut name_buf).unwrap();
+        let a2_handle = root.open(a2_name, FileMode::Read, FileAttribute::empty()).unwrap();
+        let mut a2_file = match a2_handle.into_type().unwrap() { FileType::Regular(f) => f, _ => panic!("err") };
+        let a2_size = a2_file.read(file_buf).unwrap();
+        let app2_entry = load_elf(boot_services, &file_buf[..a2_size]);
+
+        let clock_name = uefi::CStr16::from_str_with_buf("clock.elf", &mut name_buf).unwrap();
+        let clock_handle = root.open(clock_name, FileMode::Read, FileAttribute::empty()).unwrap();
+        let mut clock_file = match clock_handle.into_type().unwrap() { FileType::Regular(f) => f, _ => panic!("err") };
+        let clock_size = clock_file.read(file_buf).unwrap();
+        let clock_entry = load_elf(boot_services, &file_buf[..clock_size]);
+
         let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap();
         let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap();
         let mode = gop.current_mode_info();
 
         (
             BootInfo {
-                fb_ptr: gop.frame_buffer().as_mut_ptr(), width: mode.resolution().0,
-                height: mode.resolution().1, stride: mode.stride(), app_entry,
+                fb_ptr: gop.frame_buffer().as_mut_ptr().cast(), width: mode.resolution().0,
+                height: mode.resolution().1, stride: mode.stride(), app_entry, app2_entry, clock_entry,
             },
             kernel_entry
         )

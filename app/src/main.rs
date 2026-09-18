@@ -5,10 +5,9 @@ use core::panic::PanicInfo;
 use core::arch::asm;
 use core::ffi::c_void;
 
-#[repr(C)]
-pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub app_entry: u64 }
-#[repr(C)]
-pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize }
+#[path = "../../common/abi.rs"]
+mod abi;
+use abi::{BootInfo, SyscallMailbox};
 
 fn os_print(mb: *mut SyscallMailbox, msg: &[u8]) {
     unsafe { (*mb).syscall_num = 3; (*mb).arg1 = msg.as_ptr() as usize; (*mb).arg2 = msg.len(); asm!("int 0x80", options(nostack)); }
@@ -49,24 +48,9 @@ unsafe fn init_thread() {
 }
 
 const SIN_TABLE: [isize; 36] = [0, 17, 34, 50, 64, 76, 86, 93, 98, 100, 98, 93, 86, 76, 64, 50, 34, 17, 0, -17, -34, -50, -64, -76, -86, -93, -98, -100, -98, -93, -86, -76, -64, -50, -34, -17];
-const FONT: [u64; 64] = [
-    0x0000000000000000, 0x1818181818001800, 0x6C6C000000000000, 0x36367F367F363600,
-    0x183E603C067C1800, 0x60660C1830660600, 0x386C6C386CA6CC78, 0x1818300000000000,
-    0x0C18303030180C00, 0x30180C0C0C183000, 0x00663CFF3C660000, 0x0018187E18180000,
-    0x0000000000181830, 0x0000007E00000000, 0x0000000000181800, 0x060C183060C08000,
-    0x3C666E7666663C00, 0x1838181818187E00, 0x3C66061C30607E00, 0x3C66061C06663C00,
-    0x1C3C6CccFE0C0C00, 0x7E607C0606663C00, 0x3C607C6666663C00, 0x7E060C1830303000,
-    0x3C66663C66663C00, 0x3C66663E06063C00, 0x0018180000181800, 0x0018180000181830,
-    0x060C1830180C0600, 0x00007E007E000000, 0x30180C060C183000, 0x3C66060C18001800,
-    0x3C666E6E60663C00, 0x183C66667E666600, 0x7C66667C66667C00, 0x3C66606060663C00,
-    0x786C6666666C7800, 0x7E60607C60607E00, 0x7E60607C60606000, 0x3C66606E66663E00,
-    0x6666667E66666600, 0x3E18181818183E00, 0x0606060606663C00, 0x666C7870786C6600,
-    0x6060606060607E00, 0xC6EEDBc6c6c6c600, 0x66767E7E6E666600, 0x3C66666666663C00,
-    0x7C66667C60606000, 0x3C6666666E3C0200, 0x7C66667C6C666600, 0x3C66603C06663C00,
-    0x7E18181818181800, 0x6666666666663C00, 0x66666666663C1800, 0xC6C6C6D6FEEEC600,
-    0x66663C183C666600, 0x6666663C18181800, 0x7E060C1830607E00, 0x3C30303030303C00,
-    0x6030180C06030100, 0x3C0C0C0C0C0C3C00, 0x183C660000000000, 0x00000000000000FF 
-];
+#[path = "../../common/font.rs"]
+mod font;
+use font::FONT;
 
 fn draw_char(fb: *mut u32, stride: usize, px: usize, py: usize, ascii: u8, color: u32) {
     let idx = if ascii >= 32 && ascii <= 95 { (ascii - 32) as usize } else if ascii >= 97 && ascii <= 122 { (ascii - 97 + 33) as usize } else { 0 };
