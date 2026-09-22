@@ -38,7 +38,6 @@ mod input;
 mod interrupts;
 mod memory;
 mod paging;
-mod rtc;
 mod scheduler;
 mod task_state;
 mod user_heap;
@@ -420,7 +419,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
-        fb = scheduler::init(info).expect("Scheduler initialization failed");
+        fb = scheduler::init(info).expect("Scheduler init failed"); scheduler::spawn(6, true).expect("RTC spawn");
         interrupts::init();
         cpu::start(info);
     }

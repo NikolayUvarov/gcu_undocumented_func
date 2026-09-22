@@ -1,43 +1,28 @@
-use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_RTC_TIME, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP };
+use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP };
 use crate::input::{Keyboard, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
-use crate::{context, cpu, elf, interrupts, outb, paging, rtc, serial_write_byte};
+use crate::{context, cpu, elf, interrupts, outb, paging, serial_write_byte};
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub const MAX_TASKS: usize = 8;
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
-pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong"];
+pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong", "rtc"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize) }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), IOPort(u16) }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EpState { Unused, Idle, Sending(usize), Receiving(usize) }
 
 pub struct Endpoint { pub state: EpState }
 
-pub fn heap_test() -> (usize, usize, bool) {
-    locked(|| {
-        let before = crate::ALLOCATOR.lock().used();
-        let test = alloc::format!("Dynamic allocation test at {} ms", interrupts::milliseconds());
-        core::hint::black_box(&test); drop(test);
-        let heap = crate::ALLOCATOR.lock();
-        (heap.used(), heap.free(), heap.used() == before)
-    })
-}
+pub fn heap_test() -> (usize, usize, bool) { locked(|| { let before = crate::ALLOCATOR.lock().used(); let test = alloc::format!("Dynamic allocation test at {} ms", interrupts::milliseconds()); core::hint::black_box(&test); drop(test); let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free(), heap.used() == before) }) }
 
-struct Task {
-    pid: u64, program: usize, state: State, sp: usize, cpu: usize, space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region, runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Region, abi: Region, input: Queue<128>, log: Queue<4096>, log_line_start: bool, dirty: bool,
-    cspace: [Option<Capability>; 32], 
-}
-
-struct Scheduler {
-    boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX], faults: [Option<Fault>; 16], fault_cursor: usize, next_pid: u64, foreground: usize, keyboard: Keyboard, shell_input: Queue<128>, shell_screen: Region, shadow: Region, dirty: bool, shadow_valid: bool, notice: Option<(u64, bool)>,
-    endpoints: [Endpoint; 64], 
-}
+struct Task { pid: u64, program: usize, state: State, sp: usize, cpu: usize, space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region, runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Region, abi: Region, input: Queue<128>, log: Queue<4096>, log_line_start: bool, dirty: bool, cspace: [Option<Capability>; 32] }
+struct Scheduler { boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX], faults: [Option<Fault>; 16], fault_cursor: usize, next_pid: u64, foreground: usize, keyboard: Keyboard, shell_input: Queue<128>, shell_screen: Region, shadow: Region, dirty: bool, shadow_valid: bool, notice: Option<(u64, bool)>, endpoints: [Endpoint; 64] }
 
 static mut SCHEDULER: Option<Scheduler> = None;
 static LOCK: AtomicBool = AtomicBool::new(false);
@@ -50,12 +35,7 @@ unsafe fn scheduler() -> &'static mut Scheduler { (*core::ptr::addr_of_mut!(SCHE
 pub fn init(info: &BootInfo) -> Result<*mut u32, &'static str> {
     let bytes = info.stride.checked_mul(info.height).and_then(|n| n.checked_mul(4)).ok_or("FRAMEBUFFER SIZE OVERFLOW")?;
     let shell_screen = Region::new(bytes, 16)?; let fb = shell_screen.ptr().cast(); let shadow = Region::new(bytes, 16)?;
-    unsafe {
-        *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler {
-            boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, shadow, dirty: true, shadow_valid: false, notice: None,
-            endpoints: core::array::from_fn(|_| Endpoint { state: EpState::Unused }),
-        });
-    } Ok(fb)
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, shadow, dirty: true, shadow_valid: false, notice: None, endpoints: core::array::from_fn(|_| Endpoint { state: EpState::Unused }) }); } Ok(fb)
 }
 
 impl Scheduler {
@@ -67,14 +47,7 @@ impl Scheduler {
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
     fn focus(&mut self, slot: usize) { if self.foreground != 0 { if let Some(task) = self.tasks[self.foreground].as_mut() { task.input.clear(); } } self.shell_input.clear(); if slot != 0 { self.tasks[slot].as_mut().unwrap().input.clear(); } self.foreground = slot; self.dirty = true; }
-    fn poll_input(&mut self) {
-        for _ in 0..32 {
-            let Some(key) = self.keyboard.read() else { break; };
-            if key.background && self.foreground != 0 { let pid = self.tasks[self.foreground].as_ref().unwrap().pid; self.focus(0); self.notice = Some((pid, false)); } 
-            else if self.foreground == 0 { if !key.background { self.shell_input.push(key.shell); } } 
-            else if key.app != 0 { let task = self.tasks[self.foreground].as_mut().unwrap(); task.input.push(key.app); if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; } }
-        }
-    }
+    fn poll_input(&mut self) { for _ in 0..32 { let Some(key) = self.keyboard.read() else { break; }; if key.background && self.foreground != 0 { let pid = self.tasks[self.foreground].as_ref().unwrap().pid; self.focus(0); self.notice = Some((pid, false)); } else if self.foreground == 0 { if !key.background { self.shell_input.push(key.shell); } } else if key.app != 0 { let task = self.tasks[self.foreground].as_mut().unwrap(); task.input.push(key.app); if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; } } } }
     fn exit_current(&mut self, cpu: usize) {
         let task = self.tasks[self.current[cpu]].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited;
         for ep in self.endpoints.iter_mut() { if ep.state == EpState::Sending(self.current[cpu]) || ep.state == EpState::Receiving(self.current[cpu]) { ep.state = EpState::Idle; } }
@@ -98,16 +71,22 @@ impl Scheduler {
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited).count() }).unwrap_or(0);
         
         let mut cspace = [None; 32];
-        cspace[1] = init_cap; 
+        if program == 6 { // rtc driver
+            self.endpoints[2].state = EpState::Idle;
+            cspace[1] = Some(Capability::Endpoint(2, crate::abi::CAP_READ | crate::abi::CAP_WRITE | crate::abi::CAP_GRANT));
+            cspace[2] = Some(Capability::IOPort(0x70));
+            cspace[3] = Some(Capability::IOPort(0x71));
+        } else {
+            cspace[1] = init_cap; 
+            cspace[2] = Some(Capability::Endpoint(2, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT)); // Доступ к RTC
+        }
 
         self.tasks[slot] = Some(Task { pid, program, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), log_line_start: true, dirty: true, cspace });
         self.next_pid = next_pid; if !background { self.focus(slot); } Ok(pid)
     }
 }
 
-pub fn spawn(program: usize, background: bool) -> Result<u64, &'static str> {
-    locked(|| unsafe { scheduler().spawn_internal(program, background, None) })
-}
+pub fn spawn(program: usize, background: bool) -> Result<u64, &'static str> { locked(|| unsafe { scheduler().spawn_internal(program, background, None) }) }
 
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {
@@ -131,7 +110,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             if cpu == 0 { s.poll_input(); } if slot == 0 { return s.select(sp, cpu); }
             if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
             
-            // СЫРОЙ УКАЗАТЕЛЬ ДЛЯ РАЗДЕЛЕНИЯ ЗАИМСТВОВАНИЙ!
             let tasks_ptr = s.tasks.as_mut_ptr();
             let task = (*tasks_ptr.add(slot)).as_mut().unwrap();
             
@@ -150,7 +128,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                         } length
                     }
                 }
-                SYSCALL_RTC_TIME => rtc::read_time().unwrap_or(RTC_UNAVAILABLE), SYSCALL_UPTIME => interrupts::milliseconds() as usize,
+                SYSCALL_UPTIME => interrupts::milliseconds() as usize,
                 SYSCALL_ALLOC => task.heap.allocate(&mut task.space, request.arg1).unwrap_or(0), SYSCALL_FREE => { if task.heap.free(&mut task.space, request.arg1) { 0 } else { usize::MAX } }
                 SYSCALL_WAIT => {
                     let now = interrupts::milliseconds(); let duration = request.arg1.min(60_000).div_ceil(10).max(1) as u64 * 10;
@@ -213,6 +191,22 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                         } else { usize::MAX - 1 }
                     } else { usize::MAX }
                 }
+                17 => { // SYSCALL_PORT_IN
+                    let cap_idx = request.arg1; let port = request.arg2 as u16;
+                    if cap_idx < 32 {
+                        if let Some(Capability::IOPort(p)) = task.cspace[cap_idx] {
+                            if p == port { let mut val: u8; asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack)); val as usize } else { usize::MAX - 2 }
+                        } else { usize::MAX - 1 }
+                    } else { usize::MAX }
+                }
+                18 => { // SYSCALL_PORT_OUT
+                    let cap_idx = request.arg1; let port = request.arg2 as u16; let val = request.msg[0] as u8;
+                    if cap_idx < 32 {
+                        if let Some(Capability::IOPort(p)) = task.cspace[cap_idx] {
+                            if p == port { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack)); 0 } else { usize::MAX - 2 }
+                        } else { usize::MAX - 1 }
+                    } else { usize::MAX }
+                }
                 SYSCALL_IPC_SEND => {
                     let cap_idx = request.arg1;
                     if cap_idx >= 32 { usize::MAX } else if let Some(Capability::Endpoint(ep_id, rights)) = task.cspace[cap_idx] {
@@ -222,6 +216,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                                 match task.cspace[transfer_cap_idx] {
                                     Some(Capability::Endpoint(t_id, t_r)) => Some(Capability::Endpoint(t_id, t_r & (request.msg[1] as u8))),
                                     Some(Capability::Memory(p, sz)) => Some(Capability::Memory(p, sz)),
+                                    Some(Capability::IOPort(p)) => Some(Capability::IOPort(p)),
                                     None => None,
                                 }
                             } else { None };
@@ -233,18 +228,10 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                                     (*target_ptr).msg = request.msg; (*target_ptr).result = 0;
                                     
                                     let target_recv_idx = (*target_ptr).arg2;
-                                    if target_recv_idx > 0 && target_recv_idx < 32 {
-                                        target_task.cspace[target_recv_idx] = transfer_cap;
-                                    }
-
-                                    target_task.state = State::Ready; s.endpoints[ep_id].state = EpState::Idle;
-                                    0 
+                                    if target_recv_idx > 0 && target_recv_idx < 32 { target_task.cspace[target_recv_idx] = transfer_cap; }
+                                    target_task.state = State::Ready; s.endpoints[ep_id].state = EpState::Idle; 0 
                                 }
-                                EpState::Idle => {
-                                    s.endpoints[ep_id].state = EpState::Sending(slot);
-                                    task.state = State::BlockedIpc; task.dirty = true;
-                                    return s.select(sp, cpu);
-                                }
+                                EpState::Idle => { s.endpoints[ep_id].state = EpState::Sending(slot); task.state = State::BlockedIpc; task.dirty = true; return s.select(sp, cpu); }
                                 _ => usize::MAX - 1,
                             }
                         }
@@ -260,27 +247,16 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                                     let sender_ptr = sender_task.abi.ptr().add(4096).cast::<SyscallMailbox>();
                                     (*ptr).msg = (*sender_ptr).msg; (*sender_ptr).result = 0; 
 
-                                    let recv_idx = request.arg2;
-                                    let transfer_cap_idx = (*sender_ptr).msg[0];
+                                    let recv_idx = request.arg2; let transfer_cap_idx = (*sender_ptr).msg[0];
                                     if recv_idx > 0 && recv_idx < 32 && transfer_cap_idx > 0 && transfer_cap_idx < 32 {
-                                        let sender_cap = sender_task.cspace[transfer_cap_idx];
-                                        if let Some(cap) = sender_cap {
-                                            let new_cap = match cap {
-                                                Capability::Endpoint(s_id, s_r) => Capability::Endpoint(s_id, s_r & (*sender_ptr).msg[1] as u8),
-                                                Capability::Memory(p, sz) => Capability::Memory(p, sz),
-                                            };
+                                        if let Some(cap) = sender_task.cspace[transfer_cap_idx] {
+                                            let new_cap = match cap { Capability::Endpoint(s_id, s_r) => Capability::Endpoint(s_id, s_r & (*sender_ptr).msg[1] as u8), Capability::Memory(p, sz) => Capability::Memory(p, sz), Capability::IOPort(p) => Capability::IOPort(p) };
                                             task.cspace[recv_idx] = Some(new_cap);
                                         }
                                     }
-
-                                    sender_task.state = State::Ready; s.endpoints[ep_id].state = EpState::Idle;
-                                    0 
+                                    sender_task.state = State::Ready; s.endpoints[ep_id].state = EpState::Idle; 0 
                                 }
-                                EpState::Idle => { 
-                                    s.endpoints[ep_id].state = EpState::Receiving(slot);
-                                    task.state = State::BlockedIpc; task.dirty = true;
-                                    return s.select(sp, cpu);
-                                }
+                                EpState::Idle => { s.endpoints[ep_id].state = EpState::Receiving(slot); task.state = State::BlockedIpc; task.dirty = true; return s.select(sp, cpu); }
                                 _ => usize::MAX - 1, 
                             }
                         }
