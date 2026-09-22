@@ -1,12 +1,31 @@
 #![allow(dead_code)]
+extern crate alloc;
+#[path = "../common/abi.rs"]
+mod abi;
+#[path = "../dzen-clock/src/cycle.rs"]
+mod dzen_cycle;
+use dzen_cycle as cycle;
+#[path = "../dzen-clock/src/face.rs"]
+mod dzen_face;
+use dzen_face as face;
+#[path = "../common/font.rs"]
+mod font;
+#[path = "../dzen-clock/src/view.rs"]
+mod dzen_view;
 #[path = "../kernel/src/elf.rs"]
 mod elf;
 #[path = "../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
+#[path = "../kernel/src/memory.rs"]
+mod memory;
+#[path = "../kernel/src/paging.rs"]
+mod paging;
 #[path = "../kernel/src/rtc.rs"]
 mod rtc;
 #[path = "../kernel/src/task_state.rs"]
 mod task_state;
+#[path = "../kernel/src/user_heap.rs"]
+mod user_heap;
 
 #[test]
 fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
@@ -14,6 +33,7 @@ fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
         "usb_root/app.elf",
         "usb_root/app2.elf",
         "usb_root/clock.elf",
+        "usb_root/dzenclk.elf",
     ] {
         let data = std::fs::read(file).unwrap();
         let image = elf::Image::parse(&data).unwrap();

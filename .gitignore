@@ -16,12 +16,16 @@ Cargo.lock
 OVMF.fd
 *.fd
 usb_root/
+dist/
+scripts/__pycache__/
 NvVars
 
 # --- Сгенерированные дампы и выгрузки ---
 # Склейка исходников для передачи в контекст (code_concat.sh)
 code_context.txt
 code_context*.txt
+code_handoff/
+code-handoff/
 
 # --- История патчей (не версионируется) ---
 legacy/**

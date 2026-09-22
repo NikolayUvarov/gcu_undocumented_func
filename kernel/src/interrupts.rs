@@ -1,4 +1,4 @@
-use super::{outb, serial_write_byte};
+use super::outb;
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,33 +52,8 @@ unsafe fn set_handler(index: usize, address: u64, cs: u16) {
     };
 }
 
-fn fatal(message: &[u8], frame: &InterruptFrame) -> ! {
-    unsafe {
-        asm!("cli");
-        for &byte in message {
-            serial_write_byte(byte);
-        }
-        for shift in (0..16).rev() {
-            let digit = ((frame.rip >> (shift * 4)) & 0xF) as u8;
-            serial_write_byte(if digit < 10 {
-                b'0' + digit
-            } else {
-                b'A' + digit - 10
-            });
-        }
-        serial_write_byte(b'\r');
-        serial_write_byte(b'\n');
-        loop {
-            asm!("hlt");
-        }
-    }
-}
-
-extern "x86-interrupt" fn fault(frame: &mut InterruptFrame) {
-    fatal(b"KERNEL EXCEPTION AT RIP=", frame);
-}
-extern "x86-interrupt" fn fault_with_code(frame: &mut InterruptFrame, _code: u64) {
-    fatal(b"KERNEL EXCEPTION (ERROR CODE) AT RIP=", frame);
+extern "x86-interrupt" fn unexpected(_frame: &mut InterruptFrame) {
+    crate::cpu::halt_all();
 }
 pub fn advance() {
     TICKS.fetch_add(1, Ordering::Relaxed);
@@ -92,40 +67,41 @@ extern "x86-interrupt" fn spurious_slave(_frame: &mut InterruptFrame) {
 
 pub unsafe fn init() {
     asm!("cli");
-    let cs: u16;
-    asm!("mov {0:x}, cs", out(reg) cs);
+    let cs = 8;
     for index in 0..256 {
-        set_handler(index, fault as *const () as u64, cs);
+        set_handler(index, unexpected as *const () as u64, cs);
     }
-    for index in [8, 10, 11, 12, 13, 14, 17, 21, 29, 30] {
-        set_handler(index, fault_with_code as *const () as u64, cs);
+    for index in 0..32 {
+        set_handler(
+            index,
+            (core::ptr::addr_of!(super::context::exception_table) as u64)
+                .wrapping_add(super::context::exception_table[index]),
+            cs,
+        );
     }
+    IDT[8].ist = 1;
+    IDT[2].ist = 2;
     set_handler(
         0x20,
         super::context::task_timer_entry as *const () as u64,
         cs,
     );
+    set_handler(0x30, super::context::task_ipi_entry as *const () as u64, cs);
+    set_handler(
+        0x31,
+        super::context::task_stop_entry as *const () as u64,
+        cs,
+    );
     set_handler(0x27, spurious_master as *const () as u64, cs);
-    set_handler(0x2F, spurious_slave as *const () as u64, cs);
+    set_handler(0x2f, spurious_slave as *const () as u64, cs);
+    set_handler(0xff, spurious_master as *const () as u64, cs);
     set_handler(
         0x80,
         super::context::task_syscall_entry as *const () as u64,
         cs,
     );
-    let idtr = IdtPtr {
-        limit: (core::mem::size_of::<[IdtEntry; 256]>() - 1) as u16,
-        base: core::ptr::addr_of!(IDT) as u64,
-    };
-    asm!("lidt [{}]", in(reg) &idtr);
-
-    // The kernel currently runs on the BSP only. Use the legacy PIC route,
-    // disabling the firmware's local APIC on this CPU (including its timer).
-    // Other virtual CPUs remain parked; this is not an SMP scheduler.
-    let mut lo: u32;
-    let hi: u32;
-    asm!("rdmsr", in("ecx") 0x1Bu32, out("eax") lo, out("edx") hi);
-    lo &= !((1 << 11) | (1 << 10));
-    asm!("wrmsr", in("ecx") 0x1Bu32, in("eax") lo, in("edx") hi);
+    IDT[0x80].type_attr = 0xee; // only syscall is callable from ring 3
+    load();
 
     // Remap the 8259 PICs away from CPU exceptions; unmask only PIT IRQ0.
     for (port, value) in [
@@ -149,6 +125,14 @@ pub unsafe fn init() {
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
     asm!("sti");
+}
+
+pub unsafe fn load() {
+    let idtr = IdtPtr {
+        limit: (core::mem::size_of::<[IdtEntry; 256]>() - 1) as u16,
+        base: core::ptr::addr_of!(IDT) as u64,
+    };
+    asm!("lidt [{}]", in(reg) &idtr);
 }
 
 pub fn milliseconds() -> u64 {

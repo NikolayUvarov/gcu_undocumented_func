@@ -29,6 +29,12 @@ pub struct Image<'a> {
 }
 
 impl<'a> Image<'a> {
+    pub fn segments(&self) -> impl Iterator<Item = (usize, usize, u32)> + '_ {
+        self.headers
+            .chunks_exact(56)
+            .filter(|p| u32_at(p, 0) == PT_LOAD && word(p, 40) != 0)
+            .map(|p| (word(p, 16) - self.min, word(p, 40), u32_at(p, 4)))
+    }
     pub fn parse(data: &'a [u8]) -> Result<Self, &'static str> {
         if data.len() < 64
             || &data[..7] != b"\x7fELF\x02\x01\x01"

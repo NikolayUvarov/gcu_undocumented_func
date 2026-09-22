@@ -5,26 +5,43 @@
 extern crate alloc;
 
 use alloc::format;
+use core::alloc::{GlobalAlloc, Layout};
 use core::arch::asm;
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
-#[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
+// Never let a timer preempt a shell allocation while it holds the allocator
+// lock: another CPU can hold the scheduler lock while waiting for that same
+// allocator. All direct ALLOCATOR.lock() users must also have local IRQs off.
+struct IrqAllocator;
+#[global_allocator]
+static GLOBAL_ALLOCATOR: IrqAllocator = IrqAllocator;
+unsafe impl GlobalAlloc for IrqAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        interrupts::without(|| ALLOCATOR.alloc(layout))
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        interrupts::without(|| ALLOCATOR.dealloc(ptr, layout));
+    }
+}
 #[path = "../../common/abi.rs"]
 mod abi;
 use abi::BootInfo;
 mod context;
+mod cpu;
 mod elf;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
 mod input;
 mod interrupts;
 mod memory;
+mod paging;
 mod rtc;
 mod scheduler;
 mod task_state;
+mod user_heap;
 
 unsafe fn outb(port: u16, val: u8) {
     asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack));
@@ -190,6 +207,9 @@ fn list_programs(term: &mut Console) {
     term.print("  app   - ROTATING SQUARE\n");
     term.print("  app2  - BOUNCING SQUARE AND COUNTERS\n");
     term.print("  clock - DIGITAL CLOCK\n");
+    term.print("  dzen-clock - FIVE COLOR TIME INDICATORS\n");
+    term.print("  ping  - IPC CLIENT (SHARED MEMORY)\n");
+    term.print("  pong  - IPC SERVER (SUPERVISOR)\n");
     term.print("USE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.\n");
 }
 
@@ -326,19 +346,38 @@ fn command(term: &mut Console, line: &[u8]) {
     } else if !args.is_empty() {
         report(term, "THIS COMMAND TAKES NO ARGUMENTS");
     } else if streq(cmd, b"help") {
-        term.print("- list: programs\n- run <name> [&]: new instance\n- boot: run app\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
+        term.print("- list: programs\n- run <name> [&]: new instance\n- boot: run app\n- cpus: online processors\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
     } else if streq(cmd, b"list") {
         list_programs(term);
+    } else if streq(cmd, b"cpus") {
+        use core::sync::atomic::Ordering;
+        for i in 0..cpu::COUNT.load(Ordering::Acquire) {
+            term.print(&format!(
+                "CPU={} APIC={} ONLINE={} TICKS={}\n",
+                i,
+                cpu::apic_id(i),
+                cpu::ONLINE[i].load(Ordering::Acquire),
+                cpu::TICKS[i].load(Ordering::Relaxed)
+            ));
+        }
+    } else if streq(cmd, b"faults") {
+        for fault in scheduler::faults().into_iter().flatten() {
+            term.print(&format!(
+                "FAULT PID={} CPU={} VECTOR={} ERROR={:#x} RIP={:#x} ADDR={:#x}\n",
+                fault.pid, fault.cpu, fault.vector, fault.error, fault.rip, fault.address
+            ));
+        }
     } else if streq(cmd, b"ps") {
-        term.print("PID NAME STATE FOCUS RUNS CPU_TICKS SYSCALLS\n");
+        term.print("PID NAME STATE FOCUS CPU RUNS CPU_TICKS SYSCALLS\n");
         let mut count = 0;
         for task in scheduler::summaries().into_iter().flatten() {
             term.print(&format!(
-                "{} {} {} {} {} {} {}\n",
+                "{} {} {} {} {} {} {} {}\n",
                 task.pid,
                 task.name,
                 task.state,
                 if task.foreground { "FG" } else { "BG" },
+                task.cpu,
                 task.runs,
                 task.ticks,
                 task.calls
@@ -355,29 +394,16 @@ fn command(term: &mut Console, line: &[u8]) {
     } else if streq(cmd, b"stop") {
         term.print("SYSTEM HALTED. CPU GOING TO SLEEP...\n");
         scheduler::service();
-        unsafe {
-            asm!("cli");
-            loop {
-                asm!("hlt");
-            }
-        }
+        cpu::halt_all();
     } else if streq(cmd, b"heap") {
-        let before = ALLOCATOR.lock().used();
-        let dyn_str = format!(
+        let (used, free, freed) = scheduler::heap_test();
+        term.print(&format!(
             "Dynamic allocation works! Uptime: {} ms\n",
             interrupts::milliseconds()
-        );
-        term.print(&dyn_str);
-        drop(dyn_str);
-        let (used, free) = {
-            let heap = ALLOCATOR.lock();
-            (heap.used(), heap.free())
-        };
+        ));
         term.print(&format!(
             "HEAP: USED={} FREE={} TEST FREED={}\n",
-            used,
-            free,
-            used == before
+            used, free, freed
         ));
     } else {
         report(term, "UNKNOWN COMMAND");
@@ -392,8 +418,11 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         asm!("cli");
         init_serial();
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
+        paging::init().expect("Kernel page tables");
+        cpu::prepare(info).expect("CPU state");
         fb = scheduler::init(info).expect("Scheduler initialization failed");
         interrupts::init();
+        cpu::start(info);
     }
     let mut term = Console {
         fb,
@@ -406,7 +435,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         fg_color: 0x00A6E3A1,
     };
     term.clear();
-    term.print("MIND CORE. MULTITASKING ELF SHELL.\n");
+    term.print("MIND CORE v1.4 [Build: 2026-09-20]. SMP / RING 3 ELF SHELL.\n");
     term.print(&format!(
         "MEMORY MANAGER: {} MB HEAP.\n",
         info.heap_len / 1024 / 1024
@@ -462,8 +491,6 @@ fn panic(_info: &PanicInfo) -> ! {
         for &b in b"KERNEL PANIC\r\n" {
             serial_write_byte(b);
         }
-        loop {
-            asm!("hlt");
-        }
+        cpu::halt_all();
     }
 }

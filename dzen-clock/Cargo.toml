@@ -1,0 +1,8 @@
+[package]
+name = "dzen-clock"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+panic = "abort"
+opt-level = 3

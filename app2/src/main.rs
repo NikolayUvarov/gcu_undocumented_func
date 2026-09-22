@@ -10,6 +10,8 @@ mod abi;
 use abi::{BootInfo, SyscallMailbox, SYSCALL_UPTIME};
 #[path = "../../common/font.rs"]
 mod font;
+#[path = "../../common/user_memory.rs"]
+mod user_memory;
 #[path = "../../common/wait.rs"]
 mod wait;
 use font::FONT;
@@ -106,6 +108,14 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
     let size = 64
         .min(info.width.saturating_sub(48))
         .min(info.height.saturating_sub(top + 24));
+    let Some(mut sprite) = (unsafe { user_memory::Pages::new(mailbox, size * size * 4) }) else {
+        os_print(mailbox, b"[APP2] OUT OF MEMORY FOR SPRITE. EXITING.\r\n");
+        return;
+    };
+    for pixel in sprite.as_mut_slice().chunks_exact_mut(4) {
+        pixel.copy_from_slice(&FOREGROUND.to_le_bytes());
+    }
+    os_print(mailbox, b"[APP2] PRIVATE HEAP SPRITE READY (RW+NX).\r\n");
     let travel_x = info.width.saturating_sub(size + 48);
     let travel_y = info.height.saturating_sub(top + size + 24);
     let mut previous_square = None;
@@ -143,14 +153,19 @@ pub extern "sysv64" fn _start(info: &BootInfo, mailbox: *mut SyscallMailbox) {
         draw_text(info, 96, 72, frame_text, 0x00FFFFFF);
         draw_text(info, 24, 96, b"TSC:", FOREGROUND);
         draw_text(info, 96, 96, tick_text, 0x00FFFFFF);
-        fill_rect(
-            info,
-            24 + bounce(frame, travel_x),
-            top + bounce(frame, travel_y),
-            size,
-            size,
-            FOREGROUND,
-        );
+        let square_x = 24 + bounce(frame, travel_x);
+        let square_y = top + bounce(frame, travel_y);
+        for (index, pixel) in sprite.as_mut_slice().chunks_exact(4).enumerate() {
+            let x = square_x + index % size;
+            let y = square_y + index / size;
+            if x < info.width && y < info.height {
+                unsafe {
+                    info.fb_ptr
+                        .add(y * info.stride + x)
+                        .write_volatile(u32::from_le_bytes(pixel.try_into().unwrap()));
+                }
+            }
+        }
         previous_square = Some((24 + bounce(frame, travel_x), top + bounce(frame, travel_y)));
 
         // Log periodically instead of flooding the UART on every redraw.

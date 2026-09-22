@@ -18,10 +18,14 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailb
         // Keep SIMD values live across arbitrary timer preemptions. Other tasks
         // start with zeroed SIMD registers, making missing FXRSTOR detectable.
         asm!(
-            "pcmpeqd xmm0, xmm0",
+            "rdtsc",
+            "shl rdx, 32",
+            "or rax, rdx",
+            "mov r12, rax",
+            "movq xmm0, rax",
             "2:",
-            "pmovmskb eax, xmm0",
-            "cmp eax, 65535",
+            "movq rax, xmm0",
+            "cmp rax, r12",
             "jne 3f",
             "inc rdx",
             "jmp 2b",

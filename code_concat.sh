@@ -1,11 +1,11 @@
 #!/bin/bash
-# code_contat.sh — рекурсивно обходит каталог и склеивает все текстовые файлы
+# code_concat.sh — рекурсивно обходит каталог и склеивает все текстовые файлы
 # в один txt для передачи в контекст модели.
 #
 # Использование:
-#   ./code_contat.sh                      # обойти текущий каталог -> code_context.txt
-#   ./code_contat.sh <каталог>            # обойти указанный каталог
-#   ./code_contat.sh <каталог> <выход.txt>
+#   ./code_concat.sh                      # проект -> code_handoff/code_context.txt
+#   ./code_concat.sh <каталог>            # указанный каталог -> <каталог>/code_handoff/code_context.txt
+#   ./code_concat.sh <каталог> <выход.txt> # явно заданный выходной файл
 #
 # Переменные окружения:
 #   EXCLUDE_DIRS="dir1 dir2"   дополнительные каталоги к исключению
@@ -13,8 +13,8 @@
 
 set -euo pipefail
 
-SRC_DIR=${1:-.}
-OUT_FILE=${2:-code_context.txt}
+CONCAT_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR=${1:-$CONCAT_SCRIPT_DIR}
 MAX_SIZE=${MAX_SIZE:-1048576}
 
 if [ ! -d "$SRC_DIR" ]; then
@@ -23,17 +23,20 @@ if [ ! -d "$SRC_DIR" ]; then
 fi
 
 SRC_DIR=$(cd "$SRC_DIR" && pwd)
+OUT_FILE=${2:-$SRC_DIR/code_handoff/code_context.txt}
 
 # Выход кладём по абсолютному пути, чтобы не поймать его же при обходе.
 case "$OUT_FILE" in
     /*) : ;;
     *)  OUT_FILE="$(pwd)/$OUT_FILE" ;;
 esac
+mkdir -p -- "$(dirname -- "$OUT_FILE")"
 
 # Каталоги, которые не несут исходного кода.
 SKIP_DIRS="
 .git .svn .hg
 target build dist out
+code_handoff code-handoff
 node_modules vendor
 __pycache__ .venv venv
 .idea .vscode .cache
@@ -82,7 +85,7 @@ while IFS= read -r -d '' file; do
     } >> "$OUT_FILE"
 
     total=$((total + 1))
-done < <(find "$SRC_DIR" \( "${prune_args[@]}" \) -prune -o -type f -print0 | sort -z)
+done < <(find "$SRC_DIR" \( "${prune_args[@]}" \) -prune -o -type f ! -name 'code_context*.txt' -print0 | sort -z)
 
 echo "Записано файлов: $total (пропущено бинарных/крупных: $skipped)"
 echo "Результат: $OUT_FILE ($(stat -c%s "$OUT_FILE") байт)"

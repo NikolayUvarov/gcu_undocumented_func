@@ -2,8 +2,9 @@ use alloc::alloc::{alloc_zeroed, dealloc};
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
-// All allocations happen on the shell stack, which is never preempted. Interrupt
-// handlers neither allocate nor free; reclamation cannot free the active stack.
+// Owned kernel RAM. Allocations also serve process-memory syscalls; the global
+// allocator disables local IRQs while holding its lock. Task teardown happens
+// only after its CPU has switched away from its address space and saved context.
 pub struct Region {
     ptr: NonNull<u8>,
     layout: Layout,
