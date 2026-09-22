@@ -9,7 +9,17 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 source "$HOME/.cargo/env" 2>/dev/null || true
 export PATH="$HOME/.cargo/bin:$PATH"
 
-USER_CRATES=("kernel:kernel:kernel.elf" "app:app:app.elf" "app2:app2:app2.elf" "clock:clock:clock.elf" "dzen-clock:dzen-clock:dzenclk.elf" "ping:ping:ping.elf" "pong:pong:pong.elf" "rtc:rtc:rtc.elf")
+USER_CRATES=(
+    "kernel:kernel:kernel.elf"
+    "app:app:app.elf"
+    "app2:app2:app2.elf"
+    "clock:clock:clock.elf"
+    "dzen-clock:dzen-clock:dzenclk.elf"
+    "ping:ping:ping.elf"
+    "pong:pong:pong.elf"
+    "rtc:rtc:rtc.elf"
+    "ps2_kbd:ps2_kbd:ps2_kbd.elf"
+)
 
 for entry in "${USER_CRATES[@]}"; do
     crate_dir=${entry%%:*}

@@ -1,8 +1,5 @@
 use core::arch::global_asm;
 
-// Every entry uses [15 GPRs, vector, error, RIP, CS, RFLAGS, RSP, SS].
-// Ring-3 interrupts enter the CPU's private TSS.RSP0 stack. Contexts saved in a
-// task are copied out of that stack before dispatching another task.
 pub const SIZE: usize = 704;
 global_asm!(r#"
     .macro exception n
@@ -25,6 +22,7 @@ global_asm!(r#"
         jmp context_entry
     .endm
     interrupt task_timer_entry, 32
+    interrupt task_irq1_entry, 33
     interrupt task_ipi_entry, 48
     interrupt task_stop_entry, 49
     interrupt task_syscall_entry, 128
@@ -83,6 +81,7 @@ exception_table:
 
 unsafe extern "C" {
     pub fn task_timer_entry();
+    pub fn task_irq1_entry();
     pub fn task_ipi_entry();
     pub fn task_stop_entry();
     pub fn task_syscall_entry();
@@ -100,13 +99,13 @@ pub unsafe fn save(sp: usize, destination: usize) {
 pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
     let words = core::slice::from_raw_parts_mut((saved + 528) as *mut u64, 22);
     words.fill(0);
-    words[8] = crate::paging::USER_INFO as u64; // RDI
-    words[9] = crate::paging::USER_MAILBOX as u64; // RSI
+    words[8] = crate::paging::USER_INFO as u64;
+    words[9] = crate::paging::USER_MAILBOX as u64;
     words[17] = entry as u64;
-    words[18] = 0x23; // user code, RPL=3
-    words[19] = 0x202; // IF=1, IOPL=0
+    words[18] = 0x23;
+    words[19] = 0x202;
     words[20] = stack_top as u64;
-    words[21] = 0x1b; // user data, RPL=3
+    words[21] = 0x1b;
     *(saved as *mut u16) = 0x37f;
     *((saved + 24) as *mut u32) = 0x1f80;
     *((saved + 512) as *mut usize) = saved + 528;

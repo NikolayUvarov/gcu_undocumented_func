@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-pub const PROGRAM_COUNT: usize = 7; 
+pub const PROGRAM_COUNT: usize = 8; 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; PROGRAM_COUNT], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
@@ -20,6 +20,8 @@ pub const SYSCALL_MEM_SHARE: usize = 15;
 pub const SYSCALL_MEM_MAP: usize = 16;
 pub const SYSCALL_PORT_IN: usize = 17;
 pub const SYSCALL_PORT_OUT: usize = 18;
+pub const SYSCALL_IRQ_WAIT: usize = 19;
+pub const SYSCALL_INPUT_EVENT: usize = 20;
 
 pub const CAP_READ: u8  = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;

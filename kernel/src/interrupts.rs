@@ -81,29 +81,18 @@ pub unsafe fn init() {
     }
     IDT[8].ist = 1;
     IDT[2].ist = 2;
-    set_handler(
-        0x20,
-        super::context::task_timer_entry as *const () as u64,
-        cs,
-    );
+    set_handler(0x20, super::context::task_timer_entry as *const () as u64, cs);
+    set_handler(0x21, super::context::task_irq1_entry as *const () as u64, cs);
     set_handler(0x30, super::context::task_ipi_entry as *const () as u64, cs);
-    set_handler(
-        0x31,
-        super::context::task_stop_entry as *const () as u64,
-        cs,
-    );
+    set_handler(0x31, super::context::task_stop_entry as *const () as u64, cs);
     set_handler(0x27, spurious_master as *const () as u64, cs);
     set_handler(0x2f, spurious_slave as *const () as u64, cs);
     set_handler(0xff, spurious_master as *const () as u64, cs);
-    set_handler(
-        0x80,
-        super::context::task_syscall_entry as *const () as u64,
-        cs,
-    );
-    IDT[0x80].type_attr = 0xee; // only syscall is callable from ring 3
+    set_handler(0x80, super::context::task_syscall_entry as *const () as u64, cs);
+    IDT[0x80].type_attr = 0xee;
     load();
 
-    // Remap the 8259 PICs away from CPU exceptions; unmask only PIT IRQ0.
+    // Разрешаем IRQ0 (таймер) и IRQ1 (клавиатура PS/2) в маске PIC: 0xFC (11111100b)
     for (port, value) in [
         (0x20, 0x11),
         (0xA0, 0x11),
@@ -113,13 +102,13 @@ pub unsafe fn init() {
         (0xA1, 2),
         (0x21, 1),
         (0xA1, 1),
-        (0x21, 0xFE),
+        (0x21, 0xFC),
         (0xA1, 0xFF),
     ] {
         outb(port, value);
-        outb(0x80, 0); // I/O delay for PIC initialization.
+        outb(0x80, 0);
     }
-    // PIT channel 0, square-wave mode, approximately 100 Hz.
+
     let divisor: u16 = 11932;
     outb(0x43, 0x36);
     outb(0x40, divisor as u8);
@@ -139,8 +128,6 @@ pub fn milliseconds() -> u64 {
     TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS)
 }
 
-// Used around shell access to scheduler state. Timer preemption is disabled
-// inside interrupt gates already; restore the caller's original IF afterwards.
 pub fn without<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let flags: u64;

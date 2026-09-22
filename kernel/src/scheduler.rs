@@ -1,4 +1,4 @@
-use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP };
+use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP, SYSCALL_PORT_IN, SYSCALL_PORT_OUT, SYSCALL_IRQ_WAIT, SYSCALL_INPUT_EVENT };
 use crate::input::{Keyboard, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
@@ -9,10 +9,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 pub const MAX_TASKS: usize = 8;
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
-pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong", "rtc"];
+pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong", "rtc", "ps2_kbd"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), IOPort(u16) }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), IOPort(u16), Interrupt(u8) }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EpState { Unused, Idle, Sending(usize), Receiving(usize) }
@@ -47,7 +47,14 @@ impl Scheduler {
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
     fn focus(&mut self, slot: usize) { if self.foreground != 0 { if let Some(task) = self.tasks[self.foreground].as_mut() { task.input.clear(); } } self.shell_input.clear(); if slot != 0 { self.tasks[slot].as_mut().unwrap().input.clear(); } self.foreground = slot; self.dirty = true; }
-    fn poll_input(&mut self) { for _ in 0..32 { let Some(key) = self.keyboard.read() else { break; }; if key.background && self.foreground != 0 { let pid = self.tasks[self.foreground].as_ref().unwrap().pid; self.focus(0); self.notice = Some((pid, false)); } else if self.foreground == 0 { if !key.background { self.shell_input.push(key.shell); } } else if key.app != 0 { let task = self.tasks[self.foreground].as_mut().unwrap(); task.input.push(key.app); if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; } } } }
+    fn poll_serial(&mut self) {
+        for _ in 0..32 {
+            let Some(key) = self.keyboard.read_serial() else { break; };
+            if key.background && self.foreground != 0 { let pid = self.tasks[self.foreground].as_ref().unwrap().pid; self.focus(0); self.notice = Some((pid, false)); }
+            else if self.foreground == 0 { if !key.background { self.shell_input.push(key.shell); } }
+            else if key.app != 0 { let task = self.tasks[self.foreground].as_mut().unwrap(); task.input.push(key.app); if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; } }
+        }
+    }
     fn exit_current(&mut self, cpu: usize) {
         let task = self.tasks[self.current[cpu]].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited;
         for ep in self.endpoints.iter_mut() { if ep.state == EpState::Sending(self.current[cpu]) || ep.state == EpState::Receiving(self.current[cpu]) { ep.state = EpState::Idle; } }
@@ -71,14 +78,18 @@ impl Scheduler {
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited).count() }).unwrap_or(0);
         
         let mut cspace = [None; 32];
-        if program == 6 { // rtc driver
+        if program == 6 { // rtc
             self.endpoints[2].state = EpState::Idle;
             cspace[1] = Some(Capability::Endpoint(2, crate::abi::CAP_READ | crate::abi::CAP_WRITE | crate::abi::CAP_GRANT));
             cspace[2] = Some(Capability::IOPort(0x70));
             cspace[3] = Some(Capability::IOPort(0x71));
+        } else if program == 7 { // ps2_kbd driver
+            cspace[1] = Some(Capability::IOPort(0x60));
+            cspace[2] = Some(Capability::IOPort(0x64));
+            cspace[3] = Some(Capability::Interrupt(1));
         } else {
             cspace[1] = init_cap; 
-            cspace[2] = Some(Capability::Endpoint(2, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT)); // Доступ к RTC
+            cspace[2] = Some(Capability::Endpoint(2, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT));
         }
 
         self.tasks[slot] = Some(Task { pid, program, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), log_line_start: true, dirty: true, cspace });
@@ -93,12 +104,26 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         let registers = context::registers(sp); let vector = registers[15]; let cpu = cpu::id();
         if vector == 0x31 { asm!("cli"); loop { asm!("hlt"); } }
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
-        if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); } else if vector == 48 { cpu::eoi(); }
+        if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
+        else if vector == 33 { outb(0x20, 0x20); cpu::eoi(); } // IRQ1 PS/2
+        else if vector == 48 { cpu::eoi(); }
+        
         locked(|| {
             let s = scheduler(); let slot = s.current[cpu];
+
+            // Пробуждение обработчика IRQ 1 (вектор 33)
+            if vector == 33 {
+                for task in s.tasks.iter_mut().flatten() {
+                    if task.state == State::BlockedIrq(1) {
+                        task.state = State::Ready;
+                    }
+                }
+                return s.select(sp, cpu);
+            }
+
             if vector == 32 || vector == 48 {
                 cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
-                if cpu == 0 { s.poll_input(); } if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
+                if cpu == 0 { s.poll_serial(); } if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                 return s.select(sp, cpu);
             }
             if vector < 32 {
@@ -107,7 +132,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 s.faults[at] = Some(Fault { pid, cpu, vector, error: registers[16], rip: registers[17], address });
                 s.fault_cursor += 1; s.exit_current(cpu); return s.select(sp, cpu);
             }
-            if cpu == 0 { s.poll_input(); } if slot == 0 { return s.select(sp, cpu); }
+            if cpu == 0 { s.poll_serial(); } if slot == 0 { return s.select(sp, cpu); }
             if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
             
             let tasks_ptr = s.tasks.as_mut_ptr();
@@ -129,7 +154,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     }
                 }
                 SYSCALL_UPTIME => interrupts::milliseconds() as usize,
-                SYSCALL_ALLOC => task.heap.allocate(&mut task.space, request.arg1).unwrap_or(0), SYSCALL_FREE => { if task.heap.free(&mut task.space, request.arg1) { 0 } else { usize::MAX } }
+                SYSCALL_ALLOC => task.heap.allocate(&mut task.space, request.arg1).unwrap_or(0),
+                SYSCALL_FREE => { if task.heap.free(&mut task.space, request.arg1) { 0 } else { usize::MAX } }
                 SYSCALL_WAIT => {
                     let now = interrupts::milliseconds(); let duration = request.arg1.min(60_000).div_ceil(10).max(1) as u64 * 10;
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), now as usize);
@@ -173,8 +199,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     }
                 }
                 SYSCALL_MEM_SHARE => {
-                    let vaddr = request.arg1;
-                    let size = request.arg2;
+                    let vaddr = request.arg1; let size = request.arg2;
                     if let Some(phys) = task.space.readable(vaddr) {
                         if let Some(cap_slot) = task.cspace.iter().skip(1).position(|c| c.is_none()) {
                             let actual_slot = cap_slot + 1;
@@ -191,7 +216,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                         } else { usize::MAX - 1 }
                     } else { usize::MAX }
                 }
-                17 => { // SYSCALL_PORT_IN
+                SYSCALL_PORT_IN => {
                     let cap_idx = request.arg1; let port = request.arg2 as u16;
                     if cap_idx < 32 {
                         if let Some(Capability::IOPort(p)) = task.cspace[cap_idx] {
@@ -199,13 +224,44 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                         } else { usize::MAX - 1 }
                     } else { usize::MAX }
                 }
-                18 => { // SYSCALL_PORT_OUT
+                SYSCALL_PORT_OUT => {
                     let cap_idx = request.arg1; let port = request.arg2 as u16; let val = request.msg[0] as u8;
                     if cap_idx < 32 {
                         if let Some(Capability::IOPort(p)) = task.cspace[cap_idx] {
                             if p == port { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack)); 0 } else { usize::MAX - 2 }
                         } else { usize::MAX - 1 }
                     } else { usize::MAX }
+                }
+                SYSCALL_IRQ_WAIT => {
+                    let cap_idx = request.arg1;
+                    if cap_idx < 32 {
+                        if let Some(Capability::Interrupt(irq)) = task.cspace[cap_idx] {
+                            task.state = State::BlockedIrq(irq);
+                            core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), 0);
+                            return s.select(sp, cpu);
+                        } else { usize::MAX - 1 }
+                    } else { usize::MAX }
+                }
+                SYSCALL_INPUT_EVENT => {
+                    // Прием структурированного события ввода от userspace-драйвера
+                    let app_byte = request.arg1 as u8;
+                    let shell_byte = request.arg2 as u8;
+                    let is_bg = request.msg[0] != 0;
+
+                    if is_bg && s.foreground != 0 {
+                        let pid = s.tasks[s.foreground].as_ref().unwrap().pid;
+                        s.focus(0);
+                        s.notice = Some((pid, false));
+                    } else if s.foreground == 0 {
+                        if !is_bg { s.shell_input.push(shell_byte); }
+                    } else if app_byte != 0 {
+                        let fg_task = s.tasks[s.foreground].as_mut().unwrap();
+                        fg_task.input.push(app_byte);
+                        if matches!(fg_task.state, State::Sleeping(_)) {
+                            fg_task.state = State::Ready;
+                        }
+                    }
+                    0
                 }
                 SYSCALL_IPC_SEND => {
                     let cap_idx = request.arg1;
@@ -217,6 +273,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                                     Some(Capability::Endpoint(t_id, t_r)) => Some(Capability::Endpoint(t_id, t_r & (request.msg[1] as u8))),
                                     Some(Capability::Memory(p, sz)) => Some(Capability::Memory(p, sz)),
                                     Some(Capability::IOPort(p)) => Some(Capability::IOPort(p)),
+                                    Some(Capability::Interrupt(irq)) => Some(Capability::Interrupt(irq)),
                                     None => None,
                                 }
                             } else { None };
@@ -250,7 +307,12 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                                     let recv_idx = request.arg2; let transfer_cap_idx = (*sender_ptr).msg[0];
                                     if recv_idx > 0 && recv_idx < 32 && transfer_cap_idx > 0 && transfer_cap_idx < 32 {
                                         if let Some(cap) = sender_task.cspace[transfer_cap_idx] {
-                                            let new_cap = match cap { Capability::Endpoint(s_id, s_r) => Capability::Endpoint(s_id, s_r & (*sender_ptr).msg[1] as u8), Capability::Memory(p, sz) => Capability::Memory(p, sz), Capability::IOPort(p) => Capability::IOPort(p) };
+                                            let new_cap = match cap {
+                                                Capability::Endpoint(s_id, s_r) => Capability::Endpoint(s_id, s_r & (*sender_ptr).msg[1] as u8),
+                                                Capability::Memory(p, sz) => Capability::Memory(p, sz),
+                                                Capability::IOPort(p) => Capability::IOPort(p),
+                                                Capability::Interrupt(irq) => Capability::Interrupt(irq),
+                                            };
                                             task.cspace[recv_idx] = Some(new_cap);
                                         }
                                     }
@@ -278,7 +340,7 @@ pub fn kill(pid: u64) -> Result<(), &'static str> { locked(|| unsafe { let s = s
 pub struct Summary { pub pid: u64, pub name: &'static str, pub state: &'static str, pub foreground: bool, pub runs: u64, pub ticks: u64, pub calls: u64, pub cpu: usize }
 pub fn summaries() -> [Option<Summary>; MAX_TASKS] { locked(|| unsafe { let s = scheduler(); core::array::from_fn(|i| { s.tasks[i + 1].as_ref().map(|t| Summary { pid: t.pid, name: PROGRAM_NAMES[t.program], state: if s.current.contains(&(i + 1)) { "RUNNING" } else { t.state.label() }, foreground: s.foreground == i + 1, runs: t.runs, ticks: t.ticks, calls: t.calls, cpu: t.cpu }) }) }) }
 pub fn logs(pid: u64, buffer: &mut [u8]) -> Result<usize, &'static str> { locked(|| unsafe { let s = scheduler(); let slot = s.find(pid).ok_or("NO SUCH PID")?; let log = &mut s.tasks[slot].as_mut().unwrap().log; let mut len = 0; while len < buffer.len() { let Some(byte) = log.pop() else { break; }; buffer[len] = byte; len += 1; } Ok(len) }) }
-pub fn input() -> Option<u8> { locked(|| unsafe { let s = scheduler(); s.poll_input(); s.shell_input.pop() }) }
+pub fn input() -> Option<u8> { locked(|| unsafe { let s = scheduler(); s.poll_serial(); s.shell_input.pop() }) }
 pub fn notice() -> Option<(u64, bool)> { locked(|| unsafe { scheduler().notice.take() }) }
 pub fn dirty() { locked(|| unsafe { scheduler().dirty = true; }); }
 pub fn service() {
