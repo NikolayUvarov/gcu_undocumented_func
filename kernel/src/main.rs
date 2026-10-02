@@ -392,7 +392,6 @@ fn command(term: &mut Console, line: &[u8]) {
         term.clear();
     } else if streq(cmd, b"stop") {
         term.print("SYSTEM HALTED. CPU GOING TO SLEEP...\n");
-        scheduler::service();
         cpu::halt_all();
     } else if streq(cmd, b"heap") {
         let (used, free, freed) = scheduler::heap_test();
@@ -419,7 +418,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
-        fb = scheduler::init(info).expect("Scheduler init failed"); scheduler::spawn(6, true).expect("RTC spawn"); scheduler::spawn(7, true).expect("KBD spawn");
+        fb = scheduler::init(info).expect("Scheduler init failed"); scheduler::spawn(6, true).expect("RTC spawn"); scheduler::spawn(7, true).expect("KBD spawn"); scheduler::spawn(8, true).expect("COMP spawn");
         interrupts::init();
         cpu::start(info);
     }
@@ -478,7 +477,6 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
                 // a time slice at every iteration through idle().
             }
         }
-        scheduler::service();
         scheduler::idle();
     }
 }

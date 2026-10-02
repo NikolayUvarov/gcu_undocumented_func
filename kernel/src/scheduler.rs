@@ -1,4 +1,4 @@
-use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP, SYSCALL_PORT_IN, SYSCALL_PORT_OUT, SYSCALL_IRQ_WAIT, SYSCALL_INPUT_EVENT };
+use crate::abi::{ BootInfo, ProgramImage, SyscallMailbox, RTC_UNAVAILABLE, SYSCALL_ALLOC, SYSCALL_EXIT, SYSCALL_FREE, SYSCALL_UPTIME, SYSCALL_WAIT, SYSCALL_IPC_SEND, SYSCALL_IPC_RECV, SYSCALL_ENDPOINT_CREATE, SYSCALL_SPAWN, SYSCALL_CAP_DROP, SYSCALL_MEM_SHARE, SYSCALL_MEM_MAP, SYSCALL_PORT_IN, SYSCALL_PORT_OUT, SYSCALL_IRQ_WAIT, SYSCALL_INPUT_EVENT, SYSCALL_COMPOSITOR_PULL };
 use crate::input::{Keyboard, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 pub const MAX_TASKS: usize = 8;
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
-pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong", "rtc", "ps2_kbd"];
+pub const PROGRAM_NAMES: [&str; crate::abi::PROGRAM_COUNT] = ["app", "app2", "clock", "dzen-clock", "ping", "pong", "rtc", "ps2_kbd", "compositor"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), IOPort(u16), Interrupt(u8) }
@@ -22,7 +22,7 @@ pub struct Endpoint { pub state: EpState }
 pub fn heap_test() -> (usize, usize, bool) { locked(|| { let before = crate::ALLOCATOR.lock().used(); let test = alloc::format!("Dynamic allocation test at {} ms", interrupts::milliseconds()); core::hint::black_box(&test); drop(test); let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free(), heap.used() == before) }) }
 
 struct Task { pid: u64, program: usize, state: State, sp: usize, cpu: usize, space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region, runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Region, abi: Region, input: Queue<128>, log: Queue<4096>, log_line_start: bool, dirty: bool, cspace: [Option<Capability>; 32] }
-struct Scheduler { boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX], faults: [Option<Fault>; 16], fault_cursor: usize, next_pid: u64, foreground: usize, keyboard: Keyboard, shell_input: Queue<128>, shell_screen: Region, shadow: Region, dirty: bool, shadow_valid: bool, notice: Option<(u64, bool)>, endpoints: [Endpoint; 64] }
+struct Scheduler { boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX], faults: [Option<Fault>; 16], fault_cursor: usize, next_pid: u64, foreground: usize, keyboard: Keyboard, shell_input: Queue<128>, shell_screen: Region, dirty: bool, notice: Option<(u64, bool)>, endpoints: [Endpoint; 64] }
 
 static mut SCHEDULER: Option<Scheduler> = None;
 static LOCK: AtomicBool = AtomicBool::new(false);
@@ -34,8 +34,8 @@ unsafe fn scheduler() -> &'static mut Scheduler { (*core::ptr::addr_of_mut!(SCHE
 
 pub fn init(info: &BootInfo) -> Result<*mut u32, &'static str> {
     let bytes = info.stride.checked_mul(info.height).and_then(|n| n.checked_mul(4)).ok_or("FRAMEBUFFER SIZE OVERFLOW")?;
-    let shell_screen = Region::new(bytes, 16)?; let fb = shell_screen.ptr().cast(); let shadow = Region::new(bytes, 16)?;
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, shadow, dirty: true, shadow_valid: false, notice: None, endpoints: core::array::from_fn(|_| Endpoint { state: EpState::Unused }) }); } Ok(fb)
+    let shell_screen = Region::new(bytes.div_ceil(4096) * 4096, 4096)?; let fb = shell_screen.ptr().cast(); 
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, dirty: true, notice: None, endpoints: core::array::from_fn(|_| Endpoint { state: EpState::Unused }) }); } Ok(fb)
 }
 
 impl Scheduler {
@@ -70,6 +70,9 @@ impl Scheduler {
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::new(STACK_SIZE, 4096)?; let screen = Region::new(self.shell_screen.len().div_ceil(4096) * 4096, 4096)?; let abi = Region::new(8192, 4096)?;
+        
+        let gop_phys = self.boot.fb_ptr as usize; // Фиксируем физический адрес
+        
         let mut info = self.boot; info.fb_ptr = paging::USER_SCREEN as *mut u32; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; crate::abi::PROGRAM_COUNT]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
@@ -83,10 +86,13 @@ impl Scheduler {
             cspace[1] = Some(Capability::Endpoint(2, crate::abi::CAP_READ | crate::abi::CAP_WRITE | crate::abi::CAP_GRANT));
             cspace[2] = Some(Capability::IOPort(0x70));
             cspace[3] = Some(Capability::IOPort(0x71));
-        } else if program == 7 { // ps2_kbd driver
+        } else if program == 7 { // ps2_kbd
             cspace[1] = Some(Capability::IOPort(0x60));
             cspace[2] = Some(Capability::IOPort(0x64));
             cspace[3] = Some(Capability::Interrupt(1));
+        } else if program == 8 { // compositor
+            let fb_bytes = info.stride * info.height * 4;
+            cspace[2] = Some(Capability::Memory(gop_phys, fb_bytes)); // Маппинг реального физического адреса
         } else {
             cspace[1] = init_cap; 
             cspace[2] = Some(Capability::Endpoint(2, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT));
@@ -105,18 +111,15 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         if vector == 0x31 { asm!("cli"); loop { asm!("hlt"); } }
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
         if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
-        else if vector == 33 { outb(0x20, 0x20); cpu::eoi(); } // IRQ1 PS/2
+        else if vector == 33 { outb(0x20, 0x20); cpu::eoi(); }
         else if vector == 48 { cpu::eoi(); }
         
         locked(|| {
             let s = scheduler(); let slot = s.current[cpu];
 
-            // Пробуждение обработчика IRQ 1 (вектор 33)
             if vector == 33 {
                 for task in s.tasks.iter_mut().flatten() {
-                    if task.state == State::BlockedIrq(1) {
-                        task.state = State::Ready;
-                    }
+                    if task.state == State::BlockedIrq(1) { task.state = State::Ready; }
                 }
                 return s.select(sp, cpu);
             }
@@ -243,7 +246,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     } else { usize::MAX }
                 }
                 SYSCALL_INPUT_EVENT => {
-                    // Прием структурированного события ввода от userspace-драйвера
                     let app_byte = request.arg1 as u8;
                     let shell_byte = request.arg2 as u8;
                     let is_bg = request.msg[0] != 0;
@@ -255,13 +257,24 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     } else if s.foreground == 0 {
                         if !is_bg { s.shell_input.push(shell_byte); }
                     } else if app_byte != 0 {
-                        let fg_task = s.tasks[s.foreground].as_mut().unwrap();
+                        let fg_task = (*tasks_ptr.add(s.foreground)).as_mut().unwrap();
                         fg_task.input.push(app_byte);
-                        if matches!(fg_task.state, State::Sleeping(_)) {
-                            fg_task.state = State::Ready;
-                        }
+                        if matches!(fg_task.state, State::Sleeping(_)) { fg_task.state = State::Ready; }
                     }
                     0
+                }
+                SYSCALL_COMPOSITOR_PULL => {
+                    let cap_idx = request.arg1;
+                    if cap_idx < 32 {
+                        let source_phys = if s.foreground == 0 { s.shell_screen.ptr() as usize } else { s.tasks[s.foreground].as_ref().unwrap().screen.ptr() as usize };
+                        let is_dirty = if s.foreground == 0 { let d = s.dirty; s.dirty = false; d } else { let t = (*tasks_ptr.add(s.foreground)).as_mut().unwrap(); let d = s.dirty || t.dirty; s.dirty = false; t.dirty = false; d };
+                        
+                        if is_dirty {
+                            let fb_bytes = s.boot.stride * s.boot.height * 4;
+                            task.cspace[cap_idx] = Some(Capability::Memory(source_phys, fb_bytes));
+                            1
+                        } else { 0 }
+                    } else { usize::MAX }
                 }
                 SYSCALL_IPC_SEND => {
                     let cap_idx = request.arg1;
@@ -343,14 +356,4 @@ pub fn logs(pid: u64, buffer: &mut [u8]) -> Result<usize, &'static str> { locked
 pub fn input() -> Option<u8> { locked(|| unsafe { let s = scheduler(); s.poll_serial(); s.shell_input.pop() }) }
 pub fn notice() -> Option<(u64, bool)> { locked(|| unsafe { scheduler().notice.take() }) }
 pub fn dirty() { locked(|| unsafe { scheduler().dirty = true; }); }
-pub fn service() {
-    locked(|| unsafe {
-        let s = scheduler(); debug_assert_eq!(s.current[0], 0);
-        for (index, task) in s.tasks.iter_mut().enumerate().skip(1) { if !s.current.contains(&index) && task.as_ref().is_some_and(|t| t.state == State::Exited) { *task = None; } }
-        let source = if s.foreground == 0 { if !s.dirty { return; } s.shell_screen.ptr() } else { if s.current.contains(&s.foreground) { return; } let task = s.tasks[s.foreground].as_mut().unwrap(); if !s.dirty && !task.dirty { return; } task.dirty = false; task.screen.ptr() } as *const u32;
-        let shadow = s.shadow.ptr() as *mut u32;
-        for y in 0..s.boot.height { for x in 0..s.boot.width { let offset = y * s.boot.stride + x; let pixel = core::ptr::read_volatile(source.add(offset)); if pixel != core::ptr::read(shadow.add(offset)) || !s.shadow_valid { core::ptr::write_volatile(s.boot.fb_ptr.add(offset), pixel); core::ptr::write(shadow.add(offset), pixel); } } }
-        s.dirty = false; s.shadow_valid = true;
-    });
-}
 pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { scheduler().states(cpu::id())[1..].iter().any(|s| *s == State::Ready) }); if ready { asm!("int 0x80"); } else { asm!("sti", "hlt", "cli"); } }); }
