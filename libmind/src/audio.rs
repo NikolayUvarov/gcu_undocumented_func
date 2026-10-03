@@ -1,4 +1,4 @@
-//! Client for the audio_gw audio gateway: 16-bit stereo 48 kHz PCM via a shared buffer, tones.
+//! Client for the audio_gw audio gateway: 16-bit stereo 48 kHz PCM via a shared buffer, tones, microphone capture.
 use crate::abi::*;
 use crate::ipc::{Endpoint, Message};
 use crate::mem::Pages;
@@ -87,4 +87,22 @@ impl Stream {
         self.filled = 0;
         Ok(())
     }
+}
+
+/// Starts microphone capture (48 kHz stereo); Err(NotFound) without a capture-capable device.
+pub fn record_start() -> Result<()> { request(Message::new(AUDIO_RECORD_START, 0)).map(drop) }
+
+/// Stops microphone capture.
+pub fn record_stop() -> Result<()> { request(Message::new(AUDIO_RECORD_STOP, 0)).map(drop) }
+
+/// Copies captured interleaved L/R samples into `out`; returns (samples, overflow). 0 samples means nothing new yet.
+pub fn record_read(out: &mut [i16]) -> Result<(usize, bool)> {
+    let channel = channel()?;
+    let capacity = (out.len() * 2).min(CHUNK) & !4095;
+    if capacity == 0 { return Ok((0, false)); }
+    let [bytes, overflow] = request(Message::new(AUDIO_RECORD_READ | capacity << 8, 0).with_cap(channel.cap, 0))?;
+    let samples = (bytes / 2).min(out.len());
+    let data = channel.pages.as_slice();
+    for (i, sample) in out[..samples].iter_mut().enumerate() { *sample = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]); }
+    Ok((samples, overflow != 0))
 }

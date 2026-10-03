@@ -144,6 +144,8 @@ pub const VFS_STAT: usize = 5;
 // is an endpoint for the child's INIT slot; reply msg[2] = PID or error. With msg[2] = 0 and msg[3] = LOADER_LIST
 // the capability is a memory page: the loader writes the program list there and replies with its length.
 pub const LOADER_LIST: usize = 2;
+// With msg[2] = 0 and msg[3] = LOADER_RUN the capability is a memory page with `name\0arguments\0`: start with arguments.
+pub const LOADER_RUN: usize = 1;
 // init: CALL on EP_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
 // ERR_BUSY if it is running, ERR_NOT_FOUND if there is no such service.
 
@@ -155,6 +157,10 @@ pub const SPAWN_BOOT: usize = 1 << 63;
 pub const SPAWN_SERVICE: usize = 1; // single instance, not counted in MAX_APPS (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
 pub const SPAWN_GRANTS_MAX: usize = 16;
+// Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
+// read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
+pub const ARGS_OFFSET: usize = 2048;
+pub const ARGS_MAX: usize = 1024;
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub child: u8, pub own: u8, pub rights: u8, pub reserved: u8 }
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
@@ -192,6 +198,11 @@ pub const AUDIO_PLAY: usize = 2;
 pub const AUDIO_TONE: usize = 3;
 pub const AUDIO_STOP: usize = 4;
 pub const AUDIO_WAIT: usize = 5; // the reply is deferred until the argument's number of buffers is free in the DMA ring
+// Microphone (AC97 PCM in, 48 kHz stereo S16): START begins capture; READ copies completed buffers into the passed
+// memory capability (argument = capacity in bytes), reply msg[2] = bytes, msg[3] = 1 if the ring overflowed; STOP ends it.
+pub const AUDIO_RECORD_START: usize = 6;
+pub const AUDIO_RECORD_READ: usize = 7;
+pub const AUDIO_RECORD_STOP: usize = 8;
 // Speech synthesis: capability to a page of UTF-8 text, msg[2]=TTS_SAY|length<<8, msg[3]=pitch Hz|rate %<<16 (0 for default).
 pub const TTS_SAY: usize = 1;
 pub const AUDIO_RATE: usize = 48_000;

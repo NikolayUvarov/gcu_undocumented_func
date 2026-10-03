@@ -46,7 +46,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `usb_storage` | endpoint 7, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
 | `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
 | `loader` | endpoint 8, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
-| `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
+| `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
 | `tts` | endpoint 9, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `shell` | screen, init/loader and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
@@ -106,7 +106,7 @@ mind::tts::say("Привет. Я разум корабля.")?;          // bloc
 mind::tts::say_with("Hello world.", 140, 90)?;         // pitch 140 Hz, 90 % rate
 ```
 
-`RUN say` speaks `say.txt` from the boot disk, or a greeting. The same synthesizer modules build on the host: `rustc --edition=2021 -O tests/tts_host.rs -o /tmp/tts_host && /tmp/tts_host "текст" out.wav` writes a 16 kHz WAV, and `rustc --edition=2021 --test tests/tts_host.rs` runs the text-rule tests. Intelligibility was tuned against the offline Vosk small models: on 30 Russian test phrases about 68 % of the words are recognized (59 % without the stress dictionary), on 30 everyday English phrases about 53 % (42 % with spelling rules only); the voice is clearly synthetic.
+`say [-p <pitch Hz>] [-r <rate %>] [text]` speaks the text given on the command line (`say привет мир` — the shell accepts UTF-8 from the UART), or `say.txt` from the boot disk, or a greeting. The same synthesizer modules build on the host: `rustc --edition=2021 -O tests/tts_host.rs -o /tmp/tts_host && /tmp/tts_host "текст" out.wav` writes a 16 kHz WAV, and `rustc --edition=2021 --test tests/tts_host.rs` runs the text-rule tests. Intelligibility was tuned against the offline Vosk small models: on 30 Russian test phrases about 68 % of the words are recognized (59 % without the stress dictionary), on 30 everyday English phrases about 53 % (42 % with spelling rules only); the voice is clearly synthetic.
 
 ### Program loading
 
@@ -135,7 +135,7 @@ Each request is a `CALL` carrying a capability for the client's 4 KiB transfer p
 
 ### Audio gateway
 
-`audio_gw` drives an AC97 controller found on PCI by the kernel: a ring of 32 DMA buffers of 4 KiB (48 kHz, 16-bit stereo), buffer-completion interrupts delivered as IPC messages, and client PCM copied from the client's shared buffer. `mind::audio` offers `info`, `tone(hz, ms)`, `play`/`play_all` (interleaved `i16`) and `stop`. `RUN beep` plays three tones and a PCM sweep. When the ring is full, `AUDIO_WAIT` parks the client with a saved reply capability and the gateway answers it from the AC97 interrupt that frees buffers, so producers wait for space instead of polling. `mind::audio::Stream` collects samples in the shared buffer and hands them over in 16 KiB blocks. Add the device to QEMU with, for example, `-audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0` (or a `pa`/`dsound`/`coreaudio` audiodev). Without AC97 the gateway answers `DEVICE=false`.
+`audio_gw` drives an AC97 controller found on PCI by the kernel: a ring of 32 DMA buffers of 4 KiB (48 kHz, 16-bit stereo), buffer-completion interrupts delivered as IPC messages, and client PCM copied from the client's shared buffer. `mind::audio` offers `info`, `tone(hz, ms)`, `play`/`play_all` (interleaved `i16`) and `stop`. `RUN beep` plays three tones and a PCM sweep. The microphone side is a second ring of 16 capture buffers (AC97 PCM in, 48 kHz stereo): `AUDIO_RECORD_START/READ/STOP`, `mind::audio::record_start`, `record_read`, `record_stop`. `listen [seconds]` (1–10, default 3) records with a level meter on its screen, reports frames, peak and RMS, and plays the recording back. QEMU's `wav` audiodev has no capture; with `-audiodev none` the microphone delivers silence at the real rate (the `listen` test suite uses it), with `pa`/`alsa`/`dsound`/`coreaudio` it records the host microphone. When the ring is full, `AUDIO_WAIT` parks the client with a saved reply capability and the gateway answers it from the AC97 interrupt that frees buffers, so producers wait for space instead of polling. `mind::audio::Stream` collects samples in the shared buffer and hands them over in 16 KiB blocks. Add the device to QEMU with, for example, `-audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0` (or a `pa`/`dsound`/`coreaudio` audiodev). Without AC97 the gateway answers `DEVICE=false`.
 
 ---
 
@@ -327,10 +327,13 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN clock` — display a large digital clock (`clock.elf`) in 24-hour `HH:MM:SS` format, with time changes also printed to the UART console.
 * `RUN files` — list the boot disk and read files through `vfs_server`.
 * `RUN beep` — play tones and PCM through `audio_gw`.
-* `RUN say` — speak `say.txt` from the disk (or a greeting) through `tts`.
+* `say [-p <Hz>] [-r <%>] [text]` — speak the text (or `say.txt`, or a greeting) through `tts`.
+* `listen [seconds]` — record from the microphone, show the level, report peak/RMS and play it back.
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
-* `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
+* `RUN <name> [arguments] &` — launch a new background instance and retain the shell. Arguments reach the program through `mind::process::args()`.
+* `<name> [arguments]` — any word that is not a shell command runs the program of that name in the foreground (`say hello`, `listen 2`).
+* `RUN <name> [arguments]` (without `&`) runs in the foreground. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
 * `PS` — show PID, program, state, foreground/background, assigned CPU, scheduling count, CPU timer ticks, and syscall count. The shell is a task like the others; the footer shows its PID.
 * `FG <id>` — show an existing application's screen (services have none) and route keyboard/UART input to it, preserving its PID and state.
 * `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
@@ -461,7 +464,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
 | 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
-| 13 | SPAWN | name, length; msg = [image memory slot or `SPAWN_BOOT` \| boot index, ELF length, grant array, count \| flags << 8] → PID — spawn privilege; boot images and services need the platform privilege |
+| 13 | SPAWN | `name\0arguments`, length; msg = [image memory slot or `SPAWN_BOOT` \| boot index, ELF length, grant array, count \| flags << 8] → PID — spawn privilege; boot images and services need the platform privilege |
 | 32 | PLATFORM_CAP | kind, argument; msg[0] = second argument → new slot — platform privilege (`init`) |
 | 33 | DEVICE_FIND | PCI class, mask; msg[0] = n-th match → device index — platform privilege |
 | 34–43 | TASK_LIST, TASK_KILL, FOCUS, TASK_LOGS, CONSOLE_READ, NOTICE, FAULTS, CPU_INFO, KERNEL_HEAP, HALT | process control for the shell (see `common/abi.rs`) — control privilege |

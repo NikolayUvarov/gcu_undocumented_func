@@ -1,0 +1,29 @@
+# 022 — Audio tools: `say <text>` and `listen` (program arguments, AC97 capture) — done
+
+**Type:** feature · **Priority:** medium · **Status:** done (2026-10-03) · **Roadmap:** track G (user services) — does not change the IPC model
+
+## Problem
+
+Sound is reachable only through demos: `beep` plays fixed tones, `say` speaks `say.txt` or a fixed greeting. Programs cannot receive arguments, so `say hello` is impossible, and nothing records sound: the AC97 PCM-in channel is unused.
+
+## Plan
+
+- Program arguments: `SPAWN` takes `name\0arguments` (up to 1 KiB of arguments); the kernel copies the arguments into the child's read-only info page; `mind::process::args()` returns them. `loader` accepts a run request with a memory page `name\0arguments`; `mind::process::spawn_with_args`.
+- Shell: `run <name> [arguments] [&]`; a word that is not a shell command runs the program of that name in the foreground (`say hello`). UTF-8 input from the UART is accepted (Cyrillic for `say`).
+- `say [-p <pitch Hz>] [-r <rate %>] [text]`: speaks the text; without text, `say.txt` or the greeting as before.
+- `audio_gw`: AC97 PCM-in ring (microphone, 48 kHz stereo), operations `AUDIO_RECORD_START/READ/STOP`; `mind::audio::Recorder`.
+- `listen [seconds]` (1–10, default 3): records from the microphone with a level meter on screen, reports frames, peak and RMS, then plays the recording back.
+
+## Acceptance criteria
+
+- `run say hello world &` speaks the text (captured audio of the expected length); `say` without arguments works as before.
+- `listen 1` records about 48 000 frames in QEMU and reports the level; the playback reaches the audio output.
+- All QEMU suites pass.
+
+## Related
+
+[017](../issues-done/017-tts-on-audio-gateway.done), [ROADMAP](../ROADMAP.md) track G.
+
+## Resolution
+
+`SPAWN` takes `name\0arguments`; the kernel copies up to 1 KiB of arguments into the child's read-only info page (`mind::process::args()`). `loader` accepts a run request with a page `name\0arguments` (`mind::process::spawn_with_args`). The shell runs `run <name> [arguments] [&]` and any non-command word as a program in the foreground, and accepts UTF-8 from the UART. `say` takes `-p`, `-r` and the text. `audio_gw` gained an AC97 PCM-in ring (16 buffers) with `AUDIO_RECORD_START/READ/STOP`; `init` gives it a 200 KiB DMA region. New program `listen/`. New QEMU suite `listen` (audiodev `none`): 48 000 frames recorded in 1 s, playback, arguments, run by name; all other suites pass.

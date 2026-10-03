@@ -33,7 +33,7 @@ fn task_name(path: &[u8]) -> FixedBuf<NAME_MAX> {
     name
 }
 
-fn load(name: &[u8], init: Option<usize>) -> Result<u64, Error> {
+fn load(name: &[u8], args: &[u8], init: Option<usize>) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
     path_for(name, &mut path)?;
     let task = task_name(path.as_bytes());
@@ -49,7 +49,13 @@ fn load(name: &[u8], init: Option<usize>) -> Result<u64, Error> {
     let standard = [grant(SLOT_RTC, OWN_RTC, client), grant(SLOT_VFS, OWN_VFS, client), grant(SLOT_AUDIO, OWN_AUDIO, client),
                     grant(SLOT_LOADER, SLOT_SERVICE, client), grant(SLOT_TTS, OWN_TTS, client), grant(SLOT_INIT, init.unwrap_or(0), CAP_READ | CAP_WRITE | CAP_GRANT)];
     let grants = if init.is_some() { &standard[..] } else { &standard[..5] };
-    let result = mind::process::spawn_raw(task.as_bytes(), Image::Memory { cap, len: size }, grants, SPAWN_SCREEN);
+    // SPAWN takes `name\0arguments`.
+    let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
+    let args = &args[..args.len().min(ARGS_MAX)];
+    text[..task.as_bytes().len()].copy_from_slice(task.as_bytes());
+    let mut len = task.as_bytes().len();
+    if !args.is_empty() { text[len + 1..len + 1 + args.len()].copy_from_slice(args); len += 1 + args.len(); }
+    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, grants, SPAWN_SCREEN);
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
@@ -82,10 +88,22 @@ fn main(_info: &'static BootInfo) {
         let code = if request.data == [0, LOADER_LIST] {
             // Program list into the caller's memory page.
             match Mapping::new(RECEIVED_CAP) { Ok(mut page) => listing(page.as_mut_slice()), Err(error) => error.code() }
+        } else if request.data == [0, LOADER_RUN] {
+            // Start with arguments: the page holds `name\0arguments\0`.
+            match Mapping::new(RECEIVED_CAP) {
+                Ok(page) => {
+                    let bytes = page.as_slice();
+                    let name_end = bytes.iter().position(|&b| b == 0).unwrap_or(0);
+                    let rest = &bytes[(name_end + 1).min(bytes.len())..];
+                    let args = &rest[..rest.iter().position(|&b| b == 0).unwrap_or(rest.len()).min(ARGS_MAX)];
+                    if name_end == 0 || name_end > NAME_MAX { ERR_INVALID } else { match load(&bytes[..name_end], args, None) { Ok(pid) => pid as usize, Err(error) => error.code() } }
+                }
+                Err(error) => error.code(),
+            }
         } else {
             // Spawn: name in two message words, optional endpoint for the child's INIT slot.
             let (packed, len) = mind::process::unpack_name(request.data);
-            match load(&packed[..len], request.cap_received.then_some(RECEIVED_CAP)) { Ok(pid) => pid as usize, Err(error) => error.code() }
+            match load(&packed[..len], &[], request.cap_received.then_some(RECEIVED_CAP)) { Ok(pid) => pid as usize, Err(error) => error.code() }
         };
         if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
         let _ = ipc::reply(&Message::new(code, 0));

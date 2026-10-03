@@ -33,6 +33,9 @@ impl Console {
         if ch == b'\r' { return; }
         if ch == b'\n' { self.serial(b'\r'); }
         self.serial(ch);
+        // UTF-8 goes to COM1 as is; the 8x8 font has only ASCII, so a multi-byte character is drawn as one '?'.
+        if (0x80..0xC0).contains(&ch) { return; }
+        let ch = if ch >= 0xC0 { b'?' } else { ch };
         if ch == b'\n' {
             self.cx = 0; self.cy += 10;
         } else if ch == 0x08 {
@@ -60,7 +63,7 @@ impl Write for Console {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { for byte in text.bytes() { self.print_char(byte); } Ok(()) }
 }
 
-struct Shell { term: Console, line: [u8; 128], len: usize, own: u64, focused: Option<u64>, line_start: bool }
+struct Shell { term: Console, line: [u8; 256], len: usize, own: u64, focused: Option<u64>, line_start: bool }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
     if args.is_empty() { return None; }
@@ -70,6 +73,21 @@ fn pid_arg(args: &[u8]) -> Option<u64> {
         pid = pid.checked_mul(10)?.checked_add((byte - b'0') as u64)?;
     }
     (pid != 0).then_some(pid)
+}
+
+// Text for a failed start of a program or service.
+fn error_text(error: Error, service: bool) -> &'static str {
+    match error {
+        Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
+        Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (8)",
+        Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
+        Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
+        Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
+        Error::Invalid => "NOT A PROGRAM FILE",
+        Error::NoMemory => "OUT OF MEMORY",
+        Error::Peer => if service { "INIT NOT RUNNING" } else { "LOADER NOT RUNNING" },
+        _ => "LOAD FAILED",
+    }
 }
 
 fn label(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches([' ', '\0']) }
@@ -120,27 +138,23 @@ impl Shell {
         let _ = writeln!(self.term, "\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.");
     }
 
-    // Boot services are (re)started by init, applications by the loader from disk.
-    fn run_program(&mut self, name: &[u8], background: bool) {
+    // Boot services are (re)started by init, applications by the loader from disk (with arguments, if any).
+    fn start(name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
+        if service {
+            if !args.is_empty() { return Err(Error::Invalid); }
+            let words = mind::process::pack_name(name).ok_or(Error::Invalid)?;
+            return Endpoint::INIT.call(&Message::new(words[0], words[1]), 0).and_then(|reply| mind::sys::check(reply.data[0])).map(|pid| pid as u64);
+        }
+        let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
+        if args.is_empty() { return mind::process::spawn(name, None); }
+        mind::process::spawn_with_args(name, core::str::from_utf8(args).map_err(|_| Error::Invalid)?)
+    }
+
+    fn run_program(&mut self, name: &[u8], args: &[u8], background: bool) {
         let service = BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(name));
-        let words = mind::process::pack_name(name).unwrap_or([0, 0]);
-        let endpoint = if service { Endpoint::INIT } else { Endpoint::LOADER };
-        let result = endpoint.call(&Message::new(words[0], words[1]), 0).and_then(|reply| mind::sys::check(reply.data[0]));
-        let pid = match result {
-            Ok(pid) => pid as u64,
-            Err(error) => {
-                let text = match error {
-                    Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
-                    Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (8)",
-                    Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
-                    Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
-                    Error::Invalid => "NOT A PROGRAM FILE",
-                    Error::NoMemory => "OUT OF MEMORY",
-                    Error::Peer => if service { "INIT NOT RUNNING" } else { "LOADER NOT RUNNING" },
-                    _ => "LOAD FAILED",
-                };
-                return self.report(text);
-            }
+        let pid = match Self::start(name, args, service) {
+            Ok(pid) => pid,
+            Err(error) => return self.report(error_text(error, service)),
         };
         let (list, count) = tasks();
         let task = list[..count].iter().find(|t| t.pid == pid);
@@ -157,13 +171,17 @@ impl Shell {
         let is = |name: &[u8]| cmd.eq_ignore_ascii_case(name);
         if cmd.is_empty() { return; }
         if is(b"run") || is(b"boot") {
-            let (name, background) = if is(b"boot") {
+            let (words, background) = if is(b"boot") {
                 if !args.is_empty() { return self.report("BOOT TAKES NO ARGUMENTS"); }
                 (&b"app"[..], false)
-            } else if let Some(name) = args.strip_suffix(b"&") { (name.trim_ascii(), true) } else { (args, false) };
-            if name.is_empty() { let _ = writeln!(self.term, "USAGE: RUN <NAME> [&]"); return self.list_programs(); }
+            } else if let Some(rest) = args.strip_suffix(b"&") { (rest.trim_ascii(), true) } else { (args, false) };
+            // run <name> [arguments] [&]
+            let split = words.iter().position(|b| b.is_ascii_whitespace()).unwrap_or(words.len());
+            let (name, program_args) = (&words[..split], words[split..].trim_ascii());
+            if name.is_empty() { let _ = writeln!(self.term, "USAGE: RUN <NAME> [ARGUMENTS] [&]"); return self.list_programs(); }
             if name.len() > NAME_MAX { return self.report("PROGRAM NAME TOO LONG"); }
-            self.run_program(name, background);
+            if program_args.len() > ARGS_MAX { return self.report("ARGUMENTS TOO LONG"); }
+            self.run_program(name, program_args, background);
         } else if is(b"fg") || is(b"kill") || is(b"logs") {
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
             let missing = |error: Error| if error == Error::NotFound { "NO SUCH PID" } else { "SERVICE HAS NO SCREEN" };
@@ -186,10 +204,10 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() {
+        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [&]: new instance\n- boot: run app\n- cpus: online processors\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -215,6 +233,18 @@ impl Shell {
             let (used, free, freed) = control::kernel_heap();
             let _ = writeln!(self.term, "Dynamic allocation works! Uptime: {} ms", mind::time::uptime_ms());
             let _ = writeln!(self.term, "HEAP: USED={} FREE={} TEST FREED={}", used, free, freed);
+        } else if cmd.len() <= NAME_MAX && !BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
+            // Any other word runs the program of that name in the foreground: `say hello`, `listen 3`.
+            match Self::start(cmd, args, false) {
+                Ok(pid) => {
+                    let (list, count) = tasks();
+                    let task = list[..count].iter().find(|t| t.pid == pid);
+                    let _ = writeln!(self.term, "STARTED PID={} NAME={} FOREGROUND", pid, task.map_or("?", |t| label(&t.name)));
+                    if task.is_some_and(|t| t.screen != 0) { let _ = self.focus(pid, true); }
+                }
+                Err(Error::NotFound) => self.report("UNKNOWN COMMAND"),
+                Err(error) => self.report(error_text(error, false)),
+            }
         } else {
             self.report("UNKNOWN COMMAND");
         }
@@ -223,14 +253,18 @@ impl Shell {
     // A key typed while the shell has the focus.
     fn key(&mut self, byte: u8) {
         match byte {
-            8 if self.len != 0 => { self.len -= 1; self.term.print_char(8); }
+            8 if self.len != 0 => {
+                // Remove a whole UTF-8 character: continuation bytes, then the lead byte.
+                while self.len > 1 && (0x80..0xC0).contains(&self.line[self.len - 1]) { self.len -= 1; }
+                self.len -= 1; self.term.print_char(8);
+            }
             b'\n' => {
                 self.term.print_char(b'\n');
                 let line = self.line; let len = self.len; self.len = 0;
                 self.command(&line[..len]);
                 if self.focused.is_none() { self.prompt(); }
             }
-            32..=126 if self.len < self.line.len() => { self.line[self.len] = byte; self.len += 1; self.term.print_char(byte); }
+            32..=126 | 0x80..=0xFF if self.len < self.line.len() => { self.line[self.len] = byte; self.len += 1; self.term.print_char(byte); }
             _ => {}
         }
     }
@@ -240,7 +274,7 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let term = Console { fb: info.fb_ptr, width: info.width, height: info.height, stride: info.stride, cx: 0, cy: 0, serial: Ports(SLOT_SERIAL) };
     let own = control::focus(0, false).unwrap_or(0);
-    let mut shell = Shell { term, line: [0; 128], len: 0, own, focused: None, line_start: true };
+    let mut shell = Shell { term, line: [0; 256], len: 0, own, focused: None, line_start: true };
     shell.term.clear();
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-// audio_gw: ring 3 audio gateway. AC97 driver (DMA ring of 32 buffers); interrupts arrive
-// as IPC messages on the service endpoint, client PCM comes through their shared buffers.
+// audio_gw: ring 3 audio gateway. AC97 driver: playback DMA ring of 32 buffers, capture ring of 16 (microphone);
+// interrupts arrive as IPC messages on the service endpoint, client PCM comes through their shared buffers.
 // Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to AUDIO_PLAY.
 use mind::abi::*;
 use mind::dev::{Irq, Ports};
@@ -11,8 +11,14 @@ use mind::mem::{self, Mapping};
 const RECEIVED_CAP: usize = 9;
 const BUFFERS: usize = 32;
 const BUFFER_BYTES: usize = 4096;
+// Capture ring: 16 buffers of 4 KiB and a descriptor list, after the playback ring in the DMA region.
+const CAPTURE_BUFFERS: usize = 16;
+const CAPTURE_BASE: usize = (BUFFERS + 1) * BUFFER_BYTES;
 // Mixer registers (NAM) and the bus master PCM OUT channel (NABM).
 const RESET: u16 = 0x00; const MASTER: u16 = 0x02; const PCM_OUT: u16 = 0x18; const EXT_ID: u16 = 0x28; const EXT_CTRL: u16 = 0x2A; const FRONT_RATE: u16 = 0x2C;
+const MIC: u16 = 0x0E; const RECORD_SELECT: u16 = 0x1A; const RECORD_GAIN: u16 = 0x1C; const ADC_RATE: u16 = 0x32;
+// PCM IN channel registers (NABM offsets 0x00..0x0B).
+const PI_BDBAR: u16 = 0x00; const PI_CIV: u16 = 0x04; const PI_LVI: u16 = 0x05; const PI_SR: u16 = 0x06; const PI_CR: u16 = 0x0B;
 const BDBAR: u16 = 0x10; const CIV: u16 = 0x14; const LVI: u16 = 0x15; const SR: u16 = 0x16; const CR: u16 = 0x1B; const GLOB_CNT: u16 = 0x2C;
 const SR_DCH: u16 = 0x01; const SR_CLEAR: u16 = 0x1C; const CR_RUN: u8 = 0x01; const CR_RESET: u8 = 0x02; const CR_IOCE: u8 = 0x10;
 
@@ -35,7 +41,7 @@ impl Regs {
     fn out32(&self, at: u16, value: u32) { self.ports.out32(self.base + at, value) }
 }
 
-struct Ac97 { bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize }
+struct Ac97 { bus: Regs, ring: Mapping, physical: u32, head: usize, started: bool, interrupts: usize, capture: bool, tail: usize }
 
 impl Ac97 {
     fn init() -> Option<Self> {
@@ -47,8 +53,11 @@ impl Ac97 {
         mixer.out16(RESET, 0);
         mixer.out16(MASTER, 0x0000);
         mixer.out16(PCM_OUT, 0x0808);
-        if mixer.in16(EXT_ID) & 1 != 0 { mixer.out16(EXT_CTRL, mixer.in16(EXT_CTRL) | 1); mixer.out16(FRONT_RATE, AUDIO_RATE as u16); }
-        let mut device = Self { bus, ring, physical, head: 0, started: false, interrupts: 0 };
+        if mixer.in16(EXT_ID) & 1 != 0 { mixer.out16(EXT_CTRL, mixer.in16(EXT_CTRL) | 1); mixer.out16(FRONT_RATE, AUDIO_RATE as u16); mixer.out16(ADC_RATE, AUDIO_RATE as u16); }
+        // Record from the microphone input, unmuted at 0 dB.
+        mixer.out16(MIC, 0x0008); mixer.out16(RECORD_SELECT, 0x0000); mixer.out16(RECORD_GAIN, 0x0000);
+        if ring.len() < CAPTURE_BASE + (CAPTURE_BUFFERS + 1) * BUFFER_BYTES { mind::println!("[AUDIO] DMA REGION TOO SMALL FOR CAPTURE"); }
+        let mut device = Self { bus, ring, physical, head: 0, started: false, interrupts: 0, capture: false, tail: 0 };
         device.reset();
         Some(device)
     }
@@ -107,6 +116,48 @@ impl Ac97 {
         }
         done
     }
+    fn can_capture(&self) -> bool { self.ring.len() >= CAPTURE_BASE + (CAPTURE_BUFFERS + 1) * BUFFER_BYTES }
+    // Starts PCM-in DMA over the whole capture ring; the hardware stops at LVI, kept just behind the reader.
+    fn record_start(&mut self) -> bool {
+        if !self.can_capture() { return false; }
+        if self.capture { return true; }
+        self.bus.out8(PI_CR, CR_RESET);
+        for _ in 0..1000 { if self.bus.in8(PI_CR) & CR_RESET == 0 { break; } }
+        let list = CAPTURE_BASE + CAPTURE_BUFFERS * BUFFER_BYTES;
+        for i in 0..CAPTURE_BUFFERS {
+            let entry = &mut self.ring.as_mut_slice()[list + i * 8..list + i * 8 + 8];
+            entry[..4].copy_from_slice(&(self.physical + (CAPTURE_BASE + i * BUFFER_BYTES) as u32).to_le_bytes());
+            entry[4..6].copy_from_slice(&((BUFFER_BYTES / 2) as u16).to_le_bytes());
+            entry[6..8].copy_from_slice(&0u16.to_le_bytes());
+        }
+        self.bus.out32(PI_BDBAR, self.physical + list as u32);
+        self.tail = 0;
+        self.bus.out8(PI_LVI, (CAPTURE_BUFFERS - 1) as u8);
+        self.bus.out8(PI_CR, CR_RUN);
+        self.capture = true;
+        true
+    }
+    fn record_stop(&mut self) { self.bus.out8(PI_CR, 0); self.bus.out8(PI_CR, CR_RESET); self.capture = false; }
+    // Copies completed capture buffers into `out`; returns (bytes, overflow). On overflow the ring restarts.
+    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) {
+        if !self.capture { return (0, false); }
+        let halted = self.bus.in16(PI_SR) & SR_DCH != 0;
+        let civ = self.bus.in8(PI_CIV) as usize % CAPTURE_BUFFERS;
+        let ready = if halted { CAPTURE_BUFFERS } else { (civ + CAPTURE_BUFFERS - self.tail) % CAPTURE_BUFFERS };
+        let take = ready.min(out.len() / BUFFER_BYTES);
+        for i in 0..take {
+            let at = CAPTURE_BASE + ((self.tail + i) % CAPTURE_BUFFERS) * BUFFER_BYTES;
+            out[i * BUFFER_BYTES..(i + 1) * BUFFER_BYTES].copy_from_slice(&self.ring.as_slice()[at..at + BUFFER_BYTES]);
+        }
+        self.tail = (self.tail + take) % CAPTURE_BUFFERS;
+        if halted {
+            // The reader fell a whole ring behind: deliver what was kept and start over.
+            self.bus.out16(PI_SR, SR_CLEAR | SR_DCH); self.capture = false; self.record_start();
+        } else {
+            self.bus.out8(PI_LVI, ((self.tail + CAPTURE_BUFFERS - 1) % CAPTURE_BUFFERS) as u8);
+        }
+        (take * BUFFER_BYTES, halted)
+    }
     fn interrupt(&mut self) {
         let status = self.bus.in16(SR);
         self.bus.out16(SR, status & SR_CLEAR); // clear write-1-to-clear flags
@@ -161,6 +212,12 @@ fn main(_info: &'static BootInfo) {
             (_, None) => [ERR_NOT_FOUND, 0],
             (AUDIO_TONE, Some(d)) => [0, d.tone(arg, request.data[1])],
             (AUDIO_STOP, Some(d)) => { d.reset(); [0, 0] }
+            (AUDIO_RECORD_START, Some(d)) => if d.record_start() { [0, 0] } else { [ERR_NOT_FOUND, 0] },
+            (AUDIO_RECORD_STOP, Some(d)) => { d.record_stop(); [0, 0] }
+            (AUDIO_RECORD_READ, Some(d)) => match request.cap_received.then(|| Mapping::new(RECEIVED_CAP).ok()).flatten() {
+                Some(mut buffer) => { let len = arg.min(buffer.len()); let (bytes, overflow) = d.record_read(&mut buffer.as_mut_slice()[..len]); [bytes, overflow as usize] }
+                None => [ERR_INVALID, 0],
+            },
             (AUDIO_PLAY, Some(d)) => match request.cap_received.then(|| Mapping::new(RECEIVED_CAP).ok()).flatten() {
                 Some(buffer) => { let len = arg.min(buffer.len()); [d.play(&buffer.as_slice()[..len]), 0] }
                 None => [ERR_INVALID, 0],

@@ -38,6 +38,28 @@ pub fn spawn(name: &str, grant: Option<(usize, u8)>) -> Result<u64> {
     check(reply.data[0]).map(|pid| pid as u64)
 }
 
+/// Starts a program from disk with arguments (via the loader service); no endpoint can be passed to the child.
+pub fn spawn_with_args(name: &str, args: &str) -> Result<u64> {
+    if name.is_empty() || name.len() > NAME_MAX || args.len() > ARGS_MAX || name.contains('\0') || args.contains('\0') { return Err(crate::sys::Error::Invalid); }
+    let mut page = crate::mem::Pages::new(4096).ok_or(crate::sys::Error::NoMemory)?;
+    let bytes = page.as_mut_slice();
+    bytes[..name.len()].copy_from_slice(name.as_bytes()); bytes[name.len()] = 0;
+    bytes[name.len() + 1..name.len() + 1 + args.len()].copy_from_slice(args.as_bytes()); bytes[name.len() + 1 + args.len()] = 0;
+    let cap = page.share()?;
+    let reply = crate::ipc::Endpoint::LOADER.call(&crate::ipc::Message::new(0, LOADER_RUN).with_cap(cap, 0), 0);
+    let _ = crate::ipc::drop_cap(cap);
+    check(reply?.data[0]).map(|pid| pid as u64)
+}
+
+/// Arguments the program was started with (the text after the program name), possibly empty.
+pub fn args() -> &'static [u8] {
+    let page = (crate::sys::info_address() + ARGS_OFFSET) as *const u8;
+    unsafe { let len = u16::from_le_bytes([*page, *page.add(1)]) as usize; core::slice::from_raw_parts(page.add(2), len.min(ARGS_MAX)) }
+}
+
+/// Arguments as UTF-8 (empty if they are not valid UTF-8).
+pub fn args_str() -> &'static str { core::str::from_utf8(args()).unwrap_or("") }
+
 /// Where SPAWN takes the ELF from.
 #[derive(Clone, Copy)]
 pub enum Image {
@@ -51,6 +73,7 @@ pub enum Image {
 pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { child: child as u8, own: own as u8, rights, reserved: 0 } }
 
 /// Starts a task with exactly the granted capabilities; `flags` are SPAWN_SERVICE / SPAWN_SCREEN.
+/// `name` may be `name\0arguments`.
 pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize) -> Result<u64> {
     let (source, len) = match image { Image::Memory { cap, len } => (cap, len), Image::Boot(index) => (SPAWN_BOOT | index, 0) };
     check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, grants.len() | flags << 8]).result).map(|pid| pid as u64)

@@ -64,6 +64,7 @@ USER_CRATES=(
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
     "say:say:say.elf"
+    "listen:listen:listen.elf"
     "files:files:files.elf"
     "beep:beep:beep.elf"
 )

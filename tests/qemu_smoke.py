@@ -49,7 +49,7 @@ class VM:
             [args.qemu, "-bios", args.firmware, *storage,
              "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot",
-             *(["-audiodev", f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
+             *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         self.queue = queue.Queue()
@@ -772,6 +772,35 @@ def audio_suite(vm, wav):
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
 
 
+def listen_suite(vm):
+    # QEMU's "none" backend feeds the AC97 microphone with silence at the real rate ("wav" has no capture).
+    require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
+    log = ""
+    for _ in range(40):
+        log += vm.command("logs 1")
+        if "[LISTEN] DONE" in log:
+            break
+        time.sleep(.25)
+    require(log, "[LISTEN] RECORDING 1 S")
+    require(log, "[LISTEN] RECORDED 48000 FRAMES (1000 MS), PEAK 0, RMS 0, OVERFLOWS 0")
+    require(log, "[LISTEN] PLAYED BACK")
+    vm.command("kill 1")
+    # Program arguments: options and text reach say; a plain word runs a program in the foreground.
+    require(vm.command("run say -p 150 -r 120 hello world &"), "PID=2 NAME=say BACKGROUND")
+    log = ""
+    for _ in range(40):
+        log += vm.command("logs 2")
+        if "[SAY] DONE" in log:
+            break
+        time.sleep(.25)
+    assert re.search(r"\[SAY\] SPOKE \d+ MS", log), log
+    vm.command("kill 2")
+    require(vm.command("nosuchprogram"), "ERROR: UNKNOWN COMMAND")
+    require(vm.command("run rtc x &"), "SERVICES TAKE NO ARGUMENTS")
+    assert "FAULT PID=" not in vm.command("faults")
+    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in), playback, program arguments, run by name", flush=True)
+
+
 def tts_suite(vm, wav, asr_model=None):
     require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
     require(vm.command("run say &"), "PID=1 NAME=say BACKGROUND")
@@ -838,10 +867,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -867,7 +896,7 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
-            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else None
+            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")
             try:
@@ -875,6 +904,8 @@ def main():
                     audio_suite(vm, wav)
                 elif suite == "tts":
                     tts_suite(vm, wav, args.asr_model)
+                elif suite == "listen":
+                    listen_suite(vm)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,

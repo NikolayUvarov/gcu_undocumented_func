@@ -211,7 +211,7 @@ impl Scheduler {
     }
 
     // New task from an ELF with the given capabilities; flags are SPAWN_SERVICE / SPAWN_SCREEN.
-    fn spawn_internal(&mut self, source: Source, name: Name, flags: usize, caps: [Option<Capability>; CAP_SLOTS]) -> Result<u64, &'static str> {
+    fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; CAP_SLOTS]) -> Result<u64, &'static str> {
         let (service, has_screen) = (flags & SPAWN_SERVICE != 0, flags & SPAWN_SCREEN != 0);
         let live = |t: &&Task| t.state != State::Exited;
         if !service && self.tasks.iter().flatten().filter(live).filter(|t| !t.service).count() >= MAX_APPS { return Err("TASK LIMIT REACHED"); }
@@ -226,6 +226,8 @@ impl Scheduler {
         let screen = if has_screen { Some(Region::new(frame_bytes(&self.boot), 4096)?) } else { None };
         let mut info = self.boot; info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
+        let args = &args[..args.len().min(ARGS_MAX)];
+        unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
         let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
@@ -334,13 +336,17 @@ impl Scheduler {
         if !self.holds(slot, Capability::Spawn) { return Err(ERR_RIGHTS); }
         let platform = self.holds(slot, Capability::Platform);
         let task = self.tasks[slot].as_ref().unwrap();
-        let length = request.arg2.min(NAME_MAX); let (count, flags) = (request.msg[3] & 0xFF, request.msg[3] >> 8);
-        if length == 0 || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
+        let length = request.arg2; let (count, flags) = (request.msg[3] & 0xFF, request.msg[3] >> 8);
+        if length == 0 || length > NAME_MAX + 1 + ARGS_MAX || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
         if flags & SPAWN_SERVICE != 0 && !platform { return Err(ERR_RIGHTS); }
         let grant_bytes = count * core::mem::size_of::<Grant>();
         if count > 0 && !task.space.validate_read(request.msg[2], grant_bytes) { return Err(ERR_INVALID); }
-        let mut name = [0u8; NAME_MAX];
-        for (i, byte) in name[..length].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.arg1 + i).unwrap() as *const u8); }
+        // `name\0arguments`
+        let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
+        for (i, byte) in text[..length].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.arg1 + i).unwrap() as *const u8); }
+        let name_len = text[..length].iter().position(|&b| b == 0).unwrap_or(length);
+        if name_len == 0 || name_len > NAME_MAX { return Err(ERR_INVALID); }
+        let args = if name_len < length { &text[name_len + 1..length] } else { &[][..] };
         let mut raw = [0u8; SPAWN_GRANTS_MAX * 4];
         for (i, byte) in raw[..grant_bytes].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[2] + i).unwrap() as *const u8); }
         let mut caps = [None; CAP_SLOTS];
@@ -358,7 +364,7 @@ impl Scheduler {
                 _ => return Err(ERR_INVALID),
             }
         };
-        self.spawn_internal(source, Name::new(&name[..length]), flags, caps).map(|pid| pid as usize).map_err(spawn_error)
+        self.spawn_internal(source, Name::new(&text[..name_len]), args, flags, caps).map(|pid| pid as usize).map_err(spawn_error)
     }
 
     // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
@@ -600,7 +606,7 @@ pub fn spawn_init() -> Result<u64, &'static str> {
         let mut caps = [None; CAP_SLOTS];
         caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_INIT, CAP_READ | CAP_WRITE | CAP_GRANT));
         caps[SLOT_DEV0] = Some(Capability::Platform); caps[SLOT_DEV1] = Some(Capability::Spawn);
-        scheduler().spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), SPAWN_SERVICE, caps)
+        scheduler().spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), &[], SPAWN_SERVICE, caps)
     })
 }
 

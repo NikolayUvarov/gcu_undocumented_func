@@ -43,4 +43,7 @@ pub fn syscall(number: usize, arg1: usize, arg2: usize, msg: [usize; 4]) -> Raw 
         Raw { result: out.result, arg1: out.arg1, arg2: out.arg2, msg: out.msg }
     }
 }
+/// Address of the read-only info page (BootInfo, arguments): the page just below the mailbox.
+pub fn info_address() -> usize { MAILBOX.load(Ordering::Relaxed) as usize - 4096 }
+
 pub fn call(number: usize, arg1: usize, arg2: usize) -> usize { syscall(number, arg1, arg2, [0; 4]).result }

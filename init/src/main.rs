@@ -14,7 +14,7 @@ const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
-const AUDIO_DMA_BYTES: usize = 33 * 4096; // 32 PCM buffers + AC97 descriptor list
+const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 
 // Capabilities minted for one spawn; dropped from init's table once the child has its copies.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
