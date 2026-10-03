@@ -18,6 +18,8 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
+| [023](023-monotonic-clock.md) | Monotonic clock with defined resolution | feature | P0 | — | K3 |
+| [024](024-accounted-kernel-objects.md) | Per-owner quotas for tasks and endpoints | architecture | P0 | — | K4 |
 
 ## Finished tasks (`issues-done/`)
 
