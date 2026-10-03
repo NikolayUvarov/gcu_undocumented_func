@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State { Empty, Ready, Sleeping(u64), BlockedSend(usize), BlockedRecv(usize), BlockedReply(usize), BlockedIrq(u8), Exited }
+pub enum State { Empty, Ready, Sleeping(u64), BlockedSend(usize), BlockedRecv(usize), BlockedReply(usize), BlockedIrq(u8), BlockedFlush, Exited }
 
 impl State {
     pub fn wake(&mut self, now: u64) {
@@ -12,6 +12,7 @@ impl State {
             Self::Sleeping(_) => "SLEEPING",
             Self::BlockedSend(_) | Self::BlockedRecv(_) | Self::BlockedReply(_) => "IPC_WAIT",
             Self::BlockedIrq(_) => "IRQ_WAIT",
+            Self::BlockedFlush => "FLUSH_WAIT",
             Self::Exited => "EXITED",
         }
     }

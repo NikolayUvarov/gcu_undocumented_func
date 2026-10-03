@@ -281,7 +281,11 @@ impl Space {
     // Called with local IRQs off and the scheduler lock held. A Space is either
     // inactive or belongs to the sole, pinned task currently in this syscall.
     // Detach empty tables, flush translations, THEN release their physical RAM.
-    pub fn unmap(&mut self, start: usize, size: usize) {
+    pub fn unmap(&mut self, start: usize, size: usize) { self.unmap_with(start, size, true) }
+    // Clears only the page entries and keeps the tables, for a space another CPU may still be using.
+    pub fn unmap_leaves(&mut self, start: usize, size: usize) { self.unmap_with(start, size, false) }
+
+    fn unmap_with(&mut self, start: usize, size: usize, reclaim: bool) {
         assert!(start >= USER_IMAGE && start % PAGE == 0);
         assert!(start.checked_add(size).is_some_and(|end| end <= USER_END));
         let mut retired: [Option<Region>; TABLES] = core::array::from_fn(|_| None);
@@ -309,6 +313,7 @@ impl Space {
                 }
             }
             for level in (0..depth).rev() {
+                if !reclaim { break; }
                 let child = children[level];
                 let empty =
                     (0..512).all(|i| unsafe { (child as *const u64).add(i).read() & PRESENT == 0 });

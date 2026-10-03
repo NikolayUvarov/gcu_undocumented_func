@@ -19,4 +19,4 @@ Shared memory always stays a heap block of its creator, who keeps a writable map
 
 ## Related
 
-[028](028-memory-rights-and-lease.md), [ROADMAP](../ROADMAP.md) C4.
+[028](../issues-done/028-memory-rights-and-lease.done), [ROADMAP](../ROADMAP.md) C4.

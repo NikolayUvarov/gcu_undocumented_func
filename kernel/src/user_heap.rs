@@ -7,6 +7,7 @@ struct Block {
     physical: usize,
     memory: Option<Region>, // None: foreign physical memory (shared mapping)
     size: usize,
+    node: u64, // derivation node of the capability a foreign mapping was made from
 }
 
 pub struct Heap {
@@ -40,20 +41,20 @@ impl Heap {
         let address = self.find_hole(size)?;
         let memory = Region::new(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
-        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size });
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0 });
         self.bytes += size;
         Some(address)
     }
 
     // Mappings of foreign memory count against their own quota and don't eat into the private heap.
-    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, device: bool) -> Option<usize> {
+    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, device: bool, writable: bool, node: u64) -> Option<usize> {
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
         if size > SHARED_MAX_BYTES - self.shared { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, true, false).ok()?; }
-        self.blocks[slot] = Some(Block { address, physical, memory: None, size });
+        if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, writable, false).ok()?; }
+        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node });
         self.shared += size;
         Some(address)
     }
@@ -68,6 +69,18 @@ impl Heap {
     // Whether a mapped foreign block overlaps the given physical range.
     pub fn maps_foreign(&self, physical: usize, size: usize) -> bool {
         self.blocks.iter().flatten().any(|b| b.memory.is_none() && b.physical < physical + size && physical < b.physical + b.size)
+    }
+
+    // Unmaps foreign mappings made from revoked capabilities; without `reclaim` page tables stay (another CPU may still
+    // walk them until it switches address space). Returns whether anything was unmapped.
+    pub fn revoke(&mut self, space: &mut Space, nodes: &[u64], reclaim: bool) -> bool {
+        let mut any = false;
+        for index in 0..self.blocks.len() {
+            let Some(block) = self.blocks[index].as_ref().filter(|b| b.memory.is_none() && nodes.contains(&b.node)) else { continue };
+            if reclaim { space.unmap(block.address, block.size); } else { space.unmap_leaves(block.address, block.size); }
+            self.shared -= block.size; self.blocks[index] = None; any = true;
+        }
+        any
     }
 
     // Hands back owned regions when the task is destroyed so the kernel can decide whether they can be freed.

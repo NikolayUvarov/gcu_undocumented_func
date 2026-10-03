@@ -41,6 +41,18 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             b'r' => {
                 let _ = core::ptr::read_volatile(0x100000 as *const u64);
             }
+            b'm' | b'v' => {
+                // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
+                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                let lease = mint(memory, if mode == b'm' { abi::CAP_READ } else { abi::CAP_READ | abi::CAP_WRITE });
+                let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
+                let _ = core::ptr::read_volatile(address as *const u64);
+                if mode == b'm' { core::ptr::write_volatile(address as *mut u64, 42); }
+                core::ptr::write_volatile(address as *mut u64, 42);
+                if call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 1 { asm!("ud2", options(noreturn)); }
+                let _ = core::ptr::read_volatile(address as *const u64);
+            }
             b'w' => {
                 core::ptr::write_volatile(0x100000 as *mut u64, 42);
             }
@@ -130,9 +142,9 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 }
                 let pages = call(mb, abi::SYSCALL_ALLOC, 8192, 0);
                 let memory = call(mb, abi::SYSCALL_MEM_SHARE, pages, 0);
-                let half = mint(memory, 0, 4096, 4096);
+                let half = mint(memory, abi::CAP_READ as usize, 4096, 4096);
                 let size = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_MEMORY { (*mb).msg[2] } else { 0 } };
-                if size(memory) != 8192 || size(half) != 4096 || mint(memory, 0, 4096, 8192) != abi::ERR_INVALID || mint(memory, 0, 100, 4096) != abi::ERR_INVALID {
+                if size(memory) != 8192 || size(half) != 4096 || mint(memory, abi::CAP_READ as usize, 4096, 8192) != abi::ERR_INVALID || mint(memory, abi::CAP_READ as usize, 100, 4096) != abi::ERR_INVALID {
                     asm!("ud2", options(noreturn));
                 }
                 call(mb, abi::SYSCALL_CAP_DROP, half, 0); call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, pages, 0);

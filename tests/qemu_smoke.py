@@ -358,7 +358,9 @@ def isolation_suite(vm):
     cases = [("r", 14, 5), ("w", 14, 7), ("t", 14, 7), ("n", 14, 21),
              ("c", 13, 0), ("o", 13, 0), ("u", 6, 0), ("g", 14, 4), ("s", 6, 0),
              # AMD forbids SYSENTER in long mode (#UD); Intel checks CS=0 (#GP).
-             ("y", 6, 0), ("e", "(?:6|13)", 0), ("h", 13, 0x102)]
+             ("y", 6, 0), ("e", "(?:6|13)", 0), ("h", 13, 0x102),
+             # Read-only memory mint written to; a revoked lease read afterwards.
+             ("m", 14, 7), ("v", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")

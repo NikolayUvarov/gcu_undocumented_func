@@ -13,6 +13,7 @@ const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 64;
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
 const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
+const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 // Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
 // The PIC, PIT and PCI configuration ports stay with the kernel.
@@ -26,7 +27,7 @@ struct Node { id: u64, parent: u64 } // parent 0: root
 struct Pending { cap: Capability, node: Node, moved_from: Option<usize> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64), Platform, Control }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64), Platform, Control }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,7 +41,7 @@ enum Source<'a> { Boot(usize), Image(&'a [u8]) }
 
 impl Capability {
     fn overlaps(self, physical: usize, size: usize) -> bool {
-        match self { Self::Memory(p, s) | Self::Dma(p, s) => p < physical + size && physical < p + s, _ => false }
+        match self { Self::Memory(p, s, _) | Self::Dma(p, s) => p < physical + size && physical < p + s, _ => false }
     }
 }
 
@@ -62,7 +63,7 @@ struct Scheduler {
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
-    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64,
+    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
     orphans: Vec<Region>, // memory freed by its owner that is still mapped or held via a capability
     devices: Vec<pci::Device>, // PCI enumeration: discovery is a kernel mechanism, the choice of drivers is init's
     dma: Vec<Region>, // DMA regions handed out to init; they outlive driver restarts
@@ -96,7 +97,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], orphans: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -104,6 +105,11 @@ impl Scheduler {
     fn states(&self, cpu: usize) -> [State; SLOTS] { core::array::from_fn(|i| { if i == 0 { State::Ready } else { self.tasks[i].as_ref().filter(|t| t.cpu == cpu).map_or(State::Empty, |t| t.state) } }) }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
         let current = self.current[cpu];
+        // Every select reloads CR3, which completes a pending TLB flush of this CPU.
+        if core::mem::take(&mut self.flush[cpu]) && !self.flush.iter().any(|&f| f) {
+            for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; } }
+            self.wake_idle(cpu);
+        }
         if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); unsafe { context::save(sp, task.context.ptr() as usize); } }
         let next = task_state::next(&self.states(cpu), current); self.current[cpu] = next;
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
@@ -237,7 +243,7 @@ impl Scheduler {
                 if bar.io { Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)) } else { Ok(Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
             }
             PLATFORM_DEVICE_IRQ => match self.devices.get(a).ok_or(ERR_NOT_FOUND)?.irq { 0 | 2 => Err(ERR_NOT_FOUND), irq => Ok(Capability::Interrupt(irq)) },
-            PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot))),
+            PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
                 let bytes = a.checked_next_multiple_of(4096).filter(|&n| n > 0).ok_or(ERR_INVALID)?;
@@ -298,8 +304,9 @@ impl Scheduler {
         let receiver = self.tasks[to].as_mut().unwrap();
         receiver.cspace[receive] = Some(pending.cap); receiver.nodes[receive] = pending.node;
     }
-    // Removes every descendant of `root` from all tables and blocked sends; returns how many were removed.
-    fn revoke(&mut self, root: u64) -> usize {
+    // Removes every descendant of `root` from all tables and blocked sends and unmaps the mappings made from them; returns
+    // how many capabilities were removed and whether another CPU still runs an affected address space (flush pending).
+    fn revoke(&mut self, root: u64, cpu: usize) -> (usize, bool) {
         let mut ids = [0u64; SLOTS * (CAP_SLOTS + 1)]; ids[0] = root; let (mut known, mut removed) = (1, 0);
         loop {
             let mut changed = false;
@@ -311,8 +318,16 @@ impl Scheduler {
                 }
                 if let Some(p) = task.pending_cap { if ids[..known].contains(&p.node.parent) || (p.moved_from.is_some() && ids[1..known].contains(&p.node.id)) { task.pending_cap = None; removed += 1; changed = true; } }
             }
-            if !changed { return removed; }
+            if !changed { break; }
         }
+        let (current, mut wait) = (self.current, false);
+        for (slot, task) in self.tasks.iter_mut().enumerate() {
+            let Some(task) = task.as_mut().filter(|t| t.state != State::Exited) else { continue };
+            // A space live on another CPU keeps its page tables until that CPU has switched address space.
+            let remote = task.cpu != cpu && current[task.cpu] == slot;
+            if task.heap.revoke(&mut task.space, &ids[1..known], !remote) && remote { self.flush[task.cpu] = true; wait = true; unsafe { cpu::wake(task.cpu); } }
+        }
+        (removed, wait)
     }
     // Child with narrower authority (CAP_MINT): endpoint rights, port or page-aligned memory sub-range.
     fn mint(cap: Capability, mask: usize, offset: usize, length: usize) -> Option<Capability> {
@@ -323,7 +338,7 @@ impl Scheduler {
         match cap {
             Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8)),
             Capability::IoPorts(base, count) => range(base as usize, count as usize, 1).map(|(b, c)| Capability::IoPorts(b as u16, c as u16)),
-            Capability::Memory(base, size) => range(base, size, 4096).map(|(b, s)| Capability::Memory(b, s)),
+            Capability::Memory(base, size, rights) => range(base, size, 4096).map(|(b, s)| Capability::Memory(b, s, rights & mask as u8)),
             Capability::Dma(base, size) => range(base, size, 4096).map(|(b, s)| Capability::Dma(b, s)),
             Capability::Mmio(base, size) => range(base, size, 4096).map(|(b, s)| Capability::Mmio(b, s)),
             Capability::Reply(..) => None,
@@ -450,7 +465,7 @@ impl Scheduler {
             Source::Boot(request.msg[0] & !SPAWN_BOOT)
         } else {
             match self.cap(slot, request.msg[0]) {
-                Some(Capability::Memory(physical, size)) if request.msg[1] <= size => Source::Image(core::slice::from_raw_parts(physical as *const u8, request.msg[1])),
+                Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 && request.msg[1] <= size => Source::Image(core::slice::from_raw_parts(physical as *const u8, request.msg[1])),
                 _ => return Err(ERR_INVALID),
             }
         };
@@ -576,7 +591,12 @@ impl Scheduler {
                 _ => Err(ERR_INVALID),
             },
             SYSCALL_CAP_REVOKE => match self.index(slot, request.arg1).filter(|&i| task.cspace[i].is_some()) {
-                Some(index) => { let id = task.nodes[index].id; Ok(self.revoke(id)) }
+                Some(index) => {
+                    let id = task.nodes[index].id; let (removed, wait) = self.revoke(id, cpu);
+                    // Completion point (MC-3.6): return only once no CPU can still use a removed mapping.
+                    if wait { core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), removed); self.tasks[slot].as_mut().unwrap().state = State::BlockedFlush; return self.select(sp, cpu); }
+                    Ok(removed)
+                }
                 None => Err(ERR_INVALID),
             },
             SYSCALL_CAP_DROP => match self.index(slot, request.arg1) { Some(index) => { Self::clear(task, index); Ok(0) } None => Err(ERR_INVALID) },
@@ -597,17 +617,24 @@ impl Scheduler {
                 }
             }
             SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::free_slot(&task.cspace)) {
-                (Some((physical, size)), Some(_)) => { let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size), node).unwrap()) }
+                (Some((physical, size)), Some(_)) => { let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size, MEMORY_ALL), node).unwrap()) }
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_MEM_MAP => match self.cap(slot, request.arg1) {
-                Some(cap @ (Capability::Memory(physical, size) | Capability::Dma(physical, size) | Capability::Mmio(physical, size))) => {
+            SYSCALL_MEM_MAP => {
+                // The mapping remembers the capability's node: revoking that capability unmaps it.
+                let (cap, node) = (self.cap(slot, request.arg1), self.index(slot, request.arg1).map_or(0, |i| task.nodes[i].id));
+                let (physical, size, writable, device) = match cap {
+                    Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 => (physical, size, rights & CAP_WRITE != 0, false),
+                    Some(Capability::Dma(physical, size)) => (physical, size, true, false),
+                    Some(Capability::Mmio(physical, size)) => (physical, size, true, true),
+                    _ => (0, 0, false, false),
+                };
+                if size == 0 { Err(ERR_RIGHTS) } else {
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // mapping size for the client
-                    task.heap.map_shared(&mut task.space, physical, size, matches!(cap, Capability::Mmio(..))).ok_or(ERR_NO_MEMORY)
+                    task.heap.map_shared(&mut task.space, physical, size, device, writable, node).ok_or(ERR_NO_MEMORY)
                 }
-                _ => Err(ERR_RIGHTS),
-            },
+            }
             SYSCALL_MEM_PHYS => match self.cap(slot, request.arg1) { Some(Capability::Dma(physical, _)) => Ok(physical), _ => Err(ERR_RIGHTS) },
             SYSCALL_PORT_IN => {
                 let (port, width) = (request.arg2, request.msg[1].max(1));
@@ -653,7 +680,7 @@ impl Scheduler {
                         Some(t) => {
                             let (source, dirty) = (t.screen.as_ref().unwrap().ptr() as usize, core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty));
                             // New capability only on screen change: the compositor keeps the mapping across frames.
-                            if source != self.composited { self.composited = source; task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot))); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
+                            if source != self.composited { self.composited = source; task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ | CAP_WRITE)); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
                         }
                     }
                 }
@@ -663,7 +690,7 @@ impl Scheduler {
                 let (kind, base, size) = match self.cap(slot, request.arg1) {
                     None => (CAP_KIND_NONE, 0, 0),
                     Some(Capability::Endpoint(_, rights)) => (CAP_KIND_ENDPOINT, 0, rights as usize),
-                    Some(Capability::Memory(_, size)) => (CAP_KIND_MEMORY, 0, size),
+                    Some(Capability::Memory(_, size, rights)) => (CAP_KIND_MEMORY, rights as usize, size),
                     Some(Capability::Dma(_, size)) => (CAP_KIND_DMA, 0, size),
                     Some(Capability::Mmio(_, size)) => (CAP_KIND_MMIO, 0, size),
                     Some(Capability::IoPorts(base, count)) => (CAP_KIND_PORTS, base as usize, count as usize),
@@ -745,7 +772,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                 return s.select(sp, cpu);
             }
-            if vector == 50 { return if slot == 0 { s.select(sp, cpu) } else { sp }; }
+            if vector == 50 { return if slot == 0 || s.flush[cpu] { s.select(sp, cpu) } else { sp }; }
             if vector < 32 {
                 let mut address = 0u64; if vector == 14 { asm!("mov {}, cr2", out(reg) address); }
                 let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();

@@ -1,6 +1,6 @@
 # 028 — Memory rights, read-only sharing and leases (roadmap C4, part 1)
 
-**Type:** architecture · **Priority:** P1 · **Status:** open · **Roadmap:** step 3, C4 · **Constitution:** MC-2.6, MC-2.7, MC-3.6
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-03) · **Roadmap:** step 3, C4 · **Constitution:** MC-2.6, MC-2.7, MC-3.6
 
 ## Problem
 
@@ -20,4 +20,8 @@ A memory capability always maps read-write, so every share is `SHARE_RW`. Revoki
 
 ## Related
 
-[026](../issues-done/026-derivation-and-revocation.done), [029](029-memory-objects-move-seal.md), [ROADMAP](../ROADMAP.md) C4.
+[026](026-derivation-and-revocation.done), [029](../issues/029-memory-objects-move-seal.md), [ROADMAP](../ROADMAP.md) C4.
+
+## Resolution
+
+`Capability::Memory` carries rights (read, write, grant); `MEM_SHARE` and the framebuffer give all three, `CAP_MINT` narrows them, `MEM_MAP` needs read and maps writable only with write, `SPAWN` images need read; `CAP_INFO` reports memory rights in `arg2`. Foreign mappings record the node of the capability they came from; `CAP_REVOKE` unmaps every mapping of a removed descendant. A space running on another CPU only has its page entries cleared (`unmap_leaves`), that CPU gets a wake IPI and the revoker waits in `FLUSH_WAIT` until every flagged CPU has passed `select` (CR3 reload). Isolation cases `m` (write to a read-only mint faults) and `v` (read after revoking a lease faults) pass; the cross-CPU path has no test yet and is listed under "not covered" in the evidence. All 12 QEMU suites, the USB smoke and the host tests pass.

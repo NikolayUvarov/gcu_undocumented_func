@@ -19,4 +19,4 @@ A send or call waits without limit: a client of a server that never replies wait
 
 ## Related
 
-[028](028-memory-rights-and-lease.md), [029](029-memory-objects-move-seal.md), [ROADMAP](../ROADMAP.md) C4.
+[028](../issues-done/028-memory-rights-and-lease.done), [029](029-memory-objects-move-seal.md), [ROADMAP](../ROADMAP.md) C4.
