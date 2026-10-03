@@ -15,7 +15,7 @@ Every Mind needs its first processor tick. We are providing exactly that.
 * **Kernel:** The basic reality dispatcher. Handling hardware interrupts, system calls, and preemptive multitasking.
 * **Isolated Environment (Userspace):** A space for the genesis and parallel execution of high-level processes and future cognitive functions.
 
-The normative requirements are in the [Constitution](constitution/EN) (Russian originals in [constitution/RU](constitution/RU)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md).
+The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.0 ([Russian](ROADMAP_RU.md)).
 
 ---
 
