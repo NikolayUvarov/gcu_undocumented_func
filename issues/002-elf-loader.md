@@ -1,35 +1,35 @@
-# 002 — ELF-загрузчик вместо плоских бинарников
+# 002 — ELF loader instead of flat binaries
 
-**Тип:** feature (roadmap №1, приоритет по handoff) · **Приоритет:** высокий · **Статус:** open
-**Затрагивает:** `bootloader/`, `02_build.sh`, `kernel/linker.ld`, `app/linker.ld`
+**Type:** feature (roadmap #1, priority per the handoff) · **Priority:** high · **Status:** open
+**Affects:** `bootloader/`, `02_build.sh`, `kernel/linker.ld`, `app/linker.ld`
 
-## Что требуется по handoff
+## What the handoff requires
 
-Отказаться от `objcopy` и научить загрузчик (первый шаг — UEFI-загрузчик, не ядро) разбирать ELF64: читать `Elf64_Ehdr`, обходить `PT_LOAD`, выделять `p_memsz` страниц, копировать `p_filesz`, занулять хвост (`.bss`), применять `R_X86_64_RELATIVE` из `PT_DYNAMIC`/`.rela.dyn`, прыгать на `e_entry`.
+Drop `objcopy` and teach the loader (first step — the UEFI bootloader, not the kernel) to parse ELF64: read `Elf64_Ehdr`, walk the `PT_LOAD` segments, allocate `p_memsz` worth of pages, copy `p_filesz`, zero the tail (`.bss`), apply `R_X86_64_RELATIVE` from `PT_DYNAMIC`/`.rela.dyn`, jump to `e_entry`.
 
-## Текущее состояние
+## Current state
 
-- Загрузчик встраивает готовые `.bin` через `include_bytes!` и прыгает на смещение 0 (`bootloader/src/main.rs:20-33, 56`).
-- ELF-файлы уже PIE (`ET_DYN`) с одной `R_X86_64_RELATIVE` — формат готов к такой загрузке.
+- The bootloader embeds prebuilt `.bin` files via `include_bytes!` and jumps to offset 0 (`bootloader/src/main.rs:20-33, 56`).
+- The ELF files are already PIE (`ET_DYN`) with a single `R_X86_64_RELATIVE` — the format is ready for this kind of loading.
 
-## План
+## Plan
 
-1. В kernel/app: убрать `-Tlinker.ld`-хаки или оставить, но не требовать `. = 0`; выровнять `PT_LOAD` по 4 КБ (`-z separate-code` уже даёт).
-2. В `02_build.sh`: шаг objcopy убрать; в bootloader встраивать (или читать с FAT32 — issue 006) сами ELF.
-3. В bootloader: модуль `elf.rs` без внешних зависимостей (или крейт `goblin`/`elf` с `no_std`+`default-features=false`; проверить сборку под `x86_64-unknown-uefi`).
-   - валидация магии, `EM_X86_64`, `ET_DYN|ET_EXEC`;
-   - для каждого `PT_LOAD`: `allocate_pages(AnyPages, LOADER_DATA, ceil(memsz/4096))` для ET_DYN одним блоком под весь образ (min vaddr..max vaddr), копия `filesz`, `write_bytes(0)` до `memsz`;
-   - релокации: пройти `.rela.dyn` (по `PT_DYNAMIC` → `DT_RELA/DT_RELASZ`), для `R_X86_64_RELATIVE`: `*(base + r_offset) = base + r_addend`; на другие типы — паника с выводом в stdout до `exit_boot_services`;
-   - вход: `base + e_entry`.
-4. `BootInfo`: добавить `kernel_base`, `app_base`, `app_entry` (сейчас `app_ptr` совмещает базу и точку входа).
-5. Тест: `readelf -l` показывает `.bss` с `memsz > filesz`, а `static mut COUNTER: u64` в ядре после загрузки равен 0 и корректно инкрементируется.
+1. In kernel/app: remove the `-Tlinker.ld` hacks, or keep them but do not require `. = 0`; align `PT_LOAD` to 4 KB (`-z separate-code` already does this).
+2. In `02_build.sh`: remove the objcopy step; embed the ELF files themselves in the bootloader (or read them from FAT32 — issue 006).
+3. In the bootloader: an `elf.rs` module without external dependencies (or the `goblin`/`elf` crate with `no_std`+`default-features=false`; check that it builds for `x86_64-unknown-uefi`).
+   - validate the magic, `EM_X86_64`, `ET_DYN|ET_EXEC`;
+   - for each `PT_LOAD`: `allocate_pages(AnyPages, LOADER_DATA, ceil(memsz/4096))` — for ET_DYN as a single block for the whole image (min vaddr..max vaddr), copy `filesz`, `write_bytes(0)` up to `memsz`;
+   - relocations: walk `.rela.dyn` (via `PT_DYNAMIC` → `DT_RELA/DT_RELASZ`), for `R_X86_64_RELATIVE`: `*(base + r_offset) = base + r_addend`; for other types — panic with output to stdout before `exit_boot_services`;
+   - entry: `base + e_entry`.
+4. `BootInfo`: add `kernel_base`, `app_base`, `app_entry` (currently `app_ptr` combines the base and the entry point).
+5. Test: `readelf -l` shows `.bss` with `memsz > filesz`, and `static mut COUNTER: u64` in the kernel is 0 after loading and increments correctly.
 
-## Критерии готовности
+## Acceptance criteria
 
-- Ядро с `static mut` и `#[global_allocator]` (issue 003) запускается в QEMU.
-- `02_build.sh` не содержит `llvm-objcopy`.
-- Загрузчик отвергает битый ELF с сообщением на экране, а не молча зависает.
+- A kernel with `static mut` and `#[global_allocator]` (issue 003) boots in QEMU.
+- `02_build.sh` does not contain `llvm-objcopy`.
+- The loader rejects a corrupted ELF with an on-screen message instead of silently hanging.
 
-## Связано
+## Related
 
-[001](001-flat-binary-entry-offset-and-got-call.md) (временный фикс), [003](003-bss-and-heap-allocator.md) (разблокируется), [006](006-bootloader-load-from-fat32.md).
+[001](001-flat-binary-entry-offset-and-got-call.md) (temporary fix), [003](003-bss-and-heap-allocator.md) (gets unblocked), [006](006-bootloader-load-from-fat32.md).

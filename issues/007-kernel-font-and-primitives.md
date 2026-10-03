@@ -1,24 +1,24 @@
-# 007 — Графическое ядро: процедурный шрифт и примитивы
+# 007 — Graphics core: procedural font and primitives
 
-**Тип:** feature · **Приоритет:** средний · **Статус:** open
-**Затрагивает:** `kernel/` (новый модуль `gfx`), возможно общий крейт
+**Type:** feature · **Priority:** medium · **Status:** open
+**Affects:** `kernel/` (new `gfx` module), possibly a shared crate
 
-## Расхождение с handoff
+## Discrepancy with the handoff
 
-Handoff: «настроено базовое графическое ядро (процедурный рендеринг шрифта и примитивов)». Код: `kernel/src/main.rs` рисует один круг попиксельным перебором всего экрана; ни шрифта, ни функций `rect/line/circle/text`, ни абстракции над фреймбуфером нет.
+Handoff: "a basic graphics core has been set up (procedural rendering of the font and primitives)". Code: `kernel/src/main.rs` draws a single circle by iterating over every pixel of the screen; there is no font, no `rect/line/circle/text` functions and no framebuffer abstraction.
 
-Без вывода текста невозможна ни одна диагностика (исключения в [004](004-apic-idt-interrupts.md), ошибки загрузки, счётчики) — поэтому задача блокирует отладку остальных.
+Without text output no diagnostics are possible at all (exceptions in [004](004-apic-idt-interrupts.md), load errors, counters) — so this task blocks debugging of everything else.
 
-## План
+## Plan
 
-1. `gfx::Framebuffer { ptr, width, height, stride, format }` с `put_pixel`, `fill_rect`, `clear`; учёт `PixelFormat` из [009](009-gop-pixel-format.md).
-2. Встроенный битмап-шрифт 8×8 или 8×16 (например, публичный домен `font8x8` как `const [[u8; 8]; 128]` в `.rodata`; «процедурный» из handoff — допустимо трактовать как генерацию из таблицы). Функции `draw_char`, `draw_str`, простой курсор/консоль с переносом строк и прокруткой.
-3. `fmt::Write` для консоли → `write!(console, "ticks={}", n)` без кучи (работает до [003](003-bss-and-heap-allocator.md), т.к. `core::fmt` не требует `alloc`).
-4. Примитивы: `line` (Брезенхэм), `circle` (midpoint) — заменить попиксельный перебор экрана в текущем ядре.
-5. Двойная буферизация — позже, после кучи.
+1. `gfx::Framebuffer { ptr, width, height, stride, format }` with `put_pixel`, `fill_rect`, `clear`; honouring `PixelFormat` from [009](009-gop-pixel-format.md).
+2. A built-in 8×8 or 8×16 bitmap font (e.g. the public-domain `font8x8` as `const [[u8; 8]; 128]` in `.rodata`; the "procedural" in the handoff can reasonably be interpreted as generation from a table). Functions `draw_char`, `draw_str`, a simple cursor/console with line wrapping and scrolling.
+3. `fmt::Write` for the console → `write!(console, "ticks={}", n)` without a heap (works before [003](003-bss-and-heap-allocator.md), since `core::fmt` does not require `alloc`).
+4. Primitives: `line` (Bresenham), `circle` (midpoint) — replace the per-pixel screen iteration in the current kernel.
+5. Double buffering — later, after the heap.
 
-## Критерии готовности
+## Acceptance criteria
 
-- На экране строка вида `MIND CORE 0.1 | 1024x768 | ticks: N`.
-- `panic_handler` печатает сообщение и место паники вместо `loop {}`.
-- Отрисовка круга не перебирает весь экран каждый кадр.
+- A line like `MIND CORE 0.1 | 1024x768 | ticks: N` on screen.
+- `panic_handler` prints the message and the panic location instead of `loop {}`.
+- Drawing the circle does not iterate over the whole screen every frame.

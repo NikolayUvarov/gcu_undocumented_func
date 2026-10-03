@@ -1,29 +1,29 @@
-# issues/ — задачи на доработку
+# issues/ — open work items
 
-Создано по итогам ревизии 2026-09-17 (сопоставление handoff ↔ код, см. [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
+Created from the results of the 2026-09-17 audit (handoff ↔ code comparison, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
 
-| № | Задача | Тип | Приоритет | Блокируется |
+| # | Task | Type | Priority | Blocked by |
 |---|---|---|---|---|
-| [001](001-flat-binary-entry-offset-and-got-call.md) | `_start` не по смещению 0; `memset` через нулевой GOT | bug | критический | — |
-| [002](002-elf-loader.md) | ELF-загрузчик вместо плоских бинарников | feature (roadmap 1) | высокий | — |
-| [003](003-bss-and-heap-allocator.md) | `.bss`, статики, куча `linked_list_allocator` | feature | высокий | 002 |
-| [004](004-apic-idt-interrupts.md) | IDT + APIC, таймер и клавиатура по прерываниям | feature (roadmap 2) | высокий | 003 |
-| [005](005-syscalls.md) | Syscalls `int 0x80`, общий крейт ABI | feature (roadmap 3) | средний | 004 |
-| [006](006-bootloader-load-from-fat32.md) | Чтение kernel/app с FAT32 | feature | средний | — |
-| [007](007-kernel-font-and-primitives.md) | Шрифт, примитивы, консоль, panic-вывод | feature | средний | — |
-| [008](008-kernel-timeout-handoff.md) | Переход в userspace по таймауту | feature | низкий | — |
-| [009](009-gop-pixel-format.md) | Учёт `PixelFormat`, выбор режима GOP | bug/robustness | средний | — |
-| [010](010-docs-sync.md) | Синхронизация README/handoff с кодом | docs | средний | — |
-| [011](011-reproducible-toolchain.md) | `rust-toolchain.toml`, `Cargo.lock`, workspace, CI | infra | низкий | — |
-| [012](../issues-done/012-multitasking-and-program-instances.done) | Многозадачность, независимые экземпляры, `ps`/`kill`/`fg` | feature — выполнено 2026-09-18 | высокий | — |
-| [013](../issues-done/013-smp-and-memory-isolation.done) | SMP, ring 3 и аппаратная изоляция памяти | feature — выполнено 2026-09-19 | высокий | — |
-| [014](../issues-done/014-private-program-heap.done) | Приватная динамическая память программ | feature — выполнено 2026-09-19 | высокий | — |
-| [015](../issues-done/015-load-programs-through-vfs.done) | Загрузка программ через VFS вместо RAMFS загрузчика | feature — выполнено 2026-10-03 | высокий | — |
-| [016](../issues-done/016-storage-drivers.done) | Драйверы ATA / AHCI / USB mass storage для VFS | feature — выполнено 2026-10-03 | средний | — |
-| [017](../issues-done/017-tts-on-audio-gateway.done) | Синтез речи поверх аудиошлюза | feature — выполнено 2026-10-03 | низкий | — |
+| [001](001-flat-binary-entry-offset-and-got-call.md) | `_start` not at offset 0; `memset` through a zero GOT | bug | critical | — |
+| [002](002-elf-loader.md) | ELF loader instead of flat binaries | feature (roadmap 1) | high | — |
+| [003](003-bss-and-heap-allocator.md) | `.bss`, statics, `linked_list_allocator` heap | feature | high | 002 |
+| [004](004-apic-idt-interrupts.md) | IDT + APIC, interrupt-driven timer and keyboard | feature (roadmap 2) | high | 003 |
+| [005](005-syscalls.md) | Syscalls via `int 0x80`, shared ABI crate | feature (roadmap 3) | medium | 004 |
+| [006](006-bootloader-load-from-fat32.md) | Reading kernel/app from FAT32 | feature | medium | — |
+| [007](007-kernel-font-and-primitives.md) | Font, primitives, console, panic output | feature | medium | — |
+| [008](008-kernel-timeout-handoff.md) | Switch to userspace on timeout | feature | low | — |
+| [009](009-gop-pixel-format.md) | Honour `PixelFormat`, GOP mode selection | bug/robustness | medium | — |
+| [010](010-docs-sync.md) | Sync README/handoff with the code | docs | medium | — |
+| [011](011-reproducible-toolchain.md) | `rust-toolchain.toml`, `Cargo.lock`, workspace, CI | infra | low | — |
+| [012](../issues-done/012-multitasking-and-program-instances.done) | Multitasking, independent instances, `ps`/`kill`/`fg` | feature — done 2026-09-18 | high | — |
+| [013](../issues-done/013-smp-and-memory-isolation.done) | SMP, ring 3 and hardware memory isolation | feature — done 2026-09-19 | high | — |
+| [014](../issues-done/014-private-program-heap.done) | Private dynamic memory for programs | feature — done 2026-09-19 | high | — |
+| [015](../issues-done/015-load-programs-through-vfs.done) | Loading programs through the VFS instead of the bootloader RAMFS | feature — done 2026-10-03 | high | — |
+| [016](../issues-done/016-storage-drivers.done) | ATA / AHCI / USB mass storage drivers for the VFS | feature — done 2026-10-03 | medium | — |
+| [017](../issues-done/017-tts-on-audio-gateway.done) | Speech synthesis on top of the audio gateway | feature — done 2026-10-03 | low | — |
 
-Рекомендуемый порядок: 001 → 007 (диагностика на экране) → 002 → 003 → 004 → 005; 006/009/010/011 — параллельно.
+Recommended order: 001 → 007 (on-screen diagnostics) → 002 → 003 → 004 → 005; 006/009/010/011 in parallel.
 
-Формат файла задачи: заголовок, блок метаданных (тип/приоритет/статус/блокировки), «Проблема/Расхождение», «План», «Критерии готовности», «Связано». При закрытии — статус в заголовке и в этой таблице.
+Task file format: title, metadata block (type/priority/status/blockers), "Problem/Discrepancy", "Plan", "Acceptance criteria", "Related". On closing — status in the title and in this table.
 
-Выполненные задачи 012–014 перенесены в `issues-done/` с расширением `.done`. Постановки и результаты проверок сохранены в файлах.
+Completed tasks 012–014 have been moved to `issues-done/` with the `.done` extension. The task statements and verification results are preserved in the files.

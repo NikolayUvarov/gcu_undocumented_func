@@ -1,88 +1,88 @@
-# 013 — Многоядерность и аппаратная изоляция памяти — выполнено
+# 013 — Multi-core support and hardware memory isolation — done
 
-- Статус: выполнено
-- Дата: 2026-09-19
+- Status: done
+- Date: 2026-09-19
 
-## Постановка
+## Task statement
 
-Запускать программы на всех четырёх CPU QEMU. Перевести приложения в ring 3,
-дать каждому экземпляру отдельный CR3 и закрыть доступ к памяти ядра и других
-программ. Ошибки приложения должны завершать только его экземпляр.
+Run programs on all four QEMU CPUs. Move applications to ring 3,
+give each instance its own CR3 and block access to the memory of the kernel and other
+programs. Application faults must terminate only that instance.
 
-## Критерии готовности
+## Acceptance criteria
 
-- [x] Ядро запускает AP через INIT/SIPI; `cpus` показывает реально работающие CPU.
-- [x] Задачи распределяются между CPU; `ps` показывает CPU каждой задачи.
-- [x] Собственные GDT/TSS/IDT, отдельные стеки входа в ядро и аварийные стеки.
-- [x] Ring 3, IOPL=0, отдельные таблицы страниц; код RX, данные/стек RW+NX.
-- [x] Проверка всех пользовательских указателей в syscall, без чтения памяти ядра.
-- [x] Page fault/GP/UD завершают только виновную задачу с диагностикой.
-- [x] Безопасное освобождение после остановки задачи на другом CPU.
-- [x] `run`, `fg`, `kill`, Ctrl+Z, часы и несколько экземпляров работают как прежде.
-- [x] QEMU-проверки SMP, изоляции, сбоев, одноядерного режима и освобождения памяти.
-- [x] Документация и собранный `usb_root/` обновлены.
+- [x] The kernel starts the APs via INIT/SIPI; `cpus` shows the CPUs that are actually running.
+- [x] Tasks are distributed across CPUs; `ps` shows each task's CPU.
+- [x] Own GDT/TSS/IDT, separate kernel-entry stacks and emergency stacks.
+- [x] Ring 3, IOPL=0, separate page tables; code RX, data/stack RW+NX.
+- [x] Validation of all user pointers in syscalls, without reading kernel memory.
+- [x] Page fault/GP/UD terminate only the offending task, with diagnostics.
+- [x] Safe freeing after a task is stopped on another CPU.
+- [x] `run`, `fg`, `kill`, Ctrl+Z, the clock and multiple instances work as before.
+- [x] QEMU checks for SMP, isolation, faults, single-core mode and memory freeing.
+- [x] Documentation and the built `usb_root/` updated.
 
-## Реализация
+## Implementation
 
-- UEFI перечисляет процессоры через MP Services. До ExitBootServices резервируются
-  ELF-образы, 64 MiB runtime RAM, отдельный 256 KiB BSP-стек/страница BootInfo ниже
-  4 GiB и bootstrap-страница AP ниже 1 MiB.
-- Ядро запускает AP через INIT/SIPI. Поддерживается до 8 xAPIC CPU; в штатном QEMU
-  работают все 4. PIT на BSP задаёт 100 Hz, LAPIC IPI будят/вытесняют задачи AP.
-- При запуске задача закрепляется за CPU с минимальным числом живых задач.
-  Round-robin работает на каждом CPU; пользовательский код выполняется параллельно.
-  Общие данные планировщика и syscalls защищены spinlock с выключением локальных IRQ.
-- Собственные GDT/TSS каждого CPU, общая IDT, отдельные стеки входа из ring 3,
-  idle-стеки, IST для double fault и NMI. Контекст сохраняет GPR и x87/SSE.
-- Отдельный CR3 каждого процесса, одинаковые пользовательские виртуальные адреса
-  с разными физическими страницами. Kernel identity map — supervisor-only.
-  ELF-код RX; изменяемые данные, стек, mailbox и framebuffer RW+NX; BootInfo RO+NX.
-  Выделения страниц не делят память с соседними объектами allocator; стек окружён
-  unmapped guard pages. Релокации используют виртуальную базу приложения.
-- Приложения запускаются с CPL=3 и IOPL=0. Только int 0x80 имеет DPL=3. Все
-  указатели вывода проверяются по таблицам вызывающего процесса. Старые firmware
-  SYSCALL/SYSENTER входы отключены, как и XSAVE/AVX и унаследованные global TLB.
-- User exceptions завершают только виновный экземпляр. `faults` хранит последние
-  16 записей с PID/CPU/vector/error/RIP/CR2. Ошибки ядра остаются фатальными.
-- Перед освобождением процесса его CPU переключает CR3 и перестаёт считать задачу
-  текущей; контекст скопирован в отдельный буфер, входной стек принадлежит CPU.
-  BSP освобождает ресурсы только после этой точки. При фиксированном CPU и
-  выключенных PCID/global user mappings устаревший TLB не переживает смену CR3.
-- `cpus` показывает реально online CPU и счётчики; `ps` дополнен CPU/RUNNING.
-  `run`, `fg`, `kill`, Ctrl+Z, `logs`, `heap` и приложения сохранены.
-  Idle каждого ядра использует HLT; `stop` посылает остальным CPU stop-IPI.
+- UEFI enumerates the processors via MP Services. Before ExitBootServices it reserves
+  the ELF images, 64 MiB of runtime RAM, a separate 256 KiB BSP stack/BootInfo page below
+  4 GiB and an AP bootstrap page below 1 MiB.
+- The kernel starts the APs via INIT/SIPI. Up to 8 xAPIC CPUs are supported; in the standard QEMU
+  setup all 4 run. The PIT on the BSP provides 100 Hz; LAPIC IPIs wake/preempt tasks on the APs.
+- At launch a task is pinned to the CPU with the smallest number of live tasks.
+  Round-robin runs on each CPU; user code executes in parallel.
+  Shared scheduler and syscall data are protected by a spinlock that disables local IRQs.
+- Per-CPU GDT/TSS, a shared IDT, separate entry stacks from ring 3,
+  idle stacks, IST for double fault and NMI. The context saves GPRs and x87/SSE.
+- A separate CR3 per process, identical user virtual addresses
+  backed by different physical pages. The kernel identity map is supervisor-only.
+  ELF code RX; mutable data, stack, mailbox and framebuffer RW+NX; BootInfo RO+NX.
+  Page allocations do not share memory with neighbouring allocator objects; the stack is surrounded by
+  unmapped guard pages. Relocations use the application's virtual base.
+- Applications run with CPL=3 and IOPL=0. Only int 0x80 has DPL=3. All
+  output pointers are validated against the calling process's page tables. The old firmware
+  SYSCALL/SYSENTER entries are disabled, as are XSAVE/AVX and inherited global TLB entries.
+- User exceptions terminate only the offending instance. `faults` keeps the last
+  16 records with PID/CPU/vector/error/RIP/CR2. Kernel faults remain fatal.
+- Before a process is freed, its CPU switches CR3 and stops considering the task
+  current; the context is copied to a separate buffer, the entry stack belongs to the CPU.
+  The BSP frees resources only after this point. With a fixed CPU and
+  PCID/global user mappings disabled, a stale TLB does not survive a CR3 switch.
+- `cpus` shows the CPUs that are actually online and counters; `ps` gained CPU/RUNNING.
+  `run`, `fg`, `kill`, Ctrl+Z, `logs`, `heap` and the applications are preserved.
+  Each core's idle uses HLT; `stop` sends a stop-IPI to the other CPUs.
 
-## Проверки
+## Verification
 
-- Offline release-сборка загрузчика, ядра и трёх приложений — без предупреждений.
-- 17 host-тестов: ELF/релокации/RTC, scheduler policy, отдельные CR3 и физические
-  страницы, RX/RW+NX, guard pages, ошибки указателей и переполнение адресов.
-- QEMU, 4 CPU: прошли все 5 сценариев `normal`, `memory`, `busy`, `smp`, `isolation`.
-  Сохранены прежние проверки двух копий app/clock, независимых цветов/состояний,
-  foreground, клавиатуры PS/2 и UART, лимита задач, повторных запусков и OOM.
-- SMP: восемь бесконечных циклов без WAIT, по два на каждом CPU; CPU_TICKS растут
-  у всех, каждый цикл сохраняет собственное значение в XMM0. Удалённый kill
-  освобождает память; после завершения всех задач проверен HLT=1 на каждом CPU.
-- Изоляция: тестовый ELF сам проверяет CPL=3/IOPL=0. Чтение/запись supervisor RAM,
-  запись в RX-код, выполнение стека, CLI, OUT, UD2, guard page, повреждённый RSP,
-  SYSCALL/SYSENTER и обращение к привилегированному IDT-вектору приводят к
-  исключению только этого процесса. Часы продолжают работать. Вариант SYSENTER
-  учитывает #UD AMD64 или #GP Intel при нулевом SYSENTER_CS.
-- Проверены отказы syscalls для supervisor/noncanonical/overflow указателей и
-  буфера через границу unmapped страницы. После ошибок память возвращается
-  точно к исходному значению, новые приложения успешно запускаются.
-- QEMU, 1 CPU: отдельно прошли `smp` и `isolation` — всего 7 сценариев QEMU.
-- `git diff --check` и проверка синтаксиса build-скрипта — без ошибок.
-- `usb_root/` обновлён. Тестовые ELF запускаются только в временных FAT-копиях
-  и не подменяют штатные программы в собранном пакете.
+- Offline release build of the bootloader, kernel and three applications — no warnings.
+- 17 host tests: ELF/relocations/RTC, scheduler policy, separate CR3s and physical
+  pages, RX/RW+NX, guard pages, pointer errors and address overflow.
+- QEMU, 4 CPUs: all 5 scenarios `normal`, `memory`, `busy`, `smp`, `isolation` passed.
+  The earlier checks are kept: two copies of app/clock, independent colours/states,
+  foreground, PS/2 keyboard and UART, task limit, repeated launches and OOM.
+- SMP: eight infinite loops without WAIT, two on each CPU; CPU_TICKS increase
+  on all of them, each loop keeps its own value in XMM0. A remote kill
+  frees memory; after all tasks finish, HLT=1 was verified on every CPU.
+- Isolation: the test ELF checks CPL=3/IOPL=0 itself. Reading/writing supervisor RAM,
+  writing to RX code, executing the stack, CLI, OUT, UD2, a guard page, a corrupted RSP,
+  SYSCALL/SYSENTER and invoking a privileged IDT vector cause an
+  exception in that process only. The clock keeps running. The SYSENTER variant
+  accounts for #UD on AMD64 or #GP on Intel with a zero SYSENTER_CS.
+- Syscall rejections were checked for supervisor/noncanonical/overflow pointers and
+  for a buffer crossing the boundary of an unmapped page. After the faults, memory returns
+  exactly to its initial value, and new applications launch successfully.
+- QEMU, 1 CPU: `smp` and `isolation` passed separately — 7 QEMU scenarios in total.
+- `git diff --check` and the build script syntax check — no errors.
+- `usb_root/` updated. The test ELFs run only in temporary FAT copies
+  and do not replace the standard programs in the built package.
 
-Логи текущего прогона: `/tmp/mind-core-<suite>-<N>cpu.log`.
-Команды воспроизведения приведены в README.
+Logs of the current run: `/tmp/mind-core-<suite>-<N>cpu.log`.
+The reproduction commands are given in the README.
 
-## Границы этапа
+## Stage boundaries
 
-Целевая платформа — UEFI x86-64/QEMU, xAPIC, NX, runtime RAM/GOP ниже 4 GiB.
-Лимиты: 8 CPU, 8 приложений, 64 MiB runtime-куча. Нет миграции задач, work stealing,
-ленивого выделения страниц и AVX-контекстов. Kernel identity map supervisor-only,
-но текст ядра отдельно от записи не защищён. Kernel/syscall work сериализован;
-параллельно выполняются приложения. Проверены конфигурации с 1 и 4 CPU.
+Target platform — UEFI x86-64/QEMU, xAPIC, NX, runtime RAM/GOP below 4 GiB.
+Limits: 8 CPUs, 8 applications, 64 MiB runtime heap. No task migration, work stealing,
+lazy page allocation or AVX contexts. The kernel identity map is supervisor-only,
+but kernel text is not separately write-protected. Kernel/syscall work is serialized;
+applications run in parallel. Configurations with 1 and 4 CPUs were verified.

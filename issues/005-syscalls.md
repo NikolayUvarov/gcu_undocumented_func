@@ -1,30 +1,30 @@
-# 005 — Системные вызовы (`int 0x80`) между userspace и ядром
+# 005 — System calls (`int 0x80`) between userspace and the kernel
 
-**Тип:** feature (roadmap №3) · **Приоритет:** средний · **Статус:** open · **Блокируется:** [004](004-apic-idt-interrupts.md)
-**Затрагивает:** `kernel/`, `app/`, общий крейт протокола
+**Type:** feature (roadmap #3) · **Priority:** medium · **Status:** open · **Blocked by:** [004](004-apic-idt-interrupts.md)
+**Affects:** `kernel/`, `app/`, shared protocol crate
 
-## Что требуется по handoff
+## What the handoff requires
 
-После стабилизации IDT/APIC вернуть программный вектор `0x80` для запросов из приложения: время, аппаратные события, выделение памяти.
+After the IDT/APIC are stabilized, bring back software vector `0x80` for requests from the application: time, hardware events, memory allocation.
 
-## Текущее состояние
+## Current state
 
-Приложение получает `&BootInfo` и пишет во фреймбуфер напрямую; никакого интерфейса «вверх» нет; вернуться в ядро не может (`-> !`). README заявляет `int 0x80` как реализованный — см. [010](010-docs-sync.md).
+The application receives `&BootInfo` and writes to the framebuffer directly; there is no "upward" interface at all; it cannot return to the kernel (`-> !`). The README claims `int 0x80` is implemented — see [010](010-docs-sync.md).
 
-## План
+## Plan
 
-1. Общий `no_std`-крейт `mind-abi` (path-dependency для kernel и app): номера syscall'ов, `#[repr(C)]` структуры, `BootInfo` (устраняет тройное дублирование, см. [knowledge/05](../knowledge/05-observations-and-risks.md)).
-2. Вектор `0x80` в IDT с `DPL=3` (пока всё в ring 0 — DPL=0, но заложить).
-3. Соглашение: `rax` — номер, `rdi/rsi/rdx/r10/r8/r9` — аргументы, `rax` — результат (как Linux). Первые вызовы:
-   - `SYS_TICKS` → количество тиков таймера;
-   - `SYS_KEY_POLL` → последний сканкод или 0;
-   - `SYS_ALLOC(size, align)` / `SYS_FREE(ptr, size, align)` → из кучи ядра (issue 003);
-   - `SYS_EXIT` → возврат управления ядру (сейчас невозможен).
-4. В app: обёртки `unsafe fn syscall1..3` через `asm!("int 0x80")`, использование `SYS_TICKS` вместо `nop`-цикла.
-5. Позже: `syscall/sysret` вместо `int 0x80` (быстрее, стандартно для x86_64), userspace в ring 3 с отдельными страницами.
+1. A shared `no_std` crate `mind-abi` (path dependency for kernel and app): syscall numbers, `#[repr(C)]` structs, `BootInfo` (eliminates the triple duplication, see [knowledge/05](../knowledge/05-observations-and-risks.md)).
+2. Vector `0x80` in the IDT with `DPL=3` (for now everything is in ring 0 — DPL=0, but plan for it).
+3. Convention: `rax` — number, `rdi/rsi/rdx/r10/r8/r9` — arguments, `rax` — result (like Linux). First calls:
+   - `SYS_TICKS` → number of timer ticks;
+   - `SYS_KEY_POLL` → last scancode or 0;
+   - `SYS_ALLOC(size, align)` / `SYS_FREE(ptr, size, align)` → from the kernel heap (issue 003);
+   - `SYS_EXIT` → return control to the kernel (currently impossible).
+4. In app: `unsafe fn syscall1..3` wrappers via `asm!("int 0x80")`, use `SYS_TICKS` instead of the `nop` loop.
+5. Later: `syscall/sysret` instead of `int 0x80` (faster, standard for x86_64), userspace in ring 3 with separate pages.
 
-## Критерии готовности
+## Acceptance criteria
 
-- app анимируется по `SYS_TICKS`, скорость не зависит от CPU.
-- app по клавише Esc делает `SYS_EXIT`, ядро возвращается к своему циклу.
-- Ни одна структура протокола не продублирована между крейтами.
+- app animates based on `SYS_TICKS`; the speed does not depend on the CPU.
+- app does `SYS_EXIT` on the Esc key, and the kernel returns to its own loop.
+- No protocol structure is duplicated between crates.

@@ -1,29 +1,29 @@
-# 004 — IDT + Local APIC / IO-APIC вместо 8259 PIC, таймер и клавиатура по прерываниям
+# 004 — IDT + Local APIC / IO-APIC instead of the 8259 PIC, interrupt-driven timer and keyboard
 
-**Тип:** feature (roadmap №2) · **Приоритет:** высокий · **Статус:** open · **Блокируется:** [003](003-bss-and-heap-allocator.md) (нужны статики для IDT/GDT/TSS)
-**Затрагивает:** `kernel/`
+**Type:** feature (roadmap #2) · **Priority:** high · **Status:** open · **Blocked by:** [003](003-bss-and-heap-allocator.md) (statics are needed for IDT/GDT/TSS)
+**Affects:** `kernel/`
 
-## Что требуется по handoff
+## What the handoff requires
 
-Откаченная попытка: ремап 8259, IRQ0 (PIT) + IRQ1 (PS/2), asm-переключение контекста → Triple Fault после `sti` в UEFI-окружении. Нужно перейти на APIC, чтобы прерывания не конфликтовали с состоянием, оставленным прошивкой.
+Rolled-back attempt: 8259 remap, IRQ0 (PIT) + IRQ1 (PS/2), asm context switching → Triple Fault after `sti` in the UEFI environment. We need to move to the APIC so that interrupts do not conflict with the state left by the firmware.
 
-## Текущее состояние
+## Current state
 
-Ни IDT, ни GDT, ни обработчиков в коде нет. README при этом описывает «Hardware interrupts (IDT) for timing and keyboard input» как реализованное — см. [010](010-docs-sync.md).
+There is no IDT, no GDT and no handlers in the code. Meanwhile the README describes "Hardware interrupts (IDT) for timing and keyboard input" as implemented — see [010](010-docs-sync.md).
 
-## План (порядок важен — каждый шаг проверяется в QEMU отдельно)
+## Plan (order matters — each step is verified in QEMU separately)
 
-1. **Собственные GDT+TSS** (UEFI GDT нельзя считать стабильной после `exit_boot_services`), `lgdt`, перезагрузка `cs/ss`; IST-стек для #DF.
-2. **IDT со всеми исключениями** (`extern "x86-interrupt"`, feature `abi_x86_interrupt`), обработчик #DF/#GP/#PF, который выводит номер вектора и RIP на фреймбуфер (иначе любая ошибка — Triple Fault без диагностики). Это, вероятно, и было настоящей причиной сброса в прошлой итерации.
-3. **Замаскировать 8259** (`0xFF` в порты `0x21`/`0xA1`) — не ремапить, просто выключить.
-4. **Local APIC**: `IA32_APIC_BASE` MSR (`0x1B`), включить `xAPIC` (или x2APIC через MSR — проще, без MMIO-маппинга), SVR (`0xF0`), LVT Timer (`0x320`) в периодическом режиме с делителем; калибровка по PIT или по TSC-frequency из CPUID (в QEMU обычно доступен `0x15`/`0x16`).
-5. **IO-APIC** для клавиатуры: адрес из ACPI MADT (взять `ACPI_2_0_TABLE_GUID` из `SystemTable` до `exit_boot_services` и передать RSDP в `BootInfo`); ISA IRQ1 → GSI1 (с учётом Interrupt Source Override), редирект на вектор, например `0x21`.
-6. `sti` только после всех шагов; EOI через `0xB0`.
-7. Затем — контекст-свитч (asm, сохранение регистров в TCB) и round-robin двух задач: «ядро рисует круг» / «app рисует квадрат».
+1. **Own GDT+TSS** (the UEFI GDT cannot be considered stable after `exit_boot_services`), `lgdt`, reload `cs/ss`; an IST stack for #DF.
+2. **IDT with all exceptions** (`extern "x86-interrupt"`, feature `abi_x86_interrupt`), a #DF/#GP/#PF handler that prints the vector number and RIP to the framebuffer (otherwise any fault is a Triple Fault with no diagnostics). This was probably the real cause of the reset in the previous iteration.
+3. **Mask the 8259** (`0xFF` to ports `0x21`/`0xA1`) — don't remap, just disable it.
+4. **Local APIC**: `IA32_APIC_BASE` MSR (`0x1B`), enable `xAPIC` (or x2APIC via MSR — simpler, no MMIO mapping), SVR (`0xF0`), LVT Timer (`0x320`) in periodic mode with a divider; calibrate against the PIT or the TSC frequency from CPUID (in QEMU `0x15`/`0x16` is usually available).
+5. **IO-APIC** for the keyboard: address from the ACPI MADT (take `ACPI_2_0_TABLE_GUID` from the `SystemTable` before `exit_boot_services` and pass the RSDP in `BootInfo`); ISA IRQ1 → GSI1 (taking Interrupt Source Overrides into account), redirected to a vector, e.g. `0x21`.
+6. `sti` only after all of the steps; EOI via `0xB0`.
+7. Then — a context switch (asm, saving registers into the TCB) and round-robin of two tasks: "kernel draws a circle" / "app draws a square".
 
-## Критерии готовности
+## Acceptance criteria
 
-- Счётчик тиков таймера растёт и виден на экране; частота стабильна (без `nop`-задержек).
-- Нажатие клавиши приходит прерыванием, поллинг `0x64/0x60` удалён.
-- Исключение (`ud2` в тестовом коде) показывает диагностику, а не перезагружает QEMU.
-- Документация в README/handoff обновлена.
+- The timer tick counter increases and is visible on screen; the rate is stable (no `nop` delays).
+- Key presses arrive via interrupts; the `0x64/0x60` polling is removed.
+- An exception (`ud2` in test code) shows diagnostics instead of rebooting QEMU.
+- The documentation in README/handoff is updated.

@@ -1,20 +1,20 @@
-# 016 — Драйверы накопителей для VFS: ATA, AHCI и USB mass storage — выполнено
+# 016 — Storage drivers for the VFS: ATA, AHCI and USB mass storage — done
 
-- Тип: feature · Приоритет: средний · Статус: выполнено · Дата: 2026-10-03
+- Type: feature · Priority: medium · Status: done · Date: 2026-10-03
 
-## Проблема
-`vfs_server` сам работал с первичным каналом ATA (PIO). При загрузке с USB-образа и на большинстве реальных машин (AHCI) диска не было.
+## Problem
+`vfs_server` itself worked with the primary ATA channel (PIO). When booting from a USB image and on most real machines (AHCI), there was no disk.
 
-## Сделано
-- Блочный доступ вынесен в сервисы ring 3 `ata`, `ahci`, `usb_storage` с общим протоколом `BLOCK_INFO/ATTACH/READ` (`mind::block`); `vfs_server` подключается к ним по IPC и монтирует первый том FAT.
-- Ядро: сканер PCI с размерами BAR, мандат MMIO (некэшируемое отображение), DMA-области драйверов с выравниванием 64 КиБ; `ahci`/`usb_storage` запускаются только при наличии контроллера.
-- `usb_storage`: xHCI (передача от прошивки, сброс, кольца команд/событий/передач, порты USB 2/3), адресация устройств, Bulk-Only Transport, SCSI TEST UNIT READY/READ CAPACITY/READ(10).
-- `ahci`: BIOS/OS handoff, первый SATA-порт, IDENTIFY, READ DMA EXT.
+## Done
+- Block access was moved into the ring 3 services `ata`, `ahci`, `usb_storage` with a common `BLOCK_INFO/ATTACH/READ` protocol (`mind::block`); `vfs_server` connects to them over IPC and mounts the first FAT volume.
+- Kernel: a PCI scanner with BAR sizes, an MMIO capability (uncached mapping), driver DMA regions with 64 KiB alignment; `ahci`/`usb_storage` are started only when a controller is present.
+- `usb_storage`: xHCI (handoff from the firmware, reset, command/event/transfer rings, USB 2/3 ports), device addressing, Bulk-Only Transport, SCSI TEST UNIT READY/READ CAPACITY/READ(10).
+- `ahci`: BIOS/OS handoff, the first SATA port, IDENTIFY, READ DMA EXT.
 
-## Проверки
-- `tests/usb_image_smoke.py`: `RUN files` читает USB-образ через xHCI (критерий готовности).
-- `tests/qemu_smoke.py --suites ahci`: диск на контроллере AHCI; `services`: путь через `ata`.
-- Вручную: USB 2.0-порт со сбросом и USB-клавиатура перед накопителем (`qemu-xhci,p3=0`).
+## Verification
+- `tests/usb_image_smoke.py`: `RUN files` reads the USB image via xHCI (acceptance criterion).
+- `tests/qemu_smoke.py --suites ahci`: disk on an AHCI controller; `services`: the path via `ata`.
+- Manually: a USB 2.0 port with reset and a USB keyboard in front of the drive (`qemu-xhci,p3=0`).
 
-## Ограничения
-Драйверы опрашивают контроллеры без прерываний; NVMe нет; секторы только по 512 байт; один накопитель монтируется как корень.
+## Limitations
+The drivers poll the controllers without interrupts; no NVMe; 512-byte sectors only; a single drive is mounted as the root.

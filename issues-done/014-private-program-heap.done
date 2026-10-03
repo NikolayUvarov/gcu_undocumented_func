@@ -1,107 +1,107 @@
-# 014 — Приватная динамическая память программ — выполнено
+# 014 — Private dynamic memory for programs — done
 
-- Тип: feature
-- Приоритет: высокий
-- Статус: выполнено
-- Дата: 2026-09-19
-- Зависимость: 013 (выполнена)
+- Type: feature
+- Priority: high
+- Status: done
+- Date: 2026-09-19
+- Dependency: 013 (done)
 
-## Проблема и выбор следующего шага
+## Problem and choice of the next step
 
-После SMP и ring 3 программа имеет отдельные код, стек и данные, но не может
-запрашивать память во время работы: BootInfo не передаёт ей кучу, а ABI не
-содержит allocate/free. Следующий шаг — управляемая ядром приватная память:
-основа для динамических структур данных, загрузки файлов и библиотек userspace.
+After SMP and ring 3, a program has separate code, stack and data, but cannot
+request memory at run time: BootInfo does not pass it a heap, and the ABI does not
+contain allocate/free. The next step is kernel-managed private memory:
+the basis for dynamic data structures, file loading and userspace libraries.
 
-## Постановка
+## Task statement
 
-Добавить выделение обнулённых блоков страниц и освобождение блока по его
-начальному виртуальному адресу. Память доступна только вызывающему процессу,
-RW+NX, с unmapped страницей после блока. Лимиты: 32 блока и 16 MiB живых
-данных на процесс, в пределах существующей общей runtime-кучи 64 MiB.
-Ошибки размеров, адресов, повторного освобождения и нехватка памяти возвращают
-ошибку; они не должны повреждать ядро или уже выделенные блоки.
+Add allocation of zeroed page blocks and freeing of a block by its
+starting virtual address. The memory is accessible only to the calling process,
+RW+NX, with an unmapped page after the block. Limits: 32 blocks and 16 MiB of live
+data per process, within the existing shared 64 MiB runtime heap.
+Errors in sizes, addresses, double frees and out-of-memory return
+an error; they must not corrupt the kernel or already allocated blocks.
 
-Обновления таблиц страниц должны сбрасывать локальный TLB до возврата в
-userspace. Задачи пока закреплены за CPU и однопоточны: один CR3 не исполняется
-одновременно на нескольких CPU. При завершении, kill и fault освобождаются
-все блоки и таблицы. При неудачном выделении нужен полный rollback.
+Page table updates must flush the local TLB before returning to
+userspace. Tasks are still pinned to a CPU and single-threaded: one CR3 never executes
+simultaneously on several CPUs. On exit, kill and fault, all blocks and tables
+are freed. A failed allocation requires a full rollback.
 
-Добавить общий Rust wrapper владения блоком и использовать его в штатном app2
-для буфера спрайта. Это API блоков страниц, не malloc с мелкими подвыделениями.
+Add a shared Rust wrapper that owns a block and use it in the standard app2
+for the sprite buffer. This is a page-block API, not a malloc with small sub-allocations.
 
-## Критерии готовности
+## Acceptance criteria
 
-- [x] Syscalls allocate/free, документированный ABI и лимиты.
-- [x] Приватные нулевые RW+NX страницы, guard pages, повторное использование дыр.
-- [x] Освобождение таблиц/TLB; rollback без утечек при отказе.
-- [x] app2 использует динамический буфер; отказ обрабатывается без panic.
-- [x] Host-тесты границ, фрагментации, приватности и rollback.
-- [x] QEMU: параллельные экземпляры, allocate/free/reuse, invalid/double free,
-      лимиты/OOM, NX/guard/use-after-free faults, выход/kill/fault без утечек.
-- [x] Регрессии прежних сценариев на 4 CPU, heap-сценарий также на 1 CPU.
-- [x] README, собранный usb_root и задача в issues-done/*.done обновлены.
+- [x] allocate/free syscalls, a documented ABI and limits.
+- [x] Private zeroed RW+NX pages, guard pages, reuse of holes.
+- [x] Freeing of tables/TLB; leak-free rollback on failure.
+- [x] app2 uses a dynamic buffer; failure is handled without a panic.
+- [x] Host tests for boundaries, fragmentation, privacy and rollback.
+- [x] QEMU: parallel instances, allocate/free/reuse, invalid/double free,
+      limits/OOM, NX/guard/use-after-free faults, exit/kill/fault without leaks.
+- [x] Regressions of the earlier scenarios on 4 CPUs, the heap scenario also on 1 CPU.
+- [x] README, the built usb_root and the task in issues-done/*.done updated.
 
-## Реализация
+## Implementation
 
-- ABI: `SYSCALL_ALLOC=8`, размер в arg1, результат — адрес либо 0;
-  `SYSCALL_FREE=9`, точный адрес начала блока в arg1, результат — 0 либо
-  usize::MAX. Лимиты и размер страницы определены в `common/abi.rs`.
-- `kernel/src/user_heap.rs` хранит владельцев физических блоков и метаданные
-  в ядре. First-fit повторно использует свободные виртуальные диапазоны.
-  Арена занимает последние 32 MiB пользовательского окна; после каждого блока
-  есть guard page, перед первым блоком — ещё одна. Учёт лимита округлён до 4 KiB.
-- Mapping заранее проверяет пересечения. Ошибка на любой стадии откатывает
-  новые PTE и пустые таблицы, сохраняя старые отображения. Unmap сначала
-  отсоединяет таблицы, затем сбрасывает TLB/paging-structure cache через CR3 и
-  только после этого освобождает физические страницы таблиц и данных.
-- Ресурсы принадлежат Task и автоматически освобождаются штатным механизмом
-  отложенной очистки после переключения CPU с завершённого процесса.
-- GlobalAlloc ядра выключает локальные IRQ на время блокировки allocator.
-  Это устраняет возможный цикл: BSP держит allocator → timer ждёт scheduler →
-  AP держит scheduler и ждёт allocator. Диагностика `heap` также сериализована
-  с системными вызовами, чтобы параллельная активность не имитировала утечку.
-- `common/user_memory.rs`: `Pages::new`, mutable slice, освобождение в Drop.
-  `app2` хранит спрайт 64×64 в приватном буфере и использует его при рисовании;
-  отсутствие памяти обрабатывается сообщением и возвратом в ОС.
+- ABI: `SYSCALL_ALLOC=8`, size in arg1, result — an address or 0;
+  `SYSCALL_FREE=9`, the exact block start address in arg1, result — 0 or
+  usize::MAX. The limits and the page size are defined in `common/abi.rs`.
+- `kernel/src/user_heap.rs` keeps the owners of physical blocks and the metadata
+  in the kernel. First-fit reuses free virtual ranges.
+  The arena occupies the last 32 MiB of the user window; after each block
+  there is a guard page, and one more before the first block. Limit accounting is rounded up to 4 KiB.
+- Mapping checks for overlaps in advance. An error at any stage rolls back
+  the new PTEs and empty tables, keeping the old mappings. Unmap first
+  detaches the tables, then flushes the TLB/paging-structure cache via CR3, and
+  only after that frees the physical pages of the tables and data.
+- Resources are owned by the Task and are freed automatically by the standard
+  deferred cleanup mechanism after the CPU switches away from the finished process.
+- The kernel GlobalAlloc disables local IRQs while the allocator lock is held.
+  This removes a possible cycle: BSP holds the allocator → timer waits for the scheduler →
+  AP holds the scheduler and waits for the allocator. The `heap` diagnostics are also serialized
+  with system calls so that parallel activity does not look like a leak.
+- `common/user_memory.rs`: `Pages::new`, a mutable slice, freeing in Drop.
+  `app2` keeps a 64×64 sprite in a private buffer and uses it when drawing;
+  lack of memory is handled with a message and a return to the OS.
 
-## Проверки
+## Verification
 
-- Offline release-сборка ядра, трёх приложений и загрузчика — без предупреждений;
-  собранный `usb_root/` обновлён.
-- 21 host-тест: прежние ELF/RTC/scheduler проверки и новые проверки приватности,
-  обнуления/reuse, guard pages, размеров/переполнений/квот, invalid/double free,
-  атомарного отказа при пересечении и освобождения пустых таблиц. Искусственное
-  исчерпание таблиц после частичного mapping проверяет rollback и успешное
-  последующее выделение, повторённое трижды.
-- QEMU 4 CPU: прошли `normal`, `memory`, `busy`, `smp`, `isolation`, `heap`.
-  Штатный app2 подтверждает использование приватного буфера, продолжает рисовать
-  и корректно завершает работу через Esc/Drop.
-- Новый `heap`-сценарий: четыре экземпляра на разных CPU непрерывно проверяют
-  разные шаблоны данных по одинаковым виртуальным адресам; параллельно вызывают
-  alloc/free, а shell — команду heap. Все экземпляры и часы продолжают работать.
-- Проверены 32 блока, квота 16 MiB, нулевые/переполненные размеры, адрес внутри
-  блока, повторное освобождение и чтение освобождённого буфера через syscall.
-  Двадцать циклов allocate/free через границы 2 MiB возвращают usage к точному
-  значению до теста, пока сам процесс ещё жив: таблицы тоже освобождаются.
-- Выполнение heap-страницы даёт #PF с error=0x15; запись в guard и уже
-  освобождённую страницу — #PF с error=0x6. Завершается только виновный PID,
-  часы работают, outstanding allocations и таблицы полностью освобождаются.
-- Для OOM заранее запущены четыре клиента: два удерживают по 16 MiB, следующим
-  запросам возвращается 0 без изменения heap usage. После kill одного владельца
-  ранее отказавшее выделение проходит. Проверен возврат к исходному usage.
-- QEMU 1 CPU: отдельно прошли `smp`, `isolation`, `heap`. Всего 9 сценариев QEMU.
-- `git diff --check`, синтаксис Python и build-скрипта — без ошибок.
+- Offline release build of the kernel, three applications and the bootloader — no warnings;
+  the built `usb_root/` updated.
+- 21 host tests: the earlier ELF/RTC/scheduler checks and new checks of privacy,
+  zeroing/reuse, guard pages, sizes/overflows/quotas, invalid/double free,
+  atomic failure on overlap and freeing of empty tables. Artificial
+  exhaustion of tables after a partial mapping checks the rollback and a successful
+  subsequent allocation, repeated three times.
+- QEMU 4 CPUs: `normal`, `memory`, `busy`, `smp`, `isolation`, `heap` passed.
+  The standard app2 confirms use of the private buffer, keeps drawing
+  and exits correctly via Esc/Drop.
+- New `heap` scenario: four instances on different CPUs continuously check
+  different data patterns at identical virtual addresses; in parallel they call
+  alloc/free, and the shell runs the heap command. All instances and the clock keep running.
+- Checked: 32 blocks, the 16 MiB quota, zero/overflowing sizes, an address inside
+  a block, double free and reading a freed buffer via a syscall.
+  Twenty allocate/free cycles across 2 MiB boundaries return usage to the exact
+  pre-test value while the process itself is still alive: the tables are freed too.
+- Executing a heap page gives #PF with error=0x15; writing to a guard page or an already
+  freed page gives #PF with error=0x6. Only the offending PID is terminated,
+  the clock keeps running, outstanding allocations and tables are fully freed.
+- For OOM, four clients are started beforehand: two hold 16 MiB each, subsequent
+  requests get 0 without changing heap usage. After one owner is killed,
+  the previously rejected allocation succeeds. A return to the initial usage was verified.
+- QEMU 1 CPU: `smp`, `isolation`, `heap` passed separately. 9 QEMU scenarios in total.
+- `git diff --check`, Python and build script syntax — no errors.
 
-Логи: `/tmp/mind-core-<suite>-<N>cpu.log`. Команды воспроизведения — в README.
-`tests/heap_app.rs` используется только во временной FAT-копии тестовой VM.
+Logs: `/tmp/mind-core-<suite>-<N>cpu.log`. Reproduction commands are in the README.
+`tests/heap_app.rs` is used only in the temporary FAT copy of the test VM.
 
-## Границы этапа
+## Stage boundaries
 
-Память выделяется заранее, целыми страницами, из общей runtime-арены 64 MiB.
-Каждый блок пока требует непрерывной физической области: возможен отказ из-за
-фрагментации. Нет malloc/Rust GlobalAlloc для мелких объектов userspace и demand
-paging. Guard защищает только unmapped страницу, не переполнение внутри mapped
-страницы. Повторное использование адреса не обеспечивает temporal memory safety.
-Локальный TLB flush корректен при текущих закреплённых однопоточных процессах;
-для общих адресных пространств на нескольких CPU понадобится TLB shootdown.
+Memory is allocated eagerly, in whole pages, from the shared 64 MiB runtime arena.
+Each block currently requires a contiguous physical region: failure due to
+fragmentation is possible. There is no malloc/Rust GlobalAlloc for small userspace objects and no demand
+paging. The guard only protects the unmapped page, not an overflow within a mapped
+page. Address reuse does not provide temporal memory safety.
+The local TLB flush is correct with the current pinned single-threaded processes;
+shared address spaces on several CPUs will require a TLB shootdown.

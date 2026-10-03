@@ -1,101 +1,101 @@
-# 012 — Многозадачность, независимые экземпляры и foreground — выполнено
+# 012 — Multitasking, independent instances and foreground — done
 
-- Тип: feature
-- Приоритет: высокий
-- Статус: выполнено
-- Дата завершения: 2026-09-18
-- Основа: работающие ELF-загрузка, PIT/IDT, ожидание без busy loop и три приложения.
+- Type: feature
+- Priority: high
+- Status: done
+- Completion date: 2026-09-18
+- Basis: working ELF loading, PIT/IDT, waiting without a busy loop, and three applications.
 
-## Постановка
+## Task statement
 
-Разделить программу (ELF-файл) и её экземпляр (задача с уникальным PID).
-Разрешить одновременно выполнять разные программы и несколько экземпляров одной,
-сохраняя отзывчивую консоль и низкую нагрузку при отсутствии работы.
+Separate a program (ELF file) from its instance (a task with a unique PID).
+Allow different programs and several instances of the same program to run simultaneously,
+while keeping the console responsive and the load low when there is no work.
 
-Команды:
+Commands:
 
-- `run <name>` — новый экземпляр на переднем плане; `boot` — сокращение `run app`.
-- `run <name> &` — новый экземпляр в фоне, консоль остаётся доступной.
-- `ps` — PID, имя, состояние, foreground/background запущенных задач.
-- `kill <id>` — завершить только выбранный экземпляр и освободить его ресурсы.
-- `fg <id>` — перевести существующий экземпляр на передний план без перезапуска.
-- `Ctrl+Z` — вернуть консоль, оставив текущую программу работать в фоне.
-- `Esc` — штатно завершить foreground-программу.
+- `run <name>` — a new instance in the foreground; `boot` — shorthand for `run app`.
+- `run <name> &` — a new instance in the background; the console stays available.
+- `ps` — PID, name, state, foreground/background of the running tasks.
+- `kill <id>` — terminate only the selected instance and free its resources.
+- `fg <id>` — bring an existing instance to the foreground without restarting it.
+- `Ctrl+Z` — return the console, leaving the current program running in the background.
+- `Esc` — terminate the foreground program normally.
 
-## Реализация
+## Implementation
 
-Планировщик на одном BSP с переключением по таймеру и сном отдельных задач.
-Каждый экземпляр получает собственные стек, загруженный/релокированный ELF
-(включая `.data` и `.bss`), syscall mailbox, экран и очередь ввода.
-Только foreground получает клавиатуру и выводится на физический экран;
-фоновые программы продолжают считать и обновлять свои экраны.
-Когда все задачи спят, процессор использует `HLT`.
-Освобождение завершённых задач происходит с другого стека.
+A scheduler on a single BSP with timer-driven switching and sleeping of individual tasks.
+Each instance gets its own stack, loaded/relocated ELF
+(including `.data` and `.bss`), syscall mailbox, screen and input queue.
+Only the foreground instance receives the keyboard and is shown on the physical screen;
+background programs keep computing and updating their own screens.
+When all tasks are asleep, the processor uses `HLT`.
+Finished tasks are freed from a different stack.
 
-Первый этап сохраняет ring 0 и общее адресное пространство: аппаратная изоляция
-памяти и SMP на четырёх ядрах — отдельные будущие задачи.
+The first stage keeps ring 0 and a shared address space: hardware memory
+isolation and SMP on four cores are separate future tasks.
 
-## Критерии готовности
+## Acceptance criteria
 
-- [x] Два экземпляра `app` имеют независимые глобальные счётчики и стеки.
-- [x] Несколько приложений прогрессируют одновременно с отзывчивой консолью.
-- [x] `ps`, `kill`, `fg`, foreground/background и `Ctrl+Z` работают через UART и PS/2.
-- [x] `fg` сохраняет PID, состояние и содержимое экрана выбранного экземпляра.
-- [x] Завершение одной копии не затрагивает другую; повторные старты освобождают память.
-- [x] Неверные имена/PID, переполнение таблицы задач и нехватка памяти дают ошибки.
-- [x] Таймер вытесняет программу, которая не вызывает ожидание.
-- [x] В простое выполняется `HLT`, `heap` продолжает работать.
-- [x] Сборка, проверки загрузки/планирования и интеграционная проверка в QEMU проходят.
-- [x] README обновлён; эта задача перемещена в `issues-done/*.done` после проверки.
+- [x] Two `app` instances have independent global counters and stacks.
+- [x] Several applications make progress simultaneously with a responsive console.
+- [x] `ps`, `kill`, `fg`, foreground/background and `Ctrl+Z` work via UART and PS/2.
+- [x] `fg` preserves the PID, state and screen contents of the selected instance.
+- [x] Terminating one copy does not affect another; repeated starts free memory.
+- [x] Invalid names/PIDs, task table overflow and out-of-memory produce errors.
+- [x] The timer preempts a program that does not call wait.
+- [x] `HLT` runs while idle; `heap` keeps working.
+- [x] The build, load/scheduling checks and the QEMU integration check pass.
+- [x] README updated; this task moved to `issues-done/*.done` after verification.
 
-## Результат
+## Result
 
-Реализован вытесняющий round-robin планировщик на BSP с сохранением регистров и
-x87/SSE. Лимит — 8 одновременно запущенных программ, монотонные PID, отдельные
-64 KiB стеки, ELF-образы, ABI/mailbox, очереди ввода и буферы экрана.
-UEFI сохраняет исходные ELF-файлы и резервирует 64 MiB для runtime-кучи.
-Каждый запуск копирует сегменты, обнуляет `.bss` и применяет релокации заново.
+Implemented a preemptive round-robin scheduler on the BSP that saves registers and
+x87/SSE state. Limit — 8 simultaneously running programs, monotonic PIDs, separate
+64 KiB stacks, ELF images, ABI/mailbox, input queues and screen buffers.
+UEFI keeps the original ELF files and reserves 64 MiB for the runtime heap.
+Each launch copies the segments, zeroes `.bss` and applies relocations anew.
 
-Добавлены `run <name> [&]`, `ps`, `kill <id>`, `fg <id>`, `Ctrl+Z` и `logs <id>`.
-Последняя команда читает и очищает отдельный журнал задачи (последние 4096 байт).
-Foreground дополнительно печатает в UART с PID; background сохраняет вывод в
-журнале, не мешая консоли. Приложения показывают подсказки Ctrl+Z/Esc.
+Added `run <name> [&]`, `ps`, `kill <id>`, `fg <id>`, `Ctrl+Z` and `logs <id>`.
+The last command reads and clears a per-task log (the last 4096 bytes).
+Foreground additionally prints to UART with the PID; background keeps its output in
+the log without disturbing the console. Applications show Ctrl+Z/Esc hints.
 
-Показ экрана и ввод принадлежат только выбранному экземпляру; остальные продолжают
-работать. `fg` сохраняет состояние. `kill` и возврат из приложения освобождают
-ресурсы со стека оболочки. При ошибке создания частичные выделения откатываются.
-Когда готовых программ нет, оболочка выполняет `HLT`.
+The screen and input belong only to the selected instance; the others keep
+running. `fg` preserves state. `kill` and returning from an application free
+resources from the shell's stack. On a creation error, partial allocations are rolled back.
+When no programs are ready, the shell executes `HLT`.
 
-## Проверки
+## Verification
 
-- Полная offline release-сборка всех пяти ELF/UEFI компонентов: без предупреждений.
-- `tests/runtime.rs`: 14 тестов прошли — реальные ELF-копии, независимая `.bss`,
-  релокации, повреждённые заголовки/сегменты, пробуждение/выбор задач, RTC.
-- `tests/qemu_smoke.py`: три сценария QEMU с 4 vCPU прошли:
-  - normal: две `app`, две `clock` и `app2` одновременно; прогресс каждой задачи;
-    `fg`/Ctrl+Z/Esc; `run`/`fg`/`kill` через PS/2 (включая Shift+7 для `&`);
-    неверные PID/имена, восемь задач и отказ девятой, десять повторных запусков;
-    heap после очистки точно возвращается к базовому значению; CPU0 `HLT=1`.
-    Также проверен framebuffer: изменение цвета PID 3 не меняет цвет PID 4, повторный `fg 3`
-    сохраняет цвет; скриншот foreground-часов содержит реально отрисованные цифры.
-  - memory: ELF с увеличенной `.bss` доводит кучу до нехватки памяти до лимита
-    таблицы; неудачный запуск не меняет занятую память, оставшиеся задачи работают,
-    освобождение возвращает исходную кучу, после него возможен новый запуск.
-  - busy: тестовый ELF после единственного syscall выполняет бесконечный цикл
-    без ожидания, сохраняя значение в XMM0; таймер вытесняет его, часы и оболочка
-    отвечают, `kill` завершает задачу, память освобождается.
-- `git diff --check` и синтаксис скрипта сборки: без ошибок.
-- Пакет в `usb_root/` пересобран; тестовые ELF не входят в обычную сборку.
+- Full offline release build of all five ELF/UEFI components: no warnings.
+- `tests/runtime.rs`: 14 tests passed — real ELF copies, independent `.bss`,
+  relocations, corrupted headers/segments, task wake-up/selection, RTC.
+- `tests/qemu_smoke.py`: three QEMU scenarios with 4 vCPUs passed:
+  - normal: two `app`, two `clock` and `app2` simultaneously; progress of each task;
+    `fg`/Ctrl+Z/Esc; `run`/`fg`/`kill` via PS/2 (including Shift+7 for `&`);
+    invalid PIDs/names, eight tasks and rejection of the ninth, ten repeated launches;
+    the heap returns exactly to its baseline value after cleanup; CPU0 `HLT=1`.
+    The framebuffer was also checked: changing the colour of PID 3 does not change the colour of PID 4, a repeated `fg 3`
+    preserves the colour; a screenshot of the foreground clock contains actually rendered digits.
+  - memory: an ELF with an enlarged `.bss` drives the heap to out-of-memory before the
+    table limit; a failed launch does not change the used memory, the remaining tasks keep running,
+    freeing returns the heap to its original state, after which a new launch is possible.
+  - busy: a test ELF runs an infinite loop after a single syscall
+    without waiting, keeping a value in XMM0; the timer preempts it, the clock and the shell
+    respond, `kill` terminates the task, memory is freed.
+- `git diff --check` and the build script syntax: no errors.
+- The package in `usb_root/` was rebuilt; the test ELFs are not part of the regular build.
 
-## Файлы
+## Files
 
-- `kernel/src/scheduler.rs`, `context.rs`, `task_state.rs` — задачи и переключение.
-- `kernel/src/elf.rs`, `memory.rs` — загрузка экземпляров и освобождение ресурсов.
-- `kernel/src/input.rs`, `main.rs`, `interrupts.rs` — ввод, команды, таймер.
-- `common/abi.rs`, `common/wait.rs`, `bootloader/src/main.rs` — ABI и подготовка RAM/ELF.
-- `tests/runtime.rs`, `tests/qemu_smoke.py`, `tests/busy_app.rs` — проверки.
-- `README.md` — команды, ограничения и воспроизводимый запуск тестов.
+- `kernel/src/scheduler.rs`, `context.rs`, `task_state.rs` — tasks and switching.
+- `kernel/src/elf.rs`, `memory.rs` — loading instances and freeing resources.
+- `kernel/src/input.rs`, `main.rs`, `interrupts.rs` — input, commands, timer.
+- `common/abi.rs`, `common/wait.rs`, `bootloader/src/main.rs` — ABI and RAM/ELF preparation.
+- `tests/runtime.rs`, `tests/qemu_smoke.py`, `tests/busy_app.rs` — checks.
+- `README.md` — commands, limitations and reproducible test runs.
 
-Ограничения этапа сохранены: ring 0, общее адресное пространство, выполнение на
-одном BSP; SMP, аппаратная защита памяти, собственные GDT/TSS/IST и AVX-контекст
-не входят в эту задачу.
+The limitations of this stage remain: ring 0, a shared address space, execution on
+a single BSP; SMP, hardware memory protection, own GDT/TSS/IST and AVX context
+are not part of this task.

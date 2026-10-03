@@ -1,18 +1,18 @@
-# 015 — Загрузка программ через VFS вместо RAMFS загрузчика — выполнено
+# 015 — Loading programs through the VFS instead of the bootloader RAMFS — done
 
-- Тип: feature · Приоритет: высокий · Статус: выполнено · Дата: 2026-10-03
+- Type: feature · Priority: high · Status: done · Date: 2026-10-03
 
-## Проблема
-Загрузчик читал все программы в память до ExitBootServices, ядро запускало их только из этих образов.
+## Problem
+The bootloader read all programs into memory before ExitBootServices; the kernel could launch them only from those images.
 
-## Сделано
-- Загрузчик UEFI передаёт ядру только образы сервисов (`BOOT_FILES`); таблицы приложений в ABI больше нет.
-- Сервис `loader` (ring 3, привилегия запуска) читает ELF через `vfs_server` и вызывает `SPAWN_IMAGE` с мандатом на свой буфер; ядро разбирает и копирует образ.
-- Шелл ядра: `RUN` и `LIST` — запросы к loader через страницу запроса и сообщение ядра; итог — `LOADER_DONE`, ожидание до 15 с.
-- Программы запускают программы через `mind::process::spawn` (CALL к loader, мандат для слота INIT ребёнка).
-- Имя задачи хранится в ядре (`ps`), а не индекс образа; `dzenclk.elf` переименован в `dzen-clock.elf`.
+## Done
+- The UEFI bootloader passes the kernel only the service images (`BOOT_FILES`); there is no longer an application table in the ABI.
+- The `loader` service (ring 3, with the spawn privilege) reads the ELF via `vfs_server` and calls `SPAWN_IMAGE` with a capability for its own buffer; the kernel parses and copies the image.
+- Kernel shell: `RUN` and `LIST` are requests to the loader via a request page and a kernel message; the outcome is `LOADER_DONE`, with a wait of up to 15 s.
+- Programs launch programs via `mind::process::spawn` (a CALL to the loader, a capability for the child's INIT slot).
+- The task name is stored in the kernel (`ps`), not the image index; `dzenclk.elf` was renamed to `dzen-clock.elf`.
 
-## Проверки
-- `services`: `LIST` показывает файлы диска; запускаются `hello` (копия clock.elf) и `extra/demo.elf`, которых нет ни в одной таблице; отклоняются `kernel`, несуществующие и слишком длинные имена.
-- `isolation`: `SPAWN_IMAGE` и `LOADER_DONE` без привилегии запрещены.
-- USB-образ: приложения грузятся с USB-накопителя через xHCI.
+## Verification
+- `services`: `LIST` shows the files on the disk; `hello` (a copy of clock.elf) and `extra/demo.elf`, which are not in any table, are launched; `kernel`, nonexistent and overly long names are rejected.
+- `isolation`: `SPAWN_IMAGE` and `LOADER_DONE` are forbidden without the privilege.
+- USB image: applications are loaded from a USB drive via xHCI.

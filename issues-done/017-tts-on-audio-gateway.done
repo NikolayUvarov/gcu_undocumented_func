@@ -1,20 +1,20 @@
-# 017 — Синтез речи (TTS) поверх аудиошлюза — выполнено
+# 017 — Speech synthesis (TTS) on top of the audio gateway — done
 
-- Тип: feature · Приоритет: низкий · Статус: выполнено · Дата: 2026-10-03
+- Type: feature · Priority: low · Status: done · Date: 2026-10-03
 
-## Проблема
-`audio_gw` принимал PCM и тоны, синтеза речи не было; поток больше 16 КиБ клиент проталкивал опросом со сном.
+## Problem
+`audio_gw` accepted PCM and tones, but there was no speech synthesis; a client pushed a stream larger than 16 KiB by polling with sleeps.
 
-## Сделано
-- Ядро: `IPC_SAVE_REPLY` — одноразовый мандат ответа (не передаётся), `IPC_REPLY` по сохранённому слоту: сервер может ответить клиенту позже.
-- `audio_gw`: `AUDIO_WAIT` — клиент ждёт свободных буферов, ответ приходит из прерывания AC97; `mind::audio::Stream` и `wait_space`.
-- Сервис `tts` (ring 3): формантный синтезатор (каскад F1–F5, носовые полюс/нуль, параллельная шумовая ветвь, источник KLGLOTT88, 16 кГц → 48 кГц стерео), правила чтения русского (смягчение, оглушение, уподобление, «-тся», «-его», аканье/иканье при эвристическом ударении) и латиницы (правила + лексикон частых слов), интонация фразы.
-- `mind::tts::say`, `say_with`; программа `say` читает `say.txt` с диска.
+## Done
+- Kernel: `IPC_SAVE_REPLY` — a one-shot reply capability (not transferable), `IPC_REPLY` via the saved slot: a server can reply to a client later.
+- `audio_gw`: `AUDIO_WAIT` — the client waits for free buffers, the reply comes from the AC97 interrupt; `mind::audio::Stream` and `wait_space`.
+- The `tts` service (ring 3): a formant synthesizer (F1–F5 cascade, nasal pole/zero, parallel noise branch, KLGLOTT88 source, 16 kHz → 48 kHz stereo), Russian reading rules (palatalization, final devoicing, assimilation, «-тся», «-его», akanye/ikanye with heuristic stress) and Latin-script rules (rules + a lexicon of frequent words), phrase intonation.
+- `mind::tts::say`, `say_with`; the `say` program reads `say.txt` from the disk.
 
-## Проверки
-- `tests/qemu_smoke.py --suites tts`: длительность и основной тон записанной из QEMU речи; с `--asr-model` — распознавание слов офлайн-моделью Vosk.
-- `tests/tts_host.rs`: синтез на хосте в WAV и тесты правил чтения.
-- Разборчивость по Vosk small: ~59 % слов на 30 русских фразах, ~54 % на 8 английских (было 25 % до доработки переходов формант).
+## Verification
+- `tests/qemu_smoke.py --suites tts`: duration and fundamental frequency of the speech recorded from QEMU; with `--asr-model` — word recognition by the offline Vosk model.
+- `tests/tts_host.rs`: synthesis on the host to WAV and tests of the reading rules.
+- Intelligibility with Vosk small: ~59 % of words on 30 Russian phrases, ~54 % on 8 English ones (it was 25 % before the formant transitions were reworked).
 
-## Ограничения
-Голос заметно синтетический; ударение эвристическое (без словаря), поэтому редукция иногда ошибается; английский читается по упрощённым правилам; паузы между словами увеличены для разборчивости.
+## Limitations
+The voice is noticeably synthetic; stress is heuristic (no dictionary), so the reduction is sometimes wrong; English is read by simplified rules; pauses between words are lengthened for intelligibility.

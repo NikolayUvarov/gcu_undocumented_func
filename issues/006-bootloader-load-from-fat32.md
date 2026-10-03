@@ -1,27 +1,27 @@
-# 006 — Загрузчик: читать ядро и приложение с FAT32 вместо `include_bytes!`
+# 006 — Bootloader: read the kernel and the application from FAT32 instead of `include_bytes!`
 
-**Тип:** feature · **Приоритет:** средний · **Статус:** open
-**Затрагивает:** `bootloader/src/main.rs`, `02_build.sh`, `usb_root/`
+**Type:** feature · **Priority:** medium · **Status:** open
+**Affects:** `bootloader/src/main.rs`, `02_build.sh`, `usb_root/`
 
-## Расхождение с handoff
+## Discrepancy with the handoff
 
-Handoff: «считывает файлы ядра и приложения из файловой системы FAT32». Код: `include_bytes!("kernel.bin")` / `include_bytes!("app.bin")` (`bootloader/src/main.rs:20-21`); всё вшито в `BOOTX64.EFI` (16 896 байт). На диске в `usb_root/EFI/BOOT/` лежит только EFI.
+Handoff: "reads the kernel and application files from the FAT32 file system". Code: `include_bytes!("kernel.bin")` / `include_bytes!("app.bin")` (`bootloader/src/main.rs:20-21`); everything is baked into `BOOTX64.EFI` (16,896 bytes). On disk, `usb_root/EFI/BOOT/` contains only the EFI.
 
-Последствия текущей схемы: любое изменение ядра требует пересборки загрузчика; `cargo build` в `bootloader/` на чистом клоне не собирается, пока нет `.bin` (они в `.gitignore`).
+Consequences of the current scheme: any kernel change requires rebuilding the bootloader; `cargo build` in `bootloader/` does not build on a clean clone until the `.bin` files exist (they are in `.gitignore`).
 
-## План
+## Plan
 
-1. В bootloader: `boot_services.get_image_file_system(image_handle)` → `open_volume()` → `open("\\EFI\\MIND\\kernel.elf", READ)` → `RegularFile` → `get_info::<FileInfo>()` для размера → `allocate_pages` → `read`. Аналогично для `app.elf`.
-2. `02_build.sh`: копировать артефакты в `usb_root/EFI/MIND/` (или в корень), не в `bootloader/src/`.
-3. Ошибку «файл не найден» печатать через `stdout()` до `exit_boot_services` и делать `stall` + `reset`, а не `unwrap` в `loop {}`.
-4. Опционально: путь к файлам через `LoadOptions` или конфиг `EFI\MIND\boot.cfg`.
+1. In the bootloader: `boot_services.get_image_file_system(image_handle)` → `open_volume()` → `open("\\EFI\\MIND\\kernel.elf", READ)` → `RegularFile` → `get_info::<FileInfo>()` for the size → `allocate_pages` → `read`. Likewise for `app.elf`.
+2. `02_build.sh`: copy the artifacts to `usb_root/EFI/MIND/` (or to the root), not to `bootloader/src/`.
+3. Print a "file not found" error via `stdout()` before `exit_boot_services` and do `stall` + `reset`, rather than `unwrap` into `loop {}`.
+4. Optional: the file path via `LoadOptions` or an `EFI\MIND\boot.cfg` config.
 
-## Критерии готовности
+## Acceptance criteria
 
-- `BOOTX64.EFI` не содержит `include_bytes!`; размер EFI не зависит от ядра.
-- Замена `kernel.elf` на диске без пересборки загрузчика меняет поведение в QEMU.
-- Отсутствие файла даёт читаемое сообщение на экране.
+- `BOOTX64.EFI` does not contain `include_bytes!`; the EFI size does not depend on the kernel.
+- Replacing `kernel.elf` on disk without rebuilding the bootloader changes the behaviour in QEMU.
+- A missing file produces a readable on-screen message.
 
-## Связано
+## Related
 
-Естественно делать вместе с [002](002-elf-loader.md): читать сразу ELF.
+Naturally done together with [002](002-elf-loader.md): read ELF directly.

@@ -1,31 +1,31 @@
-# 001 — Плоские бинарники: `_start` не по смещению 0, `memset` вызывается по адресу 0
+# 001 — Flat binaries: `_start` is not at offset 0, `memset` is called at address 0
 
-**Тип:** bug · **Приоритет:** критический · **Статус:** open
-**Затрагивает:** `kernel/linker.ld`, `app/linker.ld`, `*/.cargo/config.toml`, `02_build.sh`
+**Type:** bug · **Priority:** critical · **Status:** open
+**Affects:** `kernel/linker.ld`, `app/linker.ld`, `*/.cargo/config.toml`, `02_build.sh`
 
-## Проблема
+## Problem
 
-Handoff описывает пайплайн как «дамп секций `.text/.rodata/.data`», но `02_build.sh` вызывает `llvm-objcopy -O binary` без `-j`, а `linker.ld` не управляет служебными PIE-секциями. В результате (подтверждено `readelf`/`xxd`, детали в [knowledge/03](../knowledge/03-flat-binary-layout-analysis.md)):
+The handoff describes the pipeline as "a dump of the `.text/.rodata/.data` sections", but `02_build.sh` invokes `llvm-objcopy -O binary` without `-j`, and `linker.ld` does not control the auxiliary PIE sections. As a result (confirmed with `readelf`/`xxd`, details in [knowledge/03](../knowledge/03-flat-binary-layout-analysis.md)):
 
-1. У ядра `.dynsym/.gnu.hash/.hash/.dynstr/.rela.dyn` размещены **перед** `.text`; `_start` — по смещению `0x60`, а загрузчик прыгает на `kernel_addr + 0`. Исполняются 96 байт хеш-таблиц. Работает только если в `rax` случайно оказался выровненный адрес.
-2. `core::ptr::write_bytes` компилируется в `call *memset@GOT(%rip)`; слот GOT в `.bin` содержит `0`, релокацию `R_X86_64_RELATIVE` никто не применяет. Вызов уходит по физическому адресу `0`. То же в app.
+1. In the kernel, `.dynsym/.gnu.hash/.hash/.dynstr/.rela.dyn` are placed **before** `.text`; `_start` is at offset `0x60`, while the loader jumps to `kernel_addr + 0`. 96 bytes of hash tables get executed. It only works if `rax` happens to contain an aligned address.
+2. `core::ptr::write_bytes` compiles to `call *memset@GOT(%rip)`; the GOT slot in `.bin` contains `0`, and nobody applies the `R_X86_64_RELATIVE` relocation. The call goes to physical address `0`. The same applies to app.
 
-## Критерии готовности
+## Acceptance criteria
 
-- `readelf -h kernel` и `readelf -h app` показывают `Entry point address: 0x0`.
-- `readelf -r` для обоих: `There are no relocations in this file`.
-- `llvm-objdump -d` не содержит `callq *...(%rip)` в адрес `.got`.
-- `xxd -l 4 kernel.bin` начинается с кода `_start` (`55 41 57 41` для текущего кода).
-- Запуск в QEMU: пульсирующий круг, по пробелу — квадрат.
+- `readelf -h kernel` and `readelf -h app` show `Entry point address: 0x0`.
+- `readelf -r` for both: `There are no relocations in this file`.
+- `llvm-objdump -d` contains no `callq *...(%rip)` into a `.got` address.
+- `xxd -l 4 kernel.bin` starts with the code of `_start` (`55 41 57 41` for the current code).
+- Running in QEMU: a pulsing circle; on space — a square.
 
-## Проверенное решение (собрано в scratchpad, в QEMU не запускалось)
+## Verified solution (built in the scratchpad, not run in QEMU)
 
-1. `.cargo/config.toml` (оба крейта):
+1. `.cargo/config.toml` (both crates):
    ```toml
    rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "relocation-model=pic", "-Z", "relax-elf-relocations=yes"]
    ```
-   Флаг nightly-only; проект и так на nightly.
-2. `linker.ld` (оба крейта) — после `.bss` добавить:
+   The flag is nightly-only; the project is on nightly anyway.
+2. `linker.ld` (both crates) — add after `.bss`:
    ```ld
    .dynsym   : { *(.dynsym) }
    .gnu.hash : { *(.gnu.hash) }
@@ -41,10 +41,10 @@ Handoff описывает пайплайн как «дамп секций `.tex
    $OBJCOPY -O binary -j .text -j .rodata -j .data kernel/target/.../kernel bootloader/src/kernel.bin
    $OBJCOPY -O binary -j .text -j .rodata -j .data app/target/.../app       bootloader/src/app.bin
    ```
-4. Добавить в `02_build.sh` самопроверку после сборки: `readelf -h ... | grep -q 'Entry point address: *0x0'` и `readelf -r ... | grep -q 'no relocations'`, иначе `exit 1`.
+4. Add a post-build self-check to `02_build.sh`: `readelf -h ... | grep -q 'Entry point address: *0x0'` and `readelf -r ... | grep -q 'no relocations'`, otherwise `exit 1`.
 
-Ожидаемые размеры после правки: `kernel.bin` ≈ 565 байт, `app.bin` ≈ 808 байт.
+Expected sizes after the fix: `kernel.bin` ≈ 565 bytes, `app.bin` ≈ 808 bytes.
 
-## Связано
+## Related
 
-- Полностью снимается issue [002](002-elf-loader.md) (ELF-загрузчик применяет релокации сам), но до него это исправление нужно как стабилизирующее.
+- Fully superseded by issue [002](002-elf-loader.md) (the ELF loader applies relocations itself), but until then this fix is needed for stability.
