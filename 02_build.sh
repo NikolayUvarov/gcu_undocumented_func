@@ -54,6 +54,10 @@ USER_CRATES=(
     "rtc:rtc:rtc.elf"
     "ps2_kbd:ps2_kbd:ps2_kbd.elf"
     "compositor:compositor:compositor.elf"
+    "vfs_server:vfs_server:vfs_server.elf"
+    "audio_gw:audio_gw:audio_gw.elf"
+    "files:files:files.elf"
+    "beep:beep:beep.elf"
 )
 
 echo ">>> [1/3] Сборка Ядра и Приложений (ELF)..."

@@ -20,7 +20,6 @@ mod elf_reloc;
 mod memory;
 #[path = "../kernel/src/paging.rs"]
 mod paging;
-#[path = "../kernel/src/rtc.rs"]
 #[path = "../kernel/src/task_state.rs"]
 mod task_state;
 #[path = "../kernel/src/user_heap.rs"]

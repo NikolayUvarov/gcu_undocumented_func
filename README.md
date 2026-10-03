@@ -1,7 +1,5 @@
 # MIND CORE
 
-Iain M. Banks supposed # MIND CORE
-
 The Minds of the Culture's spaceships — the ultra-powerful AIs controlling General Contact Units and Orbitals — must reside somewhere. No matter how multidimensional and advanced their hardware substrate may be, at a fundamental level, any computing architecture needs two basic things to wake up and become self-aware: a bootloader and an operating system.
 
 Before a Mind can simulate pocket universes, juggle hyperspace vectors, or conduct delicate diplomatic games on behalf of an entire civilization, it requires a reliable and predictable foundation. It is time to start building it.
@@ -21,15 +19,84 @@ Every Mind needs its first processor tick. We are providing exactly that.
 
 ### Current Runtime
 
-The UEFI bootloader loads the kernel, preserves four original ELF application files from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices.
+The UEFI bootloader loads the kernel and every program image listed in `PROGRAM_FILES` of `common/abi.rs` from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices and starts the system services in ring 3.
 
-* **Toolchain:** Pure Rust (`no_std`, `no_main`), utilizing `naked_functions` and `abi_x86_interrupt`, compiled for `x86_64-unknown-none` and `x86_64-unknown-uefi` targets.
-* **Memory and privilege:** Every application runs in ring 3 with IOPL=0 and a private four-level page table/CR3. Each `RUN` creates a fresh ELF image, 64 KiB user stack with unmapped guard pages, syscall mailbox, input/log queues, and screen buffer. Code is RX; writable data, stack, mailbox and screen are NX. User allocations occupy complete private pages. The kernel's supervisor mappings are inaccessible to applications. ELF relocations use user virtual addresses, not physical RAM addresses.
-* **Dynamic program memory:** Syscalls 8/9 allocate and free zeroed private page blocks, with RW+NX permissions and trailing guard pages. Each process can own up to 32 blocks and 16 MiB of heap data. A common Rust ownership wrapper releases blocks on drop; the kernel also reclaims outstanding allocations on exit, kill or fault. `app2` uses this API for its sprite buffer.
+* **Toolchain:** Pure Rust (`no_std`, `no_main`), utilizing `naked_functions` and `abi_x86_interrupt`, compiled for `x86_64-unknown-none` and `x86_64-unknown-uefi` targets. Programs use the `libmind` SDK.
+* **Memory and privilege:** Every task runs in ring 3 with IOPL=0 and a private four-level page table/CR3. Each `RUN` creates a fresh ELF image, 64 KiB user stack with unmapped guard pages, syscall mailbox, input/log queues, and (for applications) a screen buffer. Code is RX; writable data, stack, mailbox and screen are NX. The kernel's supervisor mappings are inaccessible to tasks.
+* **Capabilities:** Each task has 32 capability slots. A capability names an IPC endpoint (with read/write/grant rights), a shared memory block, a DMA region, an I/O port range, an interrupt line, or the input/display privilege. Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS and audio services.
+* **Dynamic program memory:** Syscalls 8/9 allocate and free zeroed private page blocks (RW+NX, trailing guard page; up to 32 blocks and 16 MiB per process). Mapped shared memory has its own 48 MiB quota. Memory that another task still maps or holds by capability is retained by the kernel until the last reference is gone, so freeing, exiting or killing an owner cannot leave a dangling mapping.
 * **CPU configuration:** The QEMU launchers expose four cores. The kernel starts APs itself with INIT/SIPI and can use up to eight enabled xAPIC CPUs. Each CPU has its own GDT, TSS, interrupt-entry stack, idle stack, and double-fault/NMI stacks. `cpus` reports actual online CPUs and interrupt counters.
-* **Scheduling:** New tasks are assigned to the least populated CPU and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP receives the 100 Hz PIC/PIT tick through LAPIC ExtINT and sends scheduling IPIs to online APs. Applications execute concurrently; a spinlock with local interrupts disabled serializes scheduler/syscall work. Kernel code is not preempted. Idle CPUs use `HLT`.
-* **System calls and faults:** The DPL-3 `int 0x80` gate is the only user entry into kernel services. Every output-buffer pointer is checked against the calling task's user mappings, including overflow and page boundaries. SYSENTER/SYSCALL firmware entry paths and AVX/XSAVE are disabled. User exceptions terminate that task and appear in `faults`; a kernel exception remains fatal. Reclamation waits until no CPU is running the task and its CR3 is no longer active.
+* **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP receives the 100 Hz PIC/PIT tick through LAPIC ExtINT and sends scheduling IPIs to online APs. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`. The shell loop reclaims exited tasks once no CPU runs them.
+* **System calls and faults:** The DPL-3 `int 0x80` gate is the only user entry into kernel services. Every buffer pointer is checked against the calling task's user mappings. User exceptions terminate that task and appear in `faults`; a kernel exception remains fatal.
 
+### System services
+
+The kernel starts these programs at boot (`BOOT_SERVICES` in `common/abi.rs`). They have no screen, cannot be brought to the foreground, and each can run only once; `RUN <service> &` restarts one after `KILL`.
+
+| PID | Service | Capabilities | Role |
+|---|---|---|---|
+| 1 | `rtc` | endpoint 2, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
+| 2 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the shell/foreground program |
+| 3 | `compositor` | GOP framebuffer, display | copies changed pixels of the active screen to the framebuffer |
+| 4 | `vfs_server` | endpoint 3, ATA ports 0x1F0–0x1F7, 0x3F6 | reads the boot disk (FAT12/16/32) and serves files by descriptor |
+| 5 | `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
+
+Applications therefore start at PID 6. The limit is eight applications in addition to the services.
+
+### IPC
+
+Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`.
+
+A driver can bind its interrupt line to its endpoint (`IRQ_BIND`): the interrupt then arrives as a message with the IRQ flag, so one loop serves both clients and hardware. The kernel masks the line when it fires; the driver reopens it with `IRQ_ACK` (or `IRQ_WAIT` for drivers that only wait for interrupts).
+
+### libmind SDK
+
+`libmind/` (crate name `mind`) is the only place with `int 0x80`. A program is:
+
+```rust
+#![no_std]
+#![no_main]
+mind::entry!(main);
+fn main(info: &'static mind::BootInfo) {
+    let screen = mind::gfx::Screen::new(info).unwrap();
+    screen.text(24, 24, b"HELLO", 2, 0x00FFFFFF, None);
+    mind::println!("uptime {} ms", mind::time::uptime_ms());
+    while mind::input::wait_or_exit(100).is_none() {}
+}
+```
+
+Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
+
+| Module | Contents |
+|---|---|
+| `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
+| `process` | `exit`, `spawn`, `alive`, `log`, `print!`/`println!` |
+| `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_or_exit` (Esc exits) |
+| `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
+| `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
+| `dev` | `Ports`, `Irq`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `gfx` | `Screen`: pixels, rectangles, 8×8 font text |
+| `rtc`, `fs`, `audio` | clients of the RTC, VFS and audio services |
+| `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
+
+The SDK also supplies the panic handler (logs the message and exits the task) and `memset`/`memcpy`/`memmove`/`memcmp`. `common/abi.rs` remains the single ABI definition shared by the kernel, the bootloader and `libmind`.
+
+### Virtual file system
+
+`vfs_server` owns the primary ATA channel (PIO, LBA28, polling) and reads FAT12/16/32 volumes with or without an MBR, including long file names and subdirectories. Clients use `mind::fs`:
+
+```rust
+let mut file = mind::fs::File::open("EFI/BOOT/BOOTX64.EFI")?;
+let mut chunk = [0u8; 4096];
+let n = file.read(&mut chunk)?;
+mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
+```
+
+Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. In QEMU the `fat:` drive used by the launchers is an ATA disk; when booting from the USB image (USB storage) or AHCI/NVMe hardware there is no ATA disk yet and the server reports `NOT FOUND`.
+
+### Audio gateway
+
+`audio_gw` drives an AC97 controller found on PCI by the kernel: a ring of 32 DMA buffers of 4 KiB (48 kHz, 16-bit stereo), buffer-completion interrupts delivered as IPC messages, and client PCM copied from the client's shared buffer. `mind::audio` offers `info`, `tone(hz, ms)`, `play`/`play_all` (interleaved `i16`) and `stop`. `RUN beep` plays three tones and a PCM sweep. A text-to-speech module is meant to be another client that produces PCM for `play_all`; it is not implemented yet. Add the device to QEMU with, for example, `-audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0` (or a `pa`/`dsound`/`coreaudio` audiodev). Without AC97 the gateway answers `DEVICE=false`.
 
 ---
 
@@ -57,7 +124,7 @@ chmod +x 02_build.sh
 ```
 
 
-2. Build the kernel, all four applications, and the UEFI bootloader. The script places the ELF files in `usb_root/` and the bootloader in `usb_root/EFI/BOOT/`:
+2. Build the kernel, all programs and services, and the UEFI bootloader. The script places the ELF files in `usb_root/` and the bootloader in `usb_root/EFI/BOOT/`:
 ```bash
 ./02_build.sh
 
@@ -70,7 +137,8 @@ qemu-system-x86_64 \
   -bios /usr/share/ovmf/OVMF.fd \
   -drive format=raw,file=fat:rw:usb_root \
   -m 512 -smp 4,sockets=1,cores=4,threads=1 \
-  -serial stdio -rtc base=localtime
+  -serial stdio -rtc base=localtime \
+  -audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0   # optional audio
 
 ```
 
@@ -104,20 +172,13 @@ and `qemu-img` installed (the latter comes with QEMU):
 
 This rebuilds all components and creates **`dist/mind-core-usb.img`**, a complete
 raw disk image of approximately 504 MiB. The image contains an MBR with a UEFI
-system partition, a FAT16 filesystem labelled `MIND CORE`, and these files:
-
-```text
-EFI/BOOT/BOOTX64.EFI
-kernel.elf
-app.elf
-app2.elf
-clock.elf
-dzenclk.elf
-```
+system partition, a FAT16 filesystem labelled `MIND CORE`, `EFI/BOOT/BOOTX64.EFI`,
+`kernel.elf` and every program in `PROGRAM_FILES` of `common/abi.rs` (applications
+and services, including long names such as `compositor.elf`).
 
 The script uses QEMU's virtual FAT image conversion, then independently checks
 the partition/filesystem and compares every packaged file with the build output.
-Only the six required files are packaged; temporary test disks in `usb_root/`
+Only these files are packaged; temporary test disks in `usb_root/`
 are excluded. It prints the image's SHA-256. Root/administrator access is not
 needed, and the script does not write to physical disks.
 
@@ -211,10 +272,11 @@ python3 tests/usb_image_smoke.py --qemu qemu-system-x86_64 --firmware OVMF.fd
 python3 tests/usb_image_smoke.py --qemu /mnt/c/msys64/ucrt64/bin/qemu-system-x86_64.exe
 ```
 
-The test checks image contents, UEFI USB boot, all three programs, CPU startup,
+The test checks image contents, UEFI USB boot, the applications, CPU startup,
 foreground switching and memory reclamation. Real-machine support still has
 the limits documented below; in particular, the kernel currently reads PS/2
-keyboard/UART input and has no USB keyboard driver after leaving UEFI.
+keyboard/UART input and has no USB keyboard driver after leaving UEFI, and
+`vfs_server` reads only ATA disks (not USB storage).
 
 ### Console
 
@@ -224,10 +286,13 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN app` — launch a new foreground instance of the rotating-square application (`app.elf`). `BOOT` remains an alias for this command.
 * `RUN app2` — launch the second application (`app2.elf`): a bouncing square, frame counter, and TSC value on screen. It prints a greeting and a status line every 30 frames to the host's QEMU console via UART.
 * `RUN clock` — display a large digital clock (`clock.elf`) in 24-hour `HH:MM:SS` format, with time changes also printed to the UART console.
+* `RUN files` — list the boot disk and read files through `vfs_server`.
+* `RUN beep` — play tones and PCM through `audio_gw`.
+* `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `RUN dzen-clock` — five color indicators for time (`dzenclk.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
-* `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist.
+* `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
 * `PS` — show PID, program, state, foreground/background, assigned CPU, scheduling count, CPU timer ticks, and syscall count. The shell/idle task has reserved PID 0.
-* `FG <id>` — show an existing task's screen and route keyboard/UART input to it, preserving its PID and state.
+* `FG <id>` — show an existing application's screen (services have none) and route keyboard/UART input to it, preserving its PID and state.
 * `KILL <id>` — terminate that instance; the shell then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs and per-CPU timer counters.
@@ -256,9 +321,9 @@ The comments above explain the example; the shell does not parse comments. Each 
 
 **Current scope:** x86-64 UEFI/QEMU with xAPIC and NX, tested with one and four CPUs. Runtime RAM and the GOP framebuffer must fit below 4 GiB; the heap is a reserved 64 MiB arena shared by kernel resources and all private program heaps. There are at most eight application tasks and eight CPUs. CPU assignment is fixed for each task; there is no migration, work stealing, demand paging, or userspace allocator for sub-page objects yet. Kernel mappings are supervisor-only identity mappings (kernel text is not separately write-protected). The supported compiler target remains `x86_64-unknown-none`; context switching saves x87/SSE, and AVX/XSAVE is disabled in CR4.
 
-The clock reads the CMOS RTC through syscall 4, which returns seconds since midnight (or `usize::MAX` when unavailable). The kernel checks for stable readings and handles both BCD/binary and 12/24-hour RTC modes. The application displays RTC time without applying a timezone offset. The supplied launch commands use local time; QEMU otherwise defaults to UTC ([QEMU RTC options](https://www.qemu.org/docs/master/system/invocation.html)).
+The clock asks the `rtc` service with `CALL` (`mind::rtc::seconds_since_midnight`), which returns seconds since midnight (or `usize::MAX` when unavailable). The driver checks for stable readings and handles both BCD/binary and 12/24-hour RTC modes. The application displays RTC time without applying a timezone offset. The supplied launch commands use local time; QEMU otherwise defaults to UTC ([QEMU RTC options](https://www.qemu.org/docs/master/system/invocation.html)).
 
-Both square demos sleep between frames and redraw only changing areas in their own buffers. The clock sleeps between RTC checks and redraws when the second changes. Syscall 5 sleeps the calling task for `arg1` milliseconds (rounded up to a 10 ms tick, capped at 60 seconds), allowing other tasks to run and waking early for foreground input. Syscall 6 reports uptime in milliseconds; syscall 7 exits the calling task. Task resources are reclaimed by the BSP shell only after the owning CPU has stopped the task and switched away from its page tables.
+Both square demos sleep between frames and redraw only changing areas in their own buffers. The clock sleeps between RTC checks and redraws when the second changes. `WAIT` lets other tasks run and wakes early for foreground input. Task resources are reclaimed by the BSP shell only after the owning CPU has stopped the task and switched away from its page tables.
 
 ### Dzen clock
 
@@ -328,26 +393,57 @@ The mailbox ABI in `common/abi.rs` provides `SYSCALL_ALLOC = 8` and `SYSCALL_FRE
 
 Each process has a separate heap arena starting above `0x8006000000`. Every block is writable and non-executable, followed by an unmapped guard page. Limits are 32 live blocks and 16 MiB of rounded data per process; availability also depends on the shared 64 MiB kernel arena. Physical backing is currently contiguous, so fragmentation can cause an allocation to fail. Failed mappings roll back all partially allocated resources. Guard pages catch accesses into those pages; they do not detect overruns that stay within a mapped page. An address can be reused after free, so this API does not provide temporal memory safety after reuse.
 
-`common/user_memory.rs` supplies `Pages::new(mailbox, bytes) -> Option<Pages>` and `as_mut_slice()`, with automatic free in `Drop`. The unsafe constructor requires the process's valid mailbox. For example, with that module imported:
+`mind::mem::Pages::new(bytes) -> Option<Pages>` wraps these calls with `as_slice()`/`as_mut_slice()`, `share()` and automatic free in `Drop`:
 
 ```rust
-if let Some(mut buffer) = unsafe { user_memory::Pages::new(mailbox, 8192) } {
+if let Some(mut buffer) = mind::mem::Pages::new(8192) {
     buffer.as_mut_slice()[0] = 42;
 } // freed here; exit/kill/fault also reclaims any remaining blocks
 ```
+
+`MEM_SHARE` accepts only the start of one of the caller's heap blocks (never code, stack or a sub-range beyond the block) and returns a capability slot; `MEM_MAP` maps a received capability into the shared quota and reports its size.
+
+### System calls
+
+`int 0x80` with the mailbox at `USER_MAILBOX` (`syscall_num`, `arg1`, `arg2`, `msg[4]` in; `result` out). Errors are `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`); `ALLOC` returns 0 on failure.
+
+| # | Name | Arguments → result |
+|---|---|---|
+| 1 | RDTSC | → time stamp counter |
+| 2 | READ_KEY | → next key of the foreground program or 0 |
+| 3 | LOG | buffer, length → bytes logged |
+| 5 | WAIT | milliseconds (10 ms steps, ≤ 60 s) → uptime at sleep |
+| 6 | UPTIME | → milliseconds since boot |
+| 7 | EXIT | — |
+| 8 / 9 | ALLOC / FREE | bytes → address / address → 0 |
+| 10 / 22 | IPC_SEND / IPC_CALL | endpoint slot, reply-capability slot; msg = [cap slot, rights mask, data, data] |
+| 11 | IPC_RECV | endpoint slot, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
+| 23 | IPC_REPLY | msg = [cap slot, rights mask, data, data] |
+| 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
+| 13 | SPAWN | name, length; msg[0..2] = endpoint slot and rights for the child's INIT slot → PID |
+| 14 | CAP_DROP | slot |
+| 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
+| 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
+| 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
+| 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
+| 20 | INPUT_EVENT | app byte, shell byte, msg[0] = background — needs the input capability |
+| 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
+| 26 | MEM_PHYS | DMA slot → physical address |
+| 28 | TASK_ALIVE | PID → 1/0 |
+| 29 | CAP_INFO | slot → kind, arg2 = base, msg[2] = size/count/rights |
 
 This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later subdivide these blocks. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
 ### Runtime checks
 
-After building, run the host tests for real ELF images, independent `.bss`/relocations, malformed ELF rejection, scheduling/wakeup policy, RTC handling, private mappings, heap limits and allocation rollback:
+After building, run the host tests for real ELF images, independent `.bss`/relocations, malformed ELF rejection, private mappings and dzen-clock logic:
 
 ```bash
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, and deliberate ring-3 faults without stopping other programs:
+The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over ATA+FAT) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
 
 ```bash
 for fixture in busy_app isolation_app heap_app; do
@@ -363,8 +459,10 @@ python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 \
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --cpus 1 \
   --busy-elf /tmp/mind-core-busy_app.elf \
   --isolation-elf /tmp/mind-core-isolation_app.elf --heap-elf /tmp/mind-core-heap_app.elf \
-  --suites smp,isolation,heap
+  --suites smp,isolation,heap,services
 ```
+
+The suites number applications from 1; the harness adds the number of boot services (5) when it sends `fg`/`kill`/`logs` and subtracts it from `PID=` in the output.
 
 From WSL with the supplied Windows setup, use `--qemu /mnt/c/msys64/ucrt64/bin/qemu-system-x86_64.exe`. Test logs are written to the system temporary directory. The busy-loop, isolation and heap-test ELFs are used only inside test VMs; the normal packaged applications are unchanged by the test.
 
@@ -401,8 +499,8 @@ compact body. Splits prefer line boundaries; a very long line/string can be
 split across parts without dropping any text. This is an analysis view, not a
 patch to apply to the repository. Original source files are never modified.
 
-The default selection includes `kernel`, `bootloader`, the four applications,
-`common`, and current tooling. It excludes historical patches, `legacy`, issue
+The default selection includes `kernel`, `bootloader`, `common`, `libmind`, all
+applications and services, and current tooling. It excludes historical patches, `legacy`, issue
 files, old `knowledge` snapshots, dependencies/build outputs, `Cargo.lock`,
 symlinks and previous context dumps. Files do not need to be committed to Git.
 Byte-identical files (such as shared linker/config files) are included once per

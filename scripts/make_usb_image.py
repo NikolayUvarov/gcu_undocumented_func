@@ -8,11 +8,14 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import re
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", "app.elf", "app2.elf", "clock.elf", "dzenclk.elf", "ping.elf", "pong.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf")
+# Список образов берётся из общего ABI, чтобы образ и загрузчик не расходились.
+PROGRAM_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"PROGRAM_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
+FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *PROGRAM_FILES)
 SECTOR = 512
 
 
@@ -113,11 +116,21 @@ def check_image(image, payloads, mark_esp=False):
         def lookup(directory, part):
             stem, _, extension = part.upper().partition(".")
             short_name = (stem.ljust(8) + extension.ljust(3)).encode("ascii")
+            long_parts = {}  # имена длиннее 8.3 (compositor.elf, vfs_server.elf) хранятся в записях LFN
             for offset in range(0, len(directory), 32):
                 entry = directory[offset:offset + 32]
                 if entry[0] == 0:
                     break
-                if entry[0] != 0xe5 and not entry[11] & 8 and entry[:11] == short_name:
+                if entry[0] == 0xe5:
+                    long_parts = {}
+                    continue
+                if entry[11] == 0x0f:
+                    chars = entry[1:11] + entry[14:26] + entry[28:32]
+                    long_parts[entry[0] & 0x1f] = chars.decode("utf-16-le").split("\0")[0].rstrip("\uffff")
+                    continue
+                long_name = "".join(long_parts[i] for i in sorted(long_parts))
+                long_parts = {}
+                if not entry[11] & 8 and (entry[:11] == short_name or long_name.lower() == part.lower()):
                     return entry
             raise ValueError(f"В USB-образе отсутствует {part}")
 

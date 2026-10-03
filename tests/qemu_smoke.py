@@ -19,10 +19,24 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
+# Системные сервисы, которые ядро запускает при старте (PID 1..N).
+SERVICES = ("rtc", "ps2_kbd", "compositor", "vfs_server", "audio_gw")
+# Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID.
+BASE = len(SERVICES)
+PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
+PID_OUT = re.compile(r"(PID[= ])(\d+)")
+
+
+def to_real(text):
+    return PID_IN.sub(lambda m: f"{m[1]}{m[2]}{int(m[3]) + BASE if int(m[3]) > 0 else m[3]}", text)
+
+
+def to_ordinal(text):
+    return PID_OUT.sub(lambda m: f"{m[1]}{int(m[2]) - BASE}" if int(m[2]) > BASE else m[0], text)
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime"):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None):
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
@@ -32,7 +46,8 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot"],
+             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot",
+             *(["-audiodev", f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         self.queue = queue.Queue()
@@ -63,7 +78,7 @@ class VM:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.collect()
-            clean = ANSI.sub("", self.output).replace("\r", "")
+            clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean)
             if text in clean:
@@ -75,6 +90,8 @@ class VM:
         raise AssertionError(f"Timeout waiting for {text!r}: {clean[-3000:]}")
 
     def send(self, text):
+        if not self.monitor:
+            text = to_real(text)
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
         for byte in text.encode("ascii"):
@@ -111,7 +128,7 @@ class VM:
         self.output = ""
 
     def keys(self, text):
-        for char in text:
+        for char in to_real(text):
             key = {" ": "spc", "\n": "ret", "&": "shift-7"}.get(char, char)
             self.hmp(f"sendkey {key} 30")
             time.sleep(.06)
@@ -146,8 +163,10 @@ def heap_used(vm):
 
 def task_rows(vm):
     output = vm.command("ps")
-    return {int(m[0]): m[1:] for m in re.findall(
-        r"^(\d+) ([\w-]+) (READY|RUNNING|SLEEPING|EXITED) (BG|FG) (\d+) (\d+) (\d+) (\d+)$", output, re.M)}
+    # Только приложения: сервисы видны в ps, но наборы проверяют пользовательские задачи.
+    return {int(m[0]) - BASE: m[1:] for m in re.findall(
+        r"^(-?\d+) ([\w-]+) (READY|RUNNING|SLEEPING|EXITED|IPC_WAIT|IRQ_WAIT) (BG|FG) (\d+) (\d+) (\d+) (\d+)$", output, re.M)
+        if m[1] not in SERVICES}
 
 
 def center_pixel(vm):
@@ -336,6 +355,12 @@ def isolation_suite(vm):
     vm.send("p\n")
     output = vm.expect(f"PID={len(cases) + 2} EXITED. SHELL RESUMED.")
     require(output, "POINTER VALIDATION OK")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    vm.send("run app2\n")
+    vm.expect("RING3 IOPL0 READY")
+    vm.send("k\n")
+    output = vm.expect(f"PID={len(cases) + 3} EXITED. SHELL RESUMED.")
+    require(output, "CAPABILITY CHECKS OK")
     time.sleep(.1); vm.collect(); vm.output = ""
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     vm.command("kill 1")
@@ -617,6 +642,84 @@ def dzen_suite(vm):
     print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim", flush=True)
 
 
+def services_suite(vm):
+    output = vm.command("ps")
+    for name in SERVICES:
+        assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
+    require(vm.command("fg -4"), "ERROR:")  # отрицательные номера стенд не переводит
+    vm.send("fg 0\n"); vm.expect("ERROR:")
+    # Сервисы не занимают экран и не запускаются повторно.
+    require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
+    baseline = heap_used(vm)
+    # IPC: pong запускает ping, принимает мандат памяти и отвечает на CALL.
+    require(vm.command("run pong &"), "PID=1 NAME=pong BACKGROUND")
+    time.sleep(3.5)
+    pong = vm.command("logs 1")
+    require(pong, "SPAWNED PING PID=2")
+    require(pong, "FROM PID 2: HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 1001")
+    require(vm.command("logs 2"), "[PING] ACK 1001")
+    # Убийство сервера, у которого клиент ждёт ответа, будит клиента с ошибкой, а не вешает ядро.
+    require(vm.command("kill 1"), "KILLED PID=1")
+    time.sleep(.5)
+    assert 2 in task_rows(vm), "client of a dead server must survive"
+    require(vm.command("kill 2"), "KILLED PID=2")
+    # VFS: список корня и чтение файлов с ATA-диска через vfs_server.
+    require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
+    output = ""
+    for _ in range(50):
+        output += vm.command("logs 3")
+        if "[FILES] DONE" in output:
+            break
+        time.sleep(.2)
+    require(output, "[FILES] kernel.elf ")
+    require(output, "<DIR>")
+    size = (ROOT / "usb_root/kernel.elf").stat().st_size
+    require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
+    efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
+    require(output, f"READ EFI/BOOT/BOOTX64.EFI {efi}/{efi} BYTES MAGIC=4D5A")
+    require(vm.command("kill 3"), "KILLED PID=3")
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
+    assert "FAULT PID=" not in vm.command("faults")
+    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA+FAT, reclaim", flush=True)
+
+
+def audio_suite(vm, wav):
+    require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
+    output = ""
+    for _ in range(50):
+        output += vm.command("logs 1")
+        if "[BEEP] DONE" in output:
+            break
+        time.sleep(.2)
+    require(output, "[BEEP] DEVICE=true RATE=48000")
+    require(output, "[BEEP] PCM QUEUED 24000 FRAMES")
+    time.sleep(1.5)
+    vm.command("kill 1")
+    vm.close()
+    import struct, wave
+    with wave.open(str(wav)) as audio:
+        frames = audio.readframes(audio.getnframes())
+        rate = audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if sample]
+    assert loud, "AC97 produced no audio"
+    seconds = (loud[-1] - loud[0]) / rate
+    assert 0.8 < seconds < 1.3, seconds  # 3 тона по 150 мс + свип 0.5 с
+
+    def power(start, hz):
+        window = left[start:start + int(rate * 0.04)]
+        return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate))
+                       for i, x in enumerate(window))) / len(window)
+    for index, hz in enumerate((523, 659, 784)):
+        start = loud[0] + int(rate * (0.05 + 0.15 * index))
+        assert power(start, hz) > 5 * max(power(start, other) for other in (523, 659, 784) if other != hz), hz
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
+
+
 def large_bss(path):
     data = bytearray(path.read_bytes())
     offset = int.from_bytes(data[32:40], "little")
@@ -637,9 +740,9 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,audio,busy,smp,isolation,heap")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "audio"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -650,7 +753,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)
             (disk / "EFI/BOOT").mkdir(parents=True)
-            for name in ["kernel.elf", "app.elf", "app2.elf", "clock.elf", "dzenclk.elf", "EFI/BOOT/BOOTX64.EFI"]:
+            for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
                 shutil.copyfile(ROOT / "usb_root" / name, disk / name)
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
@@ -660,12 +763,16 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+            wav = Path(tempfile.gettempdir()) / "mind-core-audio.wav" if suite == "audio" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
-                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime")
+                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav)
             try:
-                {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
-                 "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                 "dzen": dzen_suite}[suite](vm)
+                if suite == "audio":
+                    audio_suite(vm, wav)
+                else:
+                    {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
+                     "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
+                     "dzen": dzen_suite, "services": services_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

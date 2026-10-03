@@ -1,43 +1,38 @@
 #![no_std]
 #![no_main]
-use core::panic::PanicInfo;
-use core::arch::asm;
-#[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, SyscallMailbox, SYSCALL_MEM_MAP, SYSCALL_ALLOC, SYSCALL_FREE, SYSCALL_CAP_DROP, SYSCALL_WAIT, SYSCALL_COMPOSITOR_PULL};
+// Композитор в ring 3: переносит изменившиеся пиксели активного экрана в кадр GOP.
+use mind::abi::{BootInfo, SLOT_MEM};
+use mind::dev::{compositor_pull, Frame};
+use mind::mem::{Mapping, Pages};
 
-#[no_mangle]
-#[link_section = ".text._start"]
-pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> ! {
-    let fb_bytes = info.stride * info.height * 4;
+const SOURCE_SLOT: usize = 9; // сюда ядро кладёт мандат на активный экран
 
-    unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_MEM_MAP); core::ptr::write_volatile(&mut (*mb_ptr).arg1, 2); asm!("int 0x80", options(nostack)); }
-    let gop_vaddr = unsafe { core::ptr::read_volatile(&(*mb_ptr).result) } as *mut u32;
-
-    unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_ALLOC); core::ptr::write_volatile(&mut (*mb_ptr).arg1, fb_bytes); asm!("int 0x80", options(nostack)); }
-    let shadow_vaddr = unsafe { core::ptr::read_volatile(&(*mb_ptr).result) } as *mut u32;
-
+mind::entry!(main);
+fn main(info: &'static BootInfo) {
+    let pixels = info.stride * info.height;
+    // Ошибки отображения больше не превращаются в запись по адресу usize::MAX.
+    let Ok(gop) = Mapping::new(SLOT_MEM) else { mind::println!("[COMPOSITOR] NO FRAMEBUFFER MAPPING"); return };
+    let Some(mut shadow) = Pages::new(pixels * 4) else { mind::println!("[COMPOSITOR] NO MEMORY FOR SHADOW"); return };
+    let (gop, shadow) = (gop.as_ptr::<u32>(), shadow.as_mut_slice().as_mut_ptr() as *mut u32);
+    let mut source: Option<Mapping> = None;
+    let mut valid = false;
     loop {
-        unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_COMPOSITOR_PULL); core::ptr::write_volatile(&mut (*mb_ptr).arg1, 3); asm!("int 0x80", options(nostack)); }
-        let is_dirty = unsafe { core::ptr::read_volatile(&(*mb_ptr).result) };
-
-        if is_dirty == 1 {
-            unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_MEM_MAP); core::ptr::write_volatile(&mut (*mb_ptr).arg1, 3); asm!("int 0x80", options(nostack)); }
-            let source_vaddr = unsafe { core::ptr::read_volatile(&(*mb_ptr).result) } as *const u32;
-
-            let pixels = info.stride * info.height;
+        let frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
+        if frame == Frame::NewSource {
+            drop(source.take()); // сначала снять старое отображение (квота разделяемой памяти)
+            source = Mapping::new(SOURCE_SLOT).ok();
+            let _ = mind::ipc::drop_cap(SOURCE_SLOT); // мандат больше не нужен: отображение держит память
+        }
+        if let (Some(screen), Frame::Dirty | Frame::NewSource) = (source.as_ref(), frame) {
+            let screen = screen.as_ptr::<u32>();
             for i in 0..pixels {
-                let px = unsafe { core::ptr::read_volatile(source_vaddr.add(i)) };
-                if px != unsafe { core::ptr::read(shadow_vaddr.add(i)) } {
-                    unsafe { core::ptr::write_volatile(gop_vaddr.add(i), px); }
-                    unsafe { core::ptr::write(shadow_vaddr.add(i), px); }
+                let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
+                if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
+                    unsafe { core::ptr::write_volatile(gop.add(i), pixel); core::ptr::write(shadow.add(i), pixel); }
                 }
             }
-
-            unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_FREE); core::ptr::write_volatile(&mut (*mb_ptr).arg1, source_vaddr as usize); asm!("int 0x80", options(nostack)); }
-            unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_CAP_DROP); core::ptr::write_volatile(&mut (*mb_ptr).arg1, 3); asm!("int 0x80", options(nostack)); }
+            valid = true;
         }
-
-        unsafe { core::ptr::write_volatile(&mut (*mb_ptr).syscall_num, SYSCALL_WAIT); core::ptr::write_volatile(&mut (*mb_ptr).arg1, 15); asm!("int 0x80", options(nostack)); }
+        mind::time::sleep(15);
     }
 }
-#[panic_handler] fn panic(_info: &PanicInfo) -> ! { loop {} }

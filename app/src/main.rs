@@ -1,25 +1,12 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
-use core::arch::asm;
-use core::ffi::c_void;
+use mind::abi::BootInfo;
+use mind::font::FONT;
 
-#[path = "../../common/abi.rs"]
-mod abi;
-use abi::{BootInfo, SyscallMailbox};
-#[path = "../../common/wait.rs"]
-mod wait;
-
-fn os_print(mb: *mut SyscallMailbox, msg: &[u8]) {
-    unsafe { (*mb).syscall_num = 3; (*mb).arg1 = msg.as_ptr() as usize; (*mb).arg2 = msg.len(); asm!("int 0x80"); }
-}
-fn get_os_ticks(mb: *mut SyscallMailbox) -> usize {
-    unsafe { (*mb).syscall_num = 1; asm!("int 0x80"); (*mb).result }
-}
-fn get_os_key(mb: *mut SyscallMailbox) -> u8 {
-    unsafe { (*mb).syscall_num = 2; asm!("int 0x80"); (*mb).result as u8 }
-}
+fn os_print(msg: &[u8]) { mind::process::log(msg) }
+fn get_os_ticks() -> usize { mind::time::rdtsc() as usize }
+fn get_os_key() -> u8 { mind::input::read_key().unwrap_or(0) }
 
 static mut MAIN_SP: u64 = 0;
 static mut THREAD_SP: u64 = 0;
@@ -52,9 +39,6 @@ unsafe fn init_thread() {
 }
 
 const SIN_TABLE: [isize; 36] = [0, 17, 34, 50, 64, 76, 86, 93, 98, 100, 98, 93, 86, 76, 64, 50, 34, 17, 0, -17, -34, -50, -64, -76, -86, -93, -98, -100, -98, -93, -86, -76, -64, -50, -34, -17];
-#[path = "../../common/font.rs"]
-mod font;
-use font::FONT;
 
 fn draw_char(fb: *mut u32, stride: usize, px: usize, py: usize, ascii: u8, color: u32) {
     let idx = if ascii >= 32 && ascii <= 95 { (ascii - 32) as usize } else if ascii >= 97 && ascii <= 122 { (ascii - 97 + 33) as usize } else { 0 };
@@ -75,18 +59,14 @@ fn usize_to_str(mut val: usize, buf: &mut [u8]) -> usize {
     idx
 }
 
-#[no_mangle] pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void { let s_u8 = s as *mut u8; for i in 0..n { core::ptr::write_volatile(s_u8.add(i), c as u8); } s }
-#[no_mangle] pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void { let d_u8 = dest as *mut u8; let s_u8 = src as *const u8; for i in 0..n { core::ptr::write_volatile(d_u8.add(i), core::ptr::read_volatile(s_u8.add(i))); } dest }
-#[no_mangle] pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32 { let s1_u8 = s1 as *const u8; let s2_u8 = s2 as *const u8; for i in 0..n { let a = core::ptr::read_volatile(s1_u8.add(i)); let b = core::ptr::read_volatile(s2_u8.add(i)); if a != b { return (a as i32) - (b as i32); } } 0 }
 
-#[no_mangle]
-#[link_section = ".text._start"]
-pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> () {
+mind::entry!(main);
+fn main(info: &'static BootInfo) {
     unsafe { init_thread(); }
     
-    os_print(mb_ptr, b"\r\n========================================\r\n");
-    os_print(mb_ptr, b"[APP] STARTED. CTRL+Z: SHELL, ESC: EXIT.\r\n");
-    os_print(mb_ptr, b"========================================\r\n\r\n");
+    os_print(b"\r\n========================================\r\n");
+    os_print(b"[APP] STARTED. CTRL+Z: SHELL, ESC: EXIT.\r\n");
+    os_print(b"========================================\r\n\r\n");
 
     let mut frame_counter: usize = 0; 
     let cx = (info.width as isize) / 2; let cy = (info.height as isize) / 2;
@@ -99,7 +79,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
     loop {
         unsafe { yield_task(core::ptr::addr_of_mut!(MAIN_SP), core::ptr::read_volatile(core::ptr::addr_of!(THREAD_SP))); }
 
-        let os_key = get_os_key(mb_ptr);
+        let os_key = get_os_key();
         if os_key != 0 {
             if os_key < 0x80 { 
                 last_seen_key = os_key;
@@ -112,7 +92,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
                 
                 // ВЫХОД ПО ESC (0x01 = PS/2 клавиатура, 0x1B = MSYS2 COM-порт)
                 if os_key == 0x01 || os_key == 0x1B {
-                    os_print(mb_ptr, b"[SYSTEM] ESC PRESSED. EXITING APP...\r\n");
+                    os_print(b"[SYSTEM] ESC PRESSED. EXITING APP...\r\n");
                     break; 
                 }
             }
@@ -156,7 +136,7 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
         let mut w_buf = [0u8; 30]; let w_len = usize_to_str(current_work, &mut w_buf);
         draw_string(info.fb_ptr, info.stride, 40, 100, b"WORK  :", 0x00FFFFFF); draw_string(info.fb_ptr, info.stride, 120, 100, &w_buf[0..w_len], 0x00FFFF00);
 
-        let os_time = get_os_ticks(mb_ptr) / 10_000_000; 
+        let os_time = get_os_ticks() / 10_000_000; 
         let mut os_buf = [0u8; 30]; let os_len = usize_to_str(os_time, &mut os_buf);
         draw_string(info.fb_ptr, info.stride, 40, 130, b"OS TICKS:", 0x00FFFFFF); draw_string(info.fb_ptr, info.stride, 140, 130, &os_buf[0..os_len], 0x00FFFF00);
 
@@ -164,7 +144,6 @@ pub extern "sysv64" fn _start(info: &BootInfo, mb_ptr: *mut SyscallMailbox) -> (
         draw_string(info.fb_ptr, info.stride, 40, 160, b"LAST KEY:", 0x00FFFFFF); draw_string(info.fb_ptr, info.stride, 140, 160, &k_buf[0..k_len], 0x00FFFF00);
 
         frame_counter = frame_counter.wrapping_add(1);
-        wait::wait(mb_ptr, 30);
+        mind::time::sleep(30);
     }
 }
-#[panic_handler] fn panic(_info: &PanicInfo) -> ! { loop {} }

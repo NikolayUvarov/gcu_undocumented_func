@@ -38,12 +38,21 @@ mod input;
 mod interrupts;
 mod memory;
 mod paging;
+mod pci;
 mod scheduler;
 mod task_state;
 mod user_heap;
 
 unsafe fn outb(port: u16, val: u8) {
     asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack));
+}
+unsafe fn outl(port: u16, val: u32) {
+    asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack));
+}
+unsafe fn inl(port: u16) -> u32 {
+    let mut val: u32;
+    asm!("in eax, dx", out("eax") val, in("dx") port, options(nomem, nostack));
+    val
 }
 unsafe fn inb(port: u16) -> u8 {
     let mut val: u8;
@@ -209,6 +218,9 @@ fn list_programs(term: &mut Console) {
     term.print("  dzen-clock - FIVE COLOR TIME INDICATORS\n");
     term.print("  ping  - IPC CLIENT (SHARED MEMORY)\n");
     term.print("  pong  - IPC SERVER (SUPERVISOR)\n");
+    term.print("  files - VFS DEMO: LIST AND READ THE BOOT DISK\n");
+    term.print("  beep  - AUDIO GATEWAY DEMO: TONES AND PCM\n");
+    term.print("SERVICES (STARTED AT BOOT): rtc ps2_kbd compositor vfs_server audio_gw\n");
     term.print("USE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.\n");
 }
 
@@ -291,10 +303,7 @@ fn command(term: &mut Console, line: &[u8]) {
             list_programs(term);
             return;
         }
-        let Some(program) = scheduler::PROGRAM_NAMES
-            .iter()
-            .position(|p| streq(name, p.as_bytes()))
-        else {
+        let Some(program) = scheduler::program_index(name) else {
             report(term, "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.");
             return;
         };
@@ -302,7 +311,7 @@ fn command(term: &mut Console, line: &[u8]) {
             Ok(pid) => term.print(&format!(
                 "STARTED PID={} NAME={} {}\n",
                 pid,
-                scheduler::PROGRAM_NAMES[program],
+                abi::PROGRAM_NAMES[program],
                 if background {
                     "BACKGROUND"
                 } else {
@@ -384,9 +393,9 @@ fn command(term: &mut Console, line: &[u8]) {
             count += 1;
         }
         term.print(&format!(
-            "{} TASK(S); SHELL PID=0; LIMIT={}\n",
+            "{} TASK(S); SHELL PID=0; LIMIT={} APPS + SERVICES\n",
             count,
-            scheduler::MAX_TASKS
+            scheduler::MAX_APPS
         ));
     } else if streq(cmd, b"clear") {
         term.clear();
@@ -418,7 +427,11 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
-        fb = scheduler::init(info).expect("Scheduler init failed"); scheduler::spawn(6, true).expect("RTC spawn"); scheduler::spawn(7, true).expect("KBD spawn"); scheduler::spawn(8, true).expect("COMP spawn");
+        fb = scheduler::init(info).expect("Scheduler init failed");
+        // Системные сервисы ищутся по имени, а не по жёстко заданным номерам образов.
+        for name in abi::BOOT_SERVICES {
+            scheduler::spawn(scheduler::program_index(name.as_bytes()).unwrap(), true).expect("Service spawn");
+        }
         interrupts::init();
         cpu::start(info);
     }
@@ -433,7 +446,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         fg_color: 0x00A6E3A1,
     };
     term.clear();
-    term.print("MIND CORE v1.4 [Build: 2026-09-20]. SMP / RING 3 ELF SHELL.\n");
+    term.print("MIND CORE v1.5 [Build: 2026-10-03]. SMP / RING 3 SERVICES / IPC SHELL.\n");
     term.print(&format!(
         "MEMORY MANAGER: {} MB HEAP.\n",
         info.heap_len / 1024 / 1024
@@ -477,6 +490,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
                 // a time slice at every iteration through idle().
             }
         }
+        scheduler::reap();
         scheduler::idle();
     }
 }

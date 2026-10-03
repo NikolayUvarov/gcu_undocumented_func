@@ -1,6 +1,6 @@
 use super::outb;
 use core::arch::asm;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 const TICK_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
@@ -82,7 +82,14 @@ pub unsafe fn init() {
     IDT[8].ist = 1;
     IDT[2].ist = 2;
     set_handler(0x20, super::context::task_timer_entry as *const () as u64, cs);
-    set_handler(0x21, super::context::task_irq1_entry as *const () as u64, cs);
+    for (index, irq) in super::context::IRQ_LINES.iter().enumerate() {
+        set_handler(
+            0x20 + *irq as usize,
+            (core::ptr::addr_of!(super::context::irq_table) as u64)
+                .wrapping_add(super::context::irq_table[index]),
+            cs,
+        );
+    }
     set_handler(0x30, super::context::task_ipi_entry as *const () as u64, cs);
     set_handler(0x31, super::context::task_stop_entry as *const () as u64, cs);
     set_handler(0x27, spurious_master as *const () as u64, cs);
@@ -92,7 +99,7 @@ pub unsafe fn init() {
     IDT[0x80].type_attr = 0xee;
     load();
 
-    // Разрешаем IRQ0 (таймер) и IRQ1 (клавиатура PS/2) в маске PIC: 0xFC (11111100b)
+    // Открыты таймер, клавиатура и каскад IRQ2; остальные линии открывают драйверы.
     for (port, value) in [
         (0x20, 0x11),
         (0xA0, 0x11),
@@ -102,7 +109,7 @@ pub unsafe fn init() {
         (0xA1, 2),
         (0x21, 1),
         (0xA1, 1),
-        (0x21, 0xFC),
+        (0x21, 0xF8),
         (0xA1, 0xFF),
     ] {
         outb(port, value);
@@ -114,6 +121,15 @@ pub unsafe fn init() {
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
     asm!("sti");
+}
+
+static PIC_MASK: AtomicU16 = AtomicU16::new(0xFFF8);
+
+// Маскирует или открывает линию PIC; вызывается под блокировкой планировщика.
+pub unsafe fn set_irq_masked(irq: u8, masked: bool) {
+    let bit = 1u16 << irq;
+    let mask = if masked { PIC_MASK.fetch_or(bit, Ordering::Relaxed) | bit } else { PIC_MASK.fetch_and(!bit, Ordering::Relaxed) & !bit };
+    if irq < 8 { outb(0x21, mask as u8); } else { outb(0xA1, (mask >> 8) as u8); }
 }
 
 pub unsafe fn load() {

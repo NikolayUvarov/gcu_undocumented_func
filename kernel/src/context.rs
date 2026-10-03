@@ -22,7 +22,10 @@ global_asm!(r#"
         jmp context_entry
     .endm
     interrupt task_timer_entry, 32
-    interrupt task_irq1_entry, 33
+    // Линии PIC для драйверов в ring 3 (7 и 15 остаются ложными прерываниями).
+    .irp n,1,3,4,5,6,9,10,11,12,13,14
+        interrupt task_irq_\n, (32 + \n)
+    .endr
     interrupt task_ipi_entry, 48
     interrupt task_stop_entry, 49
     interrupt task_syscall_entry, 128
@@ -76,17 +79,24 @@ exception_table:
     .irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31
         .quad exception_\n - exception_table
     .endr
+    .global irq_table
+irq_table:
+    .irp n,1,3,4,5,6,9,10,11,12,13,14
+        .quad task_irq_\n - irq_table
+    .endr
     .previous
 "#, handler = sym crate::scheduler::interrupt);
 
 unsafe extern "C" {
     pub fn task_timer_entry();
-    pub fn task_irq1_entry();
     pub fn task_ipi_entry();
     pub fn task_stop_entry();
     pub fn task_syscall_entry();
     pub static exception_table: [u64; 32];
+    pub static irq_table: [u64; 11];
 }
+
+pub const IRQ_LINES: [u8; 11] = [1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14];
 
 pub unsafe fn registers(sp: usize) -> &'static [u64; 22] {
     &*(*(sp.wrapping_add(512) as *const usize) as *const [u64; 22])

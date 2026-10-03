@@ -10,11 +10,12 @@ pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
 pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
-pub const USER_END: usize = USER_IMAGE + 0x0800_0000;
+pub const USER_END: usize = USER_IMAGE + 0x1000_0000; // окно кучи 160 МиБ: приватная квота + отображения кадра/IPC
 const PRESENT: u64 = 1;
 const WRITE: u64 = 2;
 const USER: u64 = 4;
 const NX: u64 = 1 << 63;
+const TABLES: usize = 128; // хватает на окно кучи с разделяемыми буферами кадра
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
@@ -80,7 +81,7 @@ pub unsafe fn activate(root: usize) {
 }
 
 pub struct Space {
-    tables: [Option<Region>; 32],
+    tables: [Option<Region>; TABLES],
     count: usize,
 }
 
@@ -263,7 +264,7 @@ impl Space {
     pub fn unmap(&mut self, start: usize, size: usize) {
         assert!(start >= USER_IMAGE && start % PAGE == 0);
         assert!(start.checked_add(size).is_some_and(|end| end <= USER_END));
-        let mut retired: [Option<Region>; 32] = core::array::from_fn(|_| None);
+        let mut retired: [Option<Region>; TABLES] = core::array::from_fn(|_| None);
         let mut retired_count = 0;
         for offset in (0..size).step_by(PAGE) {
             let address = start + offset;
@@ -331,6 +332,22 @@ impl Space {
         for shift in [39, 30, 21, 12] {
             let entry = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
             if entry & (PRESENT | USER) != (PRESENT | USER) {
+                return None;
+            }
+            table = (entry & ADDRESS) as usize;
+        }
+        Some(table + (address & 4095))
+    }
+
+    // Как readable, но только для страниц с правом записи (буферы, заполняемые ядром).
+    pub fn writable(&self, address: usize) -> Option<usize> {
+        if !(USER_IMAGE..USER_END).contains(&address) {
+            return None;
+        }
+        let mut table = self.root();
+        for shift in [39, 30, 21, 12] {
+            let entry = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
+            if entry & (PRESENT | USER | WRITE) != (PRESENT | USER | WRITE) {
                 return None;
             }
             table = (entry & ADDRESS) as usize;
