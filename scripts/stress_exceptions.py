@@ -2,7 +2,8 @@
 """Пополняет словарь ударений tts только словоформами, на которых ошибается эвристика синтезатора.
 
 Вход — файлы со словоформами, где ударная гласная записана заглавной (дОбрый, тебЯ), по нескольку в строке;
-строки с # пропускаются. Формы с одинаковым написанием и разным ударением (омографы) не добавляются.
+строки с # пропускаются. Формы с одинаковым написанием (без различия е/ё) и разным чтением (омографы) не добавляются.
+Формы с «ё» сохраняются всегда: по ним синтезатор восстанавливает «ё» в тексте, набранном через «е».
     python3 scripts/stress_exceptions.py my_words.txt
 """
 import collections
@@ -37,17 +38,18 @@ def main():
                 continue
             for form in line.split():
                 if stressed(form) is not None:
-                    forms[form.lower()].add(form)
+                    forms[form.lower().replace("ё", "е")].add(form)
+    # Порядок по написанию без ё: синтезатор ищет в словаре двоичным поиском.
     entries = []
     for word, variants in forms.items():
         if len(variants) > 1:
             print(f"пропущен омограф: {word} {sorted(variants)}")
             continue
         form = variants.pop()
-        if sum(1 for c in word if c in VOWELS) > 1 and heuristic(word) != stressed(form):
+        if sum(1 for c in word if c in VOWELS) > 1 and (heuristic(form.lower()) != stressed(form) or "ё" in form.lower()):
             entries.append(form)
     header = DICTIONARY.read_text(encoding="utf-8").splitlines()[0]
-    DICTIONARY.write_text("\n".join([header, *sorted(entries, key=str.lower)]) + "\n", encoding="utf-8")
+    DICTIONARY.write_text("\n".join([header, *sorted(entries, key=lambda e: e.lower().replace("ё", "е"))]) + "\n", encoding="utf-8")
     print(f"{len(entries)} исключений в {DICTIONARY}")
 
 

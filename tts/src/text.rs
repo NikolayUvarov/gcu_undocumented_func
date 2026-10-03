@@ -18,15 +18,25 @@ impl Out<'_> {
 const STRESS: &str = include_str!("../data/stress_ru.txt");
 const RU_VOWELS: &str = "аеёиоуыэюя";
 
-/// Номер ударного гласного слова по словарю исключений.
-fn dictionary_stress(word: &[char]) -> Option<usize> {
-    STRESS.lines().filter(|line| !line.starts_with('#')).find_map(|line| {
-        let mut letters = line.chars();
-        let same = word.iter().all(|&c| letters.next().and_then(|l| l.to_lowercase().next()) == Some(c)) && letters.next().is_none();
-        if !same { return None; }
-        let upper = line.chars().position(|c| c.is_uppercase())?;
-        Some(line.chars().take(upper).filter(|c| RU_VOWELS.contains(*c)).count())
-    })
+fn fold(c: char) -> char { match c.to_lowercase().next().unwrap_or(c) { 'ё' => 'е', l => l } }
+
+/// Словоформа из словаря (строки упорядочены по написанию без «ё»: двоичный поиск); «е» в тексте совпадает с «ё».
+fn dictionary_entry(word: &[char]) -> Option<&'static str> {
+    let body = &STRESS[STRESS.find('\n')? + 1..];
+    let (mut lo, mut hi) = (0, body.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let start = body.as_bytes()[..mid].iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1);
+        let end = body[start..].find('\n').map_or(body.len(), |p| start + p);
+        let line = &body[start..end];
+        match line.chars().map(fold).cmp(word.iter().copied().map(fold)) {
+            core::cmp::Ordering::Less => lo = end + 1,
+            core::cmp::Ordering::Greater => hi = start,
+            // «ё», набранная в тексте, должна быть и в словаре (иначе это другое слово: «осёл» — не «осел»).
+            core::cmp::Ordering::Equal => return line.chars().zip(word).all(|(l, &c)| c != 'ё' || matches!(l, 'ё' | 'Ё')).then_some(line),
+        }
+    }
+    None
 }
 
 fn cyrillic(c: char) -> bool { ('а'..='я').contains(&c) || c == 'ё' }
@@ -36,8 +46,11 @@ const EN_DIGITS: [&str; 10] = ["ziro", "wan", "tu", "thri", "for", "faiv", "siks
 
 fn russian(word: &[char], out: &mut Out) {
     let start = out.len;
-    let known = dictionary_stress(word);
     let mut chars = [' '; 64]; let mut n = word.len().min(64); chars[..n].copy_from_slice(&word[..n]);
+    // Словарь задаёт ударный гласный и возвращает «ё», если текст набран через «е».
+    let entry = dictionary_entry(word);
+    let known = entry.and_then(|line| { let upper = line.chars().position(char::is_uppercase)?; Some(line.chars().take(upper).filter(|c| RU_VOWELS.contains(c.to_lowercase().next().unwrap_or(*c))).count()) });
+    if let Some(line) = entry { for (c, l) in chars[..n].iter_mut().zip(line.chars()) { *c = l.to_lowercase().next().unwrap_or(l); } }
     // «-тся/-ться» читается как [ца]; «-ого/-его» как [ово/ево] (кроме «ого», «много», «строго», «дорого»).
     let ends = |chars: &[char], tail: &str| chars.len() >= tail.chars().count() && chars[chars.len() - tail.chars().count()..].iter().copied().eq(tail.chars());
     if ends(&chars[..n], "ться") { n -= 4; chars[n] = 'ц'; chars[n + 1] = 'а'; n += 2; }
@@ -238,10 +251,14 @@ mod tests {
         assert_eq!(stressed("заполнена"), Some(1));
         assert_eq!(stressed("работа"), Some(1)); // нет в словаре: эвристика верна
         assert_eq!(phonemes("добрый")[1].0, Ph::O); // ударное «о» не редуцируется
-        // Каждая запись словаря действительно расходится с эвристикой и находится поиском.
+        assert_eq!(phonemes("еще")[3].0, Ph::O); // «ё» из словаря: [йищё]
+        assert_eq!(stressed("зеленый"), Some(1));
+        assert!(dictionary_entry(&"дёвушка".chars().collect::<Vec<_>>()).is_none()); // набранная «ё» не совпадает с «е» словаря
+        // Каждая запись словаря находится двоичным поиском — и с «ё», и через «е».
         for line in STRESS.lines().filter(|l| !l.starts_with('#')) {
             let word: Vec<char> = line.chars().flat_map(char::to_lowercase).collect();
-            assert!(dictionary_stress(&word).is_some(), "{line}");
+            assert_eq!(dictionary_entry(&word), Some(line));
+            assert_eq!(dictionary_entry(&word.iter().map(|&c| fold(c)).collect::<Vec<_>>()), Some(line));
         }
     }
     #[test]
