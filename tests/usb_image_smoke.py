@@ -49,7 +49,7 @@ def main():
         for pid in [1, 3, 4]:
             require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
         assert heap_used(vm) == baseline
-        # Файлы читаются с того же USB-накопителя: xHCI -> usb_storage -> vfs_server.
+        # Files are read from the same USB drive: xHCI -> usb_storage -> vfs_server.
         require(vm.service_logs("usb_storage", "[USB] MASS STORAGE ON PORT"), "[USB] MASS STORAGE ON PORT")
         require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM USB"), "[VFS] MOUNTED FAT16 FROM USB")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")

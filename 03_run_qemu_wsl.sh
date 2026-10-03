@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Запуск Windows QEMU из WSL через interop после ./02_build.sh.
+# Run Windows QEMU from WSL via interop after ./02_build.sh.
 set -euo pipefail
 
 RUN_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,8 +11,8 @@ fail() {
 
 command -v wslpath >/dev/null 2>&1 || fail "Запустите этот скрипт в WSL с включённым Windows interop."
 
-# Как в MSYS2 launcher: сначала UCRT64, затем MinGW64.
-# QEMU позволяет явно задать путь к .exe в формате WSL.
+# As in the MSYS2 launcher: UCRT64 first, then MinGW64.
+# QEMU lets you set the .exe path explicitly in WSL format.
 QEMU_BIN="${QEMU:-}"
 if [[ -z "$QEMU_BIN" ]]; then
     for windows_path in \
@@ -37,10 +37,10 @@ for artifact in EFI/BOOT/BOOTX64.EFI kernel.elf; do
     [[ -f "$RUN_SCRIPT_DIR/usb_root/$artifact" ]] || fail "Нет usb_root/$artifact. Сначала выполните ./02_build.sh."
 done
 
-# WSL не переводит аргументы-пути для Windows-программ автоматически.
+# WSL does not translate path arguments for Windows programs automatically.
 FIRMWARE_PATH="$(wslpath -w "$RUN_SCRIPT_DIR/OVMF.fd")"
 USB_ROOT_PATH="$(wslpath -w "$RUN_SCRIPT_DIR/usb_root")"
-# В -drive запятая разделяет параметры; запятые в имени удваиваются.
+# In -drive a comma separates options; commas in the name are doubled.
 USB_ROOT_PATH="${USB_ROOT_PATH//,/,,}"
 
 printf 'Запуск MIND CORE в Windows QEMU из WSL: %s\n' "$QEMU_BIN"

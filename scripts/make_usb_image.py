@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-# Сервисы (BOOT_FILES в ABI) нужны загрузчику; приложения — все остальные *.elf, собранные 02_build.sh.
+# Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
 FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS)
@@ -117,7 +117,7 @@ def check_image(image, payloads, mark_esp=False):
         def lookup(directory, part):
             stem, _, extension = part.upper().partition(".")
             short_name = (stem.ljust(8) + extension.ljust(3)).encode("ascii")
-            long_parts = {}  # имена длиннее 8.3 (compositor.elf, vfs_server.elf) хранятся в записях LFN
+            long_parts = {}  # names longer than 8.3 (compositor.elf, vfs_server.elf) are stored in LFN entries
             for offset in range(0, len(directory), 32):
                 entry = directory[offset:offset + 32]
                 if entry[0] == 0:

@@ -1,7 +1,7 @@
 @echo off
 echo Запуск MIND CORE в QEMU...
 
-rem Ищем QEMU в стандартных папках MSYS2 (UCRT64 или MinGW64)
+rem Look for QEMU in the standard MSYS2 folders (UCRT64 or MinGW64)
 set QEMU_PATH=C:\msys64\ucrt64\bin\qemu-system-x86_64.exe
 if not exist "%QEMU_PATH%" set QEMU_PATH=C:\msys64\mingw64\bin\qemu-system-x86_64.exe
 

@@ -1,18 +1,18 @@
-# --- Артефакты сборки Rust ---
+# --- Rust build artifacts ---
 target/
 **/target/
 Cargo.lock
 **/Cargo.lock
 
-# --- Промежуточные бинарники прошивки ---
-# Плоские образы, встраиваемые в загрузчик (02_build.sh)
+# --- Intermediate firmware binaries ---
+# Flat images embedded in the bootloader (02_build.sh)
 *.bin
-# Собранный загрузчик и модули, раскладываемые по usb_root
+# Built bootloader and modules laid out into usb_root
 *.efi
 *.EFI
 *.elf
 
-# --- Локальные образы VM / UEFI ---
+# --- Local VM / UEFI images ---
 OVMF.fd
 *.fd
 usb_root/
@@ -20,32 +20,32 @@ dist/
 scripts/__pycache__/
 NvVars
 
-# --- Сгенерированные дампы и выгрузки ---
-# Склейка исходников для передачи в контекст (code_concat.sh)
+# --- Generated dumps and exports ---
+# Source concatenation for passing into context (code_concat.sh)
 code_context.txt
 code_context*.txt
 code_handoff/
 code-handoff/
 
-# --- История патчей (не версионируется) ---
+# --- Patch history (not versioned) ---
 legacy/**
 patches_seq/patch_*.sh
 issues/**
 
-# --- Остатки правок и патчей ---
+# --- Leftovers from edits and patches ---
 *.orig
 *.rej
 *.bak
 *~
 
-# --- Временные файлы и логи ---
+# --- Temporary files and logs ---
 *.tmp
 *.log
 *.swp
 *.swo
 nohup.out
 
-# --- Служебное: ОС и редакторы ---
+# --- Housekeeping: OS and editors ---
 .DS_Store
 Thumbs.db
 .vscode/

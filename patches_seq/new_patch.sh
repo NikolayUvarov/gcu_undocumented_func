@@ -1,13 +1,13 @@
 #!/bin/bash
-# new_patch.sh — создаёт следующий по номеру патч, принимает его текст со
-# стандартного ввода и сразу применяет.
+# new_patch.sh — creates the next numbered patch, reads its text from
+# standard input and applies it immediately.
 #
-# Использование:
-#   ./new_patch.sh              создать patch_<max+1>.sh, ввести текст, применить
-#   ./new_patch.sh -t           начать с шаблона-заголовка (SCRIPT_DIR/ROOT_DIR)
-#   ./new_patch.sh -n           только создать файл, не запускать
+# Usage:
+#   ./new_patch.sh              create patch_<max+1>.sh, enter text, apply
+#   ./new_patch.sh -t           start from a header template (SCRIPT_DIR/ROOT_DIR)
+#   ./new_patch.sh -n           only create the file, do not run it
 #
-# Текст патча вводится до Ctrl-D. Пустой ввод отменяет создание.
+# Patch text is read until Ctrl-D. Empty input cancels creation.
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --- Определяем максимальный номер ---------------------------------------
+# --- Determine the highest number -----------------------------------------
 
 max=0
 for f in "$SCRIPT_DIR"/patch_*.sh; do
@@ -37,7 +37,7 @@ for f in "$SCRIPT_DIR"/patch_*.sh; do
     [ "$n" -gt "$max" ] && max=$n
 done
 
-# Если последний патч пуст — переиспользуем его номер вместо нового.
+# If the last patch is empty, reuse its number instead of creating a new one.
 reuse=""
 if [ "$max" -gt 0 ]; then
     last=$(printf '%s/patch_%03d' "$SCRIPT_DIR" "$max")
@@ -63,7 +63,7 @@ if [ -s "$PATCH_FILE" ]; then
     exit 1
 fi
 
-# --- Приглашение и ввод ---------------------------------------------------
+# --- Prompt and input -----------------------------------------------------
 
 printf 'Максимальный номер патча: %03d\n' "$max"
 printf 'Новый патч: %s\n' "$(basename "$PATCH_FILE")"
@@ -91,7 +91,7 @@ cat >> "$TMP"
 
 echo "----------------------------------------------------------------"
 
-# Порог "пусто": без шаблона — ноль байт, с шаблоном — только сам шаблон.
+# "Empty" threshold: without a template — zero bytes, with a template — only the template itself.
 min_lines=0
 [ "$USE_TEMPLATE" = 1 ] && min_lines=8
 
@@ -103,7 +103,7 @@ fi
 cp "$TMP" "$PATCH_FILE"
 echo "Записано: $PATCH_FILE ($(wc -l < "$PATCH_FILE") строк)"
 
-# --- Проверка синтаксиса и запуск ----------------------------------------
+# --- Syntax check and run -------------------------------------------------
 
 if ! bash -n "$PATCH_FILE"; then
     echo "Синтаксическая ошибка в патче — запуск отменён." >&2

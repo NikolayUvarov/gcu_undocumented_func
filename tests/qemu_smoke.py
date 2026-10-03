@@ -19,9 +19,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# Системные сервисы (PID 1..N); драйверы ahci/usb_storage есть только при наличии контроллера.
+# System services (PID 1..N); ahci/usb_storage drivers exist only when the controller is present.
 SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts")
-# Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID (BASE считается при загрузке).
+# Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
@@ -66,11 +66,11 @@ class VM:
             raise
 
     def services(self):
-        # Реальные PID сервисов по таблице ps (её строки стенд не переводит).
+        # Real service PIDs from the ps table (the harness does not translate its rows).
         return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
 
     def service_logs(self, name, until=None):
-        # Журнал сервиса; с `until` — дождаться строки (драйверы инициализируются параллельно с тестом).
+        # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
         output = ""
         for _ in range(40):
             output += self.command(f"logs {self.services()[name]}", raw=True)
@@ -181,7 +181,7 @@ def heap_used(vm):
 
 def task_rows(vm):
     output = vm.command("ps")
-    # Только приложения: сервисы видны в ps, но наборы проверяют пользовательские задачи.
+    # Apps only: services are visible in ps, but the suites check user tasks.
     return {int(m[0]) - BASE: m[1:] for m in re.findall(
         r"^(-?\d+) ([\w-]+) (READY|RUNNING|SLEEPING|EXITED|IPC_WAIT|IRQ_WAIT) (BG|FG) (\d+) (\d+) (\d+) (\d+)$", output, re.M)
         if m[1] not in SERVICES}
@@ -694,29 +694,29 @@ def services_suite(vm):
     output = vm.command("ps")
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
-    require(vm.command("fg -4"), "ERROR:")  # отрицательные номера стенд не переводит
+    require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
     vm.send("fg 0\n"); vm.expect("ERROR:")
-    # Сервисы не занимают экран и не запускаются повторно.
+    # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)
-    # IPC: pong запускает ping, принимает мандат памяти и отвечает на CALL.
+    # IPC: pong launches ping, receives a memory capability and replies to CALL.
     require(vm.command("run pong &"), "PID=1 NAME=pong BACKGROUND")
     time.sleep(3.5)
     pong = vm.command("logs 1")
     require(pong, "SPAWNED PING PID=2")
     require(pong, "FROM PID 2: HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 1001")
     require(vm.command("logs 2"), "[PING] ACK 1001")
-    # Убийство сервера, у которого клиент ждёт ответа, будит клиента с ошибкой, а не вешает ядро.
+    # Killing a server whose client awaits a reply wakes the client with an error instead of hanging the kernel.
     require(vm.command("kill 1"), "KILLED PID=1")
     time.sleep(.5)
     assert 2 in task_rows(vm), "client of a dead server must survive"
     require(vm.command("kill 2"), "KILLED PID=2")
-    # VFS: список корня и чтение файлов с ATA-диска через ata -> vfs_server.
+    # VFS: list the root and read files from the ATA disk via ata -> vfs_server.
     require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM ATA"), "[VFS] MOUNTED FAT16 FROM ATA")
     require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
     files_check(vm, 3)
     require(vm.command("kill 3"), "KILLED PID=3")
-    # loader: программы читаются с диска, а не из таблицы ядра — запускаются и новые файлы.
+    # loader: programs are read from disk, not the kernel table — new files launch too.
     listing = vm.command("list")
     for name in ("clock", "dzen-clock", "hello", "files"):
         require(listing, f"  {name} ")
@@ -760,7 +760,7 @@ def audio_suite(vm, wav):
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "AC97 produced no audio"
     seconds = (loud[-1] - loud[0]) / rate
-    assert 0.8 < seconds < 1.3, seconds  # 3 тона по 150 мс + свип 0.5 с
+    assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
     def power(start, hz):
         window = left[start:start + int(rate * 0.04)]
@@ -783,7 +783,7 @@ def tts_suite(vm, wav, asr_model=None):
         time.sleep(.25)
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
     assert 2500 < spoken < 9000, spoken
-    time.sleep(spoken / 1000 + 1)  # дождаться конца воспроизведения из кольца DMA
+    time.sleep(spoken / 1000 + 1)  # wait for DMA ring playback to finish
     vm.command("kill 1")
     vm.close()
     import struct, wave
@@ -794,7 +794,7 @@ def tts_suite(vm, wav, asr_model=None):
     assert loud, "TTS produced no audio"
     seconds = (loud[-1] - loud[0]) / rate
     assert abs(seconds * 1000 - spoken) < 1500, (seconds, spoken)
-    # Голос: основной тон в окнах с энергией — автокорреляция в диапазоне 80–160 Гц.
+    # Voice: fundamental pitch in energetic windows — autocorrelation in the 80–160 Hz range.
     pitches = []
     for start in range(loud[0], loud[-1] - 2048, rate // 10):
         window = left[start:start + 2048]
@@ -855,7 +855,7 @@ def main():
             for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
                 shutil.copyfile(ROOT / "usb_root" / name, disk / name)
             if suite == "services":
-                # Файлы, о которых ядро и ABI ничего не знают: их найдёт только loader.
+                # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
                 shutil.copyfile(disk / "app.elf", disk / "extra/demo.elf")
