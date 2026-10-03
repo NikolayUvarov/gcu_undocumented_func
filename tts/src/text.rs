@@ -14,6 +14,21 @@ impl Out<'_> {
     fn ends_with_consonant(&self, start: usize) -> bool { self.len > start && !self.units[self.len - 1].ph.vowel() && self.units[self.len - 1].ph != Ph::J }
 }
 
+// Словарь ударений для форм, где эвристика ошибается: строка — словоформа, ударная гласная заглавная.
+const STRESS: &str = include_str!("../data/stress_ru.txt");
+const RU_VOWELS: &str = "аеёиоуыэюя";
+
+/// Номер ударного гласного слова по словарю исключений.
+fn dictionary_stress(word: &[char]) -> Option<usize> {
+    STRESS.lines().filter(|line| !line.starts_with('#')).find_map(|line| {
+        let mut letters = line.chars();
+        let same = word.iter().all(|&c| letters.next().and_then(|l| l.to_lowercase().next()) == Some(c)) && letters.next().is_none();
+        if !same { return None; }
+        let upper = line.chars().position(|c| c.is_uppercase())?;
+        Some(line.chars().take(upper).filter(|c| RU_VOWELS.contains(*c)).count())
+    })
+}
+
 fn cyrillic(c: char) -> bool { ('а'..='я').contains(&c) || c == 'ё' }
 
 const RU_DIGITS: [&str; 10] = ["ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"];
@@ -21,6 +36,7 @@ const EN_DIGITS: [&str; 10] = ["ziro", "wan", "tu", "thri", "for", "faiv", "siks
 
 fn russian(word: &[char], out: &mut Out) {
     let start = out.len;
+    let known = dictionary_stress(word);
     let mut chars = [' '; 64]; let mut n = word.len().min(64); chars[..n].copy_from_slice(&word[..n]);
     // «-тся/-ться» читается как [ца]; «-ого/-его» как [ово/ево] (кроме «ого», «много», «строго», «дорого»).
     let ends = |chars: &[char], tail: &str| chars.len() >= tail.chars().count() && chars[chars.len() - tail.chars().count()..].iter().copied().eq(tail.chars());
@@ -51,7 +67,7 @@ fn russian(word: &[char], out: &mut Out) {
     if out.len > start { let last = &mut out.units[out.len - 1]; last.ph = last.ph.devoiced(); }
     // Ударение по эвристике (словаря нет): «ё» ударная; слово на согласный — последний слог, на гласный — предпоследний.
     let yo = chars[..n].iter().position(|&c| c == 'ё').map(|p| chars[..p].iter().filter(|c| "аоуыэиеёюя".contains(**c)).count());
-    stress(out, start, yo);
+    stress(out, start, known.or(yo));
     // Аканье и иканье: безударное [о] звучит как [а], безударные [е], [а] после мягкого — как [и] (кроме конца слова).
     for i in start..out.len {
         let unit = out.units[i];
@@ -210,9 +226,23 @@ mod tests {
         assert_eq!(phonemes("мать"), [(Ph::M, false), (Ph::A, false), (Ph::T, true)]);
         assert_eq!(phonemes("мять"), [(Ph::M, true), (Ph::A, false), (Ph::T, true)]);
         assert!(phonemes("учится").ends_with(&[(Ph::Ts, false), (Ph::A, false)]));
-        assert_eq!(&phonemes("его")[..3], [(Ph::J, false), (Ph::E, false), (Ph::V, false)]); // «-его» читается через [в]
+        assert_eq!(&phonemes("его")[..3], [(Ph::J, false), (Ph::I, false), (Ph::V, false)]); // [йиво]: ударение из словаря, иканье, «г» -> [в]
         assert_eq!(phonemes("молоко")[1].0, Ph::A); // аканье в безударном слоге
         assert_eq!(phonemes("жи")[1].0, Ph::Y);
+    }
+    #[test]
+    fn stress_dictionary_overrides_heuristic() {
+        let stressed = |text: &str| { let mut units = [Unit { ph: Ph::Pause(0), soft: false, stress: false }; 64]; let n = parse(text, &mut units); units[..n].iter().filter(|u| u.ph.vowel()).position(|u| u.stress) };
+        assert_eq!(stressed("добрый"), Some(0)); // эвристика дала бы последний слог
+        assert_eq!(stressed("тебя"), Some(1)); // и предпоследний — здесь
+        assert_eq!(stressed("заполнена"), Some(1));
+        assert_eq!(stressed("работа"), Some(1)); // нет в словаре: эвристика верна
+        assert_eq!(phonemes("добрый")[1].0, Ph::O); // ударное «о» не редуцируется
+        // Каждая запись словаря действительно расходится с эвристикой и находится поиском.
+        for line in STRESS.lines().filter(|l| !l.starts_with('#')) {
+            let word: Vec<char> = line.chars().flat_map(char::to_lowercase).collect();
+            assert!(dictionary_stress(&word).is_some(), "{line}");
+        }
     }
     #[test]
     fn latin_rules_and_lexicon() {
