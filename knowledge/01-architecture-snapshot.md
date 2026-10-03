@@ -1,50 +1,50 @@
-# Срез архитектуры (по коду, коммит 8ad7550)
+# Architecture snapshot (from the code, commit 8ad7550)
 
-## Компоненты
+## Components
 
-| Компонент | Путь | Таргет | Формат | Размер артефакта |
+| Component | Path | Target | Format | Artifact size |
 |-----------|------|--------|--------|------------------|
-| Bootloader | `bootloader/` | `x86_64-unknown-uefi` | PE/COFF (`BOOTX64.EFI`) | 16 896 байт |
-| Kernel | `kernel/` | `x86_64-unknown-none` | плоский бинарник `kernel.bin` | 896 байт |
-| App (userspace) | `app/` | `x86_64-unknown-none` | плоский бинарник `app.bin` | 1 136 байт |
+| Bootloader | `bootloader/` | `x86_64-unknown-uefi` | PE/COFF (`BOOTX64.EFI`) | 16 896 bytes |
+| Kernel | `kernel/` | `x86_64-unknown-none` | flat binary `kernel.bin` | 896 bytes |
+| App (userspace) | `app/` | `x86_64-unknown-none` | flat binary `app.bin` | 1 136 bytes |
 
-Три независимых cargo-пакета без workspace. Общего крейта для типов нет.
+Three independent cargo packages with no workspace. There is no shared crate for types.
 
-## Контракт `BootInfo`
+## The `BootInfo` contract
 
-Структура продублирована три раза (bootloader/kernel/app), `#[repr(C)]`, одинаковая:
+The struct is duplicated three times (bootloader/kernel/app), `#[repr(C)]`, identical:
 
 ```rust
 pub struct BootInfo {
-    pub fb_ptr: *mut u8,   // адрес фреймбуфера GOP
+    pub fb_ptr: *mut u8,   // GOP framebuffer address
     pub width: usize,
     pub height: usize,
-    pub stride: usize,     // в пикселях, не в байтах
-    pub app_ptr: *const u8 // физический адрес загруженного app.bin
+    pub stride: usize,     // in pixels, not bytes
+    pub app_ptr: *const u8 // physical address of the loaded app.bin
 }
 ```
 
-Соглашение вызова: `extern "sysv64" fn(&BootInfo) -> !`. Указатель на `BootInfo` лежит на стеке загрузчика и живёт вечно, так как загрузчик не возвращается.
+Calling convention: `extern "sysv64" fn(&BootInfo) -> !`. The pointer to `BootInfo` lives on the bootloader's stack and stays valid forever, since the bootloader never returns.
 
-Риск: дублирование без единого источника — при изменении полей в одном месте контракт ломается молча (см. [05-observations-and-risks.md](05-observations-and-risks.md)).
+Risk: duplication without a single source of truth — if the fields change in one place, the contract breaks silently (see [05-observations-and-risks.md](05-observations-and-risks.md)).
 
-## Поток управления
+## Control flow
 
-1. `bootloader/src/main.rs:20-21` — `kernel.bin` и `app.bin` встроены в EFI через `include_bytes!` (не читаются с FAT32).
-2. `:27-33` — `allocate_pages(AnyPages, LOADER_DATA, len/4096+1)` для каждого бинарника, `copy_nonoverlapping`.
-3. `:35-37` — GOP: `get_handle_for_protocol` + `open_protocol_exclusive`, берётся текущий режим без выбора и без проверки `PixelFormat`.
-4. `:53` — `exit_boot_services(LOADER_DATA)`; карта памяти отбрасывается.
-5. `:56-57` — `transmute(kernel_addr)` и прыжок по смещению **0** плоского бинарника (см. [03](03-flat-binary-layout-analysis.md): в текущей сборке `_start` там не лежит).
-6. `kernel/src/main.rs:18-62` — бесконечный цикл: поллинг порта `0x64`, при бите 0 чтение `0x60`; сканкод `0x39` (пробел) → `transmute(info.app_ptr)` и вызов приложения. Иначе рисуется пульсирующий круг, задержка — `1_000_000` `nop`.
-7. `app/src/main.rs:20-54` — бесконечный цикл: вращающийся квадрат по табличному синусу. Назад в ядро не возвращается.
+1. `bootloader/src/main.rs:20-21` — `kernel.bin` and `app.bin` are embedded in the EFI via `include_bytes!` (not read from FAT32).
+2. `:27-33` — `allocate_pages(AnyPages, LOADER_DATA, len/4096+1)` for each binary, `copy_nonoverlapping`.
+3. `:35-37` — GOP: `get_handle_for_protocol` + `open_protocol_exclusive`; the current mode is taken without selecting one and without checking `PixelFormat`.
+4. `:53` — `exit_boot_services(LOADER_DATA)`; the memory map is discarded.
+5. `:56-57` — `transmute(kernel_addr)` and a jump to offset **0** of the flat binary (see [03](03-flat-binary-layout-analysis.md): in the current build `_start` is not located there).
+6. `kernel/src/main.rs:18-62` — infinite loop: polls port `0x64`, and when bit 0 is set reads `0x60`; scancode `0x39` (space) → `transmute(info.app_ptr)` and a call into the application. Otherwise a pulsing circle is drawn; the delay is `1_000_000` `nop`s.
+7. `app/src/main.rs:20-54` — infinite loop: a square rotating via a sine lookup table. It never returns to the kernel.
 
-## Чего в коде нет (при этом упоминается в README/handoff)
+## What is not in the code (although the README/handoff mention it)
 
-- IDT, ремап PIC, обработчики IRQ0/IRQ1, переключение контекста, `int 0x80` — отсутствуют полностью.
-- Глобальный аллокатор, `alloc`, `format!` — отсутствуют.
-- Чтение файлов с FAT32 через `SimpleFileSystem` — отсутствует.
-- Рендер шрифта/примитивов — отсутствует (только круг и квадрат попиксельно).
-- Передача управления в userspace по таймауту — отсутствует (только по клавише).
-- Собственный стек ядра, `.bss`-зануление, обработка карты памяти — отсутствуют.
+- IDT, PIC remapping, IRQ0/IRQ1 handlers, context switching, `int 0x80` — entirely absent.
+- Global allocator, `alloc`, `format!` — absent.
+- Reading files from FAT32 via `SimpleFileSystem` — absent.
+- Font/primitive rendering — absent (only a circle and a square, pixel by pixel).
+- Handing control to userspace on a timeout — absent (only on a key press).
+- A dedicated kernel stack, `.bss` zeroing, memory map handling — absent.
 
-Всё это оформлено как задачи в `issues/`, см. [04-handoff-vs-code-matrix.md](04-handoff-vs-code-matrix.md).
+All of this is filed as issues in `issues/`, see [04-handoff-vs-code-matrix.md](04-handoff-vs-code-matrix.md).

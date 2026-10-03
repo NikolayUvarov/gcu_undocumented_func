@@ -1,17 +1,17 @@
-# knowledge/ — база знаний проекта MIND CORE
+# knowledge/ — MIND CORE project knowledge base
 
-Папка для находок, проверенных фактов и наблюдений по коду. Каждый файл — одна тема.
-Задачи на доработку живут отдельно в `issues/`.
+A folder for findings, verified facts and observations about the code. Each file covers one topic.
+Improvement tasks live separately in `issues/`.
 
-| Файл | Содержание |
+| File | Contents |
 |------|-----------|
-| [01-architecture-snapshot.md](01-architecture-snapshot.md) | Что реально есть в коде: компоненты, контракт `BootInfo`, поток управления |
-| [02-build-pipeline.md](02-build-pipeline.md) | Тулчейн, скрипты сборки, артефакты, что проверено |
-| [03-flat-binary-layout-analysis.md](03-flat-binary-layout-analysis.md) | Анализ ELF и плоских бинарников: смещение `_start`, GOT, `.bss` |
-| [04-handoff-vs-code-matrix.md](04-handoff-vs-code-matrix.md) | Сопоставление handoff-документа с кодом, ссылки на задачи |
-| [05-observations-and-risks.md](05-observations-and-risks.md) | Прочие наблюдения и риски, не вошедшие в задачи или вошедшие частично |
+| [01-architecture-snapshot.md](01-architecture-snapshot.md) | What actually exists in the code: components, the `BootInfo` contract, control flow |
+| [02-build-pipeline.md](02-build-pipeline.md) | Toolchain, build scripts, artifacts, what has been verified |
+| [03-flat-binary-layout-analysis.md](03-flat-binary-layout-analysis.md) | Analysis of the ELF and flat binaries: `_start` offset, GOT, `.bss` |
+| [04-handoff-vs-code-matrix.md](04-handoff-vs-code-matrix.md) | Comparison of the handoff document with the code, links to issues |
+| [05-observations-and-risks.md](05-observations-and-risks.md) | Other observations and risks not covered by issues, or covered only partially |
 
-Правила ведения:
-- Факт записывается только после проверки (команда + вывод или ссылка на строку кода).
-- Если факт устарел — файл правится, а не дописывается противоречие.
-- Дата ревизии: 2026-09-17, коммит `8ad7550` (added howto build).
+Maintenance rules:
+- A fact is recorded only after it has been verified (a command plus its output, or a reference to a line of code).
+- If a fact becomes outdated, the file is corrected rather than having a contradiction appended.
+- Revision date: 2026-09-17, commit `8ad7550` (added howto build).

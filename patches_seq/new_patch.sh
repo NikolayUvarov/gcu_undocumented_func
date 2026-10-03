@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
         -t|--template) USE_TEMPLATE=1 ;;
         -n|--no-run)   RUN_AFTER=0 ;;
         -h|--help)     sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
-        *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
     shift
 done
@@ -52,22 +52,22 @@ fi
 if [ -n "$reuse" ]; then
     NUM=$max
     PATCH_FILE="$reuse"
-    echo "Найден пустой патч $(basename "$PATCH_FILE") — заполняем его."
+    echo "Found empty patch $(basename "$PATCH_FILE"); filling it in."
 else
     NUM=$((max + 1))
     PATCH_FILE=$(printf '%s/patch_%03d.sh' "$SCRIPT_DIR" "$NUM")
 fi
 
 if [ -s "$PATCH_FILE" ]; then
-    echo "Ошибка: $PATCH_FILE уже существует и непуст." >&2
+    echo "Error: $PATCH_FILE already exists and is not empty." >&2
     exit 1
 fi
 
 # --- Prompt and input -----------------------------------------------------
 
-printf 'Максимальный номер патча: %03d\n' "$max"
-printf 'Новый патч: %s\n' "$(basename "$PATCH_FILE")"
-echo "Вводите текст патча. Завершение — Ctrl-D, отмена — пустой ввод."
+printf 'Highest patch number: %03d\n' "$max"
+printf 'New patch: %s\n' "$(basename "$PATCH_FILE")"
+echo "Enter the patch text. Finish with Ctrl-D; empty input cancels."
 echo "----------------------------------------------------------------"
 printf 'cat > %s\n' "$PATCH_FILE"
 
@@ -82,7 +82,7 @@ set -e
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="\$(cd "\$SCRIPT_DIR/.." && pwd)"
 
-echo ">>> Применяем Патч $(printf '%03d' "$NUM"): ..."
+echo ">>> Applying patch $(printf '%03d' "$NUM"): ..."
 
 TEMPLATE
 fi
@@ -96,25 +96,25 @@ min_lines=0
 [ "$USE_TEMPLATE" = 1 ] && min_lines=8
 
 if [ "$(wc -l < "$TMP")" -le "$min_lines" ]; then
-    echo "Содержимое не введено — патч не создан."
+    echo "No content entered; patch not created."
     exit 0
 fi
 
 cp "$TMP" "$PATCH_FILE"
-echo "Записано: $PATCH_FILE ($(wc -l < "$PATCH_FILE") строк)"
+echo "Written: $PATCH_FILE ($(wc -l < "$PATCH_FILE") lines)"
 
 # --- Syntax check and run -------------------------------------------------
 
 if ! bash -n "$PATCH_FILE"; then
-    echo "Синтаксическая ошибка в патче — запуск отменён." >&2
+    echo "Syntax error in patch; run cancelled." >&2
     exit 1
 fi
 
 if [ "$RUN_AFTER" = 0 ]; then
-    echo "Запуск пропущен (-n). Применить вручную: bash $PATCH_FILE"
+    echo "Run skipped (-n). Apply manually: bash $PATCH_FILE"
     exit 0
 fi
 
-echo ">>> Запуск $(basename "$PATCH_FILE") из $ROOT_DIR ..."
+echo ">>> Running $(basename "$PATCH_FILE") from $ROOT_DIR ..."
 cd "$ROOT_DIR"
 bash "$PATCH_FILE"

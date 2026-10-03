@@ -13,13 +13,13 @@ source "$HOME/.cargo/env" 2>/dev/null || true
 export PATH="$HOME/.cargo/bin:$PATH"
 
 START_TS=$(date +%s)
-STEP="инициализация"
+STEP="initialization"
 FAILED=0
 
 fail() {
     FAILED=1
     echo
-    echo "!!! ОШИБКА на шаге: $STEP"
+    echo "!!! ERROR at step: $STEP"
     finish
 }
 
@@ -28,11 +28,11 @@ finish() {
     echo
     echo "=========================================================="
     if [ "$FAILED" -eq 0 ]; then
-        echo "РЕЗУЛЬТАТ: УСПЕШНО"
-        echo "Время сборки: ${elapsed} с"
+        echo "RESULT: SUCCESS"
+        echo "Build time: ${elapsed} s"
     else
-        echo "РЕЗУЛЬТАТ: ОШИБКА"
-        echo "Сбойный шаг:  $STEP"
+        echo "RESULT: FAILURE"
+        echo "Failed step: $STEP"
     fi
     echo "=========================================================="
     exec 1>&- 2>&-
@@ -66,21 +66,21 @@ USER_CRATES=(
     "beep:beep:beep.elf"
 )
 
-echo ">>> [1/3] Сборка Ядра и Приложений (ELF)..."
+echo ">>> [1/3] Building the kernel and apps (ELF)..."
 for entry in "${USER_CRATES[@]}"; do
     crate_dir=${entry%%:*}
-    STEP="cargo build --release в $crate_dir"
+    STEP="cargo build --release in $crate_dir"
     cd "$BUILD_SCRIPT_DIR/$crate_dir"
     cargo build --release
 done
 
-echo ">>> [2/3] Сборка Загрузчика UEFI..."
-STEP="cargo build --release --target x86_64-unknown-uefi в bootloader"
+echo ">>> [2/3] Building the UEFI bootloader..."
+STEP="cargo build --release --target x86_64-unknown-uefi in bootloader"
 cd "$BUILD_SCRIPT_DIR/bootloader"
 cargo build --release --target x86_64-unknown-uefi
 
-echo ">>> [3/3] Подготовка файлов EFI/ELF..."
-STEP="раскладка артефактов"
+echo ">>> [3/3] Staging EFI/ELF files..."
+STEP="staging artifacts"
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT"
 
 for entry in "${USER_CRATES[@]}"; do

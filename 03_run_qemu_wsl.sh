@@ -5,11 +5,11 @@ set -euo pipefail
 RUN_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
-    printf 'ОШИБКА: %s\n' "$*" >&2
+    printf 'ERROR: %s\n' "$*" >&2
     exit 1
 }
 
-command -v wslpath >/dev/null 2>&1 || fail "Запустите этот скрипт в WSL с включённым Windows interop."
+command -v wslpath >/dev/null 2>&1 || fail "Run this script in WSL with Windows interop enabled."
 
 # As in the MSYS2 launcher: UCRT64 first, then MinGW64.
 # QEMU lets you set the .exe path explicitly in WSL format.
@@ -29,12 +29,12 @@ if [[ -z "$QEMU_BIN" ]]; then
         QEMU_BIN="$(command -v qemu-system-x86_64.exe || true)"
     fi
 fi
-[[ -n "$QEMU_BIN" ]] || fail "Windows QEMU не найден. Укажите QEMU=/mnt/c/путь/qemu-system-x86_64.exe."
-QEMU_BIN="$(command -v -- "$QEMU_BIN")" || fail "Не найден исполняемый файл QEMU: ${QEMU:-qemu-system-x86_64.exe}"
+[[ -n "$QEMU_BIN" ]] || fail "Windows QEMU not found. Set QEMU=/mnt/c/path/to/qemu-system-x86_64.exe."
+QEMU_BIN="$(command -v -- "$QEMU_BIN")" || fail "QEMU executable not found: ${QEMU:-qemu-system-x86_64.exe}"
 
-[[ -f "$RUN_SCRIPT_DIR/OVMF.fd" ]] || fail "Поместите UEFI-прошивку OVMF.fd рядом со скриптом."
+[[ -f "$RUN_SCRIPT_DIR/OVMF.fd" ]] || fail "Place the OVMF.fd UEFI firmware next to this script."
 for artifact in EFI/BOOT/BOOTX64.EFI kernel.elf; do
-    [[ -f "$RUN_SCRIPT_DIR/usb_root/$artifact" ]] || fail "Нет usb_root/$artifact. Сначала выполните ./02_build.sh."
+    [[ -f "$RUN_SCRIPT_DIR/usb_root/$artifact" ]] || fail "Missing usb_root/$artifact. Run ./02_build.sh first."
 done
 
 # WSL does not translate path arguments for Windows programs automatically.
@@ -43,7 +43,7 @@ USB_ROOT_PATH="$(wslpath -w "$RUN_SCRIPT_DIR/usb_root")"
 # In -drive a comma separates options; commas in the name are doubled.
 USB_ROOT_PATH="${USB_ROOT_PATH//,/,,}"
 
-printf 'Запуск MIND CORE в Windows QEMU из WSL: %s\n' "$QEMU_BIN"
+printf 'Starting MIND CORE in Windows QEMU from WSL: %s\n' "$QEMU_BIN"
 exec "$QEMU_BIN" \
     -bios "$FIRMWARE_PATH" \
     -drive "format=raw,file=fat:rw:$USB_ROOT_PATH" \

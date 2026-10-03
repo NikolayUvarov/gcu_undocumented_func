@@ -1,28 +1,28 @@
-# Прочие наблюдения и риски
+# Other observations and risks
 
-Список того, что не тянет на отдельную задачу или дополняет существующие.
+A list of things that do not warrant a separate issue or that supplement existing ones.
 
-## Загрузчик
+## Bootloader
 
-- **Карта памяти выбрасывается.** `exit_boot_services` возвращает `MemoryMap`, он биндится в `_memory_map` и не передаётся ядру. Без неё ядро не сможет построить аллокатор физических страниц. Понадобится при issue 003.
-- **`uefi = "=0.27.0"`** — API `SystemTable<Boot>` в новых версиях крейта (0.30+) объявлен deprecated в пользу глобальных `uefi::boot::*`. При обновлении код придётся переписать; пока версия жёстко зафиксирована, что нормально.
-- **`wcslen` заглушка** (`bootloader/src/main.rs:67-77`) нужна линкеру из-за `ucs2`; при обновлении `uefi` может стать лишней или, наоборот, конфликтовать.
-- **Режим GOP не выбирается**: берётся текущий (`current_mode_info`). На реальном железе это может быть 640×480 или BltOnly-буфер без линейного фреймбуфера. → issue 009.
-- **Выделение страниц** `len/4096 + 1` — корректно, но при `len % 4096 == 0` тратится лишняя страница; мелочь.
-- **Проверок статусов нет** — все `.unwrap()`. При отказе GOP паника уходит в `loop {}` без вывода. Для отладки стоит выводить через `system_table.stdout()` до `exit_boot_services`.
+- **The memory map is thrown away.** `exit_boot_services` returns a `MemoryMap`; it is bound to `_memory_map` and not passed to the kernel. Without it the kernel cannot build a physical page allocator. Will be needed for issue 003.
+- **`uefi = "=0.27.0"`** — the `SystemTable<Boot>` API is deprecated in newer versions of the crate (0.30+) in favor of the global `uefi::boot::*`. Upgrading will require rewriting the code; while the version is pinned, that is fine.
+- **The `wcslen` stub** (`bootloader/src/main.rs:67-77`) is needed by the linker because of `ucs2`; after a `uefi` upgrade it may become unnecessary or, conversely, conflict.
+- **The GOP mode is not selected**: the current one is taken (`current_mode_info`). On real hardware this may be 640×480 or a BltOnly buffer without a linear framebuffer. → issue 009.
+- **Page allocation** `len/4096 + 1` — correct, but when `len % 4096 == 0` an extra page is wasted; a minor point.
+- **No status checks** — everything is `.unwrap()`. If GOP fails, the panic ends up in `loop {}` with no output. For debugging it is worth printing via `system_table.stdout()` before `exit_boot_services`.
 
-## Ядро
+## Kernel
 
-- **Стек** — стек UEFI-загрузчика (обычно 128 КБ у OVMF). Свой стек не выделяется. Для потоков/прерываний нужен свой + IST.
-- **Задержка `nop`-циклом** — некалиброванная; на другом CPU/QEMU скорость анимации меняется в разы. Уйдёт с таймером (issue 004).
-- **Клавиатура**: буфер контроллера не сбрасывается, break-коды не отфильтровываются (пока не мешает — реагируем только на `0x39`).
-- **Обратного пути из app в ядро нет**: `app_entry(info)` объявлен `-> !`. Это по дизайну «Step 0», но контракт стоит зафиксировать в комментарии.
-- **`write_bytes` на весь фреймбуфер каждый кадр** — при 1920×1080 это 8 МБ через `memset` в MMIO-память без SSE (`+soft-float`, векторизация выключена) — медленно, но пока терпимо.
+- **Stack** — the UEFI bootloader's stack (typically 128 KB in OVMF). No dedicated stack is allocated. Threads/interrupts need their own, plus an IST.
+- **Delay via a `nop` loop** — uncalibrated; on a different CPU/QEMU the animation speed changes several-fold. Will go away with the timer (issue 004).
+- **Keyboard**: the controller buffer is not flushed and break codes are not filtered out (not a problem yet — we only react to `0x39`).
+- **There is no way back from app to the kernel**: `app_entry(info)` is declared `-> !`. This is by design for "Step 0", but the contract should be documented in a comment.
+- **`write_bytes` over the whole framebuffer every frame** — at 1920×1080 that is 8 MB through `memset` into MMIO memory without SSE (`+soft-float`, vectorization disabled) — slow, but tolerable for now.
 
-## Общее
+## General
 
-- **`BootInfo` продублирован** в трёх крейтах. Стоит вынести в общий `no_std`-крейт `boot-proto` (без workspace можно как path-dependency).
-- **Нет workspace** — три отдельных `Cargo.lock`, три `target/`. Workspace с `per-package-target` (nightly) или простой корневой `Makefile`/`justfile` упростит жизнь.
-- **README**: заголовок «Iain M. Banks supposed # MIND CORE» — опечатка/склейка; путь к OVMF в README (`/usr/share/ovmf/OVMF.fd`) на Debian/Ubuntu сейчас `/usr/share/OVMF/OVMF_CODE_4M.fd` + `OVMF_VARS_4M.fd`. → issue 010.
-- **Нет CI и нет тестов** — сборка проверяется только руками. Минимум: GitHub Action, который прогоняет `02_build.sh` и проверяет `Entry point 0x0` через `readelf`.
-- **Нет `CLAUDE.md`/AGENTS-инструкций** в репозитории; эта папка `knowledge/` частично закрывает роль.
+- **`BootInfo` is duplicated** in three crates. It should be moved into a shared `no_std` crate `boot-proto` (without a workspace this can be a path dependency).
+- **No workspace** — three separate `Cargo.lock` files, three `target/` directories. A workspace with `per-package-target` (nightly) or a simple root `Makefile`/`justfile` would make life easier.
+- **README**: the heading "Iain M. Banks supposed # MIND CORE" is a typo/accidental merge; the OVMF path in the README (`/usr/share/ovmf/OVMF.fd`) is now `/usr/share/OVMF/OVMF_CODE_4M.fd` + `OVMF_VARS_4M.fd` on Debian/Ubuntu. → issue 010.
+- **No CI and no tests** — the build is only checked by hand. At a minimum: a GitHub Action that runs `02_build.sh` and checks `Entry point 0x0` via `readelf`.
+- **No `CLAUDE.md`/AGENTS instructions** in the repository; this `knowledge/` folder partially fills that role.

@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 
-echo ">>> Проверка окружения..."
+echo ">>> Checking the environment..."
 if ! command -v rustup &> /dev/null; then
-    echo "Rust не найден. Запускаю установку..."
+    echo "Rust not found. Installing..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     source "$HOME/.cargo/env"
 else
-    echo "Rust установлен, обновляем..."
+    echo "Rust is installed; updating..."
     rustup update
 fi
 
-echo ">>> Настройка Toolchain (Nightly) и таргетов..."
+echo ">>> Setting up the toolchain (nightly) and targets..."
 rustup default nightly
 rustup target add x86_64-unknown-uefi x86_64-unknown-none
 rustup component add llvm-tools-preview
 
-echo ">>> Окружение готово к сборке!"
+echo ">>> Environment is ready to build!"

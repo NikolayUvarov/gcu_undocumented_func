@@ -1,13 +1,13 @@
 @echo off
-echo Запуск MIND CORE в QEMU...
+echo Starting MIND CORE in QEMU...
 
 rem Look for QEMU in the standard MSYS2 folders (UCRT64 or MinGW64)
 set QEMU_PATH=C:\msys64\ucrt64\bin\qemu-system-x86_64.exe
 if not exist "%QEMU_PATH%" set QEMU_PATH=C:\msys64\mingw64\bin\qemu-system-x86_64.exe
 
 if not exist "%QEMU_PATH%" (
-    echo ОШИБКА: QEMU не найден в C:\msys64! 
-    echo Проверь, куда установился msys2.
+    echo ERROR: QEMU not found in C:\msys64!
+    echo Check where MSYS2 was installed.
     pause
     exit /b
 )

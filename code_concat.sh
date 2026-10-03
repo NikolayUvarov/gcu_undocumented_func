@@ -18,7 +18,7 @@ SRC_DIR=${1:-$CONCAT_SCRIPT_DIR}
 MAX_SIZE=${MAX_SIZE:-1048576}
 
 if [ ! -d "$SRC_DIR" ]; then
-    echo "Ошибка: каталог не найден: $SRC_DIR" >&2
+    echo "Error: directory not found: $SRC_DIR" >&2
     exit 1
 fi
 
@@ -87,5 +87,5 @@ while IFS= read -r -d '' file; do
     total=$((total + 1))
 done < <(find "$SRC_DIR" \( "${prune_args[@]}" \) -prune -o -type f ! -name 'code_context*.txt' -print0 | sort -z)
 
-echo "Записано файлов: $total (пропущено бинарных/крупных: $skipped)"
-echo "Результат: $OUT_FILE ($(stat -c%s "$OUT_FILE") байт)"
+echo "Files written: $total (binary/large skipped: $skipped)"
+echo "Output: $OUT_FILE ($(stat -c%s "$OUT_FILE") bytes)"

@@ -31,7 +31,7 @@ def find_qemu_img(requested):
         found = shutil.which(name)
         if found:
             return found
-    raise ValueError("qemu-img не найден. Установите QEMU или укажите --qemu-img /путь/qemu-img.")
+    raise ValueError("qemu-img not found. Install QEMU or pass --qemu-img /path/to/qemu-img.")
 
 
 def qemu_path(path, executable):
@@ -40,7 +40,7 @@ def qemu_path(path, executable):
     if executable.lower().endswith(".exe") and os.name != "nt":
         converter = shutil.which("wslpath") or shutil.which("cygpath")
         if not converter:
-            raise ValueError("Для Windows QEMU нужен wslpath/cygpath; либо используйте native qemu-img.")
+            raise ValueError("Windows QEMU requires wslpath/cygpath; otherwise use a native qemu-img.")
         path = subprocess.check_output([converter, "-w", path], text=True).strip()
     return path
 
@@ -50,16 +50,16 @@ def read_payloads(source):
     for name in FILES:
         file = source / name
         if not file.is_file():
-            raise ValueError(f"Нет {file}. Выполните сборку без --no-build.")
+            raise ValueError(f"Missing {file}. Run the build without --no-build.")
         # The current bootloader's ELF read buffer is 4 MiB.
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
-            raise ValueError(f"Недопустимый размер {file}: ожидается 1..4194304 байт.")
+            raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
         if name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b">\x00":
-                raise ValueError(f"{file} не является ELF64 x86-64 little-endian.")
+                raise ValueError(f"{file} is not an ELF64 x86-64 little-endian binary.")
         elif data[:2] != b"MZ":
-            raise ValueError(f"{file} не является PE/EFI-приложением.")
+            raise ValueError(f"{file} is not a PE/EFI application.")
         payloads[name] = data
     return payloads
 
@@ -72,16 +72,16 @@ def check_image(image, payloads, mark_esp=False):
     """
     def require(condition, message):
         if not condition:
-            raise ValueError(f"Некорректный USB-образ: {message}")
+            raise ValueError(f"Invalid USB image: {message}")
 
     with image.open("r+b" if mark_esp else "rb") as disk:
         mbr = disk.read(SECTOR)
-        require(len(mbr) == SECTOR and mbr[510:] == b"\x55\xaa", "сигнатура MBR")
-        require(not any(mbr[462:510]), "ожидался один раздел")
-        require(mbr[450] in (0x04, 0x06, 0x0e, 0xef), "тип раздела FAT16/ESP")
+        require(len(mbr) == SECTOR and mbr[510:] == b"\x55\xaa", "MBR signature")
+        require(not any(mbr[462:510]), "expected a single partition")
+        require(mbr[450] in (0x04, 0x06, 0x0e, 0xef), "FAT16/ESP partition type")
         start, length = struct.unpack_from("<II", mbr, 454)
         require(start > 0 and length > 0 and (start + length) * SECTOR <= image.stat().st_size,
-                "раздел выходит за границы образа")
+                "partition extends beyond the image")
         disk.seek(start * SECTOR)
         boot = disk.read(SECTOR)
         require(len(boot) == SECTOR and boot[510:] == b"\x55\xaa", "FAT boot sector")
@@ -90,25 +90,25 @@ def check_image(image, payloads, mark_esp=False):
         total = total16 or struct.unpack_from("<I", boot, 32)[0]
         require(bps == SECTOR and spc > 0 and spc & (spc - 1) == 0 and reserved > 0
                 and fats == 2 and roots > 0 and fat_sectors > 0 and total == length,
-                "параметры FAT16")
+                "FAT16 parameters")
         root_sectors = (roots * 32 + SECTOR - 1) // SECTOR
         first_data = reserved + fats * fat_sectors + root_sectors
         clusters = (total - first_data) // spc
         require(4085 <= clusters < 65525 and (clusters + 2) * 2 <= fat_sectors * SECTOR,
-                "число кластеров FAT16")
+                "FAT16 cluster count")
         disk.seek((start + reserved) * SECTOR)
         fat = disk.read(fat_sectors * SECTOR)
-        require(fat == disk.read(fat_sectors * SECTOR), "копии FAT различаются")
+        require(fat == disk.read(fat_sectors * SECTOR), "FAT copies differ")
         root = disk.read(root_sectors * SECTOR)
         cluster_size = spc * SECTOR
 
         def chain(first):
             result, visited = bytearray(), set()
             while first < 0xfff8:
-                require(2 <= first < clusters + 2 and first not in visited, "цепочка кластеров")
+                require(2 <= first < clusters + 2 and first not in visited, "cluster chain")
                 visited.add(first)
                 require(len(visited) * cluster_size <= 4 * 1024 * 1024 + cluster_size,
-                        "слишком длинная цепочка")
+                        "cluster chain too long")
                 disk.seek((start + first_data + (first - 2) * spc) * SECTOR)
                 result.extend(disk.read(cluster_size))
                 first = struct.unpack_from("<H", fat, first * 2)[0]
@@ -133,20 +133,20 @@ def check_image(image, payloads, mark_esp=False):
                 long_parts = {}
                 if not entry[11] & 8 and (entry[:11] == short_name or long_name.lower() == part.lower()):
                     return entry
-            raise ValueError(f"В USB-образе отсутствует {part}")
+            raise ValueError(f"USB image is missing {part}")
 
         for name, expected in payloads.items():
             directory = root
             parts = name.split("/")
             for part in parts[:-1]:
                 entry = lookup(directory, part)
-                require(entry[11] & 0x10, f"{part} не каталог")
+                require(entry[11] & 0x10, f"{part} is not a directory")
                 directory = chain(struct.unpack_from("<H", entry, 26)[0])
             entry = lookup(directory, parts[-1])
             size = struct.unpack_from("<I", entry, 28)[0]
-            require(not entry[11] & 0x10 and size == len(expected), f"размер {name}")
+            require(not entry[11] & 0x10 and size == len(expected), f"size of {name}")
             actual = chain(struct.unpack_from("<H", entry, 26)[0])[:size]
-            require(actual == expected, f"содержимое {name} не совпало с результатом сборки")
+            require(actual == expected, f"contents of {name} do not match the build output")
         if mark_esp:
             disk.seek(450)
             disk.write(b"\xef")
@@ -157,21 +157,21 @@ def check_image(image, payloads, mark_esp=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "dist/mind-core-usb.img",
-                        help="путь к .img (по умолчанию dist/mind-core-usb.img в проекте)")
-    parser.add_argument("--no-build", action="store_true", help="использовать уже собранный usb_root/")
-    parser.add_argument("--force", action="store_true", help="заменить существующий файл образа")
-    parser.add_argument("--qemu-img", default=os.environ.get("QEMU_IMG"), help="путь к qemu-img[.exe]")
+                        help="path to the .img (default: dist/mind-core-usb.img in the project)")
+    parser.add_argument("--no-build", action="store_true", help="use the already built usb_root/")
+    parser.add_argument("--force", action="store_true", help="overwrite an existing image file")
+    parser.add_argument("--qemu-img", default=os.environ.get("QEMU_IMG"), help="path to qemu-img[.exe]")
     args = parser.parse_args()
     output = args.output.absolute()
     if output.suffix.lower() != ".img":
-        raise ValueError("Выходной файл должен иметь расширение .img.")
+        raise ValueError("Output file must have the .img extension.")
     if output.is_symlink() or (output.exists() and not output.is_file()):
-        raise ValueError("Выходной путь должен быть обычным файлом, не ссылкой или устройством.")
+        raise ValueError("Output path must be a regular file, not a symlink or device.")
     if output.exists() and not args.force:
-        raise ValueError(f"{output} уже существует. Для замены укажите --force.")
+        raise ValueError(f"{output} already exists. Pass --force to overwrite it.")
     qemu_img = find_qemu_img(args.qemu_img)
     if not args.no_build:
-        print(">>> Сборка проекта...", flush=True)
+        print(">>> Building the project...", flush=True)
         subprocess.run(["bash", str(ROOT / "02_build.sh")], cwd=ROOT, check=True)
     payloads = read_payloads(ROOT / "usb_root")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +189,7 @@ def main():
             "driver": "vvfat", "dir": qemu_path(source, qemu_img),
             "fat-type": 16, "floppy": False, "rw": False, "label": "MIND CORE",
         }}
-        print(">>> Создание RAW-образа USB (MBR, FAT16, UEFI x64)...", flush=True)
+        print(">>> Creating RAW USB image (MBR, FAT16, UEFI x64)...", flush=True)
         subprocess.run([qemu_img, "convert", "-O", "raw", "json:" + json.dumps(descriptor),
                         qemu_path(temporary, qemu_img)], check=True)
         check_image(temporary, payloads, mark_esp=True)
@@ -204,15 +204,15 @@ def main():
             # Atomic no-clobber publication also detects a competing build.
             os.link(temporary, output)
             temporary.unlink()
-        print(f">>> Готово: {output}\nРазмер: {output.stat().st_size} байт\n"
+        print(f">>> Done: {output}\nSize: {output.stat().st_size} bytes\n"
               f"SHA256: {digest.hexdigest()}\n"
-              "Запишите .img на весь USB-накопитель в режиме RAW/DD.\n"
-              "Загрузка: UEFI x64, Secure Boot выключен. Это не Legacy BIOS-образ.")
+              "Write the .img to the whole USB drive in RAW/DD mode.\n"
+              "Boot: UEFI x64, Secure Boot disabled. This is not a Legacy BIOS image.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        print(f"Ошибка: {error}", file=sys.stderr)
+        print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)

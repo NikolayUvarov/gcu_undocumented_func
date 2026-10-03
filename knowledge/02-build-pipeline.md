@@ -1,49 +1,49 @@
-# Сборочная инфраструктура
+# Build infrastructure
 
-## Тулчейн на машине ревизии (2026-09-17)
+## Toolchain on the revision machine (2026-09-17)
 
 ```
 rustc 1.100.0-nightly (574ff7d98 2026-09-14)
 cargo 1.100.0-nightly (7941be6fb 2026-09-11)
 targets: x86_64-unknown-linux-gnu, x86_64-unknown-none, x86_64-unknown-uefi
-llvm-tools-preview: установлен (llvm-objcopy, llvm-objdump; llvm-readelf отсутствует — используется системный readelf)
-qemu-system-x86_64: НЕ установлен в WSL; запуск делается на Windows через 03_run_qemu_windows.bat
-OVMF: в корне проекта OVMF.fd (4 МБ, gitignored); системный /usr/share/OVMF/OVMF_CODE_4M.fd
+llvm-tools-preview: installed (llvm-objcopy, llvm-objdump; llvm-readelf is missing — the system readelf is used)
+qemu-system-x86_64: NOT installed in WSL; it is run on Windows via 03_run_qemu_windows.bat
+OVMF: OVMF.fd in the project root (4 MB, gitignored); system /usr/share/OVMF/OVMF_CODE_4M.fd
 ```
 
-Проверено: `./02_build.sh` проходит без ошибок и без предупреждений компилятора во всех трёх крейтах.
+Verified: `./02_build.sh` completes without errors and without compiler warnings in all three crates.
 
-## Скрипты
+## Scripts
 
-| Скрипт | Назначение | Замечания |
+| Script | Purpose | Notes |
 |--------|-----------|-----------|
-| `01_prepare_env.sh` | ставит rustup, делает `rustup default nightly` **глобально**, добавляет таргеты и llvm-tools | меняет дефолтный тулчейн пользователя; нет `rust-toolchain.toml` → issue 011 |
-| `02_build.sh` | kernel/app → `cargo build --release` → `llvm-objcopy -O binary` → bootloader → копия в `usb_root/EFI/BOOT/BOOTX64.EFI` | objcopy вызывается **без** `-j .text -j .rodata -j .data`, поэтому в `.bin` попадают все alloc-секции, включая `.dynsym/.hash/.dynamic/.got` → issue 001 |
-| `03_run_qemu_windows.bat` | `qemu-system-x86_64.exe -bios OVMF.fd -drive format=raw,file=fat:rw:usb_root -m 512` | Linux-варианта нет |
+| `01_prepare_env.sh` | installs rustup, runs `rustup default nightly` **globally**, adds the targets and llvm-tools | changes the user's default toolchain; no `rust-toolchain.toml` → issue 011 |
+| `02_build.sh` | kernel/app → `cargo build --release` → `llvm-objcopy -O binary` → bootloader → copy to `usb_root/EFI/BOOT/BOOTX64.EFI` | objcopy is invoked **without** `-j .text -j .rodata -j .data`, so all alloc sections end up in the `.bin`, including `.dynsym/.hash/.dynamic/.got` → issue 001 |
+| `03_run_qemu_windows.bat` | `qemu-system-x86_64.exe -bios OVMF.fd -drive format=raw,file=fat:rw:usb_root -m 512` | there is no Linux variant |
 
-Скрипты, на которые ссылаются документы, но которых нет в репозитории: `patch_008_preemptive.sh` (README), `fix_stable_boot.sh` (handoff). Актуальный — `02_build.sh`. → issue 010.
+Scripts referenced by the documents but absent from the repository: `patch_008_preemptive.sh` (README), `fix_stable_boot.sh` (handoff). The current one is `02_build.sh`. → issue 010.
 
-## Флаги компиляции kernel/app
+## kernel/app compilation flags
 
-`.cargo/config.toml` (одинаков для kernel и app):
+`.cargo/config.toml` (identical for kernel and app):
 ```toml
 [build]
 target = "x86_64-unknown-none"
 rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "relocation-model=pic"]
 ```
 
-Факты о таргете `x86_64-unknown-none` (из `rustc --print target-spec-json`):
-- `position-independent-executables: true`, `static-position-independent-executables: true` — PIE уже по умолчанию, флаг `relocation-model=pic` избыточен, но безвреден.
-- `code-model: kernel`, `relro-level: full`, `panic-strategy: abort`, SSE/MMX выключены (`+soft-float`).
-- `relax-elf-relocations` по умолчанию **выключен** → LLD не сворачивает `call *memset@GOTPCREL(%rip)` в прямой `call` → см. issue 001.
+Facts about the `x86_64-unknown-none` target (from `rustc --print target-spec-json`):
+- `position-independent-executables: true`, `static-position-independent-executables: true` — PIE is already the default; the `relocation-model=pic` flag is redundant but harmless.
+- `code-model: kernel`, `relro-level: full`, `panic-strategy: abort`, SSE/MMX disabled (`+soft-float`).
+- `relax-elf-relocations` is **disabled** by default → LLD does not fold `call *memset@GOTPCREL(%rip)` into a direct `call` → see issue 001.
 
-## `linker.ld` (kernel и app идентичны)
+## `linker.ld` (identical for kernel and app)
 
-Секции `.text` (сначала `.text._start`), `.rodata`, `.data`, `.bss`, `/DISCARD/ .eh_frame`. Служебные PIE-секции не перечислены, поэтому LLD размещает их как orphan по своим правилам ранга — у ядра **перед** `.text` (см. [03](03-flat-binary-layout-analysis.md)).
+Sections `.text` (`.text._start` first), `.rodata`, `.data`, `.bss`, `/DISCARD/ .eh_frame`. The auxiliary PIE sections are not listed, so LLD places them as orphans according to its own rank rules — in the kernel, **before** `.text` (see [03](03-flat-binary-layout-analysis.md)).
 
-Handoff утверждает, что `.bss` пытались включить «без скрипта линковщика» — в текущем коде `linker.ld` уже есть и `.bss` в нём объявлен. Но `llvm-objcopy -O binary` NOBITS-секцию в конец файла не пишет, а `allocate_pages` считает страницы от размера файла, так что `.bss` всё равно не будет ни выделен, ни занулён → issue 003.
+The handoff claims there were attempts to include `.bss` "without a linker script" — in the current code `linker.ld` already exists and declares `.bss`. But `llvm-objcopy -O binary` does not write a NOBITS section at the end of the file, and `allocate_pages` counts pages from the file size, so `.bss` is still neither allocated nor zeroed → issue 003.
 
 ## Git
 
-- `*.bin`, `usb_root/`, `OVMF.fd`, `Cargo.lock` — в `.gitignore`. Следствие: `cargo build` в `bootloader/` на чистом клоне падает на `include_bytes!("kernel.bin")`, пока не собраны kernel/app. Порядок в `02_build.sh` это учитывает.
-- `Cargo.lock` не коммитится — для бинарных крейтов это снижает воспроизводимость (uefi зафиксирован `=0.27.0`, но транзитивные зависимости плавают) → issue 011.
+- `*.bin`, `usb_root/`, `OVMF.fd`, `Cargo.lock` are in `.gitignore`. Consequence: `cargo build` in `bootloader/` on a clean clone fails on `include_bytes!("kernel.bin")` until kernel/app have been built. The order in `02_build.sh` accounts for this.
+- `Cargo.lock` is not committed — for binary crates this reduces reproducibility (uefi is pinned to `=0.27.0`, but transitive dependencies float) → issue 011.

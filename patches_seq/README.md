@@ -1,26 +1,26 @@
 # patches_seq/
 
-Последовательность патчей, каждый из которых целиком перезаписывает
-затрагиваемые исходники и наращивает функциональность ядра.
+A sequence of patches, each of which completely overwrites the
+affected sources and extends the kernel's functionality.
 
-| Патч | Содержание |
+| Patch | Contents |
 |---|---|
-| `patch_001_idt_timer.sh` | Инициализация IDT и аппаратного таймера PIT |
-| `patch_002_idt_fix.sh` | Исправление компиляции IDT и ABI обработчика |
-| `patch_003_syscalls.sh` | `int 0x80`, разделение счётчиков, фикс вращения |
-| `patch_004_scheduler.sh` | Кооперативный планировщик и переключение контекста |
-| `patch_004_fixed.sh` | Исправленная редакция патча 004 |
-| `patch_005_rust_1_88_fixes.sh` | Совместимость с Rust 1.88 |
-| `patch_006_keyboard_irq.sh` | Аппаратные прерывания клавиатуры, интерактивное API |
-| `patch_008_preemptive.sh` | Вытесняющая многозадачность в ядре |
-| `patch_010_debug_console.sh` | Интерактивная консоль ядра (REPL) |
-| `patch_011_com_port.sh` | Вывод в COM-порт |
+| `patch_001_idt_timer.sh` | IDT and PIT hardware timer initialization |
+| `patch_002_idt_fix.sh` | Fix for IDT compilation and the handler ABI |
+| `patch_003_syscalls.sh` | `int 0x80`, separate counters, rotation fix |
+| `patch_004_scheduler.sh` | Cooperative scheduler and context switching |
+| `patch_004_fixed.sh` | Corrected revision of patch 004 |
+| `patch_005_rust_1_88_fixes.sh` | Compatibility with Rust 1.88 |
+| `patch_006_keyboard_irq.sh` | Hardware keyboard interrupts, interactive API |
+| `patch_008_preemptive.sh` | Preemptive multitasking in the kernel |
+| `patch_010_debug_console.sh` | Interactive kernel console (REPL) |
+| `patch_011_com_port.sh` | Output to the COM port |
 
-Патчи 001–008 перенесены из `Culture/legacy/v3` (2026-09-15); 010 и 011
-написаны позже, уже в этом дереве. Патчи 007 и 009 в истории отсутствуют.
+Patches 001–008 were carried over from `Culture/legacy/v3` (2026-09-15); 010 and 011
+were written later, already in this tree. Patches 007 and 009 are missing from the history.
 
-Патчи 001–008 рассчитаны на дерево от 15 сентября (передача управления
-через 6 аргументов SysV и двойная буферизация). Текущие исходники
-используют структуру `BootInfo`, поэтому применение старых патчей поверх
-них требует ручной сверки. Более ранние одноразовые генераторы — в
+Patches 001–008 target the tree from September 15 (handoff of control
+via 6 SysV arguments and double buffering). The current sources
+use the `BootInfo` struct, so applying the old patches on top of
+them requires manual reconciliation. Earlier one-off generators are in
 [../legacy/](../legacy/).

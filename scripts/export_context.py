@@ -198,9 +198,9 @@ def discover(root, enabled, patterns, out_dir):
             found.append({"path": rel, "group": group, "text": data.decode("utf-8"),
                           "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
     if set(patterns) - matched:
-        raise ValueError("Не найдены пути в выбранных группах: " + ", ".join(sorted(set(patterns) - matched)))
+        raise ValueError("Paths not found in the selected groups: " + ", ".join(sorted(set(patterns) - matched)))
     if not found:
-        raise ValueError("Не найдены актуальные исходники.")
+        raise ValueError("No current sources found.")
     return sorted(found, key=lambda item: item["path"])
 
 
@@ -243,7 +243,7 @@ def chunk_agent(header, entries, limit):
             room = limit - len(current) - len(marker)
             if room < 1:
                 if current == header:
-                    raise ValueError("--chunk-chars слишком мал для заголовка и имени файла")
+                    raise ValueError("--chunk-chars is too small for the header and file name")
                 chunks.append(current)
                 current = header
                 continue
@@ -295,25 +295,25 @@ def publish(directory, outputs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=ROOT, help="корень проекта")
-    parser.add_argument("--out-dir", type=Path, help="каталог результатов; по умолчанию code_handoff")
-    parser.add_argument("--include", action="append", default=[], help="путь/каталог/glob; можно повторять")
-    parser.add_argument("--with-tests", action="store_true", help="добавить tests.txt")
-    parser.add_argument("--with-docs", action="store_true", help="добавить docs.txt с актуальным README")
-    parser.add_argument("--agent-groups", default="code", help="группы для agent.txt: code,build,tests,docs")
-    parser.add_argument("--keep-tests-in-agent", action="store_true", help="сохранить cfg(test) модули в Rust")
-    parser.add_argument("--chunk-chars", type=int, default=16000, help="лимит символов каждой части; 0 отключает части")
+    parser.add_argument("--root", type=Path, default=ROOT, help="project root")
+    parser.add_argument("--out-dir", type=Path, help="output directory; default: code_handoff")
+    parser.add_argument("--include", action="append", default=[], help="path/directory/glob; may be repeated")
+    parser.add_argument("--with-tests", action="store_true", help="add tests.txt")
+    parser.add_argument("--with-docs", action="store_true", help="add docs.txt with the current README")
+    parser.add_argument("--agent-groups", default="code", help="groups for agent.txt: code,build,tests,docs")
+    parser.add_argument("--keep-tests-in-agent", action="store_true", help="keep cfg(test) modules in Rust")
+    parser.add_argument("--chunk-chars", type=int, default=16000, help="character limit per part; 0 disables parts")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     out_dir = (args.out_dir or root / "code_handoff").resolve()
     if not root.is_dir() or out_dir == root:
-        raise ValueError("Нужен каталог проекта и отдельный каталог результатов.")
+        raise ValueError("A project directory and a separate output directory are required.")
     if args.chunk_chars < 0 or (args.chunk_chars and args.chunk_chars < 1000):
-        raise ValueError("--chunk-chars должен быть 0 или не меньше 1000")
+        raise ValueError("--chunk-chars must be 0 or at least 1000")
     enabled = {"code", "build"} | ({"tests"} if args.with_tests else set()) | ({"docs"} if args.with_docs else set())
     agent_groups = args.agent_groups.split(",")
     if not agent_groups or set(agent_groups) - enabled:
-        raise ValueError("Неизвестная/отключённая группа agent; включите --with-tests/--with-docs при необходимости.")
+        raise ValueError("Unknown or disabled agent group; enable --with-tests/--with-docs if needed.")
     files = discover(root, enabled, args.include, out_dir)
     outputs = {}
     for group in GROUPS:
@@ -323,7 +323,7 @@ def main():
     full_bundle_names = ", ".join(outputs)
     agent_files = [f for f in files if f["group"] in agent_groups]
     if not agent_files:
-        raise ValueError("Для agent.txt не выбрано файлов; измените --agent-groups или --include.")
+        raise ValueError("No files selected for agent.txt; adjust --agent-groups or --include.")
     entries = blocks(agent_files, compact=True, keep_tests=args.keep_tests_in_agent)
     omitted = sum(f.get("agent_test_modules_omitted", 0) for f in agent_files)
     scope = ",".join(agent_groups)
@@ -352,19 +352,19 @@ def main():
                 "outputs": {name: stats(text) for name, text in outputs.items()}}
     outputs["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     publish(out_dir, outputs)
-    print(f"Готово: {out_dir}\nФайлов: {len(files)}; выбрано {original_bytes:,} байт исходников.")
+    print(f"Done: {out_dir}\nFiles: {len(files)}; {original_bytes:,} bytes of sources selected.")
     for name in ("code.txt", "build.txt", "tests.txt", "docs.txt", "agent.txt"):
         if name in outputs:
             info = stats(outputs[name])
-            print(f"{name}: {info['bytes']:,} байт; ~{info['estimated_tokens']:,} токенов (оценка: символы/4)")
+            print(f"{name}: {info['bytes']:,} bytes; ~{info['estimated_tokens']:,} tokens (estimate: chars/4)")
     ratio = 100 * (1 - stats(outputs["agent.txt"])["bytes"] / agent_input_bytes)
-    print(f"Agent: на {ratio:.1f}% меньше исходников тех же файлов; частей: {len(chunks)}.")
-    print("Для cut-and-paste: agent.txt либо parts/agent-*.txt. Состав и ограничения: index.txt.")
+    print(f"Agent: {ratio:.1f}% smaller than the same source files; parts: {len(chunks)}.")
+    print("For cut-and-paste: agent.txt or parts/agent-*.txt. Contents and limits: index.txt.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (OSError, UnicodeError, ValueError) as error:
-        print(f"Ошибка: {error}", file=sys.stderr)
+        print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
