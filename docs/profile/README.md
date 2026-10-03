@@ -29,7 +29,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-1.1, 1.3 minimal kernel, drivers outside | partial | Drivers, file system, loader, audio, TTS, command shell and service policy run in ring 3. The kernel still parses ELF images for `SPAWN` and enumerates PCI (discovery, not policy). |
 | MC-1.4 policy separate from mechanism | met (resources) | `init` decides what each service gets; the kernel validates every resource it mints (legacy port allowlist, enumerated BARs, IRQ lines, reserved endpoints) regardless of `init`'s correctness. |
 | MC-1.5 DMA boundary | **not met — declared** | No IOMMU: `ahci`, `usb_storage`, `audio_gw` and their devices are in the TCB of every memory-isolation guarantee ([tcb.md](tcb.md)). Isolation from them is not claimed. |
-| MC-1.7 accounted creation | partial | Tasks, endpoints and slots come from fixed kernel tables; private heaps and shared mappings have per-task quotas; DMA has a global limit. No per-owner accounting of kernel objects (roadmap K4). |
+| MC-1.7 accounted creation | partial | Tasks and endpoints are charged to an owner's quota delegated at spawn ([kernel-objects.md](kernel-objects.md)); private heaps and shared mappings have per-task limits; DMA has a global limit. Memory is not charged to owners. |
 | MC-1.8 reuse without residue | partial | All task memory is zeroed on allocation; freed memory is not reused while any mapping or capability refers to it. Devices are not reset on driver restart. |
 | MC-2.1 isolated state | met | Private page tables; sharing only through memory capabilities. |
 | MC-2.3 typed, versioned interfaces | not met | Protocols are numeric conventions in `common/abi.rs`; no IDL (roadmap C5). |
@@ -41,7 +41,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-3.7 no identity bypass | met | Every privileged system call checks a capability; no PID or name grants rights. |
 | MC-3.12 end of initial distribution | partial | Bootstrap authority is only `init` ([bootstrap.md](bootstrap.md)), but `init` keeps the platform privilege for service restarts. |
 | Article 4 storage | not claimed | FAT volumes are read-only external media; no content-addressed store. |
-| MC-5.1–5.5 budgets | not met | Round-robin scheduling without budgets; memory quotas only. |
+| MC-5.1–5.5 budgets | not met | Round-robin scheduling without budgets; task and endpoint quotas per owner, memory limits per task. |
 | MC-5.6 explicit clocks | met (measurement) | Monotonic `CLOCK` with stated resolution, calendar time as a separate service; deadlines still have 10 ms granularity. See [clocks.md](clocks.md). |
 | MC-6.1, 6.2 fault containment | met (ring 3) | A user exception terminates only that task, is recorded (`faults`) and its resources are reclaimed; kernel exceptions halt the system. |
 | MC-6.4–6.9 supervision | not met | No supervisor, restart budget or instance generation; `init` restarts a service only on request (roadmap C6). |

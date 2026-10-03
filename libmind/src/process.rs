@@ -72,11 +72,16 @@ pub enum Image {
 /// Grant for SPAWN: the child's slot `child` gets a copy of the caller's slot `own`, endpoints narrowed by `rights`.
 pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { child: child as u8, own: own as u8, rights, reserved: 0 } }
 
-/// Starts a task with exactly the granted capabilities; `flags` are SPAWN_SERVICE / SPAWN_SCREEN.
+/// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Quota { pub tasks: u16, pub endpoints: u16 }
+
+/// Starts a task with exactly the granted capabilities and quotas; `flags` are SPAWN_SERVICE / SPAWN_SCREEN.
 /// `name` may be `name\0arguments`.
-pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize) -> Result<u64> {
+pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota) -> Result<u64> {
     let (source, len) = match image { Image::Memory { cap, len } => (cap, len), Image::Boot(index) => (SPAWN_BOOT | index, 0) };
-    check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, grants.len() | flags << 8]).result).map(|pid| pid as u64)
+    let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32;
+    check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed]).result).map(|pid| pid as u64)
 }
 
 pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 }

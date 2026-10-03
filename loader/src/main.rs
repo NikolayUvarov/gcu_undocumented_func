@@ -7,11 +7,12 @@ use mind::abi::*;
 use mind::fs::{self, File};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::{Mapping, Pages};
-use mind::process::{grant, Image};
+use mind::process::{grant, Image, Quota};
 use mind::sys::Error;
 use mind::util::FixedBuf;
 
 const RECEIVED_CAP: usize = 9;
+const APP_ENDPOINTS: u16 = 4; // endpoints an application may create
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
@@ -55,7 +56,8 @@ fn load(name: &[u8], args: &[u8], init: Option<usize>) -> Result<u64, Error> {
     text[..task.as_bytes().len()].copy_from_slice(task.as_bytes());
     let mut len = task.as_bytes().len();
     if !args.is_empty() { text[len + 1..len + 1 + args.len()].copy_from_slice(args); len += 1 + args.len(); }
-    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, grants, SPAWN_SCREEN);
+    // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
+    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, grants, SPAWN_SCREEN, Quota { tasks: 0, endpoints: APP_ENDPOINTS });
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }

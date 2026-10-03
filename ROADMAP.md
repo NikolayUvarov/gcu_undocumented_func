@@ -55,7 +55,7 @@ These stages change the kernel ABI that everything else is built on. Working on 
 - **K1. Policy out of the kernel — done (2026-10-03, issues 020, 021).** `init` holds the bootstrap authority (platform privilege) and decides which services start with which capabilities; `SPAWN` takes an explicit grant list; the command shell, UART handling and the Ctrl+Z policy run in ring 3; the kernel keeps focus, input delivery and resource validation as mechanisms (1.3, 1.4). Idle CPUs get a wake IPI when one of their tasks becomes ready.
 - **K2. DMA boundary.** Profile statement done (DMA drivers are in the TCB, isolation from them is not claimed); VT-d with per-driver DMA domains remains task III-4 (1.5).
 - **K3. Clocks — done (2026-10-03, issue 023).** `CLOCK` gives monotonic nanoseconds from the calibrated TSC (1 ns step in QEMU) with its resolution; the RTC service remains calendar time; `WAIT` keeps the 10 ms tick (5.6).
-- **K4. Accounted kernel objects.** Endpoints, tasks, capability slots and pending messages come from per-owner quotas instead of fixed global tables (1.7, 5.1).
+- **K4. Accounted kernel objects — done for tasks and endpoints (2026-10-03, issue 024).** Every task has a task and an endpoint quota delegated at `SPAWN` from its spawner's; `init` holds the root quota and gives `loader` the application limit; memory is still paid from the global kernel heap (1.7, 5.1, 3.13).
 
 ### Step 3. Stage II — the capability and IPC core (the gate)
 
@@ -128,7 +128,7 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Done | D1 Constitution v1.6 and RFC v0.4 | Every v1.4 requirement kept, replaced or removed with a reason; timeout never creates a second owner |
 | Done | S0 profile and models | TCB, threat/fault model, clocks, bootstrap authority written and referenced from the code |
 | Done | K1 policy out of the kernel | Kernel has no shell or driver-selection policy; `init` holds bootstrap authority |
-| P0 | K3, K4 clocks and accounted kernel objects | Per-owner quotas for tasks, endpoints, slots; clock resolution documented or improved |
+| Done | K3, K4 clocks and accounted kernel objects | Monotonic clock with stated resolution; per-owner quotas for tasks and endpoints |
 | P1 | C1–C3 capabilities | Stage II capability criteria pass in tests and in the model |
 | P1 | C4–C5 IPC modes and IDL | Bounded queues, MOVE/SHARE_RO/LEASE contracts, generated bindings |
 | P1 | C6–C7 supervision and budgets | Crash of any service is reported to its owner and restarted within a budget |

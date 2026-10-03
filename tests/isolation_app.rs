@@ -117,6 +117,14 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                         asm!("ud2", options(noreturn));
                     }
                 }
+                // Endpoint quota delegated by loader: four endpoints, the fifth is refused; dropping them frees the quota later.
+                let mut endpoints = [0usize; 4];
+                for slot in endpoints.iter_mut() {
+                    *slot = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                    if *slot < abi::SLOT_DYNAMIC || *slot >= abi::CAP_SLOTS { asm!("ud2", options(noreturn)); }
+                }
+                if call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0) != abi::ERR_LIMIT { asm!("ud2", options(noreturn)); }
+                for slot in endpoints { call(mb, abi::SYSCALL_CAP_DROP, slot, 0); }
                 let block = call(mb, abi::SYSCALL_ALLOC, 8192, 0);
                 if block == 0 || call(mb, abi::SYSCALL_MEM_SHARE, block + 4096, 4096) != abi::ERR_INVALID || call(mb, abi::SYSCALL_MEM_SHARE, block, 3 * 4096) != abi::ERR_INVALID {
                     asm!("ud2", options(noreturn));

@@ -43,6 +43,7 @@ struct Task {
     cspace: [Option<Capability>; CAP_SLOTS],
     pending_cap: Option<Capability>, pending_call: bool, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64)>, // slot and PID of the client awaiting a reply
+    parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
 }
 struct Scheduler {
     boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
@@ -51,7 +52,7 @@ struct Scheduler {
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
-    dirty: bool, endpoints: [bool; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64,
+    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64,
     orphans: Vec<Region>, // memory freed by its owner that is still mapped or held via a capability
     devices: Vec<pci::Device>, // PCI enumeration: discovery is a kernel mechanism, the choice of drivers is init's
     dma: Vec<Region>, // DMA regions handed out to init; they outlive driver restarts
@@ -84,7 +85,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..EP_RESERVED].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), devices, dma: Vec::new(), composited: 0 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), devices, dma: Vec::new(), composited: 0 }); }
     Ok(())
 }
 
@@ -101,6 +102,17 @@ impl Scheduler {
         for other in 0..cpu::COUNT.load(Ordering::Acquire) {
             if other != this && self.current[other] == 0 && self.tasks.iter().flatten().any(|t| t.cpu == other && t.state == State::Ready) { unsafe { cpu::wake(other); } }
         }
+    }
+    // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
+    // delegated.
+    fn used_tasks(&self, slot: usize) -> usize {
+        let pid = self.tasks[slot].as_ref().unwrap().pid;
+        self.tasks.iter().flatten().filter(|t| t.state != State::Exited && t.parent == Some((slot, pid))).map(|t| 1 + t.quota_tasks).sum()
+    }
+    fn used_endpoints(&self, slot: usize) -> usize {
+        let pid = self.tasks[slot].as_ref().unwrap().pid;
+        let created = (EP_RESERVED..ENDPOINTS).filter(|&e| self.endpoints[e] && self.endpoint_owner[e] == Some((slot, pid))).count();
+        created + self.tasks.iter().flatten().filter(|t| t.state != State::Exited && t.parent == Some((slot, pid))).map(|t| t.quota_endpoints).sum::<usize>()
     }
     fn live(&self, slot: usize) -> bool { slot != 0 && self.tasks[slot].as_ref().is_some_and(|t| t.state != State::Exited) }
     fn focus(&mut self, slot: usize) {
@@ -176,6 +188,7 @@ impl Scheduler {
         let mut used = [false; ENDPOINTS]; used[..EP_RESERVED].fill(true);
         for task in self.tasks.iter().flatten() { for cap in task.cspace.iter().chain(core::iter::once(&task.pending_cap)).flatten() { if let Capability::Endpoint(id, _) = cap { used[*id] = true; } } }
         for ep in self.irq_bind.iter().flatten() { used[*ep] = true; }
+        for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
         self.endpoints = used;
     }
 
@@ -211,10 +224,8 @@ impl Scheduler {
     }
 
     // New task from an ELF with the given capabilities; flags are SPAWN_SERVICE / SPAWN_SCREEN.
-    fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; CAP_SLOTS]) -> Result<u64, &'static str> {
+    fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; CAP_SLOTS], parent: Option<(usize, u64)>, quotas: (usize, usize)) -> Result<u64, &'static str> {
         let (service, has_screen) = (flags & SPAWN_SERVICE != 0, flags & SPAWN_SCREEN != 0);
-        let live = |t: &&Task| t.state != State::Exited;
-        if !service && self.tasks.iter().flatten().filter(live).filter(|t| !t.service).count() >= MAX_APPS { return Err("TASK LIMIT REACHED"); }
         let slot = (1..SLOTS).find(|&i| self.tasks[i].is_none()).ok_or("NO FREE TASK SLOT")?;
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
         let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
@@ -235,7 +246,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -336,7 +347,11 @@ impl Scheduler {
         if !self.holds(slot, Capability::Spawn) { return Err(ERR_RIGHTS); }
         let platform = self.holds(slot, Capability::Platform);
         let task = self.tasks[slot].as_ref().unwrap();
-        let length = request.arg2; let (count, flags) = (request.msg[3] & 0xFF, request.msg[3] >> 8);
+        let length = request.arg2; let (count, flags) = (request.msg[3] & 0xFF, (request.msg[3] >> 8) & 0xFF);
+        let quotas = ((request.msg[3] >> 16) & 0xFFFF, (request.msg[3] >> 32) & 0xFFFF);
+        let spawner = self.tasks[slot].as_ref().unwrap();
+        if self.used_tasks(slot) + 1 + quotas.0 > spawner.quota_tasks || self.used_endpoints(slot) + quotas.1 > spawner.quota_endpoints { return Err(ERR_LIMIT); }
+        let parent = Some((slot, spawner.pid));
         if length == 0 || length > NAME_MAX + 1 + ARGS_MAX || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
         if flags & SPAWN_SERVICE != 0 && !platform { return Err(ERR_RIGHTS); }
         let grant_bytes = count * core::mem::size_of::<Grant>();
@@ -364,7 +379,7 @@ impl Scheduler {
                 _ => return Err(ERR_INVALID),
             }
         };
-        self.spawn_internal(source, Name::new(&text[..name_len]), args, flags, caps).map(|pid| pid as usize).map_err(spawn_error)
+        self.spawn_internal(source, Name::new(&text[..name_len]), args, flags, caps, parent, quotas).map(|pid| pid as usize).map_err(spawn_error)
     }
 
     // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
@@ -470,7 +485,8 @@ impl Scheduler {
             }
             SYSCALL_EXIT => { self.terminate(slot, true); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match ((EP_RESERVED..ENDPOINTS).find(|&e| !self.endpoints[e]), Self::free_slot(&task.cspace)) {
-                (Some(ep), Some(index)) => { self.endpoints[ep] = true; task.cspace[index] = Some(Capability::Endpoint(ep, CAP_READ | CAP_WRITE | CAP_GRANT)); Ok(index) }
+                _ if self.used_endpoints(slot) >= task.quota_endpoints => Err(ERR_LIMIT),
+                (Some(ep), Some(index)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); task.cspace[index] = Some(Capability::Endpoint(ep, CAP_READ | CAP_WRITE | CAP_GRANT)); Ok(index) }
                 _ => Err(ERR_NO_SLOT),
             },
             SYSCALL_CAP_DROP => if (1..CAP_SLOTS).contains(&request.arg1) { task.cspace[request.arg1] = None; Ok(0) } else { Err(ERR_INVALID) },
@@ -611,7 +627,8 @@ pub fn spawn_init() -> Result<u64, &'static str> {
         let mut caps = [None; CAP_SLOTS];
         caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_INIT, CAP_READ | CAP_WRITE | CAP_GRANT));
         caps[SLOT_DEV0] = Some(Capability::Platform); caps[SLOT_DEV1] = Some(Capability::Spawn);
-        scheduler().spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), &[], SPAWN_SERVICE, caps)
+        // init holds the root quota: every other task slot and every dynamic endpoint.
+        scheduler().spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), &[], SPAWN_SERVICE, caps, None, (MAX_TASKS - 1, ENDPOINTS - EP_RESERVED))
     })
 }
 

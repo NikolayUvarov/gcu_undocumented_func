@@ -1,6 +1,6 @@
-# 024 — Per-owner quotas for tasks and endpoints (roadmap K4)
+# 024 — Per-owner quotas for tasks and endpoints (roadmap K4) — done
 
-**Type:** feature/architecture · **Priority:** P0 · **Status:** open · **Roadmap:** step 2, K4 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+**Type:** feature/architecture · **Priority:** P0 · **Status:** done (2026-10-03) · **Roadmap:** step 2, K4 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
 
 ## Problem
 
@@ -23,3 +23,7 @@ Tasks and endpoints come from fixed global tables. The application limit (`MAX_A
 ## Related
 
 [docs/profile/kernel-objects.md](../docs/profile/kernel-objects.md), [ROADMAP](../ROADMAP.md) K4.
+
+## Resolution
+
+Each task has a task quota and an endpoint quota delegated at `SPAWN` (`msg[3]` bits 16–31 and 32–47) from the spawner's; live children reserve 1 + their task quota, created endpoints and children's endpoint quotas count against the endpoint quota (`used_tasks`, `used_endpoints` computed from the task and endpoint tables, so an exited child's reservation returns automatically). The kernel no longer enforces `MAX_APPS`; `init` gives `loader` 8 tasks and 32 endpoints, `loader` gives applications 4 endpoints. `ENDPOINT_CREATE`/`SPAWN` past the quota return `ERR_LIMIT`. Isolation fixture checks the endpoint quota; all 12 QEMU suites, USB smoke and host tests pass. Memory is not yet charged to owners (documented as a gap).

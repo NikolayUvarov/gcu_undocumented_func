@@ -6,7 +6,7 @@
 pub const BOOT_IMAGES: usize = 12;
 pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell"];
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "shell.elf"];
-pub const MAX_APPS: usize = 8; // applications (non-service tasks) running at once
+pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
@@ -153,10 +153,12 @@ pub const LOADER_RUN: usize = 1;
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
 // index (boot images need the platform privilege), msg[1] = ELF length, msg[2] = address of a Grant array,
-// msg[3] = grant count | SPAWN_* flags << 8. Each grant copies the spawner's capability into a child slot;
+// msg[3] = grant count | SPAWN_* flags << 8 | child task quota << 16 | child endpoint quota << 32. The quotas are taken
+// from the spawner's (MC-3.13): a spawner's live children each reserve 1 + their task quota of its task quota, and their
+// endpoint quotas plus the endpoints it created count against its endpoint quota. Each grant copies the spawner's capability into a child slot;
 // endpoint rights are narrowed by the mask, reply capabilities are not transferable.
 pub const SPAWN_BOOT: usize = 1 << 63;
-pub const SPAWN_SERVICE: usize = 1; // single instance, not counted in MAX_APPS (platform privilege only)
+pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
 pub const SPAWN_GRANTS_MAX: usize = 16;
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's

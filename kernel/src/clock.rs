@@ -9,10 +9,8 @@ static LAST: [AtomicU64; cpu::MAX] = [const { AtomicU64::new(0) }; cpu::MAX]; //
 
 // Constant-rate TSC: CPUID invariant TSC, or running under a hypervisor (it provides a constant-rate TSC).
 fn constant_tsc() -> bool {
-    unsafe {
-        let invariant = __cpuid(0x8000_0000).eax >= 0x8000_0007 && __cpuid(0x8000_0007).edx & (1 << 8) != 0;
-        invariant || __cpuid(1).ecx & (1 << 31) != 0
-    }
+    let invariant = __cpuid(0x8000_0000).eax >= 0x8000_0007 && __cpuid(0x8000_0007).edx & (1 << 8) != 0;
+    invariant || __cpuid(1).ecx & (1 << 31) != 0
 }
 
 // Measures the TSC over five PIT ticks; needs interrupts enabled on the BSP.

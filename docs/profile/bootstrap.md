@@ -6,7 +6,8 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 2. The kernel starts exactly one task, boot image 0 (`init`), with:
    - slot 1: endpoint 10 (`EP_INIT`), all rights;
    - slot 2: the **platform** privilege (`PLATFORM_CAP`, `DEVICE_FIND`, spawning boot images and services);
-   - slot 3: the **spawn** privilege.
+   - slot 3: the **spawn** privilege;
+   - the root quota: 19 tasks, 48 endpoints.
    Nothing else in the system holds the platform privilege unless `init` grants it (it does not).
 3. `init` starts the other boot images in `BOOT_SERVICES` order. For each it mints the needed capabilities, passes them in the `SPAWN` grant list and drops its own copies, except DMA regions, which it keeps for driver restarts.
 

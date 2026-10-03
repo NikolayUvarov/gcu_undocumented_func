@@ -50,7 +50,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `tts` | endpoint 9, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `shell` | screen, init/loader and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) ten services run and applications start at PID 11. The limit is eight applications in addition to the services.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) ten services run and applications start at PID 11. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
 
 The shell runs in ring 3. It reads the UART itself, forwards bytes to the focused program through the input privilege, and prints that program's console output to COM1 with a `[PID n]` prefix. Focus is a kernel mechanism set only by the holder of process control: the focused task's screen is shown and receives keyboard input; when it exits, or on Ctrl+Z (an input event flagged as attention), focus returns to the shell and the shell gets a notice. The kernel writes to COM1 only its boot line, kernel exceptions and panics.
 
@@ -464,8 +464,8 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 11 | IPC_RECV | endpoint slot, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
 | 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
 | 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
-| 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
-| 13 | SPAWN | `name\0arguments`, length; msg = [image memory slot or `SPAWN_BOOT` \| boot index, ELF length, grant array, count \| flags << 8] → PID — spawn privilege; boot images and services need the platform privilege |
+| 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights; `ERR_LIMIT` past the endpoint quota |
+| 13 | SPAWN | `name\0arguments`, length; msg = [image memory slot or `SPAWN_BOOT` \| boot index, ELF length, grant array, count \| flags << 8 \| task quota << 16 \| endpoint quota << 32] → PID — spawn privilege; boot images and services need the platform privilege |
 | 32 | PLATFORM_CAP | kind, argument; msg[0] = second argument → new slot — platform privilege (`init`) |
 | 33 | DEVICE_FIND | PCI class, mask; msg[0] = n-th match → device index — platform privilege |
 | 34–43 | TASK_LIST, TASK_KILL, FOCUS, TASK_LOGS, CONSOLE_READ, NOTICE, FAULTS, CPU_INFO, KERNEL_HEAP, HALT | process control for the shell (see `common/abi.rs`) — control privilege |

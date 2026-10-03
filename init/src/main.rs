@@ -6,12 +6,13 @@ use mind::abi::*;
 use mind::dev::cap_info;
 use mind::ipc::{self, Endpoint, Message};
 use mind::platform;
-use mind::process::{grant, Image};
+use mind::process::{grant, Image, Quota};
 use mind::sys::{Error, Result};
 
 const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
+const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
@@ -121,7 +122,9 @@ impl Init {
             }
             _ => return Err(Error::NotFound),
         }
-        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], flags)?;
+        // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each.
+        let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
+        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], flags, quota)?;
         self.pids[index] = pid;
         mind::println!("[INIT] STARTED {} PID={}", name, pid);
         Ok(pid)
