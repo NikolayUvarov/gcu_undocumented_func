@@ -1,0 +1,32 @@
+# 020 — `init` service: bootstrap authority and driver policy out of the kernel (roadmap K1, part 1) — done
+
+**Type:** feature/architecture · **Priority:** P0 · **Status:** done (2026-10-03) · **Roadmap:** step 2, K1 · **Constitution:** MC-1.3, MC-1.4, MC-3.3, MC-3.12
+
+## Problem
+
+The kernel decides which services to start (`wanted`: AHCI and xHCI only if present), which capabilities each one gets (`initial_caps`: a table keyed by service name with ports, BARs, IRQs, DMA sizes, endpoint numbers) and which client capabilities every application receives. That is policy inside the privileged kernel (MC-1.3, MC-1.4); there is no explicit bootstrap authority (MC-3.12).
+
+## Plan
+
+- Kernel keeps mechanisms only:
+  - at boot it starts a single boot image, `init`, with the `Platform` capability and the `init` endpoint;
+  - `PLATFORM_CAP` (holder of `Platform`) mints capabilities from platform resources the kernel has validated: reserved endpoints, legacy I/O port ranges from a fixed allowlist, IRQ lines (not the timer or cascade), PCI device BARs and IRQs from the kernel's enumeration, the GOP framebuffer, DMA regions, privileges (input, display, spawn, process control);
+  - `DEVICE_FIND` returns enumerated PCI functions by class;
+  - `SPAWN` takes an explicit grant list `(child slot ← own slot, rights mask)` and flags (service, screen); boot images may be spawned only by the holder of `Platform`.
+- `init` (ring 3) holds the policy: which services start and in which order, what each one receives, DMA regions kept across driver restarts, restart of a service on request (`RUN <service>` from the shell), refusal for a running service.
+- `loader` passes the standard client capabilities to applications through the grant list instead of the kernel filling them in.
+- An IPC send to an endpoint that no live task can receive from fails with `ERR_PEER` instead of blocking forever.
+
+## Acceptance criteria
+
+- `kernel/src` contains no list of service names and no per-service capability table.
+- All QEMU suites pass (normal, memory, dzen, services, ahci, audio, tts, busy, smp, isolation, heap) and the USB image smoke.
+- `ps` shows `init`; killing and restarting a service (`kill`, `run <service> &`) works through `init`.
+
+## Related
+
+[021](021-shell-in-ring-3.done), [019](019-platform-profile-x86-64-qemu-0.done), [ROADMAP](../ROADMAP.md) K1, C3.
+
+## Resolution
+
+New ring-3 service `init/` (boot image 0). The kernel starts only it, with endpoint 10 and the platform and spawn privileges (`scheduler::spawn_init`). New system calls `PLATFORM_CAP` (validated legacy ports, IRQs, PCI BARs/IRQs from the kernel's enumeration, framebuffer, DMA, privileges, reserved endpoints) and `DEVICE_FIND`; `SPAWN` replaces `SPAWN_IMAGE` and takes an explicit grant list and flags. `kernel/src` no longer contains service names or a per-service capability table; `loader` grants the application client capabilities itself. A send to an endpoint nobody can receive from fails with `ERR_PEER`. Idle CPUs get a wake IPI (vector 0x32) when one of their tasks becomes ready — needed because services now run on all CPUs. Verified: all 11 QEMU suites, USB image smoke, host tests.

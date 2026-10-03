@@ -159,6 +159,11 @@ pub unsafe fn tick_others() {
     }
 }
 
+// Wakes an idle CPU that has a task ready to run (otherwise it would wait for its next timer tick).
+pub unsafe fn wake(index: usize) {
+    if ONLINE[index].load(Ordering::Acquire) { ipi(apic_id(index), 0x32); }
+}
+
 pub fn halt_all() -> ! {
     unsafe {
         asm!("cli");

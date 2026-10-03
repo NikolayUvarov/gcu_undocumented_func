@@ -1,0 +1,28 @@
+# 021 — Command shell in ring 3; input and focus policy out of the kernel (roadmap K1, part 2) — done
+
+**Type:** feature/architecture · **Priority:** P0 · **Status:** done (2026-10-03) · **Blocked by:** [020](020-init-bootstrap-authority.done) · **Roadmap:** step 2, K1 · **Constitution:** MC-1.3, MC-1.4, MC-10.2
+
+## Problem
+
+The command shell (`LIST`, `RUN`, `PS`, `FG`, `KILL`, `LOGS`, `FAULTS`, `CPUS`, `HEAP`, `STOP`), its text console, UART input polling, the Ctrl+Z policy and mirroring of the foreground program's output to the UART all run in the kernel.
+
+## Plan
+
+- New boot image `shell` started by `init`, a task with a screen, holding: the `init` and `loader` client endpoints, the COM1 port range, the input privilege and the new process-control privilege.
+- Process-control system calls for its holder: task list, kill, focus, logs, faults, CPU list, kernel heap test, halt, notices (foreground exited / sent to background), console output of a task.
+- Kernel mechanisms that stay: focus (which task's screen is shown and receives input) is set only by the holder of process control and returns to it when the focused task exits; an input event flagged as "attention" (Ctrl+Z) returns focus to it; every task's console output is kept in a bounded buffer that the focus holder reads.
+- The shell polls the UART itself, forwards bytes to the focused program through the input privilege, prints its output with the `[PID n]` prefix, and talks to `loader` (`RUN`, `LIST`) and `init` (`RUN <service>`) over IPC.
+- The kernel no longer polls the UART or draws text; it writes to the serial port only for its own boot line, kernel exceptions and panics.
+
+## Acceptance criteria
+
+- `kernel/src/main.rs` has no command interpreter or text console.
+- All QEMU suites and the USB image smoke pass with unchanged command syntax and output.
+
+## Related
+
+[020](020-init-bootstrap-authority.done), [018](../issues/018-kernel-panic-diagnostics.md), [ROADMAP](../ROADMAP.md) K1.
+
+## Resolution
+
+New ring-3 service `shell/` with the same command syntax and output. Kernel `main.rs` keeps only boot and the BSP idle/reap loop; the kernel writes to COM1 only its boot line, exceptions and panics. Process-control system calls 34–43 (task list, kill, focus, logs, console output, notices, faults, CPU info, kernel heap, halt) for the holder of the control privilege. Focus is a kernel mechanism set by the focus owner and returned to it on exit or on an attention input event (Ctrl+Z). Verified: all 11 QEMU suites, USB image smoke.

@@ -105,8 +105,12 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_MEM_SHARE, 0x80_0100_1000, 4096, abi::ERR_INVALID), // nor is the stack
                     (abi::SYSCALL_IPC_RECV, abi::SLOT_RTC, 0, abi::ERR_RIGHTS), // write-only access to another's service
                     (abi::SYSCALL_IPC_REPLY, 0, 0, abi::ERR_INVALID),
-                    (abi::SYSCALL_SPAWN_IMAGE, image, 4, abi::ERR_RIGHTS), // spawning images is loader-only
-                    (abi::SYSCALL_LOADER_DONE, 1, 0, abi::ERR_INVALID),
+                    (abi::SYSCALL_SPAWN, image, 4, abi::ERR_RIGHTS), // spawning is for holders of the spawn privilege
+                    (abi::SYSCALL_PLATFORM_CAP, abi::PLATFORM_PORTS, 0x60, abi::ERR_RIGHTS), // bootstrap authority is init's
+                    (abi::SYSCALL_DEVICE_FIND, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_TASK_KILL, 1, 0, abi::ERR_RIGHTS), // process control is the shell's
+                    (abi::SYSCALL_FOCUS, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
                 ];
                 for (number, a, b, expected) in checks {
                     if call(mb, number, a, b) != expected {

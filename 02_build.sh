@@ -45,6 +45,8 @@ set -e
 
 USER_CRATES=(
     "kernel:kernel:kernel.elf"
+    "init:init:init.elf"
+    "shell:shell:shell.elf"
     "app:app:app.elf"
     "app2:app2:app2.elf"
     "clock:clock:clock.elf"

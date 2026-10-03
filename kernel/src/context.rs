@@ -28,6 +28,7 @@ global_asm!(r#"
     .endr
     interrupt task_ipi_entry, 48
     interrupt task_stop_entry, 49
+    interrupt task_wake_entry, 50
     interrupt task_syscall_entry, 128
 context_entry:
     push rax
@@ -91,6 +92,7 @@ unsafe extern "C" {
     pub fn task_timer_entry();
     pub fn task_ipi_entry();
     pub fn task_stop_entry();
+    pub fn task_wake_entry();
     pub fn task_syscall_entry();
     pub static exception_table: [u64; 32];
     pub static irq_table: [u64; 11];

@@ -92,6 +92,7 @@ pub unsafe fn init() {
     }
     set_handler(0x30, super::context::task_ipi_entry as *const () as u64, cs);
     set_handler(0x31, super::context::task_stop_entry as *const () as u64, cs);
+    set_handler(0x32, super::context::task_wake_entry as *const () as u64, cs);
     set_handler(0x27, spurious_master as *const () as u64, cs);
     set_handler(0x2f, spurious_slave as *const () as u64, cs);
     set_handler(0xff, spurious_master as *const () as u64, cs);

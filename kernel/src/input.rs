@@ -1,37 +1,4 @@
-use crate::{serial_has_data, serial_read_byte};
-
-pub struct Key {
-    pub app: u8,
-    pub shell: u8,
-    pub background: bool,
-}
-
-pub struct Keyboard;
-
-impl Keyboard {
-    pub const fn new() -> Self {
-        Self
-    }
-
-    pub fn read_serial(&mut self) -> Option<Key> {
-        unsafe {
-            if serial_has_data() {
-                let byte = serial_read_byte();
-                return Some(Key {
-                    app: byte,
-                    shell: match byte {
-                        b'\r' => b'\n',
-                        127 => 8,
-                        _ => byte,
-                    },
-                    background: byte == 26,
-                });
-            }
-            None
-        }
-    }
-}
-
+// Bounded byte queue (input, logs, console output); the oldest byte is dropped when full.
 pub struct Queue<const N: usize> {
     bytes: [u8; N],
     head: usize,

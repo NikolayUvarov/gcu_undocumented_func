@@ -30,7 +30,6 @@ code-handoff/
 # --- Patch history (not versioned) ---
 legacy/**
 patches_seq/patch_*.sh
-issues/**
 
 # --- Leftovers from edits and patches ---
 *.orig

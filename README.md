@@ -15,44 +15,48 @@ Every Mind needs its first processor tick. We are providing exactly that.
 * **Kernel:** The basic reality dispatcher. Handling hardware interrupts, system calls, and preemptive multitasking.
 * **Isolated Environment (Userspace):** A space for the genesis and parallel execution of high-level processes and future cognitive functions.
 
-The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.0 ([Russian](ROADMAP_RU.md)).
+The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.1 ([Russian](ROADMAP_RU.md)); what the implementation guarantees and under which assumptions is in the platform profile [docs/profile](docs/profile/README.md).
 
 ---
 
 ### Current Runtime
 
-The UEFI bootloader loads the kernel and only the system service images (`BOOT_FILES` in `common/abi.rs`) from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices and starts the system services in ring 3. Applications are not kept in memory: the `loader` service reads them from the boot disk through `vfs_server` when they are started.
+The UEFI bootloader loads the kernel and only the system service images (`BOOT_FILES` in `common/abi.rs`) from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices and starts exactly one program in ring 3, `init`, which holds the bootstrap authority and starts the other services, including the command shell. Applications are not kept in memory: the `loader` service reads them from the boot disk through `vfs_server` when they are started.
 
 * **Toolchain:** Pure Rust (`no_std`, `no_main`), utilizing `naked_functions` and `abi_x86_interrupt`, compiled for `x86_64-unknown-none` and `x86_64-unknown-uefi` targets. Programs use the `libmind` SDK.
 * **Memory and privilege:** Every task runs in ring 3 with IOPL=0 and a private four-level page table/CR3. Each `RUN` creates a fresh ELF image, 64 KiB user stack with unmapped guard pages, syscall mailbox, input/log queues, and (for applications) a screen buffer. Code is RX; writable data, stack, mailbox and screen are NX. The kernel's supervisor mappings are inaccessible to tasks.
-* **Capabilities:** Each task has 32 capability slots. A capability names an IPC endpoint (with read/write/grant rights), a shared memory block, a DMA region, device registers (MMIO, mapped uncached), an I/O port range, an interrupt line, or the input/display privilege. Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS and audio services.
+* **Capabilities:** Each task has 32 capability slots. A capability names an IPC endpoint (with read/write/grant rights), a shared memory block, a DMA region, device registers (MMIO, mapped uncached), an I/O port range, an interrupt line, or a privilege (input, display, spawn, process control, platform). Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS, audio, loader and TTS services. Every capability a task has was granted explicitly by its spawner (`init` for services, `loader` for applications).
 * **Dynamic program memory:** Syscalls 8/9 allocate and free zeroed private page blocks (RW+NX, trailing guard page; up to 32 blocks and 16 MiB per process). Mapped shared memory has its own 48 MiB quota. Memory that another task still maps or holds by capability is retained by the kernel until the last reference is gone, so freeing, exiting or killing an owner cannot leave a dangling mapping.
 * **CPU configuration:** The QEMU launchers expose four cores. The kernel starts APs itself with INIT/SIPI and can use up to eight enabled xAPIC CPUs. Each CPU has its own GDT, TSS, interrupt-entry stack, idle stack, and double-fault/NMI stacks. `cpus` reports actual online CPUs and interrupt counters.
-* **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP receives the 100 Hz PIC/PIT tick through LAPIC ExtINT and sends scheduling IPIs to online APs. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`. The shell loop reclaims exited tasks once no CPU runs them.
+* **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP receives the 100 Hz PIC/PIT tick through LAPIC ExtINT and sends scheduling IPIs to online APs. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`; a CPU that sleeps while one of its tasks becomes ready (an IPC reply, an IRQ) gets a wake IPI instead of waiting for its next tick. The BSP idle loop reclaims exited tasks once no CPU runs them.
 * **System calls and faults:** The DPL-3 `int 0x80` gate is the only user entry into kernel services. Every buffer pointer is checked against the calling task's user mappings. User exceptions terminate that task and appear in `faults`; a kernel exception remains fatal.
 
 ### System services
 
-The kernel starts these programs at boot, in this order (`BOOT_SERVICES` in `common/abi.rs`). `ahci` and `usb_storage` start only when the kernel finds their controller on PCI, so the PIDs of later services and the first application PID depend on the machine. Services have no screen, cannot be brought to the foreground, and each can run only once; `RUN <service> &` restarts one after `KILL`.
+The kernel contains no list of services and no per-service capability table. It starts boot image 0, `init`, with its own endpoint and two privileges: **platform** (mint capabilities over resources the kernel has validated — reserved endpoints, legacy port ranges, IRQ lines, PCI BARs and IRQs from the kernel's enumeration, the framebuffer, DMA regions, privileges) and **spawn**. That is the whole bootstrap authority; `init` then starts the other boot images in `BOOT_SERVICES` order (`common/abi.rs`), each with exactly the capabilities listed below (`SPAWN` with a grant list), and keeps DMA regions across driver restarts. `ahci` and `usb_storage` start only when `init` finds their controller (`DEVICE_FIND`), so later PIDs depend on the machine. Services cannot be brought to the foreground (except the shell) and each runs once; `RUN <service> &` asks `init` to restart one after `KILL`.
 
-| Service | Capabilities | Role |
+| Service | Capabilities (granted by init) | Role |
 |---|---|---|
+| `init` | endpoint 10, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
 | `rtc` | endpoint 2, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
-| `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the shell/foreground program |
-| `compositor` | GOP framebuffer, display | copies changed pixels of the active screen to the framebuffer |
+| `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the focused task |
+| `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer |
 | `ata` | endpoint 5, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
 | `ahci` | endpoint 6, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
 | `usb_storage` | endpoint 7, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
 | `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
-| `loader` | endpoint 8, VFS client, kernel request page, spawn privilege | reads application ELF files from the disk and starts them |
+| `loader` | endpoint 8, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
 | `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
 | `tts` | endpoint 9, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
+| `shell` | screen, init/loader and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) eight services run and applications start at PID 9. The limit is eight applications in addition to the services.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) ten services run and applications start at PID 11. The limit is eight applications in addition to the services.
+
+The shell runs in ring 3. It reads the UART itself, forwards bytes to the focused program through the input privilege, and prints that program's console output to COM1 with a `[PID n]` prefix. Focus is a kernel mechanism set only by the holder of process control: the focused task's screen is shown and receives keyboard input; when it exits, or on Ctrl+Z (an input event flagged as attention), focus returns to the shell and the shell gets a notice. The kernel writes to COM1 only its boot line, kernel exceptions and panics.
 
 ### IPC
 
-Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`. A server can keep a client waiting: `IPC_SAVE_REPLY` moves the pending reply into a one-time capability (it cannot be transferred), the server goes on receiving other requests and later answers with `IPC_REPLY` naming that slot.
+Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`; a send to an endpoint that no live task can receive from fails with `ERR_PEER` at once. A server can keep a client waiting: `IPC_SAVE_REPLY` moves the pending reply into a one-time capability (it cannot be transferred), the server goes on receiving other requests and later answers with `IPC_REPLY` naming that slot.
 
 A driver can bind its interrupt line to its endpoint (`IRQ_BIND`): the interrupt then arrives as a message with the IRQ flag, so one loop serves both clients and hardware. The kernel masks the line when it fires; the driver reopens it with `IRQ_ACK` (or `IRQ_WAIT` for drivers that only wait for interrupts).
 
@@ -106,7 +110,7 @@ mind::tts::say_with("Hello world.", 140, 90)?;         // pitch 140 Hz, 90 % rat
 
 ### Program loading
 
-`RUN <name>` and `LIST` for applications are requests from the kernel shell to `loader`: the kernel writes the request into a page shared only with `loader` and notifies it with a kernel message (sender PID 0). For `RUN`, `loader` opens `<name>.elf` (or the given path, if it contains `.` or `/`) through `mind::fs`, reads it into its own page block and calls `SPAWN_IMAGE` with a capability for that block; the kernel parses and copies the ELF into the new task and the block is freed. `LIST` lists the `*.elf` files in the root of the disk. The shell waits up to 15 s for `LOADER_DONE`. Programs start other programs with `mind::process::spawn(name, grant)`, a `CALL` to `loader` that may pass an endpoint for the child's INIT slot. Only `loader` holds the spawn privilege; service names and `kernel` are not loaded as applications.
+`RUN <name>` and `LIST` for applications are `CALL`s from the shell to `loader`, like any program's. For `RUN`, `loader` opens `<name>.elf` (or the given path, if it contains `.` or `/`) through `mind::fs`, reads it into its own page block and calls `SPAWN` with a capability for that block and a grant list of the standard client endpoints; the kernel parses and copies the ELF into the new task and the block is freed. For `LIST` the shell passes a memory page and `loader` writes the list of `*.elf` files in the root of the disk into it. Programs start other programs with `mind::process::spawn(name, grant)`, a `CALL` to `loader` that may pass an endpoint for the child's INIT slot. `RUN <service>` goes to `init` instead. Only `init` and `loader` hold the spawn privilege, only `init` may spawn boot images or services; service names and `kernel` are not loaded as applications.
 
 ### Block devices
 
@@ -327,9 +331,9 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
-* `PS` — show PID, program, state, foreground/background, assigned CPU, scheduling count, CPU timer ticks, and syscall count. The shell/idle task has reserved PID 0.
+* `PS` — show PID, program, state, foreground/background, assigned CPU, scheduling count, CPU timer ticks, and syscall count. The shell is a task like the others; the footer shows its PID.
 * `FG <id>` — show an existing application's screen (services have none) and route keyboard/UART input to it, preserving its PID and state.
-* `KILL <id>` — terminate that instance; the shell then frees its image, stack, screen, private heap and page tables.
+* `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs and per-CPU timer counters.
 * `FAULTS` — show the last 16 application exceptions: PID, CPU, exception vector/error code, instruction and fault addresses.
@@ -359,7 +363,7 @@ The comments above explain the example; the shell does not parse comments. Each 
 
 The clock asks the `rtc` service with `CALL` (`mind::rtc::seconds_since_midnight`), which returns seconds since midnight (or `usize::MAX` when unavailable). The driver checks for stable readings and handles both BCD/binary and 12/24-hour RTC modes. The application displays RTC time without applying a timezone offset. The supplied launch commands use local time; QEMU otherwise defaults to UTC ([QEMU RTC options](https://www.qemu.org/docs/master/system/invocation.html)).
 
-Both square demos sleep between frames and redraw only changing areas in their own buffers. The clock sleeps between RTC checks and redraws when the second changes. `WAIT` lets other tasks run and wakes early for foreground input. Task resources are reclaimed by the BSP shell only after the owning CPU has stopped the task and switched away from its page tables.
+Both square demos sleep between frames and redraw only changing areas in their own buffers. The clock sleeps between RTC checks and redraws when the second changes. `WAIT` lets other tasks run and wakes early for foreground input. Task resources are reclaimed by the BSP idle loop only after the owning CPU has stopped the task and switched away from its page tables.
 
 ### Dzen clock
 
@@ -441,12 +445,12 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 
 ### System calls
 
-`int 0x80` with the mailbox at `USER_MAILBOX` (`syscall_num`, `arg1`, `arg2`, `msg[4]` in; `result` out). Errors are `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`); `ALLOC` returns 0 on failure.
+`int 0x80` with the mailbox at `USER_MAILBOX` (`syscall_num`, `arg1`, `arg2`, `msg[4]` in; `result` out). Errors are `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`, `ERR_BUSY`, `ERR_LIMIT`); `ALLOC` returns 0 on failure.
 
 | # | Name | Arguments → result |
 |---|---|---|
 | 1 | RDTSC | → time stamp counter |
-| 2 | READ_KEY | → next key of the foreground program or 0 |
+| 2 | READ_KEY | → next key of the calling (focused) task or 0 |
 | 3 | LOG | buffer, length → bytes logged |
 | 5 | WAIT | milliseconds (10 ms steps, ≤ 60 s) → uptime at sleep |
 | 6 | UPTIME | → milliseconds since boot |
@@ -457,14 +461,16 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
 | 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
-| 13 | SPAWN_IMAGE | name, length; msg = [image memory slot, ELF length, endpoint slot for the child's INIT, rights mask \| shell request << 16] → PID — `loader` only |
-| 30 | LOADER_DONE | shell request, result (LIST text length or error) — `loader` only |
+| 13 | SPAWN | name, length; msg = [image memory slot or `SPAWN_BOOT` \| boot index, ELF length, grant array, count \| flags << 8] → PID — spawn privilege; boot images and services need the platform privilege |
+| 32 | PLATFORM_CAP | kind, argument; msg[0] = second argument → new slot — platform privilege (`init`) |
+| 33 | DEVICE_FIND | PCI class, mask; msg[0] = n-th match → device index — platform privilege |
+| 34–43 | TASK_LIST, TASK_KILL, FOCUS, TASK_LOGS, CONSOLE_READ, NOTICE, FAULTS, CPU_INFO, KERNEL_HEAP, HALT | process control for the shell (see `common/abi.rs`) — control privilege |
 | 14 | CAP_DROP | slot |
 | 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
 | 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
-| 20 | INPUT_EVENT | app byte, shell byte, msg[0] = background — needs the input capability |
+| 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z) — needs the input capability |
 | 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |

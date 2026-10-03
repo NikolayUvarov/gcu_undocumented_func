@@ -14,9 +14,9 @@ unsafe fn write(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub bars: [Bar; 6], pub irq: u8 }
+pub struct Device { pub class: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
 
-// BAR size is determined by writing all ones with decoding disabled, then the value is restored.
+// BAR size is determined by writing all ones with decoding disabled; the command register is restored afterwards.
 unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     let mut result = [Bar::default(); 6];
     let command = read(bus, device, function, 0x04);
@@ -46,34 +46,30 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
         }
         index += 1;
     }
-    write(bus, device, function, 0x04, command | 0x7); // I/O, memory, bus mastering
+    write(bus, device, function, 0x04, command);
     result
 }
 
-// First device whose class code (class<<16 | subclass<<8 | interface) matches under the mask.
-pub unsafe fn find(class: u32, mask: u32) -> Option<Device> {
+// All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
+pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
+    let mut devices = alloc::vec::Vec::new();
     for bus in 0..=255u8 {
         for device in 0..32u8 {
             if read(bus, device, 0, 0) & 0xFFFF == 0xFFFF { continue; }
             let functions = if read(bus, device, 0, 0x0C) & 0x0080_0000 != 0 { 8 } else { 1 };
             for function in 0..functions {
                 if read(bus, device, function, 0) & 0xFFFF == 0xFFFF { continue; }
-                let code = read(bus, device, function, 0x08) >> 8;
-                if code & mask != class { continue; }
+                let class = read(bus, device, function, 0x08) >> 8;
                 let irq = read(bus, device, function, 0x3C) as u8;
-                return Some(Device { bars: bars(bus, device, function), irq: if irq < 16 { irq } else { 0 } });
+                devices.push(Device { class, bars: bars(bus, device, function), irq: if irq < 16 { irq } else { 0 }, bus, device, function });
             }
         }
     }
-    None
+    devices
 }
 
-#[derive(Clone, Copy)]
-pub struct Ac97 { pub mixer: u16, pub bus_master: u16, pub irq: u8 }
-
-// AC97: class 04:01, two I/O BARs and an IRQ line.
-pub unsafe fn find_ac97() -> Option<Ac97> {
-    find(0x04_01_00, 0xFF_FF_00)
-        .filter(|d| d.bars[0].io && d.bars[1].io && d.irq != 0)
-        .map(|d| Ac97 { mixer: d.bars[0].base as u16, bus_master: d.bars[1].base as u16, irq: d.irq })
+// Enables I/O, memory decoding and bus mastering once a resource of the device is handed to a driver.
+pub unsafe fn enable(device: &Device) {
+    let command = read(device.bus, device.device, device.function, 0x04);
+    write(device.bus, device.device, device.function, 0x04, command | 0x7);
 }

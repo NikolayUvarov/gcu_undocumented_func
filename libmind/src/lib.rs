@@ -8,12 +8,14 @@ pub mod font;
 
 pub mod audio;
 pub mod block;
+pub mod control;
 pub mod dev;
 pub mod fs;
 pub mod gfx;
 pub mod input;
 pub mod ipc;
 pub mod mem;
+pub mod platform;
 pub mod process;
 pub mod rtc;
 pub mod sys;
