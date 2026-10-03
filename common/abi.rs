@@ -1,21 +1,15 @@
 #![allow(dead_code)]
 // Единый ABI ядра: подключается ядром, загрузчиком и libmind (не копировать).
 
-// Порядок образов задаёт загрузчик; системные сервисы ядро запускает при старте.
-pub const PROGRAM_COUNT: usize = 16;
-pub const PROGRAM_NAMES: [&str; PROGRAM_COUNT] = [
-    "app", "app2", "clock", "dzen-clock", "ping", "pong", "files", "beep",
-    "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw",
-];
-pub const PROGRAM_FILES: [&str; PROGRAM_COUNT] = [
-    "app.elf", "app2.elf", "clock.elf", "dzenclk.elf", "ping.elf", "pong.elf", "files.elf", "beep.elf",
-    "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "audio_gw.elf",
-];
+// Загрузчик UEFI передаёт ядру только образы системных сервисов; приложения читает с диска сервис loader.
 // Драйверы ahci и usb_storage запускаются, только если на шине PCI есть их контроллер.
-pub const BOOT_SERVICES: [&str; 8] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw"];
+pub const BOOT_IMAGES: usize = 9;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf"];
+pub const NAME_MAX: usize = 16; // имя задачи в ps и в запросе запуска
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; PROGRAM_COUNT], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -30,7 +24,7 @@ pub const SYSCALL_FREE: usize = 9;
 pub const SYSCALL_IPC_SEND: usize = 10;
 pub const SYSCALL_IPC_RECV: usize = 11;
 pub const SYSCALL_ENDPOINT_CREATE: usize = 12;
-pub const SYSCALL_SPAWN: usize = 13;
+pub const SYSCALL_SPAWN_IMAGE: usize = 13;
 pub const SYSCALL_CAP_DROP: usize = 14;
 pub const SYSCALL_MEM_SHARE: usize = 15;
 pub const SYSCALL_MEM_MAP: usize = 16;
@@ -47,6 +41,7 @@ pub const SYSCALL_MEM_PHYS: usize = 26;
 pub const SYSCALL_PORT_IN_BLOCK: usize = 27;
 pub const SYSCALL_TASK_ALIVE: usize = 28;
 pub const SYSCALL_CAP_INFO: usize = 29;
+pub const SYSCALL_LOADER_DONE: usize = 30;
 
 // Ответ CAP_INFO: result=вид мандата, arg2=база/адрес, msg[2]=размер/число портов/права.
 pub const CAP_KIND_NONE: usize = 0;
@@ -58,6 +53,7 @@ pub const CAP_KIND_IRQ: usize = 5;
 pub const CAP_KIND_INPUT: usize = 6;
 pub const CAP_KIND_DISPLAY: usize = 7;
 pub const CAP_KIND_MMIO: usize = 8;
+pub const CAP_KIND_SPAWN: usize = 9;
 
 // Коды ошибок: usize::MAX - n. ALLOC по-прежнему возвращает 0 при отказе.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -77,6 +73,7 @@ pub const SLOT_INIT: usize = 1;
 pub const SLOT_RTC: usize = 2;
 pub const SLOT_VFS: usize = 3;
 pub const SLOT_AUDIO: usize = 4;
+pub const SLOT_LOADER: usize = 5;
 // Слоты мандатов сервиса: обслуживаемая точка, устройства, IRQ, DMA/кадр, привилегия.
 pub const SLOT_SERVICE: usize = 1;
 pub const SLOT_DEV0: usize = 2;
@@ -97,12 +94,14 @@ pub const EP_AUDIO: usize = 4;
 pub const EP_BLOCK_ATA: usize = 5;
 pub const EP_BLOCK_AHCI: usize = 6;
 pub const EP_BLOCK_USB: usize = 7;
+pub const EP_LOADER: usize = 8;
 pub const EP_RESERVED: usize = 16;
 
 // Сообщение: msg[0]=слот передаваемого мандата, msg[1]=маска прав, msg[2..4]=данные.
 // У получателя: arg1=PID отправителя, msg[0]=1 если мандат получен, msg[1]=флаги.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
+pub const MSG_FLAG_KERNEL: usize = 4; // запрос от шелла ядра (msg[2] — номер запроса)
 
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
 // Отдельная квота для отображённой чужой памяти (кадр, буферы IPC).
@@ -115,6 +114,14 @@ pub const VFS_READ: usize = 2;
 pub const VFS_CLOSE: usize = 3;
 pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
+// Загрузчик программ. Запрос шелла лежит в странице запроса (мандат в SLOT_MEM у loader):
+// [вид, фон, длина имени, имя...]; ответ LIST — текст со смещения LOADER_REPLY.
+// Приложения просят запуск CALL-ом в SLOT_LOADER: msg[2..4] — имя (до 16 байт), мандат — точка для ребёнка.
+pub const LOADER_RUN: u8 = 1;
+pub const LOADER_LIST: u8 = 2;
+pub const LOADER_REPLY: usize = 512;
+// SPAWN_IMAGE (нужна привилегия запуска): arg1/arg2 — имя, msg[0] — мандат образа, msg[1] — длина ELF,
+// msg[2] — мандат точки для слота INIT ребёнка (0 — нет), msg[3] — маска прав | номер запроса шелла << 16.
 // Протокол блочного устройства: msg[2]=операция|число секторов<<8, msg[3]=LBA.
 // ATTACH передаёт мандат буфера клиента (до BLOCK_MAX_SECTORS секторов), READ заполняет его.
 pub const BLOCK_INFO: usize = 1;

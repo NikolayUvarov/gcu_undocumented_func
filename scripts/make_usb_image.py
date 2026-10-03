@@ -13,9 +13,10 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-# Список образов берётся из общего ABI, чтобы образ и загрузчик не расходились.
-PROGRAM_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"PROGRAM_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *PROGRAM_FILES)
+# Сервисы (BOOT_FILES в ABI) нужны загрузчику; приложения — все остальные *.elf, собранные 02_build.sh.
+BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
+APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
+FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS)
 SECTOR = 512
 
 

@@ -31,7 +31,7 @@ fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
         "usb_root/app.elf",
         "usb_root/app2.elf",
         "usb_root/clock.elf",
-        "usb_root/dzenclk.elf",
+        "usb_root/dzen-clock.elf",
     ] {
         let data = std::fs::read(file).unwrap();
         let image = elf::Image::parse(&data).unwrap();

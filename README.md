@@ -19,7 +19,7 @@ Every Mind needs its first processor tick. We are providing exactly that.
 
 ### Current Runtime
 
-The UEFI bootloader loads the kernel and every program image listed in `PROGRAM_FILES` of `common/abi.rs` from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices and starts the system services in ring 3.
+The UEFI bootloader loads the kernel and only the system service images (`BOOT_FILES` in `common/abi.rs`) from the FAT filesystem, enumerates enabled CPUs through UEFI MP Services, and reserves a 64 MiB runtime heap, a BSP stack, and a low-memory AP bootstrap page. The kernel takes over after ExitBootServices and starts the system services in ring 3. Applications are not kept in memory: the `loader` service reads them from the boot disk through `vfs_server` when they are started.
 
 * **Toolchain:** Pure Rust (`no_std`, `no_main`), utilizing `naked_functions` and `abi_x86_interrupt`, compiled for `x86_64-unknown-none` and `x86_64-unknown-uefi` targets. Programs use the `libmind` SDK.
 * **Memory and privilege:** Every task runs in ring 3 with IOPL=0 and a private four-level page table/CR3. Each `RUN` creates a fresh ELF image, 64 KiB user stack with unmapped guard pages, syscall mailbox, input/log queues, and (for applications) a screen buffer. Code is RX; writable data, stack, mailbox and screen are NX. The kernel's supervisor mappings are inaccessible to tasks.
@@ -42,9 +42,10 @@ The kernel starts these programs at boot, in this order (`BOOT_SERVICES` in `com
 | `ahci` | endpoint 6, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
 | `usb_storage` | endpoint 7, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
 | `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
+| `loader` | endpoint 8, VFS client, kernel request page, spawn privilege | reads application ELF files from the disk and starts them |
 | `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) six services run and applications start at PID 7. The limit is eight applications in addition to the services.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) seven services run and applications start at PID 8. The limit is eight applications in addition to the services.
 
 ### IPC
 
@@ -73,7 +74,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | Module | Contents |
 |---|---|
 | `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
-| `process` | `exit`, `spawn`, `alive`, `log`, `print!`/`println!` |
+| `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `spawn_image`/`loader_done` for `loader` |
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_or_exit` (Esc exits) |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
@@ -84,6 +85,10 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 
 The SDK also supplies the panic handler (logs the message and exits the task) and `memset`/`memcpy`/`memmove`/`memcmp`. `common/abi.rs` remains the single ABI definition shared by the kernel, the bootloader and `libmind`.
+
+### Program loading
+
+`RUN <name>` and `LIST` for applications are requests from the kernel shell to `loader`: the kernel writes the request into a page shared only with `loader` and notifies it with a kernel message (sender PID 0). For `RUN`, `loader` opens `<name>.elf` (or the given path, if it contains `.` or `/`) through `mind::fs`, reads it into its own page block and calls `SPAWN_IMAGE` with a capability for that block; the kernel parses and copies the ELF into the new task and the block is freed. `LIST` lists the `*.elf` files in the root of the disk. The shell waits up to 15 s for `LOADER_DONE`. Programs start other programs with `mind::process::spawn(name, grant)`, a `CALL` to `loader` that may pass an endpoint for the child's INIT slot. Only `loader` holds the spawn privilege; service names and `kernel` are not loaded as applications.
 
 ### Block devices
 
@@ -185,8 +190,8 @@ and `qemu-img` installed (the latter comes with QEMU):
 This rebuilds all components and creates **`dist/mind-core-usb.img`**, a complete
 raw disk image of approximately 504 MiB. The image contains an MBR with a UEFI
 system partition, a FAT16 filesystem labelled `MIND CORE`, `EFI/BOOT/BOOTX64.EFI`,
-`kernel.elf` and every program in `PROGRAM_FILES` of `common/abi.rs` (applications
-and services, including long names such as `compositor.elf`).
+`kernel.elf`, the services in `BOOT_FILES` of `common/abi.rs` and every other `*.elf`
+built into `usb_root/` (the applications), including long names such as `compositor.elf`.
 
 The script uses QEMU's virtual FAT image conversion, then independently checks
 the partition/filesystem and compares every packaged file with the build output.
@@ -294,14 +299,14 @@ also lists and reads the image through `usb_storage` and `vfs_server`.
 
 At the `MIND>` prompt, enter a command and press Enter (commands are case-insensitive):
 
-* `LIST` — show all available program names and descriptions.
-* `RUN app` — launch a new foreground instance of the rotating-square application (`app.elf`). `BOOT` remains an alias for this command.
+* `LIST` — show the programs (`*.elf`) on the boot disk, read by `loader`, and the boot services.
+* `RUN <name>` — load `<name>.elf` (or a path such as `extra/demo.elf`) from the disk and start it in the foreground; any ELF built for MIND CORE can be copied to the disk and run. `RUN app` starts the rotating-square application; `BOOT` remains an alias for it.
 * `RUN app2` — launch the second application (`app2.elf`): a bouncing square, frame counter, and TSC value on screen. It prints a greeting and a status line every 30 frames to the host's QEMU console via UART.
 * `RUN clock` — display a large digital clock (`clock.elf`) in 24-hour `HH:MM:SS` format, with time changes also printed to the UART console.
 * `RUN files` — list the boot disk and read files through `vfs_server`.
 * `RUN beep` — play tones and PCM through `audio_gw`.
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
-* `RUN dzen-clock` — five color indicators for time (`dzenclk.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
+* `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
 * `PS` — show PID, program, state, foreground/background, assigned CPU, scheduling count, CPU timer ticks, and syscall count. The shell/idle task has reserved PID 0.
 * `FG <id>` — show an existing application's screen (services have none) and route keyboard/UART input to it, preserving its PID and state.
@@ -432,7 +437,8 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 11 | IPC_RECV | endpoint slot, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
 | 23 | IPC_REPLY | msg = [cap slot, rights mask, data, data] |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
-| 13 | SPAWN | name, length; msg[0..2] = endpoint slot and rights for the child's INIT slot → PID |
+| 13 | SPAWN_IMAGE | name, length; msg = [image memory slot, ELF length, endpoint slot for the child's INIT, rights mask \| shell request << 16] → PID — `loader` only |
+| 30 | LOADER_DONE | shell request, result (LIST text length or error) — `loader` only |
 | 14 | CAP_DROP | slot |
 | 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |

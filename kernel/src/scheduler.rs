@@ -17,7 +17,22 @@ const AHCI_DMA_BYTES: usize = 128 * 1024; // команды, FIS и буфер �
 const XHCI_DMA_BYTES: usize = 256 * 1024; // кольца, контексты, scratchpad и буфер данных 64 КиБ
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn }
+
+// Имя задачи (для ps и запросов запуска); образы приложений больше не индексируются таблицей ядра.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Name { bytes: [u8; NAME_MAX], len: u8 }
+impl Name {
+    pub fn new(text: &[u8]) -> Self { let len = text.len().min(NAME_MAX); let mut bytes = [0; NAME_MAX]; bytes[..len].copy_from_slice(&text[..len]); Self { bytes, len: len as u8 } }
+    pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?") }
+}
+
+// Откуда берётся ELF: образ сервиса от загрузчика UEFI или буфер, переданный сервисом loader.
+enum Source<'a> { Boot(usize), Image(&'a [u8]) }
+
+// Запрос шелла к loader: запуск или список программ; итог забирает шелл.
+#[derive(Clone, Copy)]
+struct Request { id: usize, background: bool, spawned: Option<Result<u64, &'static str>>, done: Option<usize> }
 
 impl Capability {
     fn overlaps(self, physical: usize, size: usize) -> bool {
@@ -28,7 +43,7 @@ impl Capability {
 pub fn heap_test() -> (usize, usize, bool) { locked(|| { let before = crate::ALLOCATOR.lock().used(); let test = alloc::format!("Dynamic allocation test at {} ms", interrupts::milliseconds()); core::hint::black_box(&test); drop(test); let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free(), heap.used() == before) }) }
 
 struct Task {
-    pid: u64, program: usize, service: bool, state: State, sp: usize, cpu: usize,
+    pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Queue<128>, log: Queue<4096>, log_line_start: bool, dirty: bool,
@@ -45,6 +60,7 @@ struct Scheduler {
     ac97: Option<pci::Ac97>, ahci: Option<pci::Device>, xhci: Option<pci::Device>,
     dma: Vec<(&'static str, Region)>, // DMA-области драйверов переживают их перезапуск
     composited: usize, // экран, на который у композитора уже есть мандат
+    request: Option<Request>, request_page: Region, next_request: usize, loader_notify: bool,
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -55,8 +71,7 @@ fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.c
 
 unsafe fn scheduler() -> &'static mut Scheduler { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap() }
 
-pub fn program_index(name: &[u8]) -> Option<usize> { PROGRAM_NAMES.iter().position(|p| p.as_bytes().eq_ignore_ascii_case(name)) }
-pub fn is_service(program: usize) -> bool { BOOT_SERVICES.contains(&PROGRAM_NAMES[program]) }
+pub fn service_index(name: &[u8]) -> Option<usize> { BOOT_SERVICES.iter().position(|p| p.as_bytes().eq_ignore_ascii_case(name)) }
 fn frame_bytes(info: &BootInfo) -> usize { (info.stride * info.height * 4).div_ceil(4096) * 4096 }
 
 pub fn init(info: &BootInfo) -> Result<*mut u32, &'static str> {
@@ -66,7 +81,7 @@ pub fn init(info: &BootInfo) -> Result<*mut u32, &'static str> {
     let ahci = unsafe { pci::find(0x01_06_01, 0xFF_FF_FF) }.filter(|d| !d.bars[5].io && d.bars[5].size != 0);
     let xhci = unsafe { pci::find(0x0C_03_30, 0xFF_FF_FF) }.filter(|d| !d.bars[0].io && d.bars[0].size != 0);
     let mut endpoints = [false; ENDPOINTS]; endpoints[..EP_RESERVED].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, dirty: true, notice: None, endpoints, irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), ac97, ahci, xhci, dma: Vec::new(), composited: 0 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, dirty: true, notice: None, endpoints, irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), ac97, ahci, xhci, dma: Vec::new(), composited: 0, request: None, request_page: Region::new(4096, 4096)?, next_request: 1, loader_notify: false }); }
     Ok(fb)
 }
 
@@ -140,13 +155,13 @@ impl Scheduler {
     fn mmio(bar: pci::Bar) -> Option<Capability> { (!bar.io && bar.size != 0).then(|| Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
 
     // Сервис нужен, если для него есть оборудование (ahci, usb_storage) или он безусловный.
-    fn wanted(&self, program: usize) -> bool {
-        match PROGRAM_NAMES[program] { "ahci" => self.ahci.is_some(), "usb_storage" => self.xhci.is_some(), _ => true }
+    fn wanted(&self, service: usize) -> bool {
+        match BOOT_SERVICES[service] { "ahci" => self.ahci.is_some(), "usb_storage" => self.xhci.is_some(), _ => true }
     }
 
-    fn initial_caps(&mut self, program: usize, init_cap: Option<Capability>) -> [Option<Capability>; CAP_SLOTS] {
+    fn initial_caps(&mut self, name: &str, service: bool, init_cap: Option<Capability>) -> [Option<Capability>; CAP_SLOTS] {
         let mut caps = [None; CAP_SLOTS]; let all = CAP_READ | CAP_WRITE | CAP_GRANT;
-        match PROGRAM_NAMES[program] {
+        match if service { name } else { "" } {
             "rtc" => { caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_RTC, all)); caps[SLOT_DEV0] = Some(Capability::IoPorts(0x70, 2)); }
             "ps2_kbd" => { caps[SLOT_DEV0] = Some(Capability::IoPorts(0x60, 1)); caps[SLOT_DEV1] = Some(Capability::IoPorts(0x64, 1)); caps[SLOT_IRQ] = Some(Capability::Interrupt(1)); caps[SLOT_PRIV] = Some(Capability::Input); }
             "compositor" => { caps[SLOT_MEM] = Some(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot))); caps[SLOT_PRIV] = Some(Capability::Display); }
@@ -165,6 +180,11 @@ impl Scheduler {
                 let devices = [(EP_BLOCK_ATA, true), (EP_BLOCK_AHCI, self.ahci.is_some()), (EP_BLOCK_USB, self.xhci.is_some())];
                 for (slot, (ep, _)) in (SLOT_BLOCK_FIRST..).zip(devices.into_iter().filter(|(_, present)| *present)) { caps[slot] = Some(Capability::Endpoint(ep, CAP_WRITE | CAP_GRANT)); }
             }
+            "loader" => {
+                // Только loader может запускать образы из памяти; запрос шелла лежит в странице ядра.
+                caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_LOADER, all)); caps[SLOT_VFS] = Some(Capability::Endpoint(EP_VFS, CAP_WRITE | CAP_GRANT));
+                caps[SLOT_MEM] = Some(Capability::Memory(self.request_page.ptr() as usize, 4096)); caps[SLOT_PRIV] = Some(Capability::Spawn);
+            }
             "audio_gw" => {
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_AUDIO, all));
                 if let Some(ac) = self.ac97 {
@@ -177,25 +197,27 @@ impl Scheduler {
                 caps[SLOT_RTC] = Some(Capability::Endpoint(EP_RTC, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_VFS] = Some(Capability::Endpoint(EP_VFS, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_AUDIO] = Some(Capability::Endpoint(EP_AUDIO, CAP_WRITE | CAP_GRANT));
+                caps[SLOT_LOADER] = Some(Capability::Endpoint(EP_LOADER, CAP_WRITE | CAP_GRANT));
             }
         }
         caps
     }
 
-    fn spawn_internal(&mut self, program: usize, background: bool, init_cap: Option<Capability>) -> Result<u64, &'static str> {
-        let service = is_service(program);
+    fn spawn_internal(&mut self, source: Source, name: Name, background: bool, init_cap: Option<Capability>) -> Result<u64, &'static str> {
+        let service = matches!(source, Source::Boot(_));
         let live = |t: &&Task| t.state != State::Exited;
-        if service && self.tasks.iter().flatten().filter(live).any(|t| t.program == program) { return Err("SERVICE ALREADY RUNNING"); }
+        if service && self.tasks.iter().flatten().filter(live).any(|t| t.service && t.name == name) { return Err("SERVICE ALREADY RUNNING"); }
         if !service && self.tasks.iter().flatten().filter(live).filter(|t| !t.service).count() >= MAX_APPS { return Err("TASK LIMIT REACHED (8)"); }
         let slot = (1..SLOTS).find(|&i| self.tasks[i].is_none()).ok_or("NO FREE TASK SLOT")?;
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
-        let source = self.boot.programs.get(program).ok_or("UNKNOWN PROGRAM")?; let file = unsafe { core::slice::from_raw_parts(source.data, source.len) }; let elf = elf::Image::parse(file)?;
+        let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
+        let elf = elf::Image::parse(file)?;
         let mut image = Region::new(elf.size.div_ceil(4096) * 4096, 4096)?; let entry = elf.load(image.bytes_mut(), paging::USER_IMAGE)?;
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::new(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if service { None } else { Some(Region::new(self.shell_screen.len(), 4096)?) }; // сервисам экран не нужен
-        let mut info = self.boot; info.fb_ptr = if service { core::ptr::null_mut() } else { paging::USER_SCREEN as *mut u32 }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; PROGRAM_COUNT]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
+        let mut info = self.boot; info.fb_ptr = if service { core::ptr::null_mut() } else { paging::USER_SCREEN as *mut u32 }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
@@ -204,8 +226,8 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Приложения распределяются по числу приложений на CPU: спящие сервисы не сдвигают баланс.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        let cspace = self.initial_caps(program, init_cap);
-        self.tasks[slot] = Some(Task { pid, program, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), log_line_start: true, dirty: true, cspace, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None });
+        let cspace = self.initial_caps(name.as_str(), service, init_cap);
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), log_line_start: true, dirty: true, cspace, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None });
         self.next_pid = next_pid; if !background && !service { self.focus(slot); } Ok(pid)
     }
 
@@ -231,10 +253,24 @@ impl Scheduler {
         let sender = self.tasks[from].as_mut().unwrap();
         if call { sender.state = State::BlockedReply(to); } else { (*from_mb).result = 0; sender.state = State::Ready; }
     }
-    unsafe fn notify_irq(&mut self, to: usize, irq: usize) {
+    // Сообщение от ядра (IRQ или запрос шелла): отправитель с PID 0, без мандата.
+    unsafe fn notify(&mut self, to: usize, flag: usize, value: usize) {
         let mb = self.mailbox(to);
-        (*mb).msg = [0, MSG_FLAG_IRQ, irq, 0]; (*mb).arg1 = 0; (*mb).result = 0;
+        (*mb).msg = [0, flag, value, 0]; (*mb).arg1 = 0; (*mb).result = 0;
         self.tasks[to].as_mut().unwrap().state = State::Ready;
+    }
+    unsafe fn notify_irq(&mut self, to: usize, irq: usize) { self.notify(to, MSG_FLAG_IRQ, irq) }
+
+    // Запрос шелла: страница [вид, фон, длина, имя]; loader получает уведомление или найдёт его при RECV.
+    fn post_request(&mut self, kind: u8, name: &[u8], background: bool) -> Result<usize, &'static str> {
+        if !self.tasks.iter().flatten().any(|t| t.service && t.state != State::Exited && t.name.as_str() == "loader") { return Err("LOADER NOT RUNNING"); }
+        if self.request.is_some_and(|r| r.done.is_none()) { return Err("LOADER BUSY"); }
+        let page = unsafe { core::slice::from_raw_parts_mut(self.request_page.ptr(), 4096) };
+        let len = name.len().min(255); page[..3].copy_from_slice(&[kind, background as u8, len as u8]); page[3..3 + len].copy_from_slice(&name[..len]);
+        let id = self.next_request; self.next_request += 1;
+        self.request = Some(Request { id, background, spawned: None, done: None });
+        match self.blocked(State::BlockedRecv(EP_LOADER)) { Some(loader) => unsafe { self.notify(loader, MSG_FLAG_KERNEL, id) }, None => self.loader_notify = true }
+        Ok(id)
     }
     // Прерывание линии: маска уже выставлена; будит драйвер или запоминает событие.
     unsafe fn raise_irq(&mut self, irq: usize) {
@@ -267,6 +303,7 @@ impl Scheduler {
         let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         if let Some(irq) = (0..16).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
+        if ep == EP_LOADER && core::mem::take(&mut self.loader_notify) { if let Some(request) = self.request { self.notify(slot, MSG_FLAG_KERNEL, request.id); return Ok(None); } }
         let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true;
@@ -287,6 +324,7 @@ impl Scheduler {
         matches!(self.cap(slot, index), Some(Capability::IoPorts(base, count)) if port >= base as usize && port + width <= base as usize + count as usize)
     }
     fn holds(&self, slot: usize, cap: Capability) -> bool { self.tasks[slot].as_ref().unwrap().cspace.contains(&Some(cap)) }
+    fn holds_spawn(&self, slot: usize) -> bool { self.holds(slot, Capability::Spawn) }
 
     unsafe fn syscall(&mut self, slot: usize, sp: usize, cpu: usize) -> usize {
         let ptr = self.mailbox(slot); let request = core::ptr::read_volatile(ptr);
@@ -321,18 +359,31 @@ impl Scheduler {
                 _ => Err(ERR_NO_SLOT),
             },
             SYSCALL_CAP_DROP => if (1..CAP_SLOTS).contains(&request.arg1) { task.cspace[request.arg1] = None; Ok(0) } else { Err(ERR_INVALID) },
-            SYSCALL_SPAWN => {
-                let length = request.arg2.min(32); let mut name = [0u8; 32];
-                if !task.space.validate_read(request.arg1, length) { Err(ERR_INVALID) } else {
+            SYSCALL_SPAWN_IMAGE => {
+                // ELF из памяти loader: ядро разбирает и копирует его, буфер loader освобождает сам.
+                let length = request.arg2.min(NAME_MAX); let mut name = [0u8; NAME_MAX];
+                let image = match self.cap(slot, request.msg[0]) { Some(Capability::Memory(physical, size)) if request.msg[1] <= size => Some((physical, request.msg[1])), _ => None };
+                if !self.holds(slot, Capability::Spawn) { Err(ERR_RIGHTS) }
+                else if length == 0 || !task.space.validate_read(request.arg1, length) || image.is_none() { Err(ERR_INVALID) }
+                else {
                     for (i, byte) in name[..length].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.arg1 + i).unwrap() as *const u8); }
-                    match program_index(&name[..length]) {
-                        None => Err(ERR_NOT_FOUND),
-                        Some(program) => {
-                            let delegated = match self.cap(slot, request.msg[0]) { Some(Capability::Endpoint(id, r)) if request.msg[0] != 0 && r & CAP_GRANT != 0 => Some(Capability::Endpoint(id, r & request.msg[1] as u8)), _ => None };
-                            self.spawn_internal(program, true, delegated).map(|pid| pid as usize).map_err(|_| ERR_NO_SLOT)
-                        }
+                    let name = Name::new(&name[..length]);
+                    if service_index(name.as_str().as_bytes()).is_some() { Err(ERR_INVALID) } else {
+                        let (physical, size) = image.unwrap();
+                        let mask = request.msg[3] & 0xFF; let id = request.msg[3] >> 16;
+                        let delegated = match self.cap(slot, request.msg[2]) { Some(Capability::Endpoint(ep, r)) if request.msg[2] != 0 && r & CAP_GRANT != 0 => Some(Capability::Endpoint(ep, r & mask as u8)), _ => None };
+                        let shell = self.request.filter(|r| id != 0 && r.id == id && r.done.is_none());
+                        let bytes = core::slice::from_raw_parts(physical as *const u8, size);
+                        let outcome = self.spawn_internal(Source::Image(bytes), name, shell.is_none_or(|r| r.background), delegated);
+                        if let Some(request) = self.request.as_mut().filter(|_| shell.is_some()) { request.spawned = Some(outcome); }
+                        outcome.map(|pid| pid as usize).map_err(|_| ERR_NO_SLOT)
                     }
                 }
+            }
+            SYSCALL_LOADER_DONE => {
+                // Итог запроса шелла: длина текста LIST или код ошибки запуска (после освобождения буфера образа).
+                let allowed = self.holds_spawn(slot);
+                match self.request.as_mut() { Some(r) if allowed && r.id == request.arg1 && r.done.is_none() => { r.done = Some(request.arg2); Ok(0) } _ => Err(ERR_INVALID) }
             }
             SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::free_slot(&task.cspace)) {
                 (Some((physical, size)), Some(index)) => { task.cspace[index] = Some(Capability::Memory(physical, size)); Ok(index) }
@@ -404,6 +455,7 @@ impl Scheduler {
                     Some(Capability::Interrupt(irq)) => (CAP_KIND_IRQ, irq as usize, 0),
                     Some(Capability::Input) => (CAP_KIND_INPUT, 0, 0),
                     Some(Capability::Display) => (CAP_KIND_DISPLAY, 0, 0),
+                    Some(Capability::Spawn) => (CAP_KIND_SPAWN, 0, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
                 Ok(kind)
@@ -428,8 +480,20 @@ unsafe fn port_out(port: u16, width: usize, value: usize) {
     match width { 1 => asm!("out dx, al", in("dx") port, in("al") value as u8, options(nomem, nostack)), 2 => asm!("out dx, ax", in("dx") port, in("ax") value as u16, options(nomem, nostack)), _ => asm!("out dx, eax", in("dx") port, in("eax") value as u32, options(nomem, nostack)) }
 }
 
-pub fn spawn(program: usize, background: bool) -> Result<u64, &'static str> { locked(|| unsafe { scheduler().spawn_internal(program, background, None) }) }
-pub fn service_wanted(program: usize) -> bool { locked(|| unsafe { scheduler().wanted(program) }) }
+pub fn spawn_service(index: usize) -> Result<u64, &'static str> { locked(|| unsafe { scheduler().spawn_internal(Source::Boot(index), Name::new(BOOT_SERVICES[index].as_bytes()), true, None) }) }
+pub fn service_wanted(index: usize) -> bool { locked(|| unsafe { scheduler().wanted(index) }) }
+pub fn post_request(kind: u8, name: &[u8], background: bool) -> Result<usize, &'static str> { locked(|| unsafe { scheduler().post_request(kind, name, background) }) }
+// Итог запроса, когда loader его завершил: (запуск, код LOADER_DONE); текст LIST копируется в `text`.
+pub fn take_request(id: usize, text: &mut [u8]) -> Option<(Option<Result<u64, &'static str>>, usize)> {
+    locked(|| unsafe {
+        let s = scheduler();
+        let request = s.request.filter(|r| r.id == id)?; let code = request.done?;
+        let page = core::slice::from_raw_parts(s.request_page.ptr().add(LOADER_REPLY), 4096 - LOADER_REPLY);
+        let len = code.min(page.len()).min(text.len()); text[..len].copy_from_slice(&page[..len]);
+        s.request = None; Some((request.spawned, code))
+    })
+}
+pub fn cancel_request(id: usize) { locked(|| unsafe { let s = scheduler(); if s.request.is_some_and(|r| r.id == id) { s.request = None; s.loader_notify = false; } }) }
 
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {
@@ -465,11 +529,12 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
 unsafe fn serial_hex(number: u64) { for shift in (0..16).rev() { let digit = ((number >> (shift * 4)) & 15) as u8; serial_write_byte(if digit < 10 { b'0' + digit } else { b'A' + digit - 10 }); } }
 pub fn faults() -> [Option<Fault>; 16] { locked(|| unsafe { scheduler().faults }) }
 unsafe fn serial_number(mut number: u64) { let mut buffer = [0; 20]; let mut at = buffer.len(); loop { at -= 1; buffer[at] = b'0' + (number % 10) as u8; number /= 10; if number == 0 { break; } } for &byte in &buffer[at..] { serial_write_byte(byte); } }
+pub fn task_name(pid: u64) -> Option<Name> { locked(|| unsafe { let s = scheduler(); s.find(pid).map(|slot| s.tasks[slot].as_ref().unwrap().name) }) }
 pub fn foreground() -> u64 { locked(|| unsafe { let s = scheduler(); s.tasks[s.foreground].as_ref().map_or(0, |t| t.pid) }) }
 pub fn focus(pid: u64) -> Result<(), &'static str> { locked(|| unsafe { let s = scheduler(); let slot = s.find(pid).ok_or("NO SUCH PID")?; if s.tasks[slot].as_ref().unwrap().service { return Err("SERVICE HAS NO SCREEN"); } s.focus(slot); Ok(()) }) }
 pub fn kill(pid: u64) -> Result<(), &'static str> { locked(|| unsafe { let s = scheduler(); let slot = s.find(pid).ok_or("NO SUCH PID")?; s.terminate(slot, false); Ok(()) }) }
-pub struct Summary { pub pid: u64, pub name: &'static str, pub state: &'static str, pub foreground: bool, pub runs: u64, pub ticks: u64, pub calls: u64, pub cpu: usize }
-pub fn summaries() -> [Option<Summary>; MAX_TASKS] { locked(|| unsafe { let s = scheduler(); core::array::from_fn(|i| { s.tasks[i + 1].as_ref().map(|t| Summary { pid: t.pid, name: PROGRAM_NAMES[t.program], state: if s.current.contains(&(i + 1)) { "RUNNING" } else { t.state.label() }, foreground: s.foreground == i + 1, runs: t.runs, ticks: t.ticks, calls: t.calls, cpu: t.cpu }) }) }) }
+pub struct Summary { pub pid: u64, pub name: Name, pub state: &'static str, pub foreground: bool, pub runs: u64, pub ticks: u64, pub calls: u64, pub cpu: usize }
+pub fn summaries() -> [Option<Summary>; MAX_TASKS] { locked(|| unsafe { let s = scheduler(); core::array::from_fn(|i| { s.tasks[i + 1].as_ref().map(|t| Summary { pid: t.pid, name: t.name, state: if s.current.contains(&(i + 1)) { "RUNNING" } else { t.state.label() }, foreground: s.foreground == i + 1, runs: t.runs, ticks: t.ticks, calls: t.calls, cpu: t.cpu }) }) }) }
 pub fn logs(pid: u64, buffer: &mut [u8]) -> Result<usize, &'static str> { locked(|| unsafe { let s = scheduler(); let slot = s.find(pid).ok_or("NO SUCH PID")?; let log = &mut s.tasks[slot].as_mut().unwrap().log; let mut len = 0; while len < buffer.len() { let Some(byte) = log.pop() else { break; }; buffer[len] = byte; len += 1; } Ok(len) }) }
 pub fn input() -> Option<u8> { locked(|| unsafe { let s = scheduler(); s.poll_serial(); s.shell_input.pop() }) }
 pub fn notice() -> Option<(u64, bool)> { locked(|| unsafe { scheduler().notice.take() }) }

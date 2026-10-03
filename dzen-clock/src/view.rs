@@ -26,7 +26,7 @@ pub struct View<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{ProgramImage, PROGRAM_COUNT};
+    use crate::abi::{ProgramImage, BOOT_IMAGES};
 
     #[test]
     fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
@@ -39,7 +39,7 @@ mod tests {
             programs: [ProgramImage {
                 data: core::ptr::null(),
                 len: 0,
-            }; PROGRAM_COUNT],
+            }; BOOT_IMAGES],
             heap_ptr: core::ptr::null_mut(),
             heap_len: 0,
             ap_trampoline: 0,

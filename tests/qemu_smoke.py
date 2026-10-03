@@ -20,7 +20,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # Системные сервисы (PID 1..N); драйверы ahci/usb_storage есть только при наличии контроллера.
-SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw")
+SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw")
 # Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID (BASE считается при загрузке).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
@@ -692,7 +692,7 @@ def ahci_suite(vm):
 
 def services_suite(vm):
     output = vm.command("ps")
-    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "audio_gw"):
+    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     require(vm.command("fg -4"), "ERROR:")  # отрицательные номера стенд не переводит
     vm.send("fg 0\n"); vm.expect("ERROR:")
@@ -716,13 +716,27 @@ def services_suite(vm):
     require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
     files_check(vm, 3)
     require(vm.command("kill 3"), "KILLED PID=3")
+    # loader: программы читаются с диска, а не из таблицы ядра — запускаются и новые файлы.
+    listing = vm.command("list")
+    for name in ("clock", "dzen-clock", "hello", "files"):
+        require(listing, f"  {name} ")
+    assert "kernel " not in listing
+    require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
+    require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
+    time.sleep(1.2)
+    require(vm.command("logs 4"), "[CLOCK] ")
+    assert {4, 5} <= set(task_rows(vm)), task_rows(vm)
+    for text, error in [("run kernel", "UNKNOWN PROGRAM"), ("run nothing", "UNKNOWN PROGRAM"), ("run extra", "ERROR:"),
+                        ("run averyveryverylongname", "PROGRAM NAME TOO LONG")]:
+        require(vm.command(text), error)
+    vm.command("kill 4"); vm.command("kill 5")
     for _ in range(20):
         if heap_used(vm) == baseline:
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, reclaim", flush=True)
+    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, reclaim", flush=True)
 
 
 def audio_suite(vm, wav):
@@ -793,6 +807,11 @@ def main():
             (disk / "EFI/BOOT").mkdir(parents=True)
             for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
                 shutil.copyfile(ROOT / "usb_root" / name, disk / name)
+            if suite == "services":
+                # Файлы, о которых ядро и ABI ничего не знают: их найдёт только loader.
+                shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
+                (disk / "extra").mkdir()
+                shutil.copyfile(disk / "app.elf", disk / "extra/demo.elf")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":

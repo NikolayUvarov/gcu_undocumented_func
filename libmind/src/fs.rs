@@ -19,6 +19,9 @@ fn channel() -> Result<&'static mut Channel> {
     Ok(slot.as_mut().unwrap())
 }
 
+/// Заранее создаёт буфер обмена с vfs_server (сервисы делают это при старте, чтобы не расти по ходу работы).
+pub fn prepare() -> Result<()> { channel().map(drop) }
+
 fn request(op: usize, fd: usize, len: usize, offset: usize) -> Result<[usize; 2]> {
     let channel = channel()?;
     let reply = Endpoint::VFS.call(&Message::new(op | fd << 8 | len << 16, offset).with_cap(channel.cap, 0), 0)?;

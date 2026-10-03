@@ -210,18 +210,43 @@ fn streq(a: &[u8], b: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+// Ждёт итог запроса к loader, продолжая освобождать задачи и отдавать CPU сервисам.
+fn await_loader(id: usize, text: &mut [u8]) -> Result<(Option<Result<u64, &'static str>>, usize), &'static str> {
+    let start = interrupts::milliseconds();
+    loop {
+        if let Some(outcome) = scheduler::take_request(id, text) { return Ok(outcome); }
+        if interrupts::milliseconds().wrapping_sub(start) > 15_000 { scheduler::cancel_request(id); return Err("LOADER TIMEOUT"); }
+        scheduler::reap();
+        scheduler::idle();
+    }
+}
+
+// Список берётся с диска (loader + vfs_server), а не из таблицы в ядре.
 fn list_programs(term: &mut Console) {
-    term.print("PROGRAMS:\n");
-    term.print("  app   - ROTATING SQUARE\n");
-    term.print("  app2  - BOUNCING SQUARE AND COUNTERS\n");
-    term.print("  clock - DIGITAL CLOCK\n");
-    term.print("  dzen-clock - FIVE COLOR TIME INDICATORS\n");
-    term.print("  ping  - IPC CLIENT (SHARED MEMORY)\n");
-    term.print("  pong  - IPC SERVER (SUPERVISOR)\n");
-    term.print("  files - VFS DEMO: LIST AND READ THE BOOT DISK\n");
-    term.print("  beep  - AUDIO GATEWAY DEMO: TONES AND PCM\n");
-    term.print("SERVICES (STARTED AT BOOT): rtc ps2_kbd compositor vfs_server audio_gw\n");
-    term.print("USE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.\n");
+    let mut text = [0u8; 4096 - abi::LOADER_REPLY];
+    match scheduler::post_request(abi::LOADER_LIST, b"", true).and_then(|id| await_loader(id, &mut text)) {
+        Ok((_, code)) if code < text.len() => {
+            term.print("PROGRAMS ON DISK:\n");
+            for &byte in &text[..code] { term.print_char(byte); }
+        }
+        Ok(_) => report(term, "CANNOT LIST THE BOOT DISK"),
+        Err(error) => report(term, error),
+    }
+    term.print("SERVICES (STARTED AT BOOT): ");
+    for name in abi::BOOT_SERVICES { term.print(name); term.print(" "); }
+    term.print("\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.\n");
+}
+
+// Сервисы запускаются из образов загрузчика, приложения — через loader с диска.
+fn run_program(name: &[u8], background: bool) -> Result<u64, &'static str> {
+    if let Some(index) = scheduler::service_index(name) { return scheduler::spawn_service(index); }
+    let id = scheduler::post_request(abi::LOADER_RUN, name, background)?;
+    match await_loader(id, &mut [])? {
+        (Some(outcome), _) => outcome,
+        (None, abi::ERR_NOT_FOUND) => Err("UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS."),
+        (None, abi::ERR_INVALID) => Err("NOT A PROGRAM FILE"),
+        (None, _) => Err("LOAD FAILED"),
+    }
 }
 
 #[no_mangle]
@@ -303,15 +328,15 @@ fn command(term: &mut Console, line: &[u8]) {
             list_programs(term);
             return;
         }
-        let Some(program) = scheduler::program_index(name) else {
-            report(term, "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.");
+        if name.len() > abi::NAME_MAX {
+            report(term, "PROGRAM NAME TOO LONG");
             return;
-        };
-        match scheduler::spawn(program, background) {
+        }
+        match run_program(name, background) {
             Ok(pid) => term.print(&format!(
                 "STARTED PID={} NAME={} {}\n",
                 pid,
-                abi::PROGRAM_NAMES[program],
+                scheduler::task_name(pid).as_ref().map_or("?", |n| n.as_str()),
                 if background {
                     "BACKGROUND"
                 } else {
@@ -382,7 +407,7 @@ fn command(term: &mut Console, line: &[u8]) {
             term.print(&format!(
                 "{} {} {} {} {} {} {} {}\n",
                 task.pid,
-                task.name,
+                task.name.as_str(),
                 task.state,
                 if task.foreground { "FG" } else { "BG" },
                 task.cpu,
@@ -429,9 +454,8 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         cpu::prepare(info).expect("CPU state");
         fb = scheduler::init(info).expect("Scheduler init failed");
         // Системные сервисы ищутся по имени, а не по жёстко заданным номерам образов.
-        for name in abi::BOOT_SERVICES {
-            let program = scheduler::program_index(name.as_bytes()).unwrap();
-            if scheduler::service_wanted(program) { scheduler::spawn(program, true).expect("Service spawn"); }
+        for index in 0..abi::BOOT_IMAGES {
+            if scheduler::service_wanted(index) { scheduler::spawn_service(index).expect("Service spawn"); }
         }
         interrupts::init();
         cpu::start(info);

@@ -13,11 +13,12 @@ impl Message {
 
 /// Принятое сообщение или ответ.
 #[derive(Clone, Copy, Debug)]
-pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize> }
+pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub kernel: Option<usize> }
 
 fn received(raw: crate::sys::Raw) -> Received {
     let irq = (raw.msg[1] & MSG_FLAG_IRQ != 0).then_some(raw.msg[2]);
-    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq }
+    let kernel = (raw.msg[1] & MSG_FLAG_KERNEL != 0).then_some(raw.msg[2]);
+    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq, kernel }
 }
 
 /// Мандат точки IPC в слоте процесса.
@@ -28,6 +29,7 @@ impl Endpoint {
     pub const RTC: Self = Self(SLOT_RTC);
     pub const VFS: Self = Self(SLOT_VFS);
     pub const AUDIO: Self = Self(SLOT_AUDIO);
+    pub const LOADER: Self = Self(SLOT_LOADER);
     pub const INIT: Self = Self(SLOT_INIT);
     pub const SERVICE: Self = Self(SLOT_SERVICE);
 
