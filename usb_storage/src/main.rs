@@ -3,7 +3,7 @@
 // Ring 3 USB mass storage driver: xHCI controller via an MMIO capability, Bulk-Only Transport, SCSI READ(10).
 mod xhci;
 
-use mind::abi::{BootInfo, EP_BLOCK_USB, SLOT_DEV0, SLOT_MEM};
+use mind::abi::{BootInfo, BLOCK_KIND_USB, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{Dma, Mmio};
 use xhci::{Xhci, DATA, IOC, ISP, SMALL, TYPE_NORMAL};
@@ -101,5 +101,5 @@ fn main(_info: &'static BootInfo) {
         Some(s) => mind::println!("[USB] MASS STORAGE ON PORT {} (SPEED {}): {} SECTORS", s.host.port, s.host.speed, s.sectors),
         None => mind::println!("[USB] NO MASS STORAGE DEVICE"),
     }
-    block::serve(EP_BLOCK_USB, storage.as_mut().map(|s| s as &mut dyn Driver));
+    block::serve(BLOCK_KIND_USB, storage.as_mut().map(|s| s as &mut dyn Driver));
 }

@@ -1,0 +1,28 @@
+# 027 — No ambient endpoint names (roadmap C3)
+
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-03) · **Roadmap:** step 3, C3 · **Constitution:** MC-3.3, MC-3.7, MC-3.12
+
+## Problem
+
+Service endpoints are global numbers in the ABI (`EP_RTC` … `EP_INIT`, reserved range 1–15) that `init` turns into capabilities with `PLATFORM_ENDPOINT`. A number is an ambient name: whoever holds the platform privilege can reach any service by knowing its number, and the kernel keeps a service-numbering convention.
+
+## Plan
+
+- Remove `EP_*`, `EP_RESERVED` and `PLATFORM_ENDPOINT` from the ABI; every endpoint is created by `ENDPOINT_CREATE` (or by the kernel for `init`'s own) and is known only through capabilities.
+- New endpoint right `CAP_KEEP`: its holder may mint children with the receive right but cannot receive itself unless it also holds `CAP_READ`. `ENDPOINT_CREATE` returns all four rights.
+- `init` creates one endpoint per service, keeps only a keeper capability (`CAP_KEEP | CAP_WRITE | CAP_GRANT`) and moves minted children into the server (all rights) and its clients (write/grant). A restarted service gets a new receive child of the same endpoint, so existing clients keep working; while no server runs, a send fails with `ERR_PEER` as before.
+- Block drivers report a protocol-level device kind (`BLOCK_KIND_*`) instead of their endpoint number.
+
+## Acceptance criteria
+
+- No endpoint number appears in `common/abi.rs`, `init` or any service.
+- `PLATFORM_CAP` cannot produce an endpoint.
+- All QEMU suites pass; restart of a killed service through `RUN <service> &` still serves existing clients.
+
+## Related
+
+[026](026-derivation-and-revocation.done), [ROADMAP](../ROADMAP.md) C3.
+
+## Resolution
+
+`EP_*`, `EP_RESERVED` and `PLATFORM_ENDPOINT` are gone; all 63 endpoints are dynamic, `init`'s own is created by the kernel at boot and charged to init's root quota (19 tasks, 63 endpoints). New right `CAP_KEEP`: `CAP_MINT` from a keeper may add `CAP_READ`; `ENDPOINT_CREATE` returns read/write/grant/keep. `init` creates one endpoint per service on first use, keeps only `CAP_KEEP | CAP_WRITE | CAP_GRANT` and moves minted server and client children into the services. Block drivers report `BLOCK_KIND_*`. The isolation fixture checks that a keeper cannot receive but mints a receiver; the services suite kills `rtc`, shows a running client gets no answer, restarts it and sees the same client served again. All 12 QEMU suites, the USB smoke and the host tests pass.

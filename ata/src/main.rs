@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server.
-use mind::abi::{BootInfo, EP_BLOCK_ATA, SLOT_DEV0, SLOT_DEV1};
+use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
 use mind::block::{self, Driver};
 use mind::dev::Ports;
 
@@ -67,5 +67,5 @@ fn main(_info: &'static BootInfo) {
         Some(d) => mind::println!("[ATA] PRIMARY MASTER: {} SECTORS", d.sectors),
         None => mind::println!("[ATA] NO DISK ON PRIMARY CHANNEL"),
     }
-    block::serve(EP_BLOCK_ATA, disk.as_mut().map(|d| d as &mut dyn Driver));
+    block::serve(BLOCK_KIND_ATA, disk.as_mut().map(|d| d as &mut dyn Driver));
 }

@@ -26,7 +26,12 @@ impl Minted {
         self.slots[self.count] = slot; self.count += 1;
         Ok(slot)
     }
-    fn endpoint(&mut self, ep: usize) -> Result<usize> { self.mint(PLATFORM_ENDPOINT, ep, 0) }
+    // A child of a service endpoint's keeper: all rights for the server, write/grant for a client.
+    fn endpoint(&mut self, keeper: usize, rights: u8) -> Result<usize> {
+        let slot = ipc::mint(keeper, rights, 0, 0)?;
+        self.slots[self.count] = slot; self.count += 1;
+        Ok(slot)
+    }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
 }
@@ -40,10 +45,26 @@ impl Grants {
     fn copy(&mut self, child: usize, own: usize, rights: u8) { self.list[self.count] = grant(child, own, rights); self.count += 1; }
 }
 
-struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES] }
+// Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself).
+struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES] }
 
 impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
+
+    // Keeper of the endpoint of service `name`, created on first use and kept across restarts, so clients granted
+    // earlier reach the restarted server; while no server runs, sends fail with ERR_PEER.
+    fn keeper(&mut self, name: &str) -> Result<usize> {
+        let index = service_index(name);
+        if let Some(slot) = self.keepers[index] { return Ok(slot); }
+        let root = Endpoint::create()?.0;
+        let keeper = ipc::mint(root, CAP_KEEP | CAP_WRITE | CAP_GRANT, 0, 0);
+        let _ = ipc::drop_cap(root);
+        let keeper = keeper?;
+        self.keepers[index] = Some(keeper);
+        Ok(keeper)
+    }
+    fn server(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, ALL) }
+    fn client(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, CLIENT) }
 
     fn dma(&mut self, index: usize, bytes: usize) -> Result<usize> {
         if let Some(slot) = self.dma[index] { return Ok(slot); }
@@ -66,44 +87,44 @@ impl Init {
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
         match name {
-            "rtc" => { grants.add(SLOT_SERVICE, minted.endpoint(EP_RTC)?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
+            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
             "ps2_kbd" => {
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
                 grants.add(SLOT_IRQ, minted.mint(PLATFORM_IRQ, 1, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
             }
             "compositor" => { grants.add(SLOT_MEM, minted.mint(PLATFORM_FRAMEBUFFER, 0, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_DISPLAY)?, 0); }
             "ata" => {
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_ATA)?, ALL);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "ata")?, ALL);
                 grants.add(SLOT_DEV0, minted.ports(0x1F0, 8)?, 0); grants.add(SLOT_DEV1, minted.ports(0x3F6, 1)?, 0);
             }
             "ahci" => {
                 // First SATA controller in AHCI mode (class 01:06:01): ABAR is BAR5.
                 let device = platform::find_device(0x01_06_01, 0xFF_FF_FF, 0)?;
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 5, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_AHCI)?, ALL); grants.copy(SLOT_MEM, self.dma(index, AHCI_DMA_BYTES)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "ahci")?, ALL); grants.copy(SLOT_MEM, self.dma(index, AHCI_DMA_BYTES)?, 0);
             }
             "usb_storage" => {
                 // First xHCI controller (class 0C:03:30): registers in BAR0.
                 let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?;
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_USB)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running.
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_VFS)?, ALL);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
-                for (driver, ep) in [("ata", EP_BLOCK_ATA), ("ahci", EP_BLOCK_AHCI), ("usb_storage", EP_BLOCK_USB)] {
-                    if self.running(service_index(driver)) { grants.add(slot, minted.endpoint(ep)?, CLIENT); slot += 1; }
+                for driver in ["ata", "ahci", "usb_storage"] {
+                    if self.running(service_index(driver)) { grants.add(slot, self.client(&mut minted, driver)?, CLIENT); slot += 1; }
                 }
             }
             "loader" => {
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_LOADER)?, ALL);
-                grants.add(2, minted.endpoint(EP_RTC)?, CLIENT); grants.add(3, minted.endpoint(EP_VFS)?, CLIENT);
-                grants.add(4, minted.endpoint(EP_AUDIO)?, CLIENT); grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
-                grants.add(6, minted.endpoint(EP_TTS)?, CLIENT);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
+                grants.add(2, self.client(&mut minted, "rtc")?, CLIENT); grants.add(3, self.client(&mut minted, "vfs_server")?, CLIENT);
+                grants.add(4, self.client(&mut minted, "audio_gw")?, CLIENT); grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
+                grants.add(6, self.client(&mut minted, "tts")?, CLIENT);
             }
             "audio_gw" => {
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_AUDIO)?, ALL);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
                 // AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
                 if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
                     let devices = (|| -> Result<[usize; 3]> { Ok([Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, Self::bar(&mut minted, device, 1, CAP_KIND_PORTS)?, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?]) })();
@@ -113,12 +134,12 @@ impl Init {
                     }
                 }
             }
-            "tts" => { grants.add(SLOT_SERVICE, minted.endpoint(EP_TTS)?, ALL); grants.add(SLOT_AUDIO, minted.endpoint(EP_AUDIO)?, CLIENT); }
+            "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); grants.add(SLOT_AUDIO, self.client(&mut minted, "audio_gw")?, CLIENT); }
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the COM1 ports.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
-                for (slot, ep) in [(SLOT_RTC, EP_RTC), (SLOT_VFS, EP_VFS), (SLOT_AUDIO, EP_AUDIO), (SLOT_LOADER, EP_LOADER), (SLOT_TTS, EP_TTS)] { grants.add(slot, minted.endpoint(ep)?, CLIENT); }
+                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_VFS, "vfs_server"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { grants.add(slot, self.client(&mut minted, service)?, CLIENT); }
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
             }
@@ -137,7 +158,7 @@ fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == 
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES] };
+    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES] };
     // Boot order is the BOOT_SERVICES order: drivers before vfs_server, loader before the shell.
     for index in 1..BOOT_IMAGES {
         match init.start(index) {

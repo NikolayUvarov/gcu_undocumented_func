@@ -54,7 +54,7 @@ impl Device {
         Ok(Self { endpoint, buffer, sectors, kind: info.data[1] })
     }
     pub fn sectors(&self) -> u64 { self.sectors }
-    /// Driver endpoint (EP_BLOCK_*), to tell drives apart.
+    /// Device kind (BLOCK_KIND_*), to tell drives apart.
     pub fn kind(&self) -> usize { self.kind }
     /// Reads up to BLOCK_MAX_SECTORS sectors; the slice is valid until the next read.
     pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> {

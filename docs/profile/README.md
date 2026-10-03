@@ -27,7 +27,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | Requirement | Status | Notes |
 |---|---|---|
 | MC-1.1, 1.3 minimal kernel, drivers outside | partial | Drivers, file system, loader, audio, TTS, command shell and service policy run in ring 3. The kernel still parses ELF images for `SPAWN` and enumerates PCI (discovery, not policy). |
-| MC-1.4 policy separate from mechanism | met (resources) | `init` decides what each service gets; the kernel validates every resource it mints (legacy port allowlist, enumerated BARs, IRQ lines, reserved endpoints) regardless of `init`'s correctness. |
+| MC-1.4 policy separate from mechanism | met (resources) | `init` decides what each service gets; the kernel validates every resource it mints (legacy port allowlist, enumerated BARs, IRQ lines) regardless of `init`'s correctness. |
 | MC-1.5 DMA boundary | **not met — declared** | No IOMMU: `ahci`, `usb_storage`, `audio_gw` and their devices are in the TCB of every memory-isolation guarantee ([tcb.md](tcb.md)). Isolation from them is not claimed. |
 | MC-1.7 accounted creation | partial | Tasks and endpoints are charged to an owner's quota delegated at spawn ([kernel-objects.md](kernel-objects.md)); private heaps and shared mappings have per-task limits; DMA has a global limit. Memory is not charged to owners. |
 | MC-1.8 reuse without residue | partial | All task memory is zeroed on allocation; freed memory is not reused while any mapping or capability refers to it. Devices are not reset on driver restart. |
@@ -36,7 +36,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-2.5 bounded queues, back-pressure | partial | IPC is a rendezvous (no kernel message queue); waiting senders are bounded by the task count. No cancellation contract. |
 | MC-2.6 transfer modes | **not met** | Only shared read-write memory capabilities exist (`MEM_SHARE`): effectively `SHARE_RW` between the parties. COPY/MOVE/SHARE_RO/LEASE are roadmap C4. |
 | MC-3.1, 3.2 explicit, unforgeable capabilities | met (kernel-allocated slots) | Capabilities live in a kernel table and are named by handles `slot \| generation << 8`. A slot the kernel hands out gets a new generation when freed, so a stale handle is rejected. Fixed slots 1–9 are named by their owner and overwritten only by the owner's own receive. |
-| MC-3.3 no implicit authority for new domains | met | A new task gets exactly the spawner's grant list (`SPAWN`). |
+| MC-3.3 no implicit authority for new domains | met | A new task gets exactly the spawner's grant list (`SPAWN`). Endpoints have no global names; a service is reachable only through a capability `init` derived for the client. |
 | MC-3.4–3.6 copy/move/attenuate/revoke | partial | Copy and move are distinct; `CAP_MINT` attenuates endpoint rights and port/memory ranges; `CAP_REVOKE` removes all descendants (including one in a blocked send) before it returns. Mappings made from a revoked memory capability are not removed (roadmap C4). |
 | MC-3.7 no identity bypass | met | Every privileged system call checks a capability; no PID or name grants rights. |
 | MC-3.12 end of initial distribution | partial | Bootstrap authority is only `init` ([bootstrap.md](bootstrap.md)), but `init` keeps the platform privilege for service restarts. |

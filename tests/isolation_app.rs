@@ -143,6 +143,15 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     if *handle & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || *handle & abi::HANDLE_SLOT_MASK >= abi::CAP_SLOTS { asm!("ud2", options(noreturn)); }
                 }
                 if call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0) != abi::ERR_LIMIT { asm!("ud2", options(noreturn)); }
+                // A keeper (no read right) cannot receive but can mint a receiver of the same endpoint.
+                let keeper = mint(endpoints[0], (abi::CAP_KEEP | abi::CAP_WRITE) as usize, 0, 0);
+                let reader = mint(keeper, abi::CAP_READ as usize, 0, 0);
+                if rights(endpoints[0]) != (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_KEEP) as usize
+                    || rights(keeper) != (abi::CAP_KEEP | abi::CAP_WRITE) as usize || rights(reader) != abi::CAP_READ as usize
+                    || call(mb, abi::SYSCALL_IPC_RECV, keeper, 0) != abi::ERR_RIGHTS {
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, reader, 0); call(mb, abi::SYSCALL_CAP_DROP, keeper, 0);
                 for handle in endpoints { call(mb, abi::SYSCALL_CAP_DROP, handle, 0); }
                 // A dropped handle stays dead when its slot is reused: same slot, new generation.
                 let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);

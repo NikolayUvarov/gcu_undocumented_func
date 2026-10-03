@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region.
-use mind::abi::{BootInfo, EP_BLOCK_AHCI, SLOT_DEV0, SLOT_MEM};
+use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{Dma, Mmio};
 
@@ -87,5 +87,5 @@ fn main(_info: &'static BootInfo) {
         Some(d) => mind::println!("[AHCI] PORT {}: {} SECTORS", d.port, d.sectors),
         None => mind::println!("[AHCI] NO SATA DISK"),
     }
-    block::serve(EP_BLOCK_AHCI, disk.as_mut().map(|d| d as &mut dyn Driver));
+    block::serve(BLOCK_KIND_AHCI, disk.as_mut().map(|d| d as &mut dyn Driver));
 }

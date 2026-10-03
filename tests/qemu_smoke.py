@@ -740,8 +740,23 @@ def services_suite(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
+    # No endpoint numbers: a restarted service gets a new receiver of the endpoint init keeps, so a client granted
+    # earlier reaches it again; while it is dead, calls fail instead of hanging.
+    require(vm.command(f"kill {vm.services()['rtc']}", raw=True), "KILLED PID=")
+    require(vm.command("run hello &"), "PID=6 NAME=hello BACKGROUND")
+    time.sleep(1)
+    assert "[CLOCK] " not in vm.command("logs 6"), "a dead RTC service must not answer"
+    require(vm.command("run rtc &"), "NAME=rtc")
+    output = ""
+    for _ in range(20):
+        output += vm.command("logs 6")
+        if "[CLOCK] " in output:
+            break
+        time.sleep(.2)
+    require(output, "[CLOCK] ")
+    vm.command("kill 6")
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim", flush=True)
 
 
 def audio_suite(vm, wav):

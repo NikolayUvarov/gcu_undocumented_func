@@ -93,6 +93,8 @@ pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
+// Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
+pub const CAP_KEEP: u8 = 1 << 3;
 pub const CAP_SLOTS: usize = 32;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
@@ -124,17 +126,12 @@ pub const SLOT_DYNAMIC: usize = 10;
 pub const HANDLE_SLOT_MASK: usize = 0xFF;
 pub const HANDLE_GENERATION_SHIFT: usize = 8;
 
-// Reserved IPC endpoint numbers of system services.
-pub const EP_RTC: usize = 2;
-pub const EP_VFS: usize = 3;
-pub const EP_AUDIO: usize = 4;
-pub const EP_BLOCK_ATA: usize = 5;
-pub const EP_BLOCK_AHCI: usize = 6;
-pub const EP_BLOCK_USB: usize = 7;
-pub const EP_LOADER: usize = 8;
-pub const EP_TTS: usize = 9;
-pub const EP_INIT: usize = 10;
-pub const EP_RESERVED: usize = 16;
+// Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
+// through capabilities (MC-3.3).
+// Block device kinds reported by BLOCK_INFO (protocol data, not authority).
+pub const BLOCK_KIND_ATA: usize = 1;
+pub const BLOCK_KIND_AHCI: usize = 2;
+pub const BLOCK_KIND_USB: usize = 3;
 
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
 // A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
@@ -160,7 +157,7 @@ pub const VFS_STAT: usize = 5;
 pub const LOADER_LIST: usize = 2;
 // With msg[2] = 0 and msg[3] = LOADER_RUN the capability is a memory page with `name\0arguments\0`: start with arguments.
 pub const LOADER_RUN: usize = 1;
-// init: CALL on EP_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
+// init: CALL on SLOT_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
 // ERR_BUSY if it is running, ERR_NOT_FOUND if there is no such service.
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
@@ -181,7 +178,6 @@ pub const ARGS_MAX: usize = 1024;
 pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of copying it
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
-pub const PLATFORM_ENDPOINT: usize = 1; // reserved endpoint number, all rights
 pub const PLATFORM_PORTS: usize = 2; // base, count: only legacy ranges from the platform profile
 pub const PLATFORM_IRQ: usize = 3; // line 1..15 except the cascade (2)
 pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range or MMIO

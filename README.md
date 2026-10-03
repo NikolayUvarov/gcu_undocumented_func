@@ -33,21 +33,21 @@ The UEFI bootloader loads the kernel and only the system service images (`BOOT_F
 
 ### System services
 
-The kernel contains no list of services and no per-service capability table. It starts boot image 0, `init`, with its own endpoint and two privileges: **platform** (mint capabilities over resources the kernel has validated — reserved endpoints, legacy port ranges, IRQ lines, PCI BARs and IRQs from the kernel's enumeration, the framebuffer, DMA regions, privileges) and **spawn**. That is the whole bootstrap authority; `init` then starts the other boot images in `BOOT_SERVICES` order (`common/abi.rs`), each with exactly the capabilities listed below (`SPAWN` with a grant list), and keeps DMA regions across driver restarts. `ahci` and `usb_storage` start only when `init` finds their controller (`DEVICE_FIND`), so later PIDs depend on the machine. Services cannot be brought to the foreground (except the shell) and each runs once; `RUN <service> &` asks `init` to restart one after `KILL`.
+The kernel contains no list of services and no per-service capability table. It starts boot image 0, `init`, with its own endpoint and two privileges: **platform** (mint capabilities over resources the kernel has validated — legacy port ranges, IRQ lines, PCI BARs and IRQs from the kernel's enumeration, the framebuffer, DMA regions, privileges) and **spawn**. That is the whole bootstrap authority; `init` then starts the other boot images in `BOOT_SERVICES` order (`common/abi.rs`), each with exactly the capabilities listed below (`SPAWN` with a grant list), and keeps DMA regions across driver restarts. Endpoints have no global numbers: `init` creates one per service and keeps only a *keeper* capability (`CAP_KEEP`: may mint receive rights, cannot receive itself); the server gets a receive child, clients get write/grant children. A restarted service gets a new receive child of the same endpoint, so clients granted earlier reach it again; while no server runs their calls fail with `ERR_PEER`. `ahci` and `usb_storage` start only when `init` finds their controller (`DEVICE_FIND`), so later PIDs depend on the machine. Services cannot be brought to the foreground (except the shell) and each runs once; `RUN <service> &` asks `init` to restart one after `KILL`.
 
 | Service | Capabilities (granted by init) | Role |
 |---|---|---|
-| `init` | endpoint 10, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
-| `rtc` | endpoint 2, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
+| `init` | own endpoint, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
+| `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the focused task |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer |
-| `ata` | endpoint 5, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
-| `ahci` | endpoint 6, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
-| `usb_storage` | endpoint 7, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
-| `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
-| `loader` | endpoint 8, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
-| `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
-| `tts` | endpoint 9, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
+| `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
+| `ahci` | service endpoint, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
+| `usb_storage` | service endpoint, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
+| `vfs_server` | service endpoint, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
+| `loader` | service endpoint, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
+| `audio_gw` | service endpoint, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
+| `tts` | service endpoint, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `shell` | screen, init/loader and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
 In the default QEMU setup (IDE disk, no xHCI/AHCI) ten services run and applications start at PID 11. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
