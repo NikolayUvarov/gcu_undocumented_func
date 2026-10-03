@@ -1,15 +1,15 @@
 // Фонемы и их акустические цели для формантного синтеза (мужской голос, 16 кГц).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Ph { A, O, U, E, I, Y, Schwa, Ae, J, W, L, R, M, N, P, B, T, D, K, G, F, V, S, Z, Sh, Zh, Shch, X, H, Ts, Ch, Th, Pause(u16), End(u8) }
+pub enum Ph { A, O, U, E, I, Y, Schwa, Ae, Ih, Uh, Ah, Er, J, W, L, R, M, N, P, B, T, D, K, G, F, V, S, Z, Sh, Zh, Shch, X, H, Ts, Ch, Th, Dh, Pause(u16), End(u8) }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Unit { pub ph: Ph, pub soft: bool, pub stress: bool }
 
 impl Ph {
-    pub fn vowel(self) -> bool { matches!(self, Ph::A | Ph::O | Ph::U | Ph::E | Ph::I | Ph::Y | Ph::Schwa | Ph::Ae) }
+    pub fn vowel(self) -> bool { matches!(self, Ph::A | Ph::O | Ph::U | Ph::E | Ph::I | Ph::Y | Ph::Schwa | Ph::Ae | Ph::Ih | Ph::Uh | Ph::Ah | Ph::Er) }
     pub fn voiceless(self) -> bool { matches!(self, Ph::P | Ph::T | Ph::K | Ph::F | Ph::S | Ph::Sh | Ph::Shch | Ph::X | Ph::H | Ph::Ts | Ph::Ch | Ph::Th) }
-    pub fn obstruent(self) -> bool { self.voiceless() || matches!(self, Ph::B | Ph::D | Ph::G | Ph::V | Ph::Z | Ph::Zh) }
-    pub fn devoiced(self) -> Ph { match self { Ph::B => Ph::P, Ph::D => Ph::T, Ph::G => Ph::K, Ph::V => Ph::F, Ph::Z => Ph::S, Ph::Zh => Ph::Sh, other => other } }
+    pub fn obstruent(self) -> bool { self.voiceless() || matches!(self, Ph::B | Ph::D | Ph::G | Ph::V | Ph::Z | Ph::Zh | Ph::Dh) }
+    pub fn devoiced(self) -> Ph { match self { Ph::B => Ph::P, Ph::D => Ph::T, Ph::G => Ph::K, Ph::V => Ph::F, Ph::Z => Ph::S, Ph::Zh => Ph::Sh, Ph::Dh => Ph::Th, other => other } }
     pub fn voiced(self) -> Ph { match self { Ph::P => Ph::B, Ph::T => Ph::D, Ph::K => Ph::G, Ph::S => Ph::Z, Ph::Sh => Ph::Zh, other => other } }
 }
 
@@ -29,7 +29,10 @@ fn vowel_target(ph: Ph) -> Target {
     match ph {
         Ph::A => formants(720, 1240, 2550), Ph::O => formants(520, 860, 2450), Ph::U => formants(340, 720, 2300),
         Ph::E => formants(490, 1820, 2550), Ph::I => formants(290, 2250, 2950), Ph::Y => formants(320, 1500, 2350),
-        Ph::Ae => formants(660, 1720, 2450), _ => formants(500, 1450, 2500),
+        Ph::Ae => formants(660, 1720, 2450),
+        // Английские [ɪ ʊ ʌ ɝ]: ненапряжённые гласные и r-окрашенный с низкой F3.
+        Ph::Ih => formants(400, 1950, 2550), Ph::Uh => formants(440, 1050, 2250), Ph::Ah => formants(630, 1200, 2400),
+        Ph::Er => formants(470, 1380, 1700), _ => formants(500, 1450, 2500),
     }
 }
 
@@ -71,6 +74,7 @@ pub fn segments(unit: Unit, back: bool, final_vowel: bool, out: &mut [Segment; 4
             // Носовой «мурмур»: сильный низкий резонанс, размытые верхние форманты, резкий переход в гласный.
             t.av = 750; t.b = [60, 350, 500]; t.nz = if ph == Ph::M { 1000 } else { 1500 }; push(Segment { t, ms: 65, blend: 12, snap: true });
         }
+        Ph::Dh => push(seg(fric(l, 120, 5000, 4000, 550), 50, 25)), // английское звонкое [ð]
         Ph::F | Ph::Th => push(seg(fric(l, 260, if ph == Ph::F { 3500 } else { 5500 }, 5000, 0), 95, 30)),
         Ph::V => { l = formants(300, 1300, 2300); push(seg(fric(l, 40, 3500, 2500, 700), 60, 25)); }
         Ph::S => push(seg(fric(l, 850, 5600, 1600, 0), 100, 30)),

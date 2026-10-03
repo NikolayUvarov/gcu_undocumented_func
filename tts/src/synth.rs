@@ -87,7 +87,7 @@ pub fn speak(units: &[Unit], voice: Voice, sink: &mut dyn FnMut(&[i16])) {
     let base = voice.pitch.clamp(60, 300);
     for (index, unit) in units.iter().enumerate() {
         let rest = &units[index + 1..];
-        let back = rest.iter().find(|u| u.ph.vowel()).is_some_and(|u| matches!(u.ph, Ph::A | Ph::O | Ph::U | Ph::Y));
+        let back = rest.iter().find(|u| u.ph.vowel()).is_some_and(|u| matches!(u.ph, Ph::A | Ph::O | Ph::U | Ph::Y | Ph::Uh | Ph::Ah));
         // Последний гласный фразы удлиняется и несёт финальную интонацию.
         let phrase_end = rest.iter().take_while(|u| !u.ph.vowel()).find_map(|u| match u.ph { Ph::End(kind) => Some(kind), Ph::Pause(ms) if ms > crate::text::WORD_GAP_MS => Some(b','), _ => None });
         let final_vowel = unit.ph.vowel() && phrase_end.is_some();

@@ -20,23 +20,28 @@ const RU_VOWELS: &str = "аеёиоуыэюя";
 
 fn fold(c: char) -> char { match c.to_lowercase().next().unwrap_or(c) { 'ё' => 'е', l => l } }
 
-/// Словоформа из словаря (строки упорядочены по написанию без «ё»: двоичный поиск); «е» в тексте совпадает с «ё».
-fn dictionary_entry(word: &[char]) -> Option<&'static str> {
-    let body = &STRESS[STRESS.find('\n')? + 1..];
+/// Двоичный поиск строки в отсортированном словаре (первая строка — заголовок); `order` сравнивает строку с искомым.
+fn sorted_lookup(table: &'static str, order: impl Fn(&str) -> core::cmp::Ordering) -> Option<&'static str> {
+    let body = &table[table.find('\n')? + 1..];
     let (mut lo, mut hi) = (0, body.len());
     while lo < hi {
         let mid = (lo + hi) / 2;
         let start = body.as_bytes()[..mid].iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1);
         let end = body[start..].find('\n').map_or(body.len(), |p| start + p);
-        let line = &body[start..end];
-        match line.chars().map(fold).cmp(word.iter().copied().map(fold)) {
+        match order(&body[start..end]) {
             core::cmp::Ordering::Less => lo = end + 1,
             core::cmp::Ordering::Greater => hi = start,
-            // «ё», набранная в тексте, должна быть и в словаре (иначе это другое слово: «осёл» — не «осел»).
-            core::cmp::Ordering::Equal => return line.chars().zip(word).all(|(l, &c)| c != 'ё' || matches!(l, 'ё' | 'Ё')).then_some(line),
+            core::cmp::Ordering::Equal => return Some(&body[start..end]),
         }
     }
     None
+}
+
+/// Словоформа из словаря ударений (строки упорядочены по написанию без «ё»); «е» в тексте совпадает с «ё».
+fn dictionary_entry(word: &[char]) -> Option<&'static str> {
+    let line = sorted_lookup(STRESS, |line| line.chars().map(fold).cmp(word.iter().copied().map(fold)))?;
+    // «ё», набранная в тексте, должна быть и в словаре (иначе это другое слово: «осёл» — не «осел»).
+    line.chars().zip(word).all(|(l, &c)| c != 'ё' || matches!(l, 'ё' | 'Ё')).then_some(line)
 }
 
 fn cyrillic(c: char) -> bool { ('а'..='я').contains(&c) || c == 'ё' }
@@ -104,8 +109,8 @@ fn stress(out: &mut Out, start: usize, explicit: Option<usize>) {
     if let Some(i) = (start..out.len).filter(|&i| out.units[i].ph.vowel()).nth(target.min(vowels - 1)) { out.units[i].stress = true; }
 }
 
-// Частые английские слова с нерегулярным чтением. Запись: a o u e i y — гласные, @ — шва, & — [æ], ' — ударение,
-// S Z C T — ш ж ч θ, остальные буквы — одноимённые согласные (j — [й], x — [х], h — придыхание).
+// Ручные поправки к словарю CMUdict (проверяются первыми). Запись: a o u e i y — гласные, @ — шва, & — [æ], ' — ударение,
+// S Z C T D — ш ж ч θ ð, I U A R — [ɪ ʊ ʌ ɝ], остальные буквы — одноимённые согласные (j — [й], x — [х], h — придыхание).
 const LEXICON: &[(&str, &str)] = &[
     ("the", "T@"), ("a", "@"), ("an", "&n"), ("is", "'iz"), ("are", "'ar"), ("was", "w'@z"), ("you", "j'u"), ("to", "t'u"), ("of", "'@v"),
     ("i", "'aj"), ("my", "m'aj"), ("your", "j'or"), ("what", "w'@t"), ("one", "w'@n"), ("two", "t'u"), ("three", "Tr'i"), ("four", "f'or"),
@@ -118,13 +123,22 @@ const LEXICON: &[(&str, &str)] = &[
     ("here", "h'ir"), ("we", "w'i"), ("he", "h'i"), ("she", "S'i"), ("they", "T'ej"), ("be", "b'i"), ("do", "d'u"), ("have", "h'&v"),
 ];
 
+// Произношения частых слов из CMUdict: строка «слово запись», по алфавиту.
+const LEXICON_EN: &str = include_str!("../data/lexicon_en.txt");
+
 fn lexicon(word: &[char], out: &mut Out) -> bool {
-    let Some((_, code)) = LEXICON.iter().find(|(w, _)| w.chars().eq(word.iter().copied())) else { return false };
+    let code = match LEXICON.iter().find(|(w, _)| w.chars().eq(word.iter().copied())) {
+        Some((_, code)) => *code,
+        None => match sorted_lookup(LEXICON_EN, |line| line.split(' ').next().unwrap_or("").chars().cmp(word.iter().copied())) {
+            Some(line) => line.split(' ').nth(1).unwrap_or(""),
+            None => return false,
+        },
+    };
     let mut stress = false;
     for c in code.chars() {
         let ph = match c {
             '\'' => { stress = true; continue; }
-            'a' => Ph::A, 'o' => Ph::O, 'u' => Ph::U, 'e' => Ph::E, 'i' => Ph::I, 'y' => Ph::Y, '@' => Ph::Schwa, '&' => Ph::Ae,
+            'a' => Ph::A, 'o' => Ph::O, 'u' => Ph::U, 'e' => Ph::E, 'i' => Ph::I, 'y' => Ph::Y, '@' => Ph::Schwa, '&' => Ph::Ae, 'I' => Ph::Ih, 'U' => Ph::Uh, 'A' => Ph::Ah, 'R' => Ph::Er, 'D' => Ph::Dh,
             'j' => Ph::J, 'w' => Ph::W, 'l' => Ph::L, 'r' => Ph::R, 'm' => Ph::M, 'n' => Ph::N, 'p' => Ph::P, 'b' => Ph::B, 't' => Ph::T,
             'd' => Ph::D, 'k' => Ph::K, 'g' => Ph::G, 'f' => Ph::F, 'v' => Ph::V, 's' => Ph::S, 'z' => Ph::Z, 'S' => Ph::Sh, 'Z' => Ph::Zh,
             'C' => Ph::Ch, 'T' => Ph::Th, 'x' => Ph::X, 'h' => Ph::H, _ => continue,
@@ -266,5 +280,10 @@ mod tests {
         assert_eq!(phonemes("the")[0].0, Ph::Th);
         assert_eq!(phonemes("ship"), [(Ph::Sh, false), (Ph::I, false), (Ph::P, false)]);
         assert_eq!(phonemes("2").len(), 2); // two -> [t u]
+        assert_eq!(phonemes("weather")[..3], [(Ph::W, false), (Ph::E, false), (Ph::Dh, false)]); // из CMUdict, не по правилам
+        for line in LEXICON_EN.lines().filter(|l| !l.starts_with('#')) {
+            let word: Vec<char> = line.split(' ').next().unwrap().chars().collect();
+            assert!(sorted_lookup(LEXICON_EN, |l| l.split(' ').next().unwrap().chars().cmp(word.iter().copied())) == Some(line), "{line}");
+        }
     }
 }
