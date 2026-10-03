@@ -69,8 +69,9 @@ pub enum Image {
     Boot(usize),
 }
 
-/// Grant for SPAWN: the child's slot `child` gets a copy of the caller's slot `own`, endpoints narrowed by `rights`.
-pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { child: child as u8, own: own as u8, rights, reserved: 0 } }
+/// Grant for SPAWN: the child's fixed slot `child` gets a copy of the caller's capability `own` (a handle),
+/// endpoints narrowed by `rights`.
+pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, reserved: 0 } }
 
 /// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints.
 #[derive(Clone, Copy, Debug, Default)]

@@ -119,18 +119,30 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 }
                 // Endpoint quota delegated by loader: four endpoints, the fifth is refused; dropping them frees the quota later.
                 let mut endpoints = [0usize; 4];
-                for slot in endpoints.iter_mut() {
-                    *slot = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
-                    if *slot < abi::SLOT_DYNAMIC || *slot >= abi::CAP_SLOTS { asm!("ud2", options(noreturn)); }
+                for handle in endpoints.iter_mut() {
+                    *handle = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                    if *handle & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || *handle & abi::HANDLE_SLOT_MASK >= abi::CAP_SLOTS { asm!("ud2", options(noreturn)); }
                 }
                 if call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0) != abi::ERR_LIMIT { asm!("ud2", options(noreturn)); }
-                for slot in endpoints { call(mb, abi::SYSCALL_CAP_DROP, slot, 0); }
+                for handle in endpoints { call(mb, abi::SYSCALL_CAP_DROP, handle, 0); }
+                // A dropped handle stays dead when its slot is reused: same slot, new generation.
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let fresh = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
+                let stale = endpoints[0];
+                if fresh & abi::HANDLE_SLOT_MASK != stale & abi::HANDLE_SLOT_MASK || fresh == stale
+                    || call(mb, abi::SYSCALL_CAP_INFO, stale, 0) != abi::CAP_KIND_NONE
+                    || call(mb, abi::SYSCALL_CAP_INFO, fresh, 0) != abi::CAP_KIND_MEMORY
+                    || call(mb, abi::SYSCALL_CAP_DROP, stale, 0) != abi::ERR_INVALID
+                    || call(mb, abi::SYSCALL_CAP_INFO, fresh & abi::HANDLE_SLOT_MASK, 0) != abi::CAP_KIND_NONE {
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, fresh, 0); call(mb, abi::SYSCALL_FREE, block, 0);
                 let block = call(mb, abi::SYSCALL_ALLOC, 8192, 0);
                 if block == 0 || call(mb, abi::SYSCALL_MEM_SHARE, block + 4096, 4096) != abi::ERR_INVALID || call(mb, abi::SYSCALL_MEM_SHARE, block, 3 * 4096) != abi::ERR_INVALID {
                     asm!("ud2", options(noreturn));
                 }
                 let slot = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
-                if slot < abi::SLOT_DYNAMIC || call(mb, abi::SYSCALL_FREE, block, 0) != 0 || call(mb, abi::SYSCALL_CAP_DROP, slot, 0) != 0 {
+                if slot & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || call(mb, abi::SYSCALL_FREE, block, 0) != 0 || call(mb, abi::SYSCALL_CAP_DROP, slot, 0) != 0 {
                     asm!("ud2", options(noreturn));
                 }
                 print(mb, b"CAPABILITY CHECKS OK\r\n");

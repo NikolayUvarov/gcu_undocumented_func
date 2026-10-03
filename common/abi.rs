@@ -113,6 +113,11 @@ pub const SLOT_INPUT: usize = 8;
 pub const SLOT_SERIAL: usize = 9;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 10;
+// A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
+// generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
+// Received capabilities and the compositor's screen are placed only in fixed slots.
+pub const HANDLE_SLOT_MASK: usize = 0xFF;
+pub const HANDLE_GENERATION_SHIFT: usize = 8;
 
 // Reserved IPC endpoint numbers of system services.
 pub const EP_RTC: usize = 2;
@@ -165,7 +170,7 @@ pub const SPAWN_GRANTS_MAX: usize = 16;
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;
 pub const ARGS_MAX: usize = 1024;
-#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub child: u8, pub own: u8, pub rights: u8, pub reserved: u8 }
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub own: u32, pub child: u8, pub rights: u8, pub reserved: u16 }
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_ENDPOINT: usize = 1; // reserved endpoint number, all rights

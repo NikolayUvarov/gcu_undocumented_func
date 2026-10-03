@@ -694,13 +694,13 @@ def services_suite(vm):
     output = vm.command("ps")
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
-    require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
-    vm.send("fg 0\n"); vm.expect("ERROR:")
     # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
     clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
+    require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
+    vm.send("fg 0\n"); vm.expect("ERROR:")
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)

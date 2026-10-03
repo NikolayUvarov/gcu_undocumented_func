@@ -35,7 +35,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-2.3 typed, versioned interfaces | not met | Protocols are numeric conventions in `common/abi.rs`; no IDL (roadmap C5). |
 | MC-2.5 bounded queues, back-pressure | partial | IPC is a rendezvous (no kernel message queue); waiting senders are bounded by the task count. No cancellation contract. |
 | MC-2.6 transfer modes | **not met** | Only shared read-write memory capabilities exist (`MEM_SHARE`): effectively `SHARE_RW` between the parties. COPY/MOVE/SHARE_RO/LEASE are roadmap C4. |
-| MC-3.1, 3.2 explicit, unforgeable capabilities | partial | Capabilities live in a kernel table and are named by slot index. Slots have **no generation**: after a slot is freed and reused, an old index names the new capability (roadmap C1). |
+| MC-3.1, 3.2 explicit, unforgeable capabilities | met (kernel-allocated slots) | Capabilities live in a kernel table and are named by handles `slot \| generation << 8`. A slot the kernel hands out gets a new generation when freed, so a stale handle is rejected. Fixed slots 1–9 are named by their owner and overwritten only by the owner's own receive. |
 | MC-3.3 no implicit authority for new domains | met | A new task gets exactly the spawner's grant list (`SPAWN`). |
 | MC-3.4–3.6 copy/move/attenuate/revoke | not met | Only transfer with endpoint-rights narrowing and `CAP_DROP`; no derivation tree, no revocation (roadmap C2). |
 | MC-3.7 no identity bypass | met | Every privileged system call checks a capability; no PID or name grants rights. |

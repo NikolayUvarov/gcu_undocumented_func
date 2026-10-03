@@ -4,7 +4,7 @@
 |---|---|---|---|
 | Task (address space, stack 64 KiB, context, mailbox, exit page) | 20 tasks in total; per owner: the spawner's task quota (each live child reserves 1 + its own task quota) | `SPAWN` (spawn privilege; services and boot images need the platform privilege) | Counted against the spawner's task quota; memory from the kernel heap (64 MiB, global) |
 | Screen buffer | One per task spawned with `SPAWN_SCREEN` | `SPAWN` | Kernel heap |
-| Capability slot | 32 per task: slots 1–9 fixed by convention, 10–31 handed out by the kernel | Grants, `IPC` transfer, `ENDPOINT_CREATE`, `MEM_SHARE`, `PLATFORM_CAP`, `IPC_SAVE_REPLY` | Fixed per-task table |
+| Capability slot | 32 per task: slots 1–9 fixed by convention (generation 0; receive and compositor targets), 10–31 handed out by the kernel with a 24-bit generation | Grants, `IPC` transfer, `ENDPOINT_CREATE`, `MEM_SHARE`, `PLATFORM_CAP`, `IPC_SAVE_REPLY` | Fixed per-task table |
 | Endpoint | 64: 1–15 reserved for system services (minted only by `init`), 16–63 created on demand and recycled when no capability refers to them | `ENDPOINT_CREATE`, `PLATFORM_CAP` | The creator's endpoint quota (endpoints it created and still exist plus quotas delegated to its live children) |
 | Private heap block | 32 blocks and 16 MiB per task | `ALLOC` | Kernel heap |
 | Shared mapping | 48 MiB per task | `MEM_MAP` | Mapping quota per task; the memory belongs to its owner and is retained while referenced |
@@ -17,7 +17,7 @@
 
 ## Capability kinds
 
-Endpoint (read/write/grant rights), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control and platform. Rights narrowing exists only for endpoints. There is no generation, derivation tree or revocation (roadmap C1–C2).
+Endpoint (read/write/grant rights), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control and platform. Rights narrowing exists only for endpoints. Handles carry a generation for kernel-allocated slots (a generation wraps after 16 777 215 reuses of one slot); there is no derivation tree or revocation (roadmap C2).
 
 ## Quotas
 

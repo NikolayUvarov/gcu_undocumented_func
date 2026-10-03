@@ -1,0 +1,27 @@
+# 025 — Capability handles with generations (roadmap C1) — done
+
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-03) · **Roadmap:** step 3, C1 · **Constitution:** MC-3.2, MC-3.6
+
+## Problem
+
+Capabilities are named by slot index. When a slot is freed and the kernel hands it out again, an old index silently names the new capability (ABA): a program holding a stale number uses an authority it never received under that name.
+
+## Plan
+
+- A handle is `index | generation << 8`. Slots below `SLOT_DYNAMIC` are fixed by convention and named with generation 0 (their owner overwrites them explicitly, e.g. by receiving into them). Slots the kernel hands out carry a generation that changes every time the slot is freed; a handle with another generation is rejected as invalid.
+- Every system call that names a capability resolves the handle; system calls that create capabilities return handles. Received capabilities and the compositor's screen go only into fixed slots.
+- `Grant` names the spawner's capability by handle (32 bits).
+- The isolation fixture checks that a dropped handle stays dead after its slot is reused.
+
+## Acceptance criteria
+
+- Stage II criterion "a capability cannot be revived through a stale handle" holds for kernel-allocated slots; documented for fixed slots.
+- All QEMU suites pass.
+
+## Related
+
+[ROADMAP](../ROADMAP.md) C1, [docs/profile/kernel-objects.md](../docs/profile/kernel-objects.md).
+
+## Resolution
+
+Handles are `slot | generation << 8`; `index()` resolves them on every capability-naming system call; `insert()`/`clear()` hand out and free kernel-allocated slots, bumping a 24-bit generation on free; fixed slots 1–9 take generation 0 and are the only receive and compositor targets. `Grant.own` is a 32-bit handle. The isolation fixture shows a dropped handle stays invalid when its slot is reused. All 12 QEMU suites and the USB smoke pass.

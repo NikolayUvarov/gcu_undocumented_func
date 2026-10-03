@@ -59,7 +59,7 @@ These stages change the kernel ABI that everything else is built on. Working on 
 
 ### Step 3. Stage II — the capability and IPC core (the gate)
 
-- **C1. Capability space with generations.** Slot handles carry a generation; stale handles fail; slot reuse cannot revive an old right (3.2, 3.6).
+- **C1. Capability space with generations — done (2026-10-03, issue 025).** Handles carry a 24-bit generation for kernel-allocated slots; stale handles fail; fixed slots 1–9 remain owner-managed (3.2, 3.6).
 - **C2. Derivation and revocation.** Mint/copy with attenuated rights, a derivation tree (CDT) or equivalent, `revoke` with an observable completion point; copy, move and delegation are distinct operations (3.4–3.6).
 - **C3. No ambient names.** Remove global endpoint numbers from the ABI; `init` hands each process its endpoints at spawn (3.3, 3.12).
 - **C4. IPC contract.** Bounded queues with back-pressure; cancellation; COPY for small messages; memory objects with MOVE (single commit point, no two owners) and SHARE_RO (no writers during the read, including DMA); LEASE with explicit end of access; no SHARE_RW in the core profile (2.5–2.8, 2.11, 2.13).

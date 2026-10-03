@@ -40,7 +40,7 @@ struct Task {
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Queue<128>, log: Queue<4096>, console: Queue<4096>, dirty: bool,
-    cspace: [Option<Capability>; CAP_SLOTS],
+    cspace: [Option<Capability>; CAP_SLOTS], generations: [u32; CAP_SLOTS], // generation of each kernel-allocated slot
     pending_cap: Option<Capability>, pending_call: bool, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64)>, // slot and PID of the client awaiting a reply
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
@@ -160,6 +160,21 @@ impl Scheduler {
     }
     fn find(&self, pid: u64) -> Option<usize> { (1..SLOTS).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
     fn free_slot(cspace: &[Option<Capability>; CAP_SLOTS]) -> Option<usize> { (SLOT_DYNAMIC..CAP_SLOTS).find(|&i| cspace[i].is_none()) }
+    // Handle -> slot index (MC-3.2): fixed slots take generation 0, kernel-allocated ones their current generation.
+    fn index(&self, slot: usize, handle: usize) -> Option<usize> {
+        let (index, generation) = (handle & HANDLE_SLOT_MASK, handle >> HANDLE_GENERATION_SHIFT);
+        if index == 0 || index >= CAP_SLOTS { return None; }
+        let expected = if index < SLOT_DYNAMIC { 0 } else { self.tasks[slot].as_ref().unwrap().generations[index] as usize };
+        (generation == expected).then_some(index)
+    }
+    fn handle(task: &Task, index: usize) -> usize { if index < SLOT_DYNAMIC { index } else { index | (task.generations[index] as usize) << HANDLE_GENERATION_SHIFT } }
+    // Stores a new capability in a free kernel-allocated slot and returns its handle.
+    fn insert(task: &mut Task, cap: Capability) -> Option<usize> { let index = Self::free_slot(&task.cspace)?; task.cspace[index] = Some(cap); Some(Self::handle(task, index)) }
+    // Frees a slot; a kernel-allocated slot moves to the next generation (24 bits) so old handles stay invalid.
+    fn clear(task: &mut Task, index: usize) {
+        task.cspace[index] = None;
+        if index >= SLOT_DYNAMIC { task.generations[index] = (task.generations[index] % 0xFF_FFFF) + 1; }
+    }
 
     // Whether a physical range is still in use by someone else: via a capability, an in-flight send or a mapping.
     fn referenced(&self, physical: usize, size: usize) -> bool {
@@ -246,15 +261,15 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
-    fn cap(&self, slot: usize, index: usize) -> Option<Capability> { if index < CAP_SLOTS { self.tasks[slot].as_ref().unwrap().cspace[index] } else { None } }
+    fn cap(&self, slot: usize, handle: usize) -> Option<Capability> { self.index(slot, handle).and_then(|index| self.tasks[slot].as_ref().unwrap().cspace[index]) }
     // Copy of a capability for transfer; IPC endpoint rights are narrowed by the sender's mask.
-    fn transfer(&self, slot: usize, index: usize, mask: usize) -> Option<Capability> {
-        if index == 0 { return None; }
-        match self.cap(slot, index)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), Capability::Reply(..) => None, other => Some(other) } // reply caps are one-shot and not transferable
+    fn transfer(&self, slot: usize, handle: usize, mask: usize) -> Option<Capability> {
+        if handle == 0 { return None; }
+        match self.cap(slot, handle)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), Capability::Reply(..) => None, other => Some(other) } // reply caps are one-shot and not transferable
     }
     fn blocked(&self, state: State) -> Option<usize> { (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
     // Someone alive can still receive on the endpoint (otherwise a send would wait forever).
@@ -267,7 +282,7 @@ impl Scheduler {
         let (from_mb, to_mb) = (self.mailbox(from), self.mailbox(to));
         let sender = self.tasks[from].as_mut().unwrap(); let (pid, call, cap) = (sender.pid, sender.pending_call, sender.pending_cap.take());
         (*to_mb).msg[2] = (*from_mb).msg[2]; (*to_mb).msg[3] = (*from_mb).msg[3]; (*to_mb).arg1 = pid as usize; (*to_mb).msg[1] = if call { MSG_FLAG_CALL } else { 0 };
-        let receive = (*to_mb).arg2; let delivered = cap.is_some() && (1..CAP_SLOTS).contains(&receive);
+        let receive = (*to_mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
         let receiver = self.tasks[to].as_mut().unwrap();
         if delivered { receiver.cspace[receive] = cap; }
         (*to_mb).msg[0] = delivered as usize; (*to_mb).result = 0; receiver.state = State::Ready;
@@ -324,13 +339,13 @@ impl Scheduler {
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
     unsafe fn ipc_reply(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
         let target = if request.arg1 == 0 { self.tasks[slot].as_mut().unwrap().reply_to.take() } else {
-            match self.cap(slot, request.arg1) { Some(Capability::Reply(caller, pid)) => { self.tasks[slot].as_mut().unwrap().cspace[request.arg1] = None; Some((caller, pid)) } _ => None }
+            match (self.cap(slot, request.arg1), self.index(slot, request.arg1)) { (Some(Capability::Reply(caller, pid)), Some(index)) => { Self::clear(self.tasks[slot].as_mut().unwrap(), index); Some((caller, pid)) } _ => None }
         };
         let Some((caller, pid)) = target else { return Err(ERR_INVALID); };
         if !self.tasks[caller].as_ref().is_some_and(|t| t.pid == pid && t.state == State::BlockedReply(slot)) { return Err(ERR_PEER); }
         let cap = self.transfer(slot, request.msg[0], request.msg[1]); let mb = self.mailbox(caller);
         (*mb).msg[2] = request.msg[2]; (*mb).msg[3] = request.msg[3]; (*mb).arg1 = self.tasks[slot].as_ref().unwrap().pid as usize;
-        let receive = (*mb).arg2; let delivered = cap.is_some() && (1..CAP_SLOTS).contains(&receive);
+        let receive = (*mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
         let task = self.tasks[caller].as_mut().unwrap();
         if delivered { task.cspace[receive] = cap; }
         (*mb).msg[0] = delivered as usize; (*mb).msg[1] = 0; (*mb).result = 0; task.state = State::Ready;
@@ -354,7 +369,7 @@ impl Scheduler {
         let parent = Some((slot, spawner.pid));
         if length == 0 || length > NAME_MAX + 1 + ARGS_MAX || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
         if flags & SPAWN_SERVICE != 0 && !platform { return Err(ERR_RIGHTS); }
-        let grant_bytes = count * core::mem::size_of::<Grant>();
+        let grant_bytes = count * core::mem::size_of::<Grant>(); // 8 bytes: own handle u32, child u8, rights u8
         if count > 0 && !task.space.validate_read(request.msg[2], grant_bytes) { return Err(ERR_INVALID); }
         // `name\0arguments`
         let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
@@ -362,11 +377,11 @@ impl Scheduler {
         let name_len = text[..length].iter().position(|&b| b == 0).unwrap_or(length);
         if name_len == 0 || name_len > NAME_MAX { return Err(ERR_INVALID); }
         let args = if name_len < length { &text[name_len + 1..length] } else { &[][..] };
-        let mut raw = [0u8; SPAWN_GRANTS_MAX * 4];
+        let mut raw = [0u8; SPAWN_GRANTS_MAX * 8];
         for (i, byte) in raw[..grant_bytes].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[2] + i).unwrap() as *const u8); }
         let mut caps = [None; CAP_SLOTS];
-        for grant in raw[..grant_bytes].chunks(4) {
-            let (child, own, rights) = (grant[0] as usize, grant[1] as usize, grant[2] as usize);
+        for grant in raw[..grant_bytes].chunks(8) {
+            let (own, child, rights) = (u32::from_le_bytes([grant[0], grant[1], grant[2], grant[3]]) as usize, grant[4] as usize, grant[5] as usize);
             if !(1..CAP_SLOTS).contains(&child) { return Err(ERR_INVALID); }
             caps[child] = Some(self.transfer(slot, own, rights).ok_or(ERR_INVALID)?);
         }
@@ -486,15 +501,15 @@ impl Scheduler {
             SYSCALL_EXIT => { self.terminate(slot, true); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match ((EP_RESERVED..ENDPOINTS).find(|&e| !self.endpoints[e]), Self::free_slot(&task.cspace)) {
                 _ if self.used_endpoints(slot) >= task.quota_endpoints => Err(ERR_LIMIT),
-                (Some(ep), Some(index)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); task.cspace[index] = Some(Capability::Endpoint(ep, CAP_READ | CAP_WRITE | CAP_GRANT)); Ok(index) }
+                (Some(ep), Some(_)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); Ok(Self::insert(task, Capability::Endpoint(ep, CAP_READ | CAP_WRITE | CAP_GRANT)).unwrap()) }
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_CAP_DROP => if (1..CAP_SLOTS).contains(&request.arg1) { task.cspace[request.arg1] = None; Ok(0) } else { Err(ERR_INVALID) },
+            SYSCALL_CAP_DROP => match self.index(slot, request.arg1) { Some(index) => { Self::clear(task, index); Ok(0) } None => Err(ERR_INVALID) },
             SYSCALL_SPAWN => self.spawn(slot, &request),
             SYSCALL_PLATFORM_CAP => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
                     match (Self::free_slot(&task.cspace), self.platform_cap(request.arg1, request.arg2, request.msg[0])) {
-                        (Some(index), Ok(cap)) => { (*tasks.add(slot)).as_mut().unwrap().cspace[index] = Some(cap); Ok(index) }
+                        (Some(_), Ok(cap)) => Ok(Self::insert((*tasks.add(slot)).as_mut().unwrap(), cap).unwrap()),
                         (None, Ok(_)) => Err(ERR_NO_SLOT),
                         (_, Err(error)) => Err(error),
                     }
@@ -507,7 +522,7 @@ impl Scheduler {
                 }
             }
             SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::free_slot(&task.cspace)) {
-                (Some((physical, size)), Some(index)) => { task.cspace[index] = Some(Capability::Memory(physical, size)); Ok(index) }
+                (Some((physical, size)), Some(_)) => Ok(Self::insert(task, Capability::Memory(physical, size)).unwrap()),
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
@@ -556,7 +571,7 @@ impl Scheduler {
                 if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else { self.route_key(request.arg1 as u8, request.arg2 as u8, request.msg[0] != 0); Ok(0) }
             }
             SYSCALL_COMPOSITOR_PULL => {
-                if !self.holds(slot, Capability::Display) || !(1..CAP_SLOTS).contains(&request.arg1) { Err(ERR_RIGHTS) } else {
+                if !self.holds(slot, Capability::Display) || !(1..SLOT_DYNAMIC).contains(&request.arg1) { Err(ERR_RIGHTS) } else {
                     let focused = self.foreground;
                     match (*tasks.add(focused)).as_mut().filter(|_| focused != 0).filter(|t| t.screen.is_some()) {
                         None => Ok(0),
@@ -596,7 +611,7 @@ impl Scheduler {
             SYSCALL_IPC_REPLY => self.ipc_reply(slot, &request),
             SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::free_slot(&task.cspace)) {
                 // Deferred reply: the server accepts further requests and replies to this client later.
-                (Some((caller, pid)), Some(index)) => { task.reply_to = None; task.cspace[index] = Some(Capability::Reply(caller, pid)); Ok(index) }
+                (Some((caller, pid)), Some(_)) => { task.reply_to = None; Ok(Self::insert(task, Capability::Reply(caller, pid)).unwrap()) }
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
