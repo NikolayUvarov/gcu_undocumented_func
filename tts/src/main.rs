@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-// tts: синтез речи в ring 3. Текст (UTF-8) приходит в разделяемой странице клиента, речь синтезируется
-// формантным синтезатором 16 кГц, повышается до 48 кГц стерео и потоком уходит в audio_gw.
+// tts: speech synthesis in ring 3. Text (UTF-8) arrives in a page shared by the client; speech is synthesized
+// by a 16 kHz formant synthesizer, upsampled to 48 kHz stereo and streamed to audio_gw.
 mod dsp;
 mod phonemes;
 mod synth;
@@ -16,7 +16,7 @@ use phonemes::{Ph, Unit};
 const RECEIVED_CAP: usize = 9;
 const MAX_UNITS: usize = 2048;
 
-// Повышение частоты 16 -> 48 кГц линейной интерполяцией, моно -> стерео.
+// Upsampling 16 -> 48 kHz by linear interpolation, mono -> stereo.
 struct Upsampler { previous: i32, buffer: [i16; synth::FRAME * 6], error: bool }
 
 impl Upsampler {
@@ -51,7 +51,7 @@ fn main(_info: &'static BootInfo) {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         let (op, len) = (request.data[0] & 0xFF, request.data[0] >> 8);
         let voice = synth::Voice { pitch: match request.data[1] & 0xFFFF { 0 => 112, p => p as i64 }, rate: match request.data[1] >> 16 { 0 => 100, r => r as i64 } };
-        // Текст копируется из страницы клиента, затем страница сразу отображается обратно.
+        // The text is copied out of the client's page, then the page is mapped back immediately.
         let mut text = [0u8; 4096]; let mut length = 0;
         if request.cap_received {
             if let Ok(page) = Mapping::new(RECEIVED_CAP) { length = len.min(page.len()).min(text.len()); text[..length].copy_from_slice(&page.as_slice()[..length]); }

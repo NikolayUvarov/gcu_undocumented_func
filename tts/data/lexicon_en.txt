@@ -1,4 +1,4 @@
-# Произношения частых английских слов (CMUdict, BSD; github.com/cmusphinx/cmudict); строится scripts/lexicon_en.py.
+# Pronunciations of frequent English words (CMUdict, BSD; github.com/cmusphinx/cmudict); built by scripts/lexicon_en.py.
 a @
 aargh 'arg
 aaron 'er@n

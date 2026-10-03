@@ -1,4 +1,4 @@
-// Хостовая проверка синтезатора tts: текст -> WAV 16 кГц моно (те же модули, что в сервисе ring 3).
+// Host-side check of the tts synthesizer: text -> 16 kHz mono WAV (same modules as the ring 3 service).
 // rustc --edition=2021 -O tests/tts_host.rs -o /tmp/tts_host && /tmp/tts_host "привет мир" out.wav
 #![allow(dead_code)]
 #[path = "../tts/src/dsp.rs"]

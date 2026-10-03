@@ -1,4 +1,4 @@
-// Фонемы и их акустические цели для формантного синтеза (мужской голос, 16 кГц).
+// Phonemes and their acoustic targets for formant synthesis (male voice, 16 kHz).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ph { A, O, U, E, I, Y, Schwa, Ae, Ih, Uh, Ah, Er, J, W, L, R, M, N, P, B, T, D, K, G, F, V, S, Z, Sh, Zh, Shch, X, H, Ts, Ch, Th, Dh, Pause(u16), End(u8) }
 
@@ -13,7 +13,7 @@ impl Ph {
     pub fn voiced(self) -> Ph { match self { Ph::P => Ph::B, Ph::T => Ph::D, Ph::K => Ph::G, Ph::S => Ph::Z, Ph::Sh => Ph::Zh, other => other } }
 }
 
-// Цель сегмента: форманты F1–F3 и полосы, амплитуды голоса (av), придыхания (ah) и шума (af) с его частотой.
+// Segment target: formants F1–F3 and bandwidths, amplitudes of voicing (av), aspiration (ah) and frication (af) with its frequency.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Target { pub f: [i32; 3], pub b: [i32; 3], pub av: i32, pub ah: i32, pub af: i32, pub ff: i32, pub fb: i32, pub nz: i32 }
 
@@ -22,7 +22,7 @@ pub struct Segment { pub t: Target, pub ms: i32, pub blend: i32, pub snap: bool 
 
 const fn formants(f1: i32, f2: i32, f3: i32) -> Target { Target { f: [f1, f2, f3], b: [70, 90, 150], av: 0, ah: 0, af: 0, ff: 0, fb: 0, nz: NASAL_POLE } }
 
-// Носовой полюс; нуль на той же частоте его гасит (ротовые звуки), смещённый нуль даёт носовой тембр.
+// Nasal pole; a zero at the same frequency cancels it (oral sounds), a shifted zero gives nasal timbre.
 pub const NASAL_POLE: i32 = 270;
 
 fn vowel_target(ph: Ph) -> Target {
@@ -30,13 +30,13 @@ fn vowel_target(ph: Ph) -> Target {
         Ph::A => formants(720, 1240, 2550), Ph::O => formants(520, 860, 2450), Ph::U => formants(340, 720, 2300),
         Ph::E => formants(490, 1820, 2550), Ph::I => formants(290, 2250, 2950), Ph::Y => formants(320, 1500, 2350),
         Ph::Ae => formants(660, 1720, 2450),
-        // Английские [ɪ ʊ ʌ ɝ]: ненапряжённые гласные и r-окрашенный с низкой F3.
+        // English [ɪ ʊ ʌ ɝ]: lax vowels and an r-colored one with low F3.
         Ph::Ih => formants(400, 1950, 2550), Ph::Uh => formants(440, 1050, 2250), Ph::Ah => formants(630, 1200, 2400),
         Ph::Er => formants(470, 1380, 1700), _ => formants(500, 1450, 2500),
     }
 }
 
-// Локус F2 согласного по месту образования; мягкие тянут форманты к [i].
+// Consonant F2 locus by place of articulation; soft consonants pull formants toward [i].
 fn locus(ph: Ph, soft: bool, back: bool) -> Target {
     if soft { return formants(270, 1950, 2800); }
     match ph {
@@ -47,7 +47,7 @@ fn locus(ph: Ph, soft: bool, back: bool) -> Target {
     }
 }
 
-/// Сегменты одной фонемы; `back` — следующий гласный задний (для [k g x]); длительности при темпе 100 %.
+/// Segments of one phoneme; `back` means the next vowel is a back vowel (for [k g x]); durations at 100 % tempo.
 pub fn segments(unit: Unit, back: bool, final_vowel: bool, out: &mut [Segment; 4]) -> usize {
     let Unit { ph, soft, stress } = unit;
     let seg = |t: Target, ms: i32, blend: i32| Segment { t, ms, blend, snap: false };
@@ -65,16 +65,16 @@ pub fn segments(unit: Unit, back: bool, final_vowel: bool, out: &mut [Segment; 4
         Ph::W => { let mut t = formants(300, 650, 2250); t.av = 800; push(seg(t, 50, 30)); }
         Ph::L => { let mut t = if soft { formants(300, 1900, 2800) } else { formants(360, 1000, 2650) }; t.av = 750; t.b = [90, 150, 250]; push(seg(t, 60, 30)); }
         Ph::R => {
-            // Одноударное дрожание: короткое смыкание посередине.
+            // Single-contact trill (tap): a short closure in the middle.
             let mut t = if soft { formants(380, 1800, 2400) } else { formants(420, 1250, 1650) }; t.av = 800;
             push(seg(t, 18, 25)); let mut tap = t; tap.av = 150; push(seg(tap, 14, 6)); push(seg(t, 16, 6));
         }
         Ph::M | Ph::N => {
             let mut t = if ph == Ph::M { formants(250, 1000, 2200) } else if soft { formants(250, 2000, 2800) } else { formants(250, 1650, 2550) };
-            // Носовой «мурмур»: сильный низкий резонанс, размытые верхние форманты, резкий переход в гласный.
+            // Nasal murmur: strong low resonance, blurred upper formants, abrupt transition into the vowel.
             t.av = 750; t.b = [60, 350, 500]; t.nz = if ph == Ph::M { 1000 } else { 1500 }; push(Segment { t, ms: 65, blend: 12, snap: true });
         }
-        Ph::Dh => push(seg(fric(l, 120, 5000, 4000, 550), 50, 25)), // английское звонкое [ð]
+        Ph::Dh => push(seg(fric(l, 120, 5000, 4000, 550), 50, 25)), // English voiced [ð]
         Ph::F | Ph::Th => push(seg(fric(l, 260, if ph == Ph::F { 3500 } else { 5500 }, 5000, 0), 95, 30)),
         Ph::V => { l = formants(300, 1300, 2300); push(seg(fric(l, 40, 3500, 2500, 700), 60, 25)); }
         Ph::S => push(seg(fric(l, 850, 5600, 1600, 0), 100, 30)),
@@ -87,7 +87,7 @@ pub fn segments(unit: Unit, back: bool, final_vowel: bool, out: &mut [Segment; 4
         Ph::P | Ph::B | Ph::T | Ph::D | Ph::K | Ph::G | Ph::Ts | Ph::Ch => {
             let voiced = matches!(ph, Ph::B | Ph::D | Ph::G);
             let (ff, fb, af) = match ph { Ph::P | Ph::B => (1200, 2000, 500), Ph::K | Ph::G => (if back { 1500 } else { 2500 }, 700, 900), _ => (4200, 2500, 850) };
-            // Смычка (у звонких — «голосовая полоса»), взрыв, у глухих короткое придыхание.
+            // Closure (with a voice bar for voiced stops), burst, and short aspiration for voiceless ones.
             let mut closure = l; closure.av = if voiced { 260 } else { 0 }; closure.f[0] = 200; push(seg(closure, if voiced { 50 } else { 58 }, 25));
             let mut burst = fric(l, if voiced { af * 2 / 3 } else { af }, ff, fb, if voiced { 300 } else { 0 }); burst.f[0] = 250;
             push(Segment { t: burst, ms: if ph == Ph::K || ph == Ph::G { 20 } else { 10 }, blend: 2, snap: true });

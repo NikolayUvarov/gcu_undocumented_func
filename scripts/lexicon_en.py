@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Строит tts/data/lexicon_en.txt — произношения частых английских слов из CMUdict (BSD, github.com/cmusphinx/cmudict).
+"""Builds tts/data/lexicon_en.txt: pronunciations of frequent English words from CMUdict (BSD, github.com/cmusphinx/cmudict).
 
-Отбор — по частотному списку словоформ «слово частота» (например, en_50k.txt из hermitdave/FrequencyWords): первые N слов.
-Запись — алфавит лексикона tts (tts/src/text.rs): a o u e i — гласные, @ — шва, & — [æ], ' — ударение перед гласным,
-I U A R — [ɪ ʊ ʌ ɝ], S Z C T D — ш ж ч θ ð, j — [й], h — придыхание. Апостроф из слова убирается (так его читает синтезатор: don't -> dont).
+Selection uses a frequency list of "word count" lines (e.g. en_50k.txt from hermitdave/FrequencyWords): the first N words.
+Notation is the tts lexicon alphabet (tts/src/text.rs): a o u e i = vowels, @ = schwa, & = [æ], ' = stress before a vowel,
+I U A R = [ɪ ʊ ʌ ɝ], S Z C T D = [ʃ ʒ tʃ θ ð], j = [j], h = aspiration. Apostrophes are dropped from words (as the synthesizer reads them: don't -> dont).
     python3 scripts/lexicon_en.py cmudict.dict en_50k.txt [N]
 """
 from pathlib import Path
 import sys
 
 LEXICON = Path(__file__).resolve().parents[1] / "tts/data/lexicon_en.txt"
-# ARPAbet -> алфавит tts; [ŋ] синтезатор не различает: n. Ударный AH — [ʌ], безударный — шва.
+# ARPAbet -> tts alphabet; the synthesizer has no [ŋ]: n. Stressed AH = [ʌ], unstressed = schwa.
 PHONES = {
     "AA": "a", "AE": "&", "AH": "@", "AO": "o", "AW": "au", "AY": "aj", "EH": "e", "ER": "R", "EY": "ej", "IH": "I", "IY": "i",
     "OW": "ou", "OY": "oj", "UH": "U", "UW": "u", "B": "b", "CH": "C", "D": "d", "DH": "D", "F": "f", "G": "g", "HH": "h",
@@ -42,13 +42,13 @@ def main():
         key = word.replace("'", "")
         if word not in pronunciations or not key.isascii() or not key.isalpha():
             continue
-        # «we'll» и «well» после удаления апострофа совпадают: слово без апострофа важнее.
+        # "we'll" and "well" collide once the apostrophe is removed: the word without an apostrophe wins.
         if key in entries and "'" in word:
             continue
         entries[key] = code(pronunciations[word])
-    header = "# Произношения частых английских слов (CMUdict, BSD; github.com/cmusphinx/cmudict); строится scripts/lexicon_en.py."
+    header = "# Pronunciations of frequent English words (CMUdict, BSD; github.com/cmusphinx/cmudict); built by scripts/lexicon_en.py."
     LEXICON.write_text("\n".join([header, *(f"{w} {c}" for w, c in sorted(entries.items()))]) + "\n", encoding="utf-8")
-    print(f"{len(entries)} слов в {LEXICON}")
+    print(f"{len(entries)} words in {LEXICON}")
 
 
 if __name__ == "__main__":

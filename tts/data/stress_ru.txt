@@ -1,4 +1,4 @@
-# Ударения русских словоформ, где эвристика tts ошибается, и формы с «ё»; ударная гласная — заглавная; порядок — по написанию без «ё». Основа — словарь OpenRussian (CC BY-SA 4.0, github.com/Badestrand/russian-dictionary); пополнять через scripts/stress_exceptions.py.
+# Russian word-form stresses where the tts heuristic is wrong, plus forms with "ё"; stressed vowel uppercase; sorted by spelling with "ё" folded to "е". Based on the OpenRussian dictionary (CC BY-SA 4.0, github.com/Badestrand/russian-dictionary); extend via scripts/stress_exceptions.py.
 абсолЮтная
 абсолЮтное
 абсолЮтной

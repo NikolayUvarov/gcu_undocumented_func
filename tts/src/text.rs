@@ -1,4 +1,4 @@
-// Текст -> фонемы: русская орфография (почти фонетическая) и упрощённые правила чтения латиницы.
+// Text -> phonemes: Russian orthography (nearly phonetic) and simplified reading rules for Latin script.
 use crate::phonemes::{Ph, Unit};
 
 pub const WORD_GAP_MS: u16 = 100;
@@ -9,18 +9,18 @@ pub struct Out<'a> { pub units: &'a mut [Unit], pub len: usize }
 impl Out<'_> {
     fn push(&mut self, ph: Ph) { if self.len < self.units.len() { self.units[self.len] = Unit { ph, soft: false, stress: false }; self.len += 1; } }
     fn last(&mut self) -> Option<&mut Unit> { self.len.checked_sub(1).map(|i| &mut self.units[i]) }
-    // Смягчение предыдущего согласного (ж, ш, ц всегда твёрдые; ч, щ, й всегда мягкие).
+    // Palatalize the preceding consonant (ж, ш, ц are always hard; ч, щ, й are always soft).
     fn soften(&mut self) { if let Some(u) = self.last() { if !u.ph.vowel() && !matches!(u.ph, Ph::Zh | Ph::Sh | Ph::Ts | Ph::Pause(_) | Ph::End(_)) { u.soft = true; } } }
     fn ends_with_consonant(&self, start: usize) -> bool { self.len > start && !self.units[self.len - 1].ph.vowel() && self.units[self.len - 1].ph != Ph::J }
 }
 
-// Словарь ударений для форм, где эвристика ошибается: строка — словоформа, ударная гласная заглавная.
+// Stress dictionary for forms where the heuristic is wrong: one word form per line, stressed vowel uppercase.
 const STRESS: &str = include_str!("../data/stress_ru.txt");
 const RU_VOWELS: &str = "аеёиоуыэюя";
 
 fn fold(c: char) -> char { match c.to_lowercase().next().unwrap_or(c) { 'ё' => 'е', l => l } }
 
-/// Двоичный поиск строки в отсортированном словаре (первая строка — заголовок); `order` сравнивает строку с искомым.
+/// Binary search for a line in a sorted dictionary (the first line is a header); `order` compares a line with the target.
 fn sorted_lookup(table: &'static str, order: impl Fn(&str) -> core::cmp::Ordering) -> Option<&'static str> {
     let body = &table[table.find('\n')? + 1..];
     let (mut lo, mut hi) = (0, body.len());
@@ -37,10 +37,10 @@ fn sorted_lookup(table: &'static str, order: impl Fn(&str) -> core::cmp::Orderin
     None
 }
 
-/// Словоформа из словаря ударений (строки упорядочены по написанию без «ё»); «е» в тексте совпадает с «ё».
+/// Word form from the stress dictionary (lines sorted by spelling with "ё" folded to "е"); "е" in the text matches "ё".
 fn dictionary_entry(word: &[char]) -> Option<&'static str> {
     let line = sorted_lookup(STRESS, |line| line.chars().map(fold).cmp(word.iter().copied().map(fold)))?;
-    // «ё», набранная в тексте, должна быть и в словаре (иначе это другое слово: «осёл» — не «осел»).
+    // A "ё" typed in the text must also be in the dictionary (otherwise it is a different word: "осёл" is not "осел").
     line.chars().zip(word).all(|(l, &c)| c != 'ё' || matches!(l, 'ё' | 'Ё')).then_some(line)
 }
 
@@ -52,11 +52,11 @@ const EN_DIGITS: [&str; 10] = ["ziro", "wan", "tu", "thri", "for", "faiv", "siks
 fn russian(word: &[char], out: &mut Out) {
     let start = out.len;
     let mut chars = [' '; 64]; let mut n = word.len().min(64); chars[..n].copy_from_slice(&word[..n]);
-    // Словарь задаёт ударный гласный и возвращает «ё», если текст набран через «е».
+    // The dictionary gives the stressed vowel and restores "ё" when the text was typed with "е".
     let entry = dictionary_entry(word);
     let known = entry.and_then(|line| { let upper = line.chars().position(char::is_uppercase)?; Some(line.chars().take(upper).filter(|c| RU_VOWELS.contains(c.to_lowercase().next().unwrap_or(*c))).count()) });
     if let Some(line) = entry { for (c, l) in chars[..n].iter_mut().zip(line.chars()) { *c = l.to_lowercase().next().unwrap_or(l); } }
-    // «-тся/-ться» читается как [ца]; «-ого/-его» как [ово/ево] (кроме «ого», «много», «строго», «дорого»).
+    // "-тся/-ться" reads as [ца]; "-ого/-его" as [ово/ево] (except "ого", "много", "строго", "дорого").
     let ends = |chars: &[char], tail: &str| chars.len() >= tail.chars().count() && chars[chars.len() - tail.chars().count()..].iter().copied().eq(tail.chars());
     if ends(&chars[..n], "ться") { n -= 4; chars[n] = 'ц'; chars[n + 1] = 'а'; n += 2; }
     else if ends(&chars[..n], "тся") { n -= 3; chars[n] = 'ц'; chars[n + 1] = 'а'; n += 2; }
@@ -79,14 +79,14 @@ fn russian(word: &[char], out: &mut Out) {
             _ => {}
         }
     }
-    // Двойные согласные — один звук; оглушение на конце слова и уподобление по звонкости перед шумным.
+    // Double consonants are one sound; word-final devoicing and voicing assimilation before an obstruent.
     let mut i = start + 1;
     while i < out.len { if out.units[i].ph == out.units[i - 1].ph && !out.units[i].ph.vowel() { out.units.copy_within(i + 1..out.len, i); out.len -= 1; } else { i += 1; } }
     if out.len > start { let last = &mut out.units[out.len - 1]; last.ph = last.ph.devoiced(); }
-    // Ударение по эвристике (словаря нет): «ё» ударная; слово на согласный — последний слог, на гласный — предпоследний.
+    // Heuristic stress (no dictionary entry): "ё" is stressed; word ending in a consonant -> last syllable, in a vowel -> penultimate.
     let yo = chars[..n].iter().position(|&c| c == 'ё').map(|p| chars[..p].iter().filter(|c| "аоуыэиеёюя".contains(**c)).count());
     stress(out, start, known.or(yo));
-    // Аканье и иканье: безударное [о] звучит как [а], безударные [е], [а] после мягкого — как [и] (кроме конца слова).
+    // Akanye and ikanye: unstressed [о] sounds as [а], unstressed [е], [а] after a soft consonant as [и] (except word-finally).
     for i in start..out.len {
         let unit = out.units[i];
         if !unit.ph.vowel() || unit.stress { continue; }
@@ -100,7 +100,7 @@ fn russian(word: &[char], out: &mut Out) {
     }
 }
 
-// Отмечает ударный гласный слова: явный номер или правило «согласный на конце — последний слог, иначе предпоследний».
+// Marks the stressed vowel of a word: explicit index, or the rule "final consonant -> last syllable, otherwise penultimate".
 fn stress(out: &mut Out, start: usize, explicit: Option<usize>) {
     let vowels = (start..out.len).filter(|&i| out.units[i].ph.vowel()).count();
     if vowels == 0 { return; }
@@ -109,8 +109,8 @@ fn stress(out: &mut Out, start: usize, explicit: Option<usize>) {
     if let Some(i) = (start..out.len).filter(|&i| out.units[i].ph.vowel()).nth(target.min(vowels - 1)) { out.units[i].stress = true; }
 }
 
-// Ручные поправки к словарю CMUdict (проверяются первыми). Запись: a o u e i y — гласные, @ — шва, & — [æ], ' — ударение,
-// S Z C T D — ш ж ч θ ð, I U A R — [ɪ ʊ ʌ ɝ], остальные буквы — одноимённые согласные (j — [й], x — [х], h — придыхание).
+// Manual overrides for the CMUdict lexicon (checked first). Notation: a o u e i y = vowels, @ = schwa, & = [æ], ' = stress,
+// S Z C T D = [ʃ ʒ tʃ θ ð], I U A R = [ɪ ʊ ʌ ɝ], other letters = the same-named consonants (j = [j], x = [x], h = aspiration).
 const LEXICON: &[(&str, &str)] = &[
     ("the", "T@"), ("a", "@"), ("an", "&n"), ("is", "'iz"), ("are", "'ar"), ("was", "w'@z"), ("you", "j'u"), ("to", "t'u"), ("of", "'@v"),
     ("i", "'aj"), ("my", "m'aj"), ("your", "j'or"), ("what", "w'@t"), ("one", "w'@n"), ("two", "t'u"), ("three", "Tr'i"), ("four", "f'or"),
@@ -123,7 +123,7 @@ const LEXICON: &[(&str, &str)] = &[
     ("here", "h'ir"), ("we", "w'i"), ("he", "h'i"), ("she", "S'i"), ("they", "T'ej"), ("be", "b'i"), ("do", "d'u"), ("have", "h'&v"),
 ];
 
-// Произношения частых слов из CMUdict: строка «слово запись», по алфавиту.
+// Pronunciations of frequent words from CMUdict: one "word code" line each, sorted alphabetically.
 const LEXICON_EN: &str = include_str!("../data/lexicon_en.txt");
 
 fn lexicon(word: &[char], out: &mut Out) -> bool {
@@ -155,7 +155,7 @@ fn latin(word: &[char], out: &mut Out) {
     let n = word.len();
     let at = |i: usize| if i < n { word[i] } else { ' ' };
     let vowel = |c: char| "aeiouy".contains(c);
-    // Немое конечное «e» и «магическое e»: name -> [neim], time -> [taim].
+    // Silent final "e" and "magic e": name -> [neim], time -> [taim].
     let silent_e = n > 2 && at(n - 1) == 'e' && !vowel(at(n - 2)) && word[..n - 1].iter().any(|&c| vowel(c));
     let magic = silent_e && n >= 3 && vowel(at(n - 3)) && (n < 4 || !vowel(at(n - 4)));
     let end = if silent_e { n - 1 } else { n };
@@ -195,15 +195,15 @@ fn latin(word: &[char], out: &mut Out) {
             'c' => out.push(if "eiy".contains(next) { Ph::S } else { Ph::K }),
             _ => {}
         }
-        // Удвоенные согласные читаются один раз.
+        // Doubled consonants are read once.
         if step == 1 && !vowel(c) && next == c { step = 2; }
         i += step;
     }
-    // В английском ударение чаще на первом слоге.
+    // In English, stress usually falls on the first syllable.
     if !(start..out.len).any(|i| out.units[i].stress) { stress(out, start, Some(0)); }
 }
 
-/// Разбирает текст в фонемы; возвращает их число.
+/// Parses text into phonemes; returns their count.
 pub fn parse(text: &str, units: &mut [Unit]) -> usize {
     let mut out = Out { units, len: 0 };
     let russian_text = text.chars().any(|c| cyrillic(c.to_lowercase().next().unwrap_or(c)));
@@ -253,22 +253,22 @@ mod tests {
         assert_eq!(phonemes("мать"), [(Ph::M, false), (Ph::A, false), (Ph::T, true)]);
         assert_eq!(phonemes("мять"), [(Ph::M, true), (Ph::A, false), (Ph::T, true)]);
         assert!(phonemes("учится").ends_with(&[(Ph::Ts, false), (Ph::A, false)]));
-        assert_eq!(&phonemes("его")[..3], [(Ph::J, false), (Ph::I, false), (Ph::V, false)]); // [йиво]: ударение из словаря, иканье, «г» -> [в]
-        assert_eq!(phonemes("молоко")[1].0, Ph::A); // аканье в безударном слоге
+        assert_eq!(&phonemes("его")[..3], [(Ph::J, false), (Ph::I, false), (Ph::V, false)]); // [йиво]: stress from the dictionary, ikanye, "г" -> [в]
+        assert_eq!(phonemes("молоко")[1].0, Ph::A); // akanye in an unstressed syllable
         assert_eq!(phonemes("жи")[1].0, Ph::Y);
     }
     #[test]
     fn stress_dictionary_overrides_heuristic() {
         let stressed = |text: &str| { let mut units = [Unit { ph: Ph::Pause(0), soft: false, stress: false }; 64]; let n = parse(text, &mut units); units[..n].iter().filter(|u| u.ph.vowel()).position(|u| u.stress) };
-        assert_eq!(stressed("добрый"), Some(0)); // эвристика дала бы последний слог
-        assert_eq!(stressed("тебя"), Some(1)); // и предпоследний — здесь
+        assert_eq!(stressed("добрый"), Some(0)); // the heuristic would pick the last syllable
+        assert_eq!(stressed("тебя"), Some(1)); // and the penultimate one here
         assert_eq!(stressed("заполнена"), Some(1));
-        assert_eq!(stressed("работа"), Some(1)); // нет в словаре: эвристика верна
-        assert_eq!(phonemes("добрый")[1].0, Ph::O); // ударное «о» не редуцируется
-        assert_eq!(phonemes("еще")[3].0, Ph::O); // «ё» из словаря: [йищё]
+        assert_eq!(stressed("работа"), Some(1)); // not in the dictionary: the heuristic is right
+        assert_eq!(phonemes("добрый")[1].0, Ph::O); // stressed "о" is not reduced
+        assert_eq!(phonemes("еще")[3].0, Ph::O); // "ё" from the dictionary: [йищё]
         assert_eq!(stressed("зеленый"), Some(1));
-        assert!(dictionary_entry(&"дёвушка".chars().collect::<Vec<_>>()).is_none()); // набранная «ё» не совпадает с «е» словаря
-        // Каждая запись словаря находится двоичным поиском — и с «ё», и через «е».
+        assert!(dictionary_entry(&"дёвушка".chars().collect::<Vec<_>>()).is_none()); // a typed "ё" does not match a dictionary "е"
+        // Every dictionary entry is found by binary search, both with "ё" and spelled with "е".
         for line in STRESS.lines().filter(|l| !l.starts_with('#')) {
             let word: Vec<char> = line.chars().flat_map(char::to_lowercase).collect();
             assert_eq!(dictionary_entry(&word), Some(line));
@@ -280,7 +280,7 @@ mod tests {
         assert_eq!(phonemes("the")[0].0, Ph::Th);
         assert_eq!(phonemes("ship"), [(Ph::Sh, false), (Ph::I, false), (Ph::P, false)]);
         assert_eq!(phonemes("2").len(), 2); // two -> [t u]
-        assert_eq!(phonemes("weather")[..3], [(Ph::W, false), (Ph::E, false), (Ph::Dh, false)]); // из CMUdict, не по правилам
+        assert_eq!(phonemes("weather")[..3], [(Ph::W, false), (Ph::E, false), (Ph::Dh, false)]); // from CMUdict, not from the rules
         for line in LEXICON_EN.lines().filter(|l| !l.starts_with('#')) {
             let word: Vec<char> = line.split(' ').next().unwrap().chars().collect();
             assert!(sorted_lookup(LEXICON_EN, |l| l.split(' ').next().unwrap().chars().cmp(word.iter().copied())) == Some(line), "{line}");

@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Демонстрация синтеза речи: читает say.txt с диска (если есть) или произносит приветствие.
+// Speech synthesis demo: reads say.txt from disk (if present) or speaks a greeting.
 use mind::abi::BootInfo;
 use mind::fs::File;
 use mind::gfx::Screen;
@@ -27,7 +27,7 @@ fn main(info: &'static BootInfo) {
     loop { mind::input::wait_or_exit(200); }
 }
 
-// Видимая часть текста для экрана: шрифт 8x8 знает только ASCII.
+// Displayable part of the text for the screen: the 8x8 font knows only ASCII.
 struct FixedText { bytes: [u8; 96], len: usize }
 impl FixedText { fn as_bytes(&self) -> &[u8] { &self.bytes[..self.len] } }
 impl FromIterator<u8> for FixedText {

@@ -1,4 +1,4 @@
-//! Клиент сервиса tts: синтез речи (русский и латиница) через audio_gw.
+//! Client for the tts service: speech synthesis (Russian and Latin script) via audio_gw.
 use crate::abi::*;
 use crate::ipc::{Endpoint, Message};
 use crate::mem::Pages;
@@ -7,7 +7,7 @@ use core::cell::UnsafeCell;
 
 struct Channel { pages: Pages, cap: usize }
 struct Shared(UnsafeCell<Option<Channel>>);
-unsafe impl Sync for Shared {} // процессы однопоточны
+unsafe impl Sync for Shared {} // processes are single-threaded
 static CHANNEL: Shared = Shared(UnsafeCell::new(None));
 
 fn channel() -> Result<&'static mut Channel> {
@@ -16,10 +16,10 @@ fn channel() -> Result<&'static mut Channel> {
     Ok(slot.as_mut().unwrap())
 }
 
-/// Произносит текст (до 4 КиБ UTF-8) голосом по умолчанию; возвращает длительность речи в мс, когда она поставлена в очередь.
+/// Speaks text (up to 4 KiB of UTF-8) in the default voice; returns the speech duration in ms once it is queued.
 pub fn say(text: &str) -> Result<usize> { say_with(text, 0, 0) }
 
-/// То же с высотой тона (Гц, 0 — 112) и темпом (%, 0 — 100).
+/// Same, with pitch (Hz, 0 = 112) and tempo (%, 0 = 100).
 pub fn say_with(text: &str, pitch: u16, rate: u16) -> Result<usize> {
     if text.len() > 4096 { return Err(Error::Invalid); }
     let channel = channel()?;

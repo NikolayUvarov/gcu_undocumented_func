@@ -1,4 +1,4 @@
-// Фиксированная точка Q30: косинус и экспонента для коэффициентов, резонаторы, шум и голосовой источник.
+// Q30 fixed point: cosine and exponential for coefficients, resonators, noise and the glottal source.
 pub const RATE: i64 = 16_000;
 const Q: i64 = 1 << 30;
 const PI: i64 = 3_373_259_426; // π · 2^30
@@ -20,7 +20,7 @@ fn exp_neg_q30(y: i64) -> i64 {
     t
 }
 
-// Резонатор второго порядка (Клатт): единичное усиление на нуле для каскада или в пике — для параллельной ветви.
+// Second-order resonator (Klatt): unity gain at DC for the cascade, or at the peak for the parallel branch.
 #[derive(Clone, Copy, Default)]
 pub struct Resonator { a: i64, b: i64, c: i64, y1: i64, y2: i64 }
 
@@ -39,7 +39,7 @@ impl Resonator {
     }
 }
 
-// Антирезонатор (нуль спектра): обратный фильтр к резонатору с единичным усилением на нуле.
+// Antiresonator (spectral zero): inverse filter of a resonator with unity gain at DC.
 #[derive(Clone, Copy, Default)]
 pub struct Antiresonator { a: i64, b: i64, c: i64, x1: i64, x2: i64 }
 
@@ -58,20 +58,20 @@ impl Antiresonator {
 pub struct Noise(u32);
 impl Noise {
     pub const fn new() -> Self { Self(0x1234_5678) }
-    // Равномерный шум в ±4096.
+    // Uniform noise in ±4096.
     pub fn next(&mut self) -> i64 { self.0 = self.0.wrapping_mul(1_103_515_245).wrapping_add(12_345); ((self.0 >> 16) as i64 & 0x1FFF) - 4096 }
 }
 
-// Источник KLGLOTT88: производная потока 2x − 3x² в открытой фазе, резкое закрытие даёт возбуждение.
+// KLGLOTT88 source: flow derivative 2x − 3x² in the open phase; the abrupt closure provides the excitation.
 pub struct Glottis { phase: u32 }
 impl Glottis {
     pub const fn new() -> Self { Self { phase: 0 } }
-    /// Возвращает отсчёт (±4096 при амплитуде 4096) и признак начала нового периода.
+    /// Returns a sample (±4096 at amplitude 4096) and whether a new period has started.
     pub fn next(&mut self, f0: i64) -> (i64, bool) {
         let step = ((f0.clamp(50, 400) << 32) / RATE) as u32;
         let (phase, wrapped) = self.phase.overflowing_add(step);
         self.phase = phase;
-        let open = (u32::MAX as u64 * 6 / 10) as u32; // открытая фаза — 60 % периода
+        let open = (u32::MAX as u64 * 6 / 10) as u32; // open phase is 60 % of the period
         if phase >= open { return (0, wrapped); }
         let x = ((phase as i64) << 15) / open as i64; // Q15
         (((2 * x - (3 * x * x >> 15)) * 4096) >> 15, wrapped)

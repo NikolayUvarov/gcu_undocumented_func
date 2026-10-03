@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Извлекает словоформы с ударением из выгрузки словаря OpenRussian (CC BY-SA 4.0) для scripts/stress_exceptions.py.
+"""Extracts stressed word forms from an OpenRussian dictionary dump (CC BY-SA 4.0) for scripts/stress_exceptions.py.
 
-CSV (nouns, adjectives, verbs, others) — https://github.com/Badestrand/russian-dictionary. Отбор — по частотному списку
-словоформ «слово частота» (например, ru_50k.txt из hermitdave/FrequencyWords): берутся первые N его слов.
-Написания сравниваются без различия е/ё. Написание пропускается, если у одной леммы оно читается по-разному или другое
-чтение даёт лемма, чья начальная форма встречается хотя бы в 1/20 случаев от самой частой леммы с этим написанием (замок, дома).
-    python3 scripts/stress_openrussian.py <каталог с CSV> ru_50k.txt [N] > forms.txt && python3 scripts/stress_exceptions.py forms.txt
+CSV (nouns, adjectives, verbs, others): https://github.com/Badestrand/russian-dictionary. Selection uses a frequency list
+of "word count" lines (e.g. ru_50k.txt from hermitdave/FrequencyWords): its first N words are taken.
+Spellings are compared ignoring е/ё. A spelling is skipped if one lemma reads it in different ways, or if a different
+reading comes from a lemma whose base form occurs at least 1/20 as often as the most frequent lemma with that spelling ("замок", "дома").
+    python3 scripts/stress_openrussian.py <CSV directory> ru_50k.txt [N] > forms.txt && python3 scripts/stress_exceptions.py forms.txt
 """
 import collections
 import csv
@@ -17,7 +17,7 @@ TABLES = ["nouns", "adjectives", "verbs", "others"]
 SKIP = {"bare", "translations_en", "translations_de", "gender", "partner", "animate", "indeclinable", "sg_only", "pl_only", "aspect"}
 
 
-# «доро'га» -> («дорога», 1); None для форм без ударения, с двумя ударениями или с посторонними знаками.
+# "доро'га" -> ("дорога", 1); None for forms without stress, with two stresses, or with stray characters.
 def parse(form):
     form = form.strip().lower().replace("`", "'").replace("\u0301", "'")
     word = form.replace("'", "")
@@ -51,8 +51,8 @@ def fold(word):
 
 
 def resolve(root, frequency, limit):
-    """Словарь «написание без ё -> (форма с ё, номер ударного гласного)» для первых `limit` слов частотного списка."""
-    # Вес леммы — частота её точного написания (ё в субтитрах редка, поэтому «небо» перевешивает «нёбо»).
+    """Dict "spelling with ё folded -> (form with ё, stressed vowel index)" for the first `limit` words of the frequency list."""
+    # A lemma's weight is the frequency of its exact spelling (ё is rare in subtitles, so "небо" outweighs "нёбо").
     counts = collections.Counter()
     for line in Path(frequency).read_text(encoding="utf-8").splitlines():
         word, _, count = line.partition(" ")
