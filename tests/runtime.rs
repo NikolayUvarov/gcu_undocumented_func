@@ -21,7 +21,6 @@ mod memory;
 #[path = "../kernel/src/paging.rs"]
 mod paging;
 #[path = "../kernel/src/rtc.rs"]
-mod rtc;
 #[path = "../kernel/src/task_state.rs"]
 mod task_state;
 #[path = "../kernel/src/user_heap.rs"]

@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", "app.elf", "app2.elf", "clock.elf", "dzenclk.elf")
+FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", "app.elf", "app2.elf", "clock.elf", "dzenclk.elf", "ping.elf", "pong.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf")
 SECTOR = 512
 
 
