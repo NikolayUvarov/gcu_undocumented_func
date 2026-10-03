@@ -17,7 +17,7 @@
 
 ## Capability kinds
 
-Endpoint (read/write/grant rights), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control and platform. Rights narrowing exists only for endpoints. Handles carry a generation for kernel-allocated slots (a generation wraps after 16 777 215 reuses of one slot); there is no derivation tree or revocation (roadmap C2).
+Endpoint (read/write/grant rights), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control and platform. Handles carry a generation for kernel-allocated slots (a generation wraps after 16 777 215 reuses of one slot). Every capability has an identity and a parent: kernel-created capabilities are roots, copies and `CAP_MINT` children are descendants of their source, a move keeps the identity. `CAP_MINT` narrows endpoint rights, port ranges and page-aligned memory, DMA and MMIO ranges; other kinds are copied unchanged, reply capabilities cannot be minted. `CAP_REVOKE` removes all descendants from every task and from blocked sends.
 
 ## Quotas
 
@@ -27,4 +27,5 @@ Every task has a task quota and an endpoint quota, delegated by its spawner at `
 
 - Memory is not part of the quotas: tasks, private heaps and DMA regions are paid from the global kernel heap; per-task limits (heap 16 MiB, shared mappings 48 MiB) bound a single task, not an owner's subtree.
 - Capability slots are a fixed per-task table rather than a quota.
+- Revoking a memory, DMA or MMIO capability does not unmap mappings already made from it (roadmap C4).
 - No CPU budgets or scheduling contexts (roadmap C7).

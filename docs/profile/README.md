@@ -37,7 +37,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-2.6 transfer modes | **not met** | Only shared read-write memory capabilities exist (`MEM_SHARE`): effectively `SHARE_RW` between the parties. COPY/MOVE/SHARE_RO/LEASE are roadmap C4. |
 | MC-3.1, 3.2 explicit, unforgeable capabilities | met (kernel-allocated slots) | Capabilities live in a kernel table and are named by handles `slot \| generation << 8`. A slot the kernel hands out gets a new generation when freed, so a stale handle is rejected. Fixed slots 1–9 are named by their owner and overwritten only by the owner's own receive. |
 | MC-3.3 no implicit authority for new domains | met | A new task gets exactly the spawner's grant list (`SPAWN`). |
-| MC-3.4–3.6 copy/move/attenuate/revoke | not met | Only transfer with endpoint-rights narrowing and `CAP_DROP`; no derivation tree, no revocation (roadmap C2). |
+| MC-3.4–3.6 copy/move/attenuate/revoke | partial | Copy and move are distinct; `CAP_MINT` attenuates endpoint rights and port/memory ranges; `CAP_REVOKE` removes all descendants (including one in a blocked send) before it returns. Mappings made from a revoked memory capability are not removed (roadmap C4). |
 | MC-3.7 no identity bypass | met | Every privileged system call checks a capability; no PID or name grants rights. |
 | MC-3.12 end of initial distribution | partial | Bootstrap authority is only `init` ([bootstrap.md](bootstrap.md)), but `init` keeps the platform privilege for service restarts. |
 | Article 4 storage | not claimed | FAT volumes are read-only external media; no content-addressed store. |

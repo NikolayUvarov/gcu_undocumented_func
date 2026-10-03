@@ -60,7 +60,7 @@ These stages change the kernel ABI that everything else is built on. Working on 
 ### Step 3. Stage II — the capability and IPC core (the gate)
 
 - **C1. Capability space with generations — done (2026-10-03, issue 025).** Handles carry a 24-bit generation for kernel-allocated slots; stale handles fail; fixed slots 1–9 remain owner-managed (3.2, 3.6).
-- **C2. Derivation and revocation.** Mint/copy with attenuated rights, a derivation tree (CDT) or equivalent, `revoke` with an observable completion point; copy, move and delegation are distinct operations (3.4–3.6).
+- **C2. Derivation and revocation — done (2026-10-03, issue 026).** Every capability has a parent; `CAP_MINT` attenuates (endpoint rights, port and memory sub-ranges), copy and move are distinct (`CAP_TRANSFER_MOVE`, `GRANT_MOVE`), `CAP_REVOKE` removes all descendants and returns when they are unusable; memory mappings are not unmapped on revoke (C4) (3.4–3.6).
 - **C3. No ambient names.** Remove global endpoint numbers from the ABI; `init` hands each process its endpoints at spawn (3.3, 3.12).
 - **C4. IPC contract.** Bounded queues with back-pressure; cancellation; COPY for small messages; memory objects with MOVE (single commit point, no two owners) and SHARE_RO (no writers during the read, including DMA); LEASE with explicit end of access; no SHARE_RW in the core profile (2.5–2.8, 2.11, 2.13).
 - **C5. MIND IDL v0.** Typed, versioned interface descriptions with size limits and the capability kinds a message may carry; generated Rust bindings in `libmind`; schema validation in the receiver, outside the kernel (2.3, 2.4, 2.12). WIT is the candidate representation (Appendix B.2).

@@ -6,7 +6,7 @@ use mind::abi::*;
 use mind::dev::cap_info;
 use mind::ipc::{self, Endpoint, Message};
 use mind::platform;
-use mind::process::{grant, Image, Quota};
+use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::{Error, Result};
 
 const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
@@ -17,7 +17,7 @@ const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buf
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 
-// Capabilities minted for one spawn; dropped from init's table once the child has its copies.
+// Capabilities minted for one spawn; moved into the child, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
 impl Minted {
     fn new() -> Self { Self { slots: [0; SPAWN_GRANTS_MAX], count: 0 } }
@@ -32,10 +32,12 @@ impl Minted {
 }
 impl Drop for Minted { fn drop(&mut self) { for &slot in &self.slots[..self.count] { let _ = ipc::drop_cap(slot); } } }
 
+// Minted capabilities are moved into the child; kept ones (init's endpoint, DMA regions) are copied, so init can revoke them.
 struct Grants { list: [Grant; SPAWN_GRANTS_MAX], count: usize }
 impl Grants {
     fn new() -> Self { Self { list: [Grant::default(); SPAWN_GRANTS_MAX], count: 0 } }
-    fn add(&mut self, child: usize, own: usize, rights: u8) { self.list[self.count] = grant(child, own, rights); self.count += 1; }
+    fn add(&mut self, child: usize, own: usize, rights: u8) { self.list[self.count] = grant_moved(child, own, rights); self.count += 1; }
+    fn copy(&mut self, child: usize, own: usize, rights: u8) { self.list[self.count] = grant(child, own, rights); self.count += 1; }
 }
 
 struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES] }
@@ -78,13 +80,13 @@ impl Init {
                 // First SATA controller in AHCI mode (class 01:06:01): ABAR is BAR5.
                 let device = platform::find_device(0x01_06_01, 0xFF_FF_FF, 0)?;
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 5, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_AHCI)?, ALL); grants.add(SLOT_MEM, self.dma(index, AHCI_DMA_BYTES)?, 0);
+                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_AHCI)?, ALL); grants.copy(SLOT_MEM, self.dma(index, AHCI_DMA_BYTES)?, 0);
             }
             "usb_storage" => {
                 // First xHCI controller (class 0C:03:30): registers in BAR0.
                 let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?;
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_USB)?, ALL); grants.add(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
+                grants.add(SLOT_SERVICE, minted.endpoint(EP_BLOCK_USB)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running.
@@ -107,7 +109,7 @@ impl Init {
                     let devices = (|| -> Result<[usize; 3]> { Ok([Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, Self::bar(&mut minted, device, 1, CAP_KIND_PORTS)?, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?]) })();
                     if let Ok([mixer, bus_master, irq]) = devices {
                         grants.add(SLOT_DEV0, mixer, 0); grants.add(SLOT_DEV1, bus_master, 0); grants.add(SLOT_IRQ, irq, 0);
-                        grants.add(SLOT_MEM, self.dma(index, AUDIO_DMA_BYTES)?, 0);
+                        grants.copy(SLOT_MEM, self.dma(index, AUDIO_DMA_BYTES)?, 0);
                     }
                 }
             }
@@ -115,7 +117,7 @@ impl Init {
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the COM1 ports.
                 flags |= SPAWN_SCREEN;
-                grants.add(SLOT_INIT, SLOT_SERVICE, CLIENT);
+                grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
                 for (slot, ep) in [(SLOT_RTC, EP_RTC), (SLOT_VFS, EP_VFS), (SLOT_AUDIO, EP_AUDIO), (SLOT_LOADER, EP_LOADER), (SLOT_TTS, EP_TTS)] { grants.add(slot, minted.endpoint(ep)?, CLIENT); }
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);

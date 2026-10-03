@@ -9,7 +9,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
    - slot 3: the **spawn** privilege;
    - the root quota: 19 tasks, 48 endpoints.
    Nothing else in the system holds the platform privilege unless `init` grants it (it does not).
-3. `init` starts the other boot images in `BOOT_SERVICES` order. For each it mints the needed capabilities, passes them in the `SPAWN` grant list and drops its own copies, except DMA regions, which it keeps for driver restarts.
+3. `init` starts the other boot images in `BOOT_SERVICES` order. For each it mints the needed capabilities, moves them into the service through the `SPAWN` grant list (`GRANT_MOVE`), except DMA regions and its own endpoint, which it copies and keeps.
 
 | Service | Receives from `init` |
 |---|---|

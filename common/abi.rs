@@ -59,6 +59,11 @@ pub const SYSCALL_KERNEL_HEAP: usize = 42;
 pub const SYSCALL_HALT: usize = 43;
 // CLOCK: result = monotonic nanoseconds since boot, arg2 = resolution in ns, msg[2] = calibrated TSC Hz (0: tick clock).
 pub const SYSCALL_CLOCK: usize = 44;
+// CAP_MINT: arg1 = handle, arg2 = endpoint rights mask, msg[0] = offset, msg[1] = length (0: to the end) for port and
+// memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
+// from all tasks; the capability itself stays (MC-3.4-3.6).
+pub const SYSCALL_CAP_MINT: usize = 45;
+pub const SYSCALL_CAP_REVOKE: usize = 46;
 
 // CAP_INFO reply: result=capability kind, arg2=base/address, msg[2]=size/port count/rights.
 pub const CAP_KIND_NONE: usize = 0;
@@ -131,7 +136,9 @@ pub const EP_TTS: usize = 9;
 pub const EP_INIT: usize = 10;
 pub const EP_RESERVED: usize = 16;
 
-// Message: msg[0]=slot of the capability to transfer, msg[1]=rights mask, msg[2..4]=data.
+// Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
+// A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
+pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
 // At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
@@ -170,7 +177,8 @@ pub const SPAWN_GRANTS_MAX: usize = 16;
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;
 pub const ARGS_MAX: usize = 1024;
-#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub own: u32, pub child: u8, pub rights: u8, pub reserved: u16 }
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub own: u32, pub child: u8, pub rights: u8, pub flags: u16 }
+pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of copying it
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_ENDPOINT: usize = 1; // reserved endpoint number, all rights

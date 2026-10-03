@@ -117,6 +117,25 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                         asm!("ud2", options(noreturn));
                     }
                 }
+                // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
+                let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg[0] = offset; (*mb).msg[1] = length; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
+                let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };
+                let writer = mint(abi::SLOT_RTC, abi::CAP_WRITE as usize, 0, 0);
+                let wider = mint(writer, (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT) as usize, 0, 0);
+                if rights(writer) != abi::CAP_WRITE as usize || rights(wider) != abi::CAP_WRITE as usize
+                    || call(mb, abi::SYSCALL_CAP_REVOKE, abi::SLOT_RTC, 0) != 2
+                    || call(mb, abi::SYSCALL_CAP_INFO, writer, 0) != abi::CAP_KIND_NONE || call(mb, abi::SYSCALL_CAP_INFO, wider, 0) != abi::CAP_KIND_NONE
+                    || rights(abi::SLOT_RTC) != (abi::CAP_WRITE | abi::CAP_GRANT) as usize {
+                    asm!("ud2", options(noreturn));
+                }
+                let pages = call(mb, abi::SYSCALL_ALLOC, 8192, 0);
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, pages, 0);
+                let half = mint(memory, 0, 4096, 4096);
+                let size = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_MEMORY { (*mb).msg[2] } else { 0 } };
+                if size(memory) != 8192 || size(half) != 4096 || mint(memory, 0, 4096, 8192) != abi::ERR_INVALID || mint(memory, 0, 100, 4096) != abi::ERR_INVALID {
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, half, 0); call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, pages, 0);
                 // Endpoint quota delegated by loader: four endpoints, the fifth is refused; dropping them frees the quota later.
                 let mut endpoints = [0usize; 4];
                 for handle in endpoints.iter_mut() {

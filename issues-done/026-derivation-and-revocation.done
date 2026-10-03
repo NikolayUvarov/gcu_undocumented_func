@@ -1,0 +1,28 @@
+# 026 — Capability derivation, attenuation and revocation (roadmap C2)
+
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-03) · **Roadmap:** step 3, C2 · **Constitution:** MC-3.4, MC-3.5, MC-3.6
+
+## Problem
+
+A capability can only be copied (IPC transfer, spawn grant) or dropped. Copies cannot be taken back, a holder cannot hand out a narrower right than its own except endpoint rights, and copy, move and delegation are indistinguishable.
+
+## Plan
+
+- Every capability in a table has an identity and a parent: a **copy** (IPC transfer, spawn grant) and a **mint** are children of the source; a **move** keeps the identity and leaves the source slot empty. Capabilities created by the kernel (`ENDPOINT_CREATE`, `MEM_SHARE`, `PLATFORM_CAP`, reply capabilities, the compositor's screen) are roots.
+- `CAP_MINT(handle, rights, offset, length)`: a child with narrower authority — endpoint rights mask, port sub-range, page-aligned memory/DMA/MMIO sub-range; other kinds are copied unchanged.
+- `CAP_REVOKE(handle)`: removes every descendant of the capability from every task, including capabilities waiting in a blocked send; the holder keeps the capability itself. The system call returns the number removed; when it returns, no operation can use a removed capability (completion point, MC-3.6).
+- IPC transfer flag `CAP_TRANSFER_MOVE` and grant flag `GRANT_MOVE`; `init` moves the capabilities it mints into services instead of copying and dropping.
+- Known limit (documented): revoking a memory capability does not unmap mappings already made from it; memory transfer modes come with C4.
+
+## Acceptance criteria
+
+- The isolation fixture shows: a minted endpoint has only the masked rights; a minted port range is a sub-range; revoking a parent removes its children, keeps the parent; a revoked handle is invalid.
+- All QEMU suites pass.
+
+## Related
+
+[025](025-capability-generations.done), [ROADMAP](../ROADMAP.md) C2.
+
+## Resolution
+
+Every capability-table entry carries a `Node { id, parent }`; kernel-created capabilities are roots. IPC transfers and spawn grants copy (a new child node) unless `CAP_TRANSFER_MOVE` / `GRANT_MOVE` is set, which keeps the node and empties the source slot only when the transfer completes. `CAP_MINT` (45) narrows endpoint rights, port ranges and page-aligned memory/DMA/MMIO ranges; `CAP_REVOKE` (46) removes all descendants from every table and from blocked sends and returns their number. `init` moves the capabilities it mints and copies DMA regions and its own endpoint. The isolation fixture (case `k`) checks mint masks, that re-minting cannot widen rights, sub-range validation and revoke keeping the parent. Known limit: mappings made from a revoked memory capability stay mapped (C4). All 12 QEMU suites and the USB smoke pass.

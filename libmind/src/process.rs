@@ -71,7 +71,10 @@ pub enum Image {
 
 /// Grant for SPAWN: the child's fixed slot `child` gets a copy of the caller's capability `own` (a handle),
 /// endpoints narrowed by `rights`.
-pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, reserved: 0 } }
+pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, flags: 0 } }
+
+/// Same, but the capability is moved into the child (the caller's handle becomes invalid once the child exists).
+pub const fn grant_moved(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, flags: GRANT_MOVE } }
 
 /// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints.
 #[derive(Clone, Copy, Debug, Default)]

@@ -2,13 +2,17 @@
 use crate::abi::*;
 use crate::sys::{call, check, syscall, Result};
 
-/// Outgoing message: two data words and, optionally, the capability from slot `cap` with a rights mask.
+/// Outgoing message: two data words and, optionally, the capability `cap` (a handle) with a rights mask; it is copied
+/// (the receiver gets a child the sender can revoke) unless `moved`.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Message { pub data: [usize; 2], pub cap: usize, pub rights: u8 }
+pub struct Message { pub data: [usize; 2], pub cap: usize, pub rights: u8, pub moved: bool }
 
 impl Message {
-    pub const fn new(a: usize, b: usize) -> Self { Self { data: [a, b], cap: 0, rights: 0 } }
+    pub const fn new(a: usize, b: usize) -> Self { Self { data: [a, b], cap: 0, rights: 0, moved: false } }
     pub const fn with_cap(mut self, slot: usize, rights: u8) -> Self { self.cap = slot; self.rights = rights; self }
+    /// Moves the capability: the sender's handle becomes invalid once the message is delivered.
+    pub const fn with_cap_moved(mut self, slot: usize, rights: u8) -> Self { self.cap = slot; self.rights = rights; self.moved = true; self }
+    fn mask(&self) -> usize { self.rights as usize | if self.moved { CAP_TRANSFER_MOVE } else { 0 } }
 }
 
 /// Received message or reply.
@@ -38,12 +42,12 @@ impl Endpoint {
 
     /// Blocks until a receiver arrives; multiple senders are queued.
     pub fn send(&self, message: &Message) -> Result<()> {
-        check(syscall(SYSCALL_IPC_SEND, self.0, 0, [message.cap, message.rights as usize, message.data[0], message.data[1]]).result).map(drop)
+        check(syscall(SYSCALL_IPC_SEND, self.0, 0, [message.cap, message.mask(), message.data[0], message.data[1]]).result).map(drop)
     }
 
     /// Sends and waits for the server's reply; a capability in the reply lands in slot `receive` (0 means don't accept).
     pub fn call(&self, message: &Message, receive: usize) -> Result<Received> {
-        let raw = syscall(SYSCALL_IPC_CALL, self.0, receive, [message.cap, message.rights as usize, message.data[0], message.data[1]]);
+        let raw = syscall(SYSCALL_IPC_CALL, self.0, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
         check(raw.result).map(|_| received(raw))
     }
 
@@ -56,7 +60,7 @@ impl Endpoint {
 
 /// Replies to the client of the last received `call`.
 pub fn reply(message: &Message) -> Result<()> {
-    check(syscall(SYSCALL_IPC_REPLY, 0, 0, [message.cap, message.rights as usize, message.data[0], message.data[1]]).result).map(drop)
+    check(syscall(SYSCALL_IPC_REPLY, 0, 0, [message.cap, message.mask(), message.data[0], message.data[1]]).result).map(drop)
 }
 
 /// Saves the right to reply to the last client into a capability slot, to reply later (`reply_saved`).
@@ -64,8 +68,18 @@ pub fn save_reply() -> Result<usize> { check(call(SYSCALL_IPC_SAVE_REPLY, 0, 0))
 
 /// Replies via a saved capability; the slot is freed.
 pub fn reply_saved(slot: usize, message: &Message) -> Result<()> {
-    check(syscall(SYSCALL_IPC_REPLY, slot, 0, [message.cap, message.rights as usize, message.data[0], message.data[1]]).result).map(drop)
+    check(syscall(SYSCALL_IPC_REPLY, slot, 0, [message.cap, message.mask(), message.data[0], message.data[1]]).result).map(drop)
 }
 
 /// Frees a capability slot.
 pub fn drop_cap(slot: usize) -> Result<()> { check(call(SYSCALL_CAP_DROP, slot, 0)).map(drop) }
+
+/// Child capability with narrower authority: endpoint rights `mask`, or a sub-range (`offset`, `length`, 0 = to the end)
+/// of a port range or a page-aligned memory/DMA/MMIO range. Returns its handle.
+pub fn mint(handle: usize, mask: u8, offset: usize, length: usize) -> Result<usize> {
+    check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [offset, length, 0, 0]).result)
+}
+
+/// Removes every capability derived from `handle` (copies, mints and their descendants) from all tasks; the capability
+/// itself stays. Returns the number removed; when it returns, none of them can be used any more.
+pub fn revoke(handle: usize) -> Result<usize> { check(call(SYSCALL_CAP_REVOKE, handle, 0)) }
