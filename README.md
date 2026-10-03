@@ -339,6 +339,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs and per-CPU timer counters.
+* `CLOCK` — show the monotonic clock (ns), its resolution and the calibrated TSC frequency.
 * `FAULTS` — show the last 16 application exceptions: PID, CPU, exception vector/error code, instruction and fault addresses.
 * `HEAP` — allocate and format a test string, release it, and report total runtime heap usage, free bytes, and whether the test allocation was freed. The measurement is serialized with program allocations so concurrent heap activity cannot produce a false leak report.
 * `HELP` — list the available commands.
@@ -478,6 +479,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |
+| 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: 10 ms tick) |
 | 29 | CAP_INFO | slot → kind, arg2 = base, msg[2] = size/count/rights |
 
 This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later subdivide these blocks. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).

@@ -28,6 +28,7 @@ unsafe impl GlobalAlloc for IrqAllocator {
 #[path = "../../common/abi.rs"]
 mod abi;
 use abi::BootInfo;
+mod clock;
 mod context;
 mod cpu;
 mod elf;
@@ -123,6 +124,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         scheduler::init(info).expect("Scheduler init failed");
         scheduler::spawn_init().expect("init spawn");
         interrupts::init();
+        clock::calibrate();
         cpu::start(info);
     }
     serial_print("MIND CORE KERNEL: INIT STARTED\n");

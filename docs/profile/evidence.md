@@ -7,6 +7,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
 | Applications cannot use privileged system calls (input, display, ports, IRQ, MMIO, spawn, platform, device enumeration, process control, halt) | `isolation` suite, case `k` |
 | Memory of exited, killed or faulted tasks is reclaimed; kernel heap returns to its baseline | `normal`, `heap`, `memory`, `services` suites (`heap_used` baseline checks) |
+| Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |

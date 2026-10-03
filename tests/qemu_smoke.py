@@ -696,6 +696,11 @@ def services_suite(vm):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
     vm.send("fg 0\n"); vm.expect("ERROR:")
+    # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
+    clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
+    assert all(clocks), clocks
+    (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
+    assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)
@@ -736,7 +741,7 @@ def services_suite(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, reclaim", flush=True)
 
 
 def audio_suite(vm, wav):

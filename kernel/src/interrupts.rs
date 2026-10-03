@@ -141,6 +141,8 @@ pub unsafe fn load() {
     asm!("lidt [{}]", in(reg) &idtr);
 }
 
+pub fn milliseconds_per_tick() -> u64 { TICK_MS }
+
 pub fn milliseconds() -> u64 {
     TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS)
 }

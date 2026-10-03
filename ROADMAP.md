@@ -54,7 +54,7 @@ These stages change the kernel ABI that everything else is built on. Working on 
 
 - **K1. Policy out of the kernel — done (2026-10-03, issues 020, 021).** `init` holds the bootstrap authority (platform privilege) and decides which services start with which capabilities; `SPAWN` takes an explicit grant list; the command shell, UART handling and the Ctrl+Z policy run in ring 3; the kernel keeps focus, input delivery and resource validation as mechanisms (1.3, 1.4). Idle CPUs get a wake IPI when one of their tasks becomes ready.
 - **K2. DMA boundary.** Profile statement done (DMA drivers are in the TCB, isolation from them is not claimed); VT-d with per-driver DMA domains remains task III-4 (1.5).
-- **K3. Clocks.** A monotonic clock primitive with defined resolution; the RTC service becomes the calendar-time service (5.6).
+- **K3. Clocks — done (2026-10-03, issue 023).** `CLOCK` gives monotonic nanoseconds from the calibrated TSC (1 ns step in QEMU) with its resolution; the RTC service remains calendar time; `WAIT` keeps the 10 ms tick (5.6).
 - **K4. Accounted kernel objects.** Endpoints, tasks, capability slots and pending messages come from per-owner quotas instead of fixed global tables (1.7, 5.1).
 
 ### Step 3. Stage II — the capability and IPC core (the gate)

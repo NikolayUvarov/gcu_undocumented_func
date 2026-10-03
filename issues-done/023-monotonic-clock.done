@@ -1,6 +1,6 @@
-# 023 — Monotonic clock with defined resolution (roadmap K3)
+# 023 — Monotonic clock with defined resolution (roadmap K3) — done
 
-**Type:** feature · **Priority:** P0 · **Status:** open · **Roadmap:** step 2, K3 · **Constitution:** MC-5.6
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-03) · **Roadmap:** step 2, K3 · **Constitution:** MC-5.6
 
 ## Problem
 
@@ -21,3 +21,7 @@ The only monotonic time is `UPTIME`, counted from the 100 Hz PIT tick: 10 ms res
 ## Related
 
 [docs/profile/clocks.md](../docs/profile/clocks.md), [ROADMAP](../ROADMAP.md) K3.
+
+## Resolution
+
+New kernel module `kernel/src/clock.rs`: the TSC is calibrated at boot over five PIT ticks and used when its rate is constant (CPUID invariant TSC or a hypervisor); otherwise the 10 ms tick. System call `CLOCK` (44): nanoseconds since boot, resolution, TSC Hz; per-CPU last value keeps it monotonic. `mind::time::monotonic_ns`, `clock_info`; shell command `clock`. QEMU: 1 ns step, about 2.7 GHz. `services` suite checks increase and resolution; profile `clocks.md` updated.

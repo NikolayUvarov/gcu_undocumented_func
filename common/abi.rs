@@ -57,6 +57,8 @@ pub const SYSCALL_FAULTS: usize = 40;
 pub const SYSCALL_CPU_INFO: usize = 41;
 pub const SYSCALL_KERNEL_HEAP: usize = 42;
 pub const SYSCALL_HALT: usize = 43;
+// CLOCK: result = monotonic nanoseconds since boot, arg2 = resolution in ns, msg[2] = calibrated TSC Hz (0: tick clock).
+pub const SYSCALL_CLOCK: usize = 44;
 
 // CAP_INFO reply: result=capability kind, arg2=base/address, msg[2]=size/port count/rights.
 pub const CAP_KIND_NONE: usize = 0;

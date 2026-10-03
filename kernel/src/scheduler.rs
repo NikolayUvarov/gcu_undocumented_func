@@ -455,6 +455,11 @@ impl Scheduler {
                 }
             }
             SYSCALL_UPTIME => Ok(interrupts::milliseconds() as usize),
+            SYSCALL_CLOCK => {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), crate::clock::resolution_ns() as usize);
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), crate::clock::tsc_hz() as usize);
+                Ok(crate::clock::now_ns() as usize)
+            }
             SYSCALL_ALLOC => Ok(task.heap.allocate(&mut task.space, request.arg1).unwrap_or(0)),
             SYSCALL_FREE => match task.heap.free(&mut task.space, request.arg1) { None => Err(ERR_INVALID), Some(region) => { if let Some(region) = region { self.retire(region); } Ok(0) } },
             SYSCALL_WAIT => {

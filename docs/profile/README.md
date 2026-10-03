@@ -42,7 +42,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-3.12 end of initial distribution | partial | Bootstrap authority is only `init` ([bootstrap.md](bootstrap.md)), but `init` keeps the platform privilege for service restarts. |
 | Article 4 storage | not claimed | FAT volumes are read-only external media; no content-addressed store. |
 | MC-5.1–5.5 budgets | not met | Round-robin scheduling without budgets; memory quotas only. |
-| MC-5.6 explicit clocks | partial | See [clocks.md](clocks.md). |
+| MC-5.6 explicit clocks | met (measurement) | Monotonic `CLOCK` with stated resolution, calendar time as a separate service; deadlines still have 10 ms granularity. See [clocks.md](clocks.md). |
 | MC-6.1, 6.2 fault containment | met (ring 3) | A user exception terminates only that task, is recorded (`faults`) and its resources are reclaimed; kernel exceptions halt the system. |
 | MC-6.4–6.9 supervision | not met | No supervisor, restart budget or instance generation; `init` restarts a service only on request (roadmap C6). |
 | Articles 7, 8 | not claimed | Single node; no safety plane. |
