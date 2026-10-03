@@ -3,9 +3,9 @@
 
 // Загрузчик UEFI передаёт ядру только образы системных сервисов; приложения читает с диска сервис loader.
 // Драйверы ahci и usb_storage запускаются, только если на шине PCI есть их контроллер.
-pub const BOOT_IMAGES: usize = 9;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf"];
+pub const BOOT_IMAGES: usize = 10;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf"];
 pub const NAME_MAX: usize = 16; // имя задачи в ps и в запросе запуска
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
@@ -42,6 +42,7 @@ pub const SYSCALL_PORT_IN_BLOCK: usize = 27;
 pub const SYSCALL_TASK_ALIVE: usize = 28;
 pub const SYSCALL_CAP_INFO: usize = 29;
 pub const SYSCALL_LOADER_DONE: usize = 30;
+pub const SYSCALL_IPC_SAVE_REPLY: usize = 31;
 
 // Ответ CAP_INFO: result=вид мандата, arg2=база/адрес, msg[2]=размер/число портов/права.
 pub const CAP_KIND_NONE: usize = 0;
@@ -54,6 +55,7 @@ pub const CAP_KIND_INPUT: usize = 6;
 pub const CAP_KIND_DISPLAY: usize = 7;
 pub const CAP_KIND_MMIO: usize = 8;
 pub const CAP_KIND_SPAWN: usize = 9;
+pub const CAP_KIND_REPLY: usize = 10;
 
 // Коды ошибок: usize::MAX - n. ALLOC по-прежнему возвращает 0 при отказе.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -74,6 +76,7 @@ pub const SLOT_RTC: usize = 2;
 pub const SLOT_VFS: usize = 3;
 pub const SLOT_AUDIO: usize = 4;
 pub const SLOT_LOADER: usize = 5;
+pub const SLOT_TTS: usize = 6;
 // Слоты мандатов сервиса: обслуживаемая точка, устройства, IRQ, DMA/кадр, привилегия.
 pub const SLOT_SERVICE: usize = 1;
 pub const SLOT_DEV0: usize = 2;
@@ -95,6 +98,7 @@ pub const EP_BLOCK_ATA: usize = 5;
 pub const EP_BLOCK_AHCI: usize = 6;
 pub const EP_BLOCK_USB: usize = 7;
 pub const EP_LOADER: usize = 8;
+pub const EP_TTS: usize = 9;
 pub const EP_RESERVED: usize = 16;
 
 // Сообщение: msg[0]=слот передаваемого мандата, msg[1]=маска прав, msg[2..4]=данные.
@@ -134,4 +138,7 @@ pub const AUDIO_INFO: usize = 1;
 pub const AUDIO_PLAY: usize = 2;
 pub const AUDIO_TONE: usize = 3;
 pub const AUDIO_STOP: usize = 4;
+pub const AUDIO_WAIT: usize = 5; // ответ откладывается, пока в кольце DMA не освободится аргумент буферов
+// Синтез речи: мандат страницы с текстом UTF-8, msg[2]=TTS_SAY|длина<<8, msg[3]=высота тона Гц|темп %<<16 (0 — по умолчанию).
+pub const TTS_SAY: usize = 1;
 pub const AUDIO_RATE: usize = 48_000;

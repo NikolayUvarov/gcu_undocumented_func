@@ -114,10 +114,21 @@ impl Ac97 {
     }
 }
 
+// Клиенты, ждущие места в кольце: сохранённый мандат ответа и нужное число свободных буферов.
+const WAITERS: usize = 8;
+
+fn release(device: &Option<Ac97>, waiters: &mut [Option<(usize, usize)>; WAITERS], all: bool) {
+    let free = device.as_ref().map_or(BUFFERS - 1, |d| d.free());
+    for waiter in waiters.iter_mut() {
+        if let Some((slot, want)) = *waiter { if all || free >= want { let _ = ipc::reply_saved(slot, &Message::new(free, 0)); *waiter = None; } }
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut device = Ac97::init();
     let irq = Irq(SLOT_IRQ);
+    let mut waiters: [Option<(usize, usize)>; WAITERS] = [None; WAITERS];
     match &device {
         Some(_) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
         None => mind::println!("[AUDIO] NO AC97 DEVICE; GATEWAY ANSWERS WITHOUT OUTPUT"),
@@ -130,9 +141,21 @@ fn main(_info: &'static BootInfo) {
                 if device.interrupts % 64 == 1 { mind::println!("[AUDIO] IRQ COUNT {}", device.interrupts); }
             }
             let _ = irq.ack();
+            release(&device, &mut waiters, false); // буферы доиграны: будим ждущих клиентов
             continue;
         }
         let (op, arg) = (request.data[0] & 0xFF, request.data[0] >> 8);
+        if op == AUDIO_WAIT && request.is_call {
+            let want = arg.clamp(1, BUFFERS - 1);
+            let free = device.as_ref().map_or(BUFFERS - 1, |d| d.free());
+            let parked = free < want && match (waiters.iter().position(Option::is_none), ipc::save_reply()) {
+                (Some(index), Ok(slot)) => { waiters[index] = Some((slot, want)); true }
+                (None, Ok(slot)) => { let _ = ipc::reply_saved(slot, &Message::new(ERR_NO_SLOT, 0)); true }
+                _ => false,
+            };
+            if !parked { let _ = ipc::reply(&Message::new(free, 0)); }
+            continue;
+        }
         let reply = match (op, device.as_mut()) {
             (AUDIO_INFO, d) => [d.is_some() as usize, AUDIO_RATE],
             (_, None) => [ERR_NOT_FOUND, 0],
@@ -144,6 +167,7 @@ fn main(_info: &'static BootInfo) {
             },
             _ => [ERR_INVALID, 0],
         };
+        if op == AUDIO_STOP { release(&device, &mut waiters, true); }
         if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
         if request.is_call { let _ = ipc::reply(&Message::new(reply[0], reply[1])); }
     }

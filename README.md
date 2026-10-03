@@ -44,12 +44,13 @@ The kernel starts these programs at boot, in this order (`BOOT_SERVICES` in `com
 | `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
 | `loader` | endpoint 8, VFS client, kernel request page, spawn privilege | reads application ELF files from the disk and starts them |
 | `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
+| `tts` | endpoint 9, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) seven services run and applications start at PID 8. The limit is eight applications in addition to the services.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) eight services run and applications start at PID 9. The limit is eight applications in addition to the services.
 
 ### IPC
 
-Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`.
+Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`. A server can keep a client waiting: `IPC_SAVE_REPLY` moves the pending reply into a one-time capability (it cannot be transferred), the server goes on receiving other requests and later answers with `IPC_REPLY` naming that slot.
 
 A driver can bind its interrupt line to its endpoint (`IRQ_BIND`): the interrupt then arrives as a message with the IRQ flag, so one loop serves both clients and hardware. The kernel masks the line when it fires; the driver reopens it with `IRQ_ACK` (or `IRQ_WAIT` for drivers that only wait for interrupts).
 
@@ -81,10 +82,25 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
 | `block` | block device client (`Device`) and the driver loop (`serve`, `Driver`) |
 | `gfx` | `Screen`: pixels, rectangles, 8×8 font text |
-| `rtc`, `fs`, `audio` | clients of the RTC, VFS and audio services |
+| `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`audio::Stream`, `audio::wait_space`, `tts::say`) |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 
 The SDK also supplies the panic handler (logs the message and exits the task) and `memset`/`memcpy`/`memmove`/`memcmp`. `common/abi.rs` remains the single ABI definition shared by the kernel, the bootloader and `libmind`.
+
+### Text to speech
+
+`tts` is a formant synthesizer written for MIND CORE (no recorded voice data): text → phonemes → targets for five cascade formants, a nasal pole/zero pair and a parallel noise branch, with a KLGLOTT88 glottal source at 16 kHz, then upsampled to 48 kHz stereo and streamed to `audio_gw`.
+
+* Russian: letter-to-sound rules with palatalization, final devoicing and voicing assimilation, «-тся», «-ого/-его», akanye/ikanye around a heuristic stress (no dictionary: words ending in a consonant are stressed on the last syllable, others on the penultimate, «ё» is always stressed).
+* Latin script: simplified English spelling rules plus a small lexicon of frequent irregular words; digits are read one by one.
+* Prosody: phrase declination, a pitch rise on stressed vowels, falling or rising final intonation for `.` and `?`, pauses for punctuation and between words.
+
+```rust
+mind::tts::say("Привет. Я разум корабля.")?;          // blocks until the speech is queued
+mind::tts::say_with("Hello world.", 140, 90)?;         // pitch 140 Hz, 90 % rate
+```
+
+`RUN say` speaks `say.txt` from the boot disk, or a greeting. The same synthesizer modules build on the host: `rustc --edition=2021 -O tests/tts_host.rs -o /tmp/tts_host && /tmp/tts_host "текст" out.wav` writes a 16 kHz WAV, and `rustc --edition=2021 --test tests/tts_host.rs` runs the text-rule tests. Intelligibility was tuned against the offline Vosk small models: on 30 Russian test phrases about 59 % of the words are recognized, on 8 English phrases about 54 %; the voice is clearly synthetic.
 
 ### Program loading
 
@@ -113,7 +129,7 @@ Each request is a `CALL` carrying a capability for the client's 4 KiB transfer p
 
 ### Audio gateway
 
-`audio_gw` drives an AC97 controller found on PCI by the kernel: a ring of 32 DMA buffers of 4 KiB (48 kHz, 16-bit stereo), buffer-completion interrupts delivered as IPC messages, and client PCM copied from the client's shared buffer. `mind::audio` offers `info`, `tone(hz, ms)`, `play`/`play_all` (interleaved `i16`) and `stop`. `RUN beep` plays three tones and a PCM sweep. A text-to-speech module is meant to be another client that produces PCM for `play_all`; it is not implemented yet. Add the device to QEMU with, for example, `-audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0` (or a `pa`/`dsound`/`coreaudio` audiodev). Without AC97 the gateway answers `DEVICE=false`.
+`audio_gw` drives an AC97 controller found on PCI by the kernel: a ring of 32 DMA buffers of 4 KiB (48 kHz, 16-bit stereo), buffer-completion interrupts delivered as IPC messages, and client PCM copied from the client's shared buffer. `mind::audio` offers `info`, `tone(hz, ms)`, `play`/`play_all` (interleaved `i16`) and `stop`. `RUN beep` plays three tones and a PCM sweep. When the ring is full, `AUDIO_WAIT` parks the client with a saved reply capability and the gateway answers it from the AC97 interrupt that frees buffers, so producers wait for space instead of polling. `mind::audio::Stream` collects samples in the shared buffer and hands them over in 16 KiB blocks. Add the device to QEMU with, for example, `-audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0` (or a `pa`/`dsound`/`coreaudio` audiodev). Without AC97 the gateway answers `DEVICE=false`.
 
 ---
 
@@ -305,6 +321,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN clock` — display a large digital clock (`clock.elf`) in 24-hour `HH:MM:SS` format, with time changes also printed to the UART console.
 * `RUN files` — list the boot disk and read files through `vfs_server`.
 * `RUN beep` — play tones and PCM through `audio_gw`.
+* `RUN say` — speak `say.txt` from the disk (or a greeting) through `tts`.
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * `RUN <name> &` — launch a new background instance and retain the shell. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
@@ -435,7 +452,8 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 8 / 9 | ALLOC / FREE | bytes → address / address → 0 |
 | 10 / 22 | IPC_SEND / IPC_CALL | endpoint slot, reply-capability slot; msg = [cap slot, rights mask, data, data] |
 | 11 | IPC_RECV | endpoint slot, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
-| 23 | IPC_REPLY | msg = [cap slot, rights mask, data, data] |
+| 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
+| 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights |
 | 13 | SPAWN_IMAGE | name, length; msg = [image memory slot, ELF length, endpoint slot for the child's INIT, rights mask \| shell request << 16] → PID — `loader` only |
 | 30 | LOADER_DONE | shell request, result (LIST text length or error) — `loader` only |
@@ -462,7 +480,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
+The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
 
 ```bash
 for fixture in busy_app isolation_app heap_app; do

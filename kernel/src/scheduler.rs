@@ -17,7 +17,7 @@ const AHCI_DMA_BYTES: usize = 128 * 1024; // команды, FIS и буфер �
 const XHCI_DMA_BYTES: usize = 256 * 1024; // кольца, контексты, scratchpad и буфер данных 64 КиБ
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64) }
 
 // Имя задачи (для ps и запросов запуска); образы приложений больше не индексируются таблицей ядра.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -185,6 +185,7 @@ impl Scheduler {
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_LOADER, all)); caps[SLOT_VFS] = Some(Capability::Endpoint(EP_VFS, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_MEM] = Some(Capability::Memory(self.request_page.ptr() as usize, 4096)); caps[SLOT_PRIV] = Some(Capability::Spawn);
             }
+            "tts" => { caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_TTS, all)); caps[SLOT_AUDIO] = Some(Capability::Endpoint(EP_AUDIO, CAP_WRITE | CAP_GRANT)); }
             "audio_gw" => {
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_AUDIO, all));
                 if let Some(ac) = self.ac97 {
@@ -198,6 +199,7 @@ impl Scheduler {
                 caps[SLOT_VFS] = Some(Capability::Endpoint(EP_VFS, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_AUDIO] = Some(Capability::Endpoint(EP_AUDIO, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_LOADER] = Some(Capability::Endpoint(EP_LOADER, CAP_WRITE | CAP_GRANT));
+                caps[SLOT_TTS] = Some(Capability::Endpoint(EP_TTS, CAP_WRITE | CAP_GRANT));
             }
         }
         caps
@@ -235,7 +237,7 @@ impl Scheduler {
     // Копия мандата для передачи; права точки IPC сужаются маской отправителя.
     fn transfer(&self, slot: usize, index: usize, mask: usize) -> Option<Capability> {
         if index == 0 { return None; }
-        match self.cap(slot, index)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), other => Some(other) }
+        match self.cap(slot, index)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), Capability::Reply(..) => None, other => Some(other) } // ответ одноразовый, не передаётся
     }
     fn blocked(&self, state: State) -> Option<usize> { (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
 
@@ -309,8 +311,12 @@ impl Scheduler {
         let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true;
         Ok(Some(self.select(sp, cpu)))
     }
+    // Ответ последнему клиенту или клиенту из сохранённого мандата ответа (arg1 — его слот).
     unsafe fn ipc_reply(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
-        let Some((caller, pid)) = self.tasks[slot].as_mut().unwrap().reply_to.take() else { return Err(ERR_INVALID); };
+        let target = if request.arg1 == 0 { self.tasks[slot].as_mut().unwrap().reply_to.take() } else {
+            match self.cap(slot, request.arg1) { Some(Capability::Reply(caller, pid)) => { self.tasks[slot].as_mut().unwrap().cspace[request.arg1] = None; Some((caller, pid)) } _ => None }
+        };
+        let Some((caller, pid)) = target else { return Err(ERR_INVALID); };
         if !self.tasks[caller].as_ref().is_some_and(|t| t.pid == pid && t.state == State::BlockedReply(slot)) { return Err(ERR_PEER); }
         let cap = self.transfer(slot, request.msg[0], request.msg[1]); let mb = self.mailbox(caller);
         (*mb).msg[2] = request.msg[2]; (*mb).msg[3] = request.msg[3]; (*mb).arg1 = self.tasks[slot].as_ref().unwrap().pid as usize;
@@ -456,6 +462,7 @@ impl Scheduler {
                     Some(Capability::Input) => (CAP_KIND_INPUT, 0, 0),
                     Some(Capability::Display) => (CAP_KIND_DISPLAY, 0, 0),
                     Some(Capability::Spawn) => (CAP_KIND_SPAWN, 0, 0),
+                    Some(Capability::Reply(..)) => (CAP_KIND_REPLY, 0, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
                 Ok(kind)
@@ -466,6 +473,12 @@ impl Scheduler {
                 match outcome { Ok(Some(next)) => return next, Ok(None) => Ok(0), Err(error) => Err(error) }
             }
             SYSCALL_IPC_REPLY => self.ipc_reply(slot, &request),
+            SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::free_slot(&task.cspace)) {
+                // Отложенный ответ: сервер принимает следующие запросы и отвечает этому клиенту позже.
+                (Some((caller, pid)), Some(index)) => { task.reply_to = None; task.cspace[index] = Some(Capability::Reply(caller, pid)); Ok(index) }
+                (None, _) => Err(ERR_INVALID),
+                _ => Err(ERR_NO_SLOT),
+            },
             _ => Err(ERR_INVALID),
         };
         let (Ok(value) | Err(value)) = result;

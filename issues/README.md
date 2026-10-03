@@ -20,7 +20,7 @@
 | [014](../issues-done/014-private-program-heap.done) | Приватная динамическая память программ | feature — выполнено 2026-09-19 | высокий | — |
 | [015](../issues-done/015-load-programs-through-vfs.done) | Загрузка программ через VFS вместо RAMFS загрузчика | feature — выполнено 2026-10-03 | высокий | — |
 | [016](../issues-done/016-storage-drivers.done) | Драйверы ATA / AHCI / USB mass storage для VFS | feature — выполнено 2026-10-03 | средний | — |
-| [017](017-tts-on-audio-gateway.md) | Синтез речи поверх аудиошлюза | feature | низкий | — |
+| [017](../issues-done/017-tts-on-audio-gateway.done) | Синтез речи поверх аудиошлюза | feature — выполнено 2026-10-03 | низкий | — |
 
 Рекомендуемый порядок: 001 → 007 (диагностика на экране) → 002 → 003 → 004 → 005; 006/009/010/011 — параллельно.
 

@@ -30,6 +30,7 @@ impl Endpoint {
     pub const VFS: Self = Self(SLOT_VFS);
     pub const AUDIO: Self = Self(SLOT_AUDIO);
     pub const LOADER: Self = Self(SLOT_LOADER);
+    pub const TTS: Self = Self(SLOT_TTS);
     pub const INIT: Self = Self(SLOT_INIT);
     pub const SERVICE: Self = Self(SLOT_SERVICE);
 
@@ -57,6 +58,14 @@ impl Endpoint {
 /// Ответ клиенту последнего принятого `call`.
 pub fn reply(message: &Message) -> Result<()> {
     check(syscall(SYSCALL_IPC_REPLY, 0, 0, [message.cap, message.rights as usize, message.data[0], message.data[1]]).result).map(drop)
+}
+
+/// Сохраняет право ответить последнему клиенту в слот мандата, чтобы ответить позже (`reply_saved`).
+pub fn save_reply() -> Result<usize> { check(call(SYSCALL_IPC_SAVE_REPLY, 0, 0)) }
+
+/// Ответ по сохранённому мандату; слот освобождается.
+pub fn reply_saved(slot: usize, message: &Message) -> Result<()> {
+    check(syscall(SYSCALL_IPC_REPLY, slot, 0, [message.cap, message.rights as usize, message.data[0], message.data[1]]).result).map(drop)
 }
 
 /// Освобождает слот мандата.

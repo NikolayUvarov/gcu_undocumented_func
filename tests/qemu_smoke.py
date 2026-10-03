@@ -20,7 +20,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # Системные сервисы (PID 1..N); драйверы ahci/usb_storage есть только при наличии контроллера.
-SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw")
+SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts")
 # Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID (BASE считается при загрузке).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
@@ -692,7 +692,7 @@ def ahci_suite(vm):
 
 def services_suite(vm):
     output = vm.command("ps")
-    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw"):
+    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     require(vm.command("fg -4"), "ERROR:")  # отрицательные номера стенд не переводит
     vm.send("fg 0\n"); vm.expect("ERROR:")
@@ -772,6 +772,52 @@ def audio_suite(vm, wav):
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
 
 
+def tts_suite(vm, wav, asr_model=None):
+    require(vm.service_logs("tts", "[TTS] FORMANT SYNTHESIZER READY"), "AUDIO=true")
+    require(vm.command("run say &"), "PID=1 NAME=say BACKGROUND")
+    output = ""
+    for _ in range(80):
+        output += vm.command("logs 1")
+        if "[SAY] DONE" in output:
+            break
+        time.sleep(.25)
+    spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    assert 2500 < spoken < 9000, spoken
+    time.sleep(spoken / 1000 + 1)  # дождаться конца воспроизведения из кольца DMA
+    vm.command("kill 1")
+    vm.close()
+    import struct, wave
+    with wave.open(str(wav)) as audio:
+        frames, rate = audio.readframes(audio.getnframes()), audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if abs(sample) > 300]
+    assert loud, "TTS produced no audio"
+    seconds = (loud[-1] - loud[0]) / rate
+    assert abs(seconds * 1000 - spoken) < 1500, (seconds, spoken)
+    # Голос: основной тон в окнах с энергией — автокорреляция в диапазоне 80–160 Гц.
+    pitches = []
+    for start in range(loud[0], loud[-1] - 2048, rate // 10):
+        window = left[start:start + 2048]
+        if sum(x * x for x in window) / len(window) < 1e6:
+            continue
+        lags = range(rate // 400, rate // 60)
+        best = max(lags, key=lambda lag: sum(window[i] * window[i + lag] for i in range(0, 2048 - lag, 4)))
+        pitches.append(rate / best)
+    voiced = [p for p in pitches if 80 <= p <= 160]
+    assert len(voiced) > len(pitches) / 2, pitches
+    if asr_model:
+        import json, vosk
+        vosk.SetLogLevel(-1)
+        step = rate / 16000
+        mono = [left[int(i * step)] for i in range(int(len(left) / step))]
+        recognizer = vosk.KaldiRecognizer(vosk.Model(asr_model), 16000)
+        recognizer.AcceptWaveform(struct.pack(f"<{len(mono)}h", *mono))
+        heard = json.loads(recognizer.FinalResult())["text"]
+        print(f"ASR: {heard!r}", flush=True)
+        assert sum(word in heard for word in ("разум", "корабля", "система", "работе")) >= 3, heard
+    print(f"PASS: text to speech in ring 3: {spoken} ms of speech through audio_gw, voiced pitch {sum(voiced) / len(voiced):.0f} Hz" + (", recognized by ASR" if asr_model else ""), flush=True)
+
+
 def large_bss(path):
     data = bytearray(path.read_bytes())
     offset = int.from_bytes(data[32:40], "little")
@@ -792,9 +838,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,busy,smp,isolation,heap")
+    parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -820,12 +867,14 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
-            wav = Path(tempfile.gettempdir()) / "mind-core-audio.wav" if suite == "audio" else None
+            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
+                elif suite == "tts":
+                    tts_suite(vm, wav, args.asr_model)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,

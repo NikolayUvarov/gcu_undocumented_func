@@ -45,12 +45,46 @@ pub fn play(samples: &[i16]) -> Result<usize> {
     Ok(accepted / 2)
 }
 
-/// Проигрывает весь буфер, дожидаясь места в очереди.
+/// Ждёт, пока в кольце DMA шлюза освободится `buffers` буферов по 4 КиБ (ответ приходит по прерыванию AC97).
+pub fn wait_space(buffers: usize) -> Result<usize> { request(Message::new(AUDIO_WAIT | buffers << 8, 0)).map(|[free, _]| free) }
+
+/// Проигрывает весь буфер, дожидаясь места в очереди по уведомлению шлюза.
 pub fn play_all(mut samples: &[i16]) -> Result<()> {
     while samples.len() >= 2 {
         let accepted = play(samples)?;
-        if accepted == 0 { crate::time::sleep(20); }
+        if accepted == 0 && wait_space(CHUNK / 4096).is_err() { crate::time::sleep(20); }
         samples = &samples[accepted..];
     }
     Ok(())
+}
+
+/// Потоковый вывод: сэмплы копируются прямо в разделяемый буфер и уходят шлюзу блоками по 16 КиБ,
+/// пока производитель (например, синтезатор речи) готовит следующие.
+pub struct Stream { filled: usize }
+
+impl Stream {
+    pub fn new() -> Result<Self> { channel()?; Ok(Self { filled: 0 }) }
+    /// Добавляет чередующиеся сэмплы L/R.
+    pub fn write(&mut self, samples: &[i16]) -> Result<()> {
+        for sample in samples {
+            if self.filled == CHUNK / 2 { self.flush()?; }
+            let bytes = channel()?.pages.as_mut_slice();
+            bytes[self.filled * 2..self.filled * 2 + 2].copy_from_slice(&sample.to_le_bytes());
+            self.filled += 1;
+        }
+        Ok(())
+    }
+    /// Отдаёт накопленное шлюзу целиком, ожидая места в кольце.
+    pub fn flush(&mut self) -> Result<()> {
+        while self.filled >= 2 {
+            let channel = channel()?;
+            let [accepted, _] = request(Message::new(AUDIO_PLAY | (self.filled & !1) * 2 << 8, 0).with_cap(channel.cap, 0))?;
+            let taken = (accepted / 2).min(self.filled);
+            if taken == 0 { if wait_space(CHUNK / 4096).is_err() { crate::time::sleep(20); } continue; }
+            channel.pages.as_mut_slice().copy_within(taken * 2..self.filled * 2, 0);
+            self.filled -= taken;
+        }
+        self.filled = 0;
+        Ok(())
+    }
 }

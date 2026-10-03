@@ -60,6 +60,8 @@ USER_CRATES=(
     "vfs_server:vfs_server:vfs_server.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
+    "tts:tts:tts.elf"
+    "say:say:say.elf"
     "files:files:files.elf"
     "beep:beep:beep.elf"
 )
