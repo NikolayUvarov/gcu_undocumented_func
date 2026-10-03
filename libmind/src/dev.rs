@@ -54,3 +54,37 @@ pub enum Frame { Unchanged, Dirty, NewSource }
 pub fn compositor_pull(slot: usize) -> Result<Frame> {
     check(call(SYSCALL_COMPOSITOR_PULL, slot, 0)).map(|state| match state { 0 => Frame::Unchanged, 1 => Frame::Dirty, _ => Frame::NewSource })
 }
+
+/// Регистры устройства (MMIO), отображённые некэшируемыми; доступ по смещению.
+pub struct Mmio { map: crate::mem::Mapping }
+
+impl Mmio {
+    pub fn map(slot: usize) -> Result<Self> { crate::mem::Mapping::new(slot).map(|map| Self { map }) }
+    pub fn len(&self) -> usize { self.map.len() }
+    pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    fn at<T>(&self, offset: usize) -> *mut T { (self.map.address() + offset) as *mut T }
+    pub fn read8(&self, offset: usize) -> u8 { unsafe { core::ptr::read_volatile(self.at(offset)) } }
+    pub fn read32(&self, offset: usize) -> u32 { unsafe { core::ptr::read_volatile(self.at(offset)) } }
+    pub fn write32(&self, offset: usize, value: u32) { unsafe { core::ptr::write_volatile(self.at(offset), value) } }
+    /// 64-битные регистры пишутся двумя словами: младшее, затем старшее.
+    pub fn write64(&self, offset: usize, value: u64) { self.write32(offset, value as u32); self.write32(offset + 4, (value >> 32) as u32); }
+    pub fn read64(&self, offset: usize) -> u64 { self.read32(offset) as u64 | (self.read32(offset + 4) as u64) << 32 }
+}
+
+/// DMA-область драйвера: виртуальный адрес для процессора и физический для устройства.
+pub struct Dma { map: crate::mem::Mapping, physical: u64 }
+
+impl Dma {
+    pub fn map(slot: usize) -> Result<Self> {
+        let physical = crate::mem::dma_physical(slot)? as u64;
+        crate::mem::Mapping::new(slot).map(|map| Self { map, physical })
+    }
+    pub fn len(&self) -> usize { self.map.len() }
+    pub fn is_empty(&self) -> bool { self.map.is_empty() }
+    pub fn physical(&self, offset: usize) -> u64 { self.physical + offset as u64 }
+    pub fn bytes(&mut self, offset: usize, len: usize) -> &mut [u8] { &mut self.map.as_mut_slice()[offset..offset + len] }
+    pub fn zero(&mut self, offset: usize, len: usize) { for byte in self.bytes(offset, len) { unsafe { core::ptr::write_volatile(byte, 0) } } }
+    pub fn read32(&self, offset: usize) -> u32 { unsafe { core::ptr::read_volatile((self.map.address() + offset) as *const u32) } }
+    pub fn write32(&mut self, offset: usize, value: u32) { unsafe { core::ptr::write_volatile((self.map.address() + offset) as *mut u32, value) } }
+    pub fn write64(&mut self, offset: usize, value: u64) { self.write32(offset, value as u32); self.write32(offset + 4, (value >> 32) as u32); }
+}

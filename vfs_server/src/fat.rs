@@ -1,5 +1,5 @@
 // Только чтение FAT12/16/32: MBR или «голый» том, каталоги, длинные имена (ASCII).
-use crate::ata::Disk;
+use crate::disk::Disk;
 
 #[derive(Clone, Copy)]
 pub struct Node { pub cluster: u32, pub size: u32, pub is_dir: bool, root: bool }
@@ -32,6 +32,7 @@ impl Volume {
         Some(Self { disk, start, bits, sectors_per_cluster, fat_start: start + reserved, root_start: start + reserved + fats * fat_size, root_sectors, data_start: start + data, root_cluster: if bits == 32 { u32_at(&boot, 44) } else { 0 } })
     }
     pub fn bits(&self) -> u8 { self.bits }
+    pub fn kind(&self) -> usize { self.disk.kind() }
     pub fn start(&self) -> u32 { self.start }
 
     fn cluster_bytes(&self) -> usize { self.sectors_per_cluster as usize * 512 }

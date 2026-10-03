@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-// vfs_server: изолированный процесс, который владеет диском (ATA PIO), разбирает FAT
+// vfs_server: изолированный процесс, который получает секторы от блочных драйверов по IPC, разбирает FAT
 // и выдаёт клиентам дескрипторы, привязанные к их PID. Данные идут через буфер клиента.
-mod ata;
+mod disk;
 mod fat;
 
 use mind::abi::*;
@@ -74,10 +74,15 @@ impl Server {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let volume = ata::Disk::probe().and_then(fat::Volume::mount);
+    // Первый накопитель с томом FAT (порядок: ata, ahci, usb_storage) становится корнем.
+    let volume = (SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES)
+        .filter(|&slot| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT)
+        .filter_map(|slot| mind::block::Device::open(Endpoint(slot)).ok())
+        .filter_map(disk::Disk::new)
+        .find_map(fat::Volume::mount);
     match &volume {
-        Some(v) => mind::println!("[VFS] ATA DISK MOUNTED: FAT{} AT LBA {}", v.bits(), v.start()),
-        None => mind::println!("[VFS] NO ATA FAT DISK; REQUESTS WILL FAIL"),
+        Some(v) => mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}", v.bits(), match v.kind() { EP_BLOCK_ATA => "ATA", EP_BLOCK_AHCI => "AHCI", EP_BLOCK_USB => "USB", _ => "?" }, v.start()),
+        None => mind::println!("[VFS] NO FAT VOLUME ON ANY BLOCK DEVICE; REQUESTS WILL FAIL"),
     }
     let mut server = Server { volume, open: [None; MAX_OPEN] };
     loop {

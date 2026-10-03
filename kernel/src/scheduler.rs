@@ -7,15 +7,17 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const MAX_TASKS: usize = 16; // сервисы + приложения
+pub const MAX_TASKS: usize = 20; // сервисы + приложения
 pub const MAX_APPS: usize = 8; // сервисы не отнимают слоты у пользовательских программ
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 64;
 const AUDIO_DMA_BYTES: usize = 33 * 4096; // 32 буфера PCM + список дескрипторов AC97
+const AHCI_DMA_BYTES: usize = 128 * 1024; // команды, FIS и буфер данных 64 КиБ
+const XHCI_DMA_BYTES: usize = 256 * 1024; // кольца, контексты, scratchpad и буфер данных 64 КиБ
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display }
 
 impl Capability {
     fn overlaps(self, physical: usize, size: usize) -> bool {
@@ -40,7 +42,8 @@ struct Scheduler {
     shell_input: Queue<128>, shell_screen: Region, dirty: bool, notice: Option<(u64, bool)>,
     endpoints: [bool; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64,
     orphans: Vec<Region>, // освобождённая владельцем память, которую ещё отображают или держат мандатом
-    ac97: Option<pci::Ac97>, audio_dma: Option<Region>,
+    ac97: Option<pci::Ac97>, ahci: Option<pci::Device>, xhci: Option<pci::Device>,
+    dma: Vec<(&'static str, Region)>, // DMA-области драйверов переживают их перезапуск
     composited: usize, // экран, на который у композитора уже есть мандат
 }
 
@@ -60,9 +63,10 @@ pub fn init(info: &BootInfo) -> Result<*mut u32, &'static str> {
     let bytes = info.stride.checked_mul(info.height).and_then(|n| n.checked_mul(4)).ok_or("FRAMEBUFFER SIZE OVERFLOW")?;
     let shell_screen = Region::new(bytes.div_ceil(4096) * 4096, 4096)?; let fb = shell_screen.ptr().cast();
     let ac97 = unsafe { pci::find_ac97() };
-    let audio_dma = if ac97.is_some() { Some(Region::new(AUDIO_DMA_BYTES, 4096)?) } else { None };
+    let ahci = unsafe { pci::find(0x01_06_01, 0xFF_FF_FF) }.filter(|d| !d.bars[5].io && d.bars[5].size != 0);
+    let xhci = unsafe { pci::find(0x0C_03_30, 0xFF_FF_FF) }.filter(|d| !d.bars[0].io && d.bars[0].size != 0);
     let mut endpoints = [false; ENDPOINTS]; endpoints[..EP_RESERVED].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, dirty: true, notice: None, endpoints, irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), ac97, audio_dma, composited: 0 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, keyboard: Keyboard::new(), shell_input: Queue::new(), shell_screen, dirty: true, notice: None, endpoints, irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, orphans: Vec::new(), ac97, ahci, xhci, dma: Vec::new(), composited: 0 }); }
     Ok(fb)
 }
 
@@ -128,18 +132,44 @@ impl Scheduler {
         self.endpoints = used;
     }
 
-    fn initial_caps(&self, program: usize, init_cap: Option<Capability>) -> [Option<Capability>; CAP_SLOTS] {
+    // DMA-область драйвера (выровнена на 64 КиБ, чтобы буфер данных не пересекал границу для DMA).
+    fn dma(&mut self, name: &'static str, bytes: usize) -> Option<Capability> {
+        if !self.dma.iter().any(|(owner, _)| *owner == name) { self.dma.push((name, Region::new(bytes, 64 * 1024).ok()?)); }
+        self.dma.iter().find(|(owner, _)| *owner == name).map(|(_, r)| Capability::Dma(r.ptr() as usize, r.len()))
+    }
+    fn mmio(bar: pci::Bar) -> Option<Capability> { (!bar.io && bar.size != 0).then(|| Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
+
+    // Сервис нужен, если для него есть оборудование (ahci, usb_storage) или он безусловный.
+    fn wanted(&self, program: usize) -> bool {
+        match PROGRAM_NAMES[program] { "ahci" => self.ahci.is_some(), "usb_storage" => self.xhci.is_some(), _ => true }
+    }
+
+    fn initial_caps(&mut self, program: usize, init_cap: Option<Capability>) -> [Option<Capability>; CAP_SLOTS] {
         let mut caps = [None; CAP_SLOTS]; let all = CAP_READ | CAP_WRITE | CAP_GRANT;
         match PROGRAM_NAMES[program] {
             "rtc" => { caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_RTC, all)); caps[SLOT_DEV0] = Some(Capability::IoPorts(0x70, 2)); }
             "ps2_kbd" => { caps[SLOT_DEV0] = Some(Capability::IoPorts(0x60, 1)); caps[SLOT_DEV1] = Some(Capability::IoPorts(0x64, 1)); caps[SLOT_IRQ] = Some(Capability::Interrupt(1)); caps[SLOT_PRIV] = Some(Capability::Input); }
             "compositor" => { caps[SLOT_MEM] = Some(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot))); caps[SLOT_PRIV] = Some(Capability::Display); }
-            "vfs_server" => { caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_VFS, all)); caps[SLOT_DEV0] = Some(Capability::IoPorts(0x1F0, 8)); caps[SLOT_DEV1] = Some(Capability::IoPorts(0x3F6, 1)); }
+            "ata" => { caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_BLOCK_ATA, all)); caps[SLOT_DEV0] = Some(Capability::IoPorts(0x1F0, 8)); caps[SLOT_DEV1] = Some(Capability::IoPorts(0x3F6, 1)); }
+            "ahci" => {
+                caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_BLOCK_AHCI, all));
+                if let Some(device) = self.ahci { caps[SLOT_DEV0] = Self::mmio(device.bars[5]); caps[SLOT_MEM] = self.dma("ahci", AHCI_DMA_BYTES); }
+            }
+            "usb_storage" => {
+                caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_BLOCK_USB, all));
+                if let Some(device) = self.xhci { caps[SLOT_DEV0] = Self::mmio(device.bars[0]); caps[SLOT_MEM] = self.dma("usb_storage", XHCI_DMA_BYTES); }
+            }
+            "vfs_server" => {
+                // VFS видит только блочные устройства, драйверы которых действительно запускаются.
+                caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_VFS, all));
+                let devices = [(EP_BLOCK_ATA, true), (EP_BLOCK_AHCI, self.ahci.is_some()), (EP_BLOCK_USB, self.xhci.is_some())];
+                for (slot, (ep, _)) in (SLOT_BLOCK_FIRST..).zip(devices.into_iter().filter(|(_, present)| *present)) { caps[slot] = Some(Capability::Endpoint(ep, CAP_WRITE | CAP_GRANT)); }
+            }
             "audio_gw" => {
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_AUDIO, all));
-                if let (Some(ac), Some(dma)) = (self.ac97, self.audio_dma.as_ref()) {
+                if let Some(ac) = self.ac97 {
                     caps[SLOT_DEV0] = Some(Capability::IoPorts(ac.mixer, 256)); caps[SLOT_DEV1] = Some(Capability::IoPorts(ac.bus_master, 64));
-                    caps[SLOT_IRQ] = Some(Capability::Interrupt(ac.irq)); caps[SLOT_MEM] = Some(Capability::Dma(dma.ptr() as usize, dma.len()));
+                    caps[SLOT_IRQ] = Some(Capability::Interrupt(ac.irq)); caps[SLOT_MEM] = self.dma("audio_gw", AUDIO_DMA_BYTES);
                 }
             }
             _ => {
@@ -310,9 +340,9 @@ impl Scheduler {
                 _ => Err(ERR_NO_SLOT),
             },
             SYSCALL_MEM_MAP => match self.cap(slot, request.arg1) {
-                Some(Capability::Memory(physical, size) | Capability::Dma(physical, size)) => {
+                Some(cap @ (Capability::Memory(physical, size) | Capability::Dma(physical, size) | Capability::Mmio(physical, size))) => {
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // размер отображения для клиента
-                    task.heap.map_shared(&mut task.space, physical, size).ok_or(ERR_NO_MEMORY)
+                    task.heap.map_shared(&mut task.space, physical, size, matches!(cap, Capability::Mmio(..))).ok_or(ERR_NO_MEMORY)
                 }
                 _ => Err(ERR_RIGHTS),
             },
@@ -369,6 +399,7 @@ impl Scheduler {
                     Some(Capability::Endpoint(_, rights)) => (CAP_KIND_ENDPOINT, 0, rights as usize),
                     Some(Capability::Memory(_, size)) => (CAP_KIND_MEMORY, 0, size),
                     Some(Capability::Dma(_, size)) => (CAP_KIND_DMA, 0, size),
+                    Some(Capability::Mmio(_, size)) => (CAP_KIND_MMIO, 0, size),
                     Some(Capability::IoPorts(base, count)) => (CAP_KIND_PORTS, base as usize, count as usize),
                     Some(Capability::Interrupt(irq)) => (CAP_KIND_IRQ, irq as usize, 0),
                     Some(Capability::Input) => (CAP_KIND_INPUT, 0, 0),
@@ -398,6 +429,7 @@ unsafe fn port_out(port: u16, width: usize, value: usize) {
 }
 
 pub fn spawn(program: usize, background: bool) -> Result<u64, &'static str> { locked(|| unsafe { scheduler().spawn_internal(program, background, None) }) }
+pub fn service_wanted(program: usize) -> bool { locked(|| unsafe { scheduler().wanted(program) }) }
 
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {

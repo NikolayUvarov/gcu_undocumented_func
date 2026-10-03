@@ -430,7 +430,8 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         fb = scheduler::init(info).expect("Scheduler init failed");
         // Системные сервисы ищутся по имени, а не по жёстко заданным номерам образов.
         for name in abi::BOOT_SERVICES {
-            scheduler::spawn(scheduler::program_index(name.as_bytes()).unwrap(), true).expect("Service spawn");
+            let program = scheduler::program_index(name.as_bytes()).unwrap();
+            if scheduler::service_wanted(program) { scheduler::spawn(program, true).expect("Service spawn"); }
         }
         interrupts::init();
         cpu::start(info);

@@ -46,13 +46,13 @@ impl Heap {
     }
 
     // Отображения чужой памяти считаются по своей квоте и не съедают приватную кучу.
-    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize) -> Option<usize> {
+    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, device: bool) -> Option<usize> {
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
         if size > SHARED_MAX_BYTES - self.shared { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        space.map(address, physical, size, true, false).ok()?;
+        if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, true, false).ok()?; }
         self.blocks[slot] = Some(Block { address, physical, memory: None, size });
         self.shared += size;
         Some(address)

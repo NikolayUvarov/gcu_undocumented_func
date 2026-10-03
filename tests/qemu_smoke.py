@@ -19,10 +19,10 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# Системные сервисы, которые ядро запускает при старте (PID 1..N).
-SERVICES = ("rtc", "ps2_kbd", "compositor", "vfs_server", "audio_gw")
-# Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID.
-BASE = len(SERVICES)
+# Системные сервисы (PID 1..N); драйверы ahci/usb_storage есть только при наличии контроллера.
+SERVICES = ("rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw")
+# Наборы тестов нумеруют приложения с 1; стенд переводит их номера в реальные PID (BASE считается при загрузке).
+BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
@@ -36,13 +36,15 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False):
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
         storage = (["-drive", f"format=raw,file={filename},if=none,id=usbdisk",
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
-                   if usb else ["-drive", f"format=raw,file=fat:{filename}"])
+                   if usb else ["-drive", f"format=raw,file=fat:{filename},if=none,id=sata",
+                                "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
+                   if ahci else ["-drive", f"format=raw,file=fat:{filename}"])
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
@@ -57,9 +59,25 @@ class VM:
         threading.Thread(target=self._read, daemon=True).start()
         try:
             self.expect("MIND> ", timeout=30)
+            global BASE
+            BASE = len(self.services())
         except BaseException:
             self.close()
             raise
+
+    def services(self):
+        # Реальные PID сервисов по таблице ps (её строки стенд не переводит).
+        return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
+
+    def service_logs(self, name, until=None):
+        # Журнал сервиса; с `until` — дождаться строки (драйверы инициализируются параллельно с тестом).
+        output = ""
+        for _ in range(40):
+            output += self.command(f"logs {self.services()[name]}", raw=True)
+            if until is None or until in output:
+                break
+            time.sleep(.25)
+        return output
 
     def _read(self):
         while data := self.process.stdout.read(1):
@@ -89,8 +107,8 @@ class VM:
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {text!r}: {clean[-3000:]}")
 
-    def send(self, text):
-        if not self.monitor:
+    def send(self, text, raw=False):
+        if not self.monitor and not raw:
             text = to_real(text)
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
@@ -99,8 +117,8 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text):
-        self.send(text + "\n")
+    def command(self, text, raw=False):
+        self.send(text + "\n", raw)
         return self.expect("MIND> ")
 
     def hmp(self, command):
@@ -642,9 +660,39 @@ def dzen_suite(vm):
     print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim", flush=True)
 
 
+def files_check(vm, pid):
+    output = ""
+    for _ in range(50):
+        output += vm.command(f"logs {pid}")
+        if "[FILES] DONE" in output:
+            break
+        time.sleep(.2)
+    require(output, "[FILES] kernel.elf ")
+    require(output, "<DIR>")
+    size = (ROOT / "usb_root/kernel.elf").stat().st_size
+    require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
+    efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
+    require(output, f"READ EFI/BOOT/BOOTX64.EFI {efi}/{efi} BYTES MAGIC=4D5A")
+    return output
+
+
+def ahci_suite(vm):
+    baseline = heap_used(vm)
+    services = vm.services()
+    assert "ahci" in services and "usb_storage" not in services, services
+    require(vm.service_logs("ata", "[ATA] NO DISK"), "[ATA] NO DISK")
+    require(vm.service_logs("ahci", "[AHCI] PORT 0: "), "[AHCI] PORT 0: ")
+    require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM AHCI"), "[VFS] MOUNTED FAT16 FROM AHCI")
+    require(vm.command("run files &"), "PID=1 NAME=files BACKGROUND")
+    files_check(vm, 1)
+    vm.command("kill 1")
+    assert heap_used(vm) == baseline
+    print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads", flush=True)
+
+
 def services_suite(vm):
     output = vm.command("ps")
-    for name in SERVICES:
+    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "audio_gw"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     require(vm.command("fg -4"), "ERROR:")  # отрицательные номера стенд не переводит
     vm.send("fg 0\n"); vm.expect("ERROR:")
@@ -663,20 +711,10 @@ def services_suite(vm):
     time.sleep(.5)
     assert 2 in task_rows(vm), "client of a dead server must survive"
     require(vm.command("kill 2"), "KILLED PID=2")
-    # VFS: список корня и чтение файлов с ATA-диска через vfs_server.
+    # VFS: список корня и чтение файлов с ATA-диска через ata -> vfs_server.
+    require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM ATA"), "[VFS] MOUNTED FAT16 FROM ATA")
     require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
-    output = ""
-    for _ in range(50):
-        output += vm.command("logs 3")
-        if "[FILES] DONE" in output:
-            break
-        time.sleep(.2)
-    require(output, "[FILES] kernel.elf ")
-    require(output, "<DIR>")
-    size = (ROOT / "usb_root/kernel.elf").stat().st_size
-    require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
-    efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
-    require(output, f"READ EFI/BOOT/BOOTX64.EFI {efi}/{efi} BYTES MAGIC=4D5A")
+    files_check(vm, 3)
     require(vm.command("kill 3"), "KILLED PID=3")
     for _ in range(20):
         if heap_used(vm) == baseline:
@@ -684,7 +722,7 @@ def services_suite(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA+FAT, reclaim", flush=True)
+    print("PASS: boot services, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, reclaim", flush=True)
 
 
 def audio_suite(vm, wav):
@@ -740,9 +778,9 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,audio,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,busy,smp,isolation,heap")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "audio"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -765,14 +803,14 @@ def main():
                 large_bss(disk / "app2.elf")
             wav = Path(tempfile.gettempdir()) / "mind-core-audio.wav" if suite == "audio" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
-                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav)
+                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

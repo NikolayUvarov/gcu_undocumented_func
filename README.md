@@ -23,7 +23,7 @@ The UEFI bootloader loads the kernel and every program image listed in `PROGRAM_
 
 * **Toolchain:** Pure Rust (`no_std`, `no_main`), utilizing `naked_functions` and `abi_x86_interrupt`, compiled for `x86_64-unknown-none` and `x86_64-unknown-uefi` targets. Programs use the `libmind` SDK.
 * **Memory and privilege:** Every task runs in ring 3 with IOPL=0 and a private four-level page table/CR3. Each `RUN` creates a fresh ELF image, 64 KiB user stack with unmapped guard pages, syscall mailbox, input/log queues, and (for applications) a screen buffer. Code is RX; writable data, stack, mailbox and screen are NX. The kernel's supervisor mappings are inaccessible to tasks.
-* **Capabilities:** Each task has 32 capability slots. A capability names an IPC endpoint (with read/write/grant rights), a shared memory block, a DMA region, an I/O port range, an interrupt line, or the input/display privilege. Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS and audio services.
+* **Capabilities:** Each task has 32 capability slots. A capability names an IPC endpoint (with read/write/grant rights), a shared memory block, a DMA region, device registers (MMIO, mapped uncached), an I/O port range, an interrupt line, or the input/display privilege. Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS and audio services.
 * **Dynamic program memory:** Syscalls 8/9 allocate and free zeroed private page blocks (RW+NX, trailing guard page; up to 32 blocks and 16 MiB per process). Mapped shared memory has its own 48 MiB quota. Memory that another task still maps or holds by capability is retained by the kernel until the last reference is gone, so freeing, exiting or killing an owner cannot leave a dangling mapping.
 * **CPU configuration:** The QEMU launchers expose four cores. The kernel starts APs itself with INIT/SIPI and can use up to eight enabled xAPIC CPUs. Each CPU has its own GDT, TSS, interrupt-entry stack, idle stack, and double-fault/NMI stacks. `cpus` reports actual online CPUs and interrupt counters.
 * **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP receives the 100 Hz PIC/PIT tick through LAPIC ExtINT and sends scheduling IPIs to online APs. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`. The shell loop reclaims exited tasks once no CPU runs them.
@@ -31,17 +31,20 @@ The UEFI bootloader loads the kernel and every program image listed in `PROGRAM_
 
 ### System services
 
-The kernel starts these programs at boot (`BOOT_SERVICES` in `common/abi.rs`). They have no screen, cannot be brought to the foreground, and each can run only once; `RUN <service> &` restarts one after `KILL`.
+The kernel starts these programs at boot, in this order (`BOOT_SERVICES` in `common/abi.rs`). `ahci` and `usb_storage` start only when the kernel finds their controller on PCI, so the PIDs of later services and the first application PID depend on the machine. Services have no screen, cannot be brought to the foreground, and each can run only once; `RUN <service> &` restarts one after `KILL`.
 
-| PID | Service | Capabilities | Role |
-|---|---|---|---|
-| 1 | `rtc` | endpoint 2, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
-| 2 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the shell/foreground program |
-| 3 | `compositor` | GOP framebuffer, display | copies changed pixels of the active screen to the framebuffer |
-| 4 | `vfs_server` | endpoint 3, ATA ports 0x1F0–0x1F7, 0x3F6 | reads the boot disk (FAT12/16/32) and serves files by descriptor |
-| 5 | `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
+| Service | Capabilities | Role |
+|---|---|---|
+| `rtc` | endpoint 2, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
+| `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the shell/foreground program |
+| `compositor` | GOP framebuffer, display | copies changed pixels of the active screen to the framebuffer |
+| `ata` | endpoint 5, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
+| `ahci` | endpoint 6, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
+| `usb_storage` | endpoint 7, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
+| `vfs_server` | endpoint 3, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
+| `audio_gw` | endpoint 4, AC97 BARs, its IRQ, 132 KiB DMA | audio gateway: PCM and tones through an AC97 DMA ring |
 
-Applications therefore start at PID 6. The limit is eight applications in addition to the services.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) six services run and applications start at PID 7. The limit is eight applications in addition to the services.
 
 ### IPC
 
@@ -74,16 +77,25 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_or_exit` (Esc exits) |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
-| `dev` | `Ports`, `Irq`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `block` | block device client (`Device`) and the driver loop (`serve`, `Driver`) |
 | `gfx` | `Screen`: pixels, rectangles, 8×8 font text |
 | `rtc`, `fs`, `audio` | clients of the RTC, VFS and audio services |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 
 The SDK also supplies the panic handler (logs the message and exits the task) and `memset`/`memcpy`/`memmove`/`memcmp`. `common/abi.rs` remains the single ABI definition shared by the kernel, the bootloader and `libmind`.
 
+### Block devices
+
+Storage drivers are separate ring-3 services that speak one block protocol (`BLOCK_INFO`, `BLOCK_ATTACH`, `BLOCK_READ` in `common/abi.rs`): the client attaches a 64 KiB buffer once by capability, and every read of up to 128 sectors fills it. `mind::block` provides both sides — `Device` for clients and `serve`/`Driver` for drivers. The drivers poll their controllers (no interrupts yet); AHCI and xHCI registers arrive as MMIO capabilities mapped uncached, and the kernel allocates each driver a DMA region (64 KiB aligned) whose physical address only that driver can query.
+
+* `ata`: primary channel, PIO, up to 128 sectors per command.
+* `ahci`: takes the HBA from firmware (BIOS/OS handoff), uses the first port with a SATA signature, IDENTIFY and READ DMA EXT through one command slot.
+* `usb_storage`: takes the xHCI controller from firmware, resets it, enables USB 3 ports or resets USB 2 ports, addresses each device until it finds a mass storage interface (class 08/06/50), configures its bulk endpoints and reads with SCSI READ(10). Other USB devices (for example a keyboard) are addressed and skipped.
+
 ### Virtual file system
 
-`vfs_server` owns the primary ATA channel (PIO, LBA28, polling) and reads FAT12/16/32 volumes with or without an MBR, including long file names and subdirectories. Clients use `mind::fs`:
+`vfs_server` opens the block drivers it was given (in the order ATA, AHCI, USB), mounts the first FAT12/16/32 volume with or without an MBR, including long file names and subdirectories, and reads it through a 64-sector cache with read-ahead. Clients use `mind::fs`:
 
 ```rust
 let mut file = mind::fs::File::open("EFI/BOOT/BOOTX64.EFI")?;
@@ -92,7 +104,7 @@ let n = file.read(&mut chunk)?;
 mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
 ```
 
-Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. In QEMU the `fat:` drive used by the launchers is an ATA disk; when booting from the USB image (USB storage) or AHCI/NVMe hardware there is no ATA disk yet and the server reports `NOT FOUND`.
+Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
 
 ### Audio gateway
 
@@ -275,8 +287,8 @@ python3 tests/usb_image_smoke.py --qemu /mnt/c/msys64/ucrt64/bin/qemu-system-x86
 The test checks image contents, UEFI USB boot, the applications, CPU startup,
 foreground switching and memory reclamation. Real-machine support still has
 the limits documented below; in particular, the kernel currently reads PS/2
-keyboard/UART input and has no USB keyboard driver after leaving UEFI, and
-`vfs_server` reads only ATA disks (not USB storage).
+keyboard/UART input and has no USB keyboard driver after leaving UEFI. The test
+also lists and reads the image through `usb_storage` and `vfs_server`.
 
 ### Console
 
@@ -429,6 +441,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 20 | INPUT_EVENT | app byte, shell byte, msg[0] = background — needs the input capability |
 | 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
+| 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |
 | 29 | CAP_INFO | slot → kind, arg2 = base, msg[2] = size/count/rights |
 
@@ -443,7 +456,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over ATA+FAT) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
+The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
 
 ```bash
 for fixture in busy_app isolation_app heap_app; do
@@ -462,7 +475,7 @@ python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --cpus 1 \
   --suites smp,isolation,heap,services
 ```
 
-The suites number applications from 1; the harness adds the number of boot services (5) when it sends `fg`/`kill`/`logs` and subtracts it from `PID=` in the output.
+The suites number applications from 1; the harness counts the boot services in `ps` at startup, adds that number when it sends `fg`/`kill`/`logs` and subtracts it from `PID=` in the output.
 
 From WSL with the supplied Windows setup, use `--qemu /mnt/c/msys64/ucrt64/bin/qemu-system-x86_64.exe`. Test logs are written to the system temporary directory. The busy-loop, isolation and heap-test ELFs are used only inside test VMs; the normal packaged applications are unchanged by the test.
 

@@ -15,6 +15,7 @@ const PRESENT: u64 = 1;
 const WRITE: u64 = 2;
 const USER: u64 = 4;
 const NX: u64 = 1 << 63;
+const UNCACHED: u64 = 0x18; // PCD | PWT: регистры устройств без кэширования
 const TABLES: usize = 128; // хватает на окно кучи с разделяемыми буферами кадра
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
@@ -193,6 +194,23 @@ impl Space {
         writable: bool,
         executable: bool,
     ) -> Result<(), &'static str> {
+        self.map_with(virtual_start, physical, size, writable, executable, false)
+    }
+
+    // Регистры MMIO отображаются некэшируемыми (RW+NX).
+    pub fn map_device(&mut self, virtual_start: usize, physical: usize, size: usize) -> Result<(), &'static str> {
+        self.map_with(virtual_start, physical, size, true, false, true)
+    }
+
+    fn map_with(
+        &mut self,
+        virtual_start: usize,
+        physical: usize,
+        size: usize,
+        writable: bool,
+        executable: bool,
+        device: bool,
+    ) -> Result<(), &'static str> {
         if virtual_start < USER_IMAGE
             || virtual_start >= USER_END
             || virtual_start % PAGE != 0
@@ -212,7 +230,7 @@ impl Space {
                 return Err("OVERLAPPING USER PAGES");
             }
         }
-        let result = self.map_pages(virtual_start, physical, size, writable, executable);
+        let result = self.map_pages(virtual_start, physical, size, writable, executable, device);
         if result.is_err() {
             self.unmap(virtual_start, size);
         } else {
@@ -228,6 +246,7 @@ impl Space {
         size: usize,
         writable: bool,
         executable: bool,
+        device: bool,
     ) -> Result<(), &'static str> {
         for offset in (0..size).step_by(PAGE) {
             let address = virtual_start + offset;
@@ -251,7 +270,8 @@ impl Space {
                         | PRESENT
                         | USER
                         | if writable { WRITE } else { 0 }
-                        | if executable { 0 } else { NX },
+                        | if executable { 0 } else { NX }
+                        | if device { UNCACHED } else { 0 },
                 );
             }
         }

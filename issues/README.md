@@ -19,7 +19,7 @@
 | [013](../issues-done/013-smp-and-memory-isolation.done) | SMP, ring 3 и аппаратная изоляция памяти | feature — выполнено 2026-09-19 | высокий | — |
 | [014](../issues-done/014-private-program-heap.done) | Приватная динамическая память программ | feature — выполнено 2026-09-19 | высокий | — |
 | [015](015-load-programs-through-vfs.md) | Загрузка программ через VFS вместо RAMFS загрузчика | feature | высокий | — |
-| [016](016-storage-drivers.md) | Драйверы AHCI / USB mass storage для VFS | feature | средний | — |
+| [016](../issues-done/016-storage-drivers.done) | Драйверы ATA / AHCI / USB mass storage для VFS | feature — выполнено 2026-10-03 | средний | — |
 | [017](017-tts-on-audio-gateway.md) | Синтез речи поверх аудиошлюза | feature | низкий | — |
 
 Рекомендуемый порядок: 001 → 007 (диагностика на экране) → 002 → 003 → 004 → 005; 006/009/010/011 — параллельно.

@@ -7,6 +7,7 @@ pub mod abi;
 pub mod font;
 
 pub mod audio;
+pub mod block;
 pub mod dev;
 pub mod fs;
 pub mod gfx;

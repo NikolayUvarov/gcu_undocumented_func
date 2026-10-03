@@ -2,16 +2,17 @@
 // Единый ABI ядра: подключается ядром, загрузчиком и libmind (не копировать).
 
 // Порядок образов задаёт загрузчик; системные сервисы ядро запускает при старте.
-pub const PROGRAM_COUNT: usize = 13;
+pub const PROGRAM_COUNT: usize = 16;
 pub const PROGRAM_NAMES: [&str; PROGRAM_COUNT] = [
     "app", "app2", "clock", "dzen-clock", "ping", "pong", "files", "beep",
-    "rtc", "ps2_kbd", "compositor", "vfs_server", "audio_gw",
+    "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw",
 ];
 pub const PROGRAM_FILES: [&str; PROGRAM_COUNT] = [
     "app.elf", "app2.elf", "clock.elf", "dzenclk.elf", "ping.elf", "pong.elf", "files.elf", "beep.elf",
-    "rtc.elf", "ps2_kbd.elf", "compositor.elf", "vfs_server.elf", "audio_gw.elf",
+    "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "audio_gw.elf",
 ];
-pub const BOOT_SERVICES: [&str; 5] = ["rtc", "ps2_kbd", "compositor", "vfs_server", "audio_gw"];
+// Драйверы ahci и usb_storage запускаются, только если на шине PCI есть их контроллер.
+pub const BOOT_SERVICES: [&str; 8] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw"];
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; PROGRAM_COUNT], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
@@ -56,6 +57,7 @@ pub const CAP_KIND_PORTS: usize = 4;
 pub const CAP_KIND_IRQ: usize = 5;
 pub const CAP_KIND_INPUT: usize = 6;
 pub const CAP_KIND_DISPLAY: usize = 7;
+pub const CAP_KIND_MMIO: usize = 8;
 
 // Коды ошибок: usize::MAX - n. ALLOC по-прежнему возвращает 0 при отказе.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -82,6 +84,9 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
+// У vfs_server слоты 2..5 — точки блочных драйверов (ata, ahci, usb_storage), если они запущены.
+pub const SLOT_BLOCK_FIRST: usize = 2;
+pub const BLOCK_DEVICES: usize = 3;
 // Новые мандаты ядро выдаёт начиная с этого слота.
 pub const SLOT_DYNAMIC: usize = 8;
 
@@ -89,7 +94,10 @@ pub const SLOT_DYNAMIC: usize = 8;
 pub const EP_RTC: usize = 2;
 pub const EP_VFS: usize = 3;
 pub const EP_AUDIO: usize = 4;
-pub const EP_RESERVED: usize = 8;
+pub const EP_BLOCK_ATA: usize = 5;
+pub const EP_BLOCK_AHCI: usize = 6;
+pub const EP_BLOCK_USB: usize = 7;
+pub const EP_RESERVED: usize = 16;
 
 // Сообщение: msg[0]=слот передаваемого мандата, msg[1]=маска прав, msg[2..4]=данные.
 // У получателя: arg1=PID отправителя, msg[0]=1 если мандат получен, msg[1]=флаги.
@@ -107,6 +115,13 @@ pub const VFS_READ: usize = 2;
 pub const VFS_CLOSE: usize = 3;
 pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
+// Протокол блочного устройства: msg[2]=операция|число секторов<<8, msg[3]=LBA.
+// ATTACH передаёт мандат буфера клиента (до BLOCK_MAX_SECTORS секторов), READ заполняет его.
+pub const BLOCK_INFO: usize = 1;
+pub const BLOCK_ATTACH: usize = 2;
+pub const BLOCK_READ: usize = 3;
+pub const BLOCK_SECTOR: usize = 512;
+pub const BLOCK_MAX_SECTORS: usize = 128;
 // Протокол аудио: msg[2]=операция|аргумент<<8, msg[3]=второй аргумент.
 pub const AUDIO_INFO: usize = 1;
 pub const AUDIO_PLAY: usize = 2;

@@ -14,7 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE_ROOTS = {"kernel", "bootloader", "common", "libmind", "app", "app2", "clock", "dzen-clock", "ping", "pong", "files", "beep",
-              "rtc", "ps2_kbd", "compositor", "vfs_server", "audio_gw"}
+              "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "audio_gw"}
 SKIP = {"target", "build", "dist", "out", "code_handoff", "code-handoff", "usb_root", "legacy", "patches_seq",
         "issues", "issues-done", "knowledge", "node_modules", "vendor", "__pycache__"}
 GROUPS = ("code", "build", "tests", "docs")
