@@ -18,9 +18,6 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [019](019-platform-profile-x86-64-qemu-0.md) | Platform profile `x86-64/QEMU-0` | docs | P0 | — | S0 |
-| [020](020-init-bootstrap-authority.md) | `init`: bootstrap authority, driver policy out of the kernel | architecture | P0 | — | K1 |
-| [021](021-shell-in-ring-3.md) | Shell in ring 3, input/focus policy out of the kernel | architecture | P0 | 020 | K1 |
 
 ## Finished tasks (`issues-done/`)
 
@@ -41,5 +38,8 @@
 | [015](../issues-done/015-load-programs-through-vfs.done) | Loading programs through the VFS | done (2026-10-03) |
 | [016](../issues-done/016-storage-drivers.done) | ATA / AHCI / USB storage drivers | done (2026-10-03) |
 | [017](../issues-done/017-tts-on-audio-gateway.done) | Text to speech over the audio gateway | done (2026-10-03) |
+| [019](../issues-done/019-platform-profile-x86-64-qemu-0.done) | Platform profile `x86-64/QEMU-0` | done (2026-10-03) |
+| [020](../issues-done/020-init-bootstrap-authority.done) | `init`: bootstrap authority, driver policy out of the kernel | done (2026-10-03) |
+| [021](../issues-done/021-shell-in-ring-3.done) | Shell in ring 3, input/focus policy out of the kernel | done (2026-10-03) |
 
 Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

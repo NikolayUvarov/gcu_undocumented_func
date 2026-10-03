@@ -6,7 +6,7 @@
 **Basis:** the full edition 1.4; amendments of edition 1.5 accepted in refined form; [review of 21 September 2026](review_2026-09-21.md).  
 **Supersedes:** editions 1.4 and 1.5 (kept in [archive/](archive/)).  
 **Related document:** [RFC 001: Marain, revision 0.4](RFC_001_Marain_v0.4.md).  
-**Order of work:** [ROADMAP v1.0](../../ROADMAP.md).
+**Order of work:** [ROADMAP](../../ROADMAP.md).
 
 **Edition 1.6 amendment (3 October 2026):** Articles 2–6 are restored in full from edition 1.4 (the abridgements of edition 1.5 are not accepted); the 1.5 additions to clauses 2.6 (`SHARE_RW`) and 6.10 (checkpoint protocol) are accepted in refined form; the 1.4 rule on the normative status of the appendices is restored; stable requirement IDs `MC-<article>.<clause>` are introduced; Appendix B.2 fixes the `SHARE_RW` restriction of the first profile; Appendix D links to the ROADMAP and separates the stage numberings; the categorical rationales in Appendix F are toned down. Full list in Appendix H.
 

@@ -1,0 +1,31 @@
+# 019 — Platform profile `x86-64/QEMU-0` (roadmap S0) — done
+
+**Type:** docs/architecture · **Priority:** P0 · **Status:** done (2026-10-03) · **Roadmap:** step 1, S0 · **Constitution:** MC-1.5, MC-1.6, MC-3.12, MC-5.6, MC-12.1, MC-12.3, Appendix D stage 0
+
+## Problem
+
+Stage 0 of the Constitution requires a written profile before guarantees can be claimed: threat and fault model, TCB per guarantee, kernel objects and budgets, clocks, bootstrap authority, evidence plan. None of it exists; the code makes implicit assumptions (no IOMMU, DMA-capable drivers fully trusted, global endpoint numbers).
+
+## Plan
+
+Write `docs/profile/` (English, the code refers to it):
+- `README.md` — what the profile is, scope (QEMU q35/i440fx + OVMF, 1–8 CPUs, x86-64, no IOMMU), conformance table: every article with "met / partial / not met / not claimed" and the evidence (test names).
+- `threat-model.md` — assets, adversaries (malicious application, faulty or malicious driver, malicious disk content), out of scope (physical access, firmware, side channels), fault model.
+- `tcb.md` — TCB per guarantee; explicit statement that AHCI, xHCI and AC97 drivers are in the TCB because DMA is not bounded (MC-1.5).
+- `kernel-objects.md` — tasks, capability slots and kinds, endpoints, memory regions, DMA regions, IRQ lines; their limits and who pays.
+- `clocks.md` — PIT 100 Hz tick, `UPTIME` as the monotonic clock, RTC as calendar time; known gaps (no budgets, 10 ms resolution).
+- `bootstrap.md` — bootstrap authority after issue 020: what the kernel gives `init`, what `init` hands out, where initial distribution ends.
+- `evidence.md` — which QEMU suites and host tests support which statements.
+
+## Acceptance criteria
+
+- The documents exist, are referenced from README and ROADMAP, and every "met" claim names a test.
+- Nothing is claimed that the code does not do (MC-12.3).
+
+## Related
+
+[ROADMAP](../ROADMAP.md) S0, [020](020-init-bootstrap-authority.done), [021](021-shell-in-ring-3.done).
+
+## Resolution
+
+Written in [`docs/profile/`](../docs/profile/README.md): README with the conformance table for Articles 1–12, threat-model.md, tcb.md, kernel-objects.md, clocks.md, bootstrap.md, evidence.md. Linked from README, ROADMAP and `constitution/README.md`. Gaps are stated as "not met" or "not claimed" (DMA boundary, revocation, budgets, signed boot).

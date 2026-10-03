@@ -1,0 +1,37 @@
+# Threat and fault model — `x86-64/QEMU-0`
+
+## Assets
+
+1. Integrity of the kernel: its code, data, page tables and capability tables.
+2. Memory isolation between tasks: no task reads or writes another task's private memory without a capability.
+3. Capability confinement: a task can only use the authority it was granted.
+4. Availability of the boot services and of the shell.
+5. Integrity of programs started from the boot disk (limited, see below).
+
+## Adversaries in scope
+
+| Adversary | Can | Guarantee claimed |
+|---|---|---|
+| Malicious application | Any code in ring 3 with the standard client capabilities (RTC, VFS, audio, loader, TTS endpoints, its INIT slot) | Cannot read or write kernel memory or other tasks' private memory, cannot use privileged system calls, cannot obtain device access. Faults terminate only it. |
+| Compromised service without DMA | Everything its capabilities allow (e.g. `rtc`: CMOS ports; `vfs_server`: block endpoints; `shell`: kill, focus, logs, input injection) | Damage is limited to those capabilities and what transitively reaches through them (MC-1.6, MC-3.9). |
+| Malicious file content | Crafted FAT structures and ELF files on the boot disk | FAT parsing happens in `vfs_server` (ring 3, block endpoints only). ELF images of applications are parsed by the kernel's ELF loader with bounds checks; the loader rejects malformed images. Program origin is **not** authenticated. |
+
+## Out of scope (not claimed)
+
+- **DMA-capable drivers and devices.** Without an IOMMU, `ahci`, `usb_storage`, `audio_gw` and the devices they program can access all physical memory. A compromise of any of them defeats every memory guarantee (MC-1.5).
+- `init` and the platform privilege: `init` can mint device capabilities, DMA regions and privileges; it is trusted.
+- Firmware, the UEFI bootloader, physical access, malicious hardware, supply chain of the toolchain.
+- Side channels (caches, timing, speculative execution) and SMT interference.
+- Denial of service by CPU consumption: there are no budgets; a busy task only shares its CPU round-robin.
+
+## Fault model
+
+| Fault | Behaviour |
+|---|---|
+| Exception in a user task | The task is terminated, the fault is recorded (`faults`), clients waiting for its reply get `ERR_PEER`, its memory is reclaimed once no other task maps it. |
+| Task exits or is killed while focused | Focus returns to the focus owner (shell), which gets a notice. |
+| Service dies | Its clients get `ERR_PEER`; new sends to its endpoint fail with `ERR_PEER`. It is restarted only by an explicit `RUN <service> &` (no automatic supervision). |
+| Driver hangs | Not detected (no watchdog, no supervision). |
+| Device misbehaves (DMA) | Not contained. |
+| Kernel exception or panic | The system halts with a message on COM1. |
+| Loss of the disk | Programs can no longer be loaded; running tasks continue. |

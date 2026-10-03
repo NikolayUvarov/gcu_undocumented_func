@@ -1,6 +1,6 @@
-# MIND CORE — Roadmap v1.0
+# MIND CORE — Roadmap v1.1
 
-**Version:** 1.0  
+**Version:** 1.1 (1.0 → 1.1: S0 and K1 done)  
 **Date:** 3 October 2026  
 **Based on:** [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md)  
 **Russian version:** [ROADMAP_RU.md](ROADMAP_RU.md) (kept in sync; the English text is the reference)
@@ -28,9 +28,9 @@ What exists (see [README](README.md) for details): x86-64 UEFI boot, SMP up to 8
 
 | Constitution stage | State | Main gaps (article) |
 |---|---|---|
-| **0. Models and profile** | Not started | No threat/fault model, TCB list, object and budget model, clock model, bootstrap-authority description (Appendix D, stage 0) |
-| **I. Protected execution** | Mostly there | No DMA boundary: no IOMMU, so DMA-capable drivers (AHCI, xHCI, AC97) are in the TCB and the profile must say so (1.5). Policy still lives in the kernel: the command shell, PCI scan with the choice of drivers to start, foreground and input routing (1.3, 1.4). No monotonic clock primitive with defined semantics (5.6). Kernel objects (endpoints, tasks, slots) have fixed tables, not accounted quotas (1.7, 5.1) |
-| **II. Capabilities, IPC, minimal supervision** | Partial | Capabilities are slots without generations: a stale slot number can name a new object (3.2, 3.6). No derivation tree, attenuation of an existing capability or revocation with a completion point (3.4–3.6). Well-known endpoints have global numbers in the ABI instead of being handed out by a bootstrap authority (3.3, 3.12). IPC has no transfer modes (COPY/MOVE/SHARE_RO/LEASE), no bounded queues with back-pressure, no cancellation contract (2.5–2.8, 2.13). No interface description language (2.3). No supervisor, restart budget, instance generations or failure notification to an owner (6.1–6.9). No scheduling budgets (5.1–5.5) |
+| **0. Models and profile** | Done (profile 0.1) | [`docs/profile/`](docs/profile/README.md): threat and fault model, TCB per guarantee, kernel objects and limits, clocks, bootstrap authority, evidence, conformance table. Budgets are described as absent, not designed |
+| **I. Protected execution** | Mostly there | Policy is out of the kernel (K1 done): `init` holds the bootstrap authority and service policy, the shell runs in ring 3. No DMA boundary: no IOMMU, DMA drivers are declared part of the TCB (1.5). Clock semantics are documented but `UPTIME` has 10 ms resolution (5.6). Kernel objects have fixed tables, not per-owner quotas (1.7, 5.1) |
+| **II. Capabilities, IPC, minimal supervision** | Partial | Capabilities are slots without generations: a stale slot number can name a new object (3.2, 3.6). No derivation tree, attenuation of an existing capability or revocation with a completion point (3.4–3.6). Well-known endpoints are now handed out only by `init`, but their numbers are still global in the ABI (3.3, 3.12); `init` keeps the platform privilege after boot. IPC has no transfer modes (COPY/MOVE/SHARE_RO/LEASE), no bounded queues with back-pressure, no cancellation contract (2.5–2.8, 2.13). No interface description language (2.3). No supervisor, restart budget, instance generations or failure notification to an owner (6.1–6.9). No scheduling budgets (5.1–5.5) |
 | **III. Driver vertical slice** | Early | Real drivers exist, but there is no device reset / DMA quiescence / restart path and no VirtIO (Appendix D, stage III) |
 | **IV. State and recovery** | Not started | FAT is read-only; no content-addressed store, Head service, checkpoints (Article 4, 6.10) |
 | **V. Update and distribution** | Not started | Boot images are not signed; no manifests, launch records, A/B activation, key roles (Article 9) |
@@ -47,13 +47,13 @@ These stages change the kernel ABI that everything else is built on. Working on 
 ### Step 1. Documents and stage 0 (short; blocks nothing else from starting, but defines the targets)
 
 - **D1. Constitution edition — done (2026-10-03).** Constitution v1.6 and RFC 001 v0.4 published; the review's P0 items on the texts are closed.
-- **D2. Tracker — partly done.** Finished issues moved to `issues-done/` with the rule in `issues/README.md`. Remaining: open one issue per item of steps 2–3 when work on it starts.
-- **S0. Platform profile `x86-64/QEMU-0`** (Appendix D, stage 0): threat and fault model; TCB per guarantee (firmware, bootloader, kernel, toolchain, and — while there is no IOMMU — every DMA-capable driver); kernel object model; budgets; clocks (monotonic in the kernel, calendar time as a service); bootstrap authority and the point where initial distribution of authority ends (3.12); plan of evidence. Output: `docs/profile/` documents referenced from the code.
+- **D2. Tracker — done for S0 and K1** (issues 019–021). Open one issue per further item of steps 2–3 when work on it starts.
+- **S0. Platform profile `x86-64/QEMU-0` — done (2026-10-03, issue 019, [`docs/profile/`](docs/profile/README.md)).** Contents: threat and fault model; TCB per guarantee (firmware, bootloader, kernel, toolchain, and — while there is no IOMMU — every DMA-capable driver); kernel object model; budgets; clocks (monotonic in the kernel, calendar time as a service); bootstrap authority and the point where initial distribution of authority ends (3.12); plan of evidence. Output: `docs/profile/` documents referenced from the code.
 
 ### Step 2. Stage I gaps (kernel hardening)
 
-- **K1. Policy out of the kernel.** Move the shell, the PCI-based choice of drivers and input/foreground routing into an `init` service that holds the bootstrap authority; the kernel keeps mechanisms only (1.3, 1.4).
-- **K2. DMA boundary.** Either VT-d (QEMU `intel-iommu`) with per-driver DMA domains, or an explicit profile statement that DMA drivers are in the TCB and isolation from them is not claimed (1.5). Recommended: profile statement now, VT-d as task III-4.
+- **K1. Policy out of the kernel — done (2026-10-03, issues 020, 021).** `init` holds the bootstrap authority (platform privilege) and decides which services start with which capabilities; `SPAWN` takes an explicit grant list; the command shell, UART handling and the Ctrl+Z policy run in ring 3; the kernel keeps focus, input delivery and resource validation as mechanisms (1.3, 1.4). Idle CPUs get a wake IPI when one of their tasks becomes ready.
+- **K2. DMA boundary.** Profile statement done (DMA drivers are in the TCB, isolation from them is not claimed); VT-d with per-driver DMA domains remains task III-4 (1.5).
 - **K3. Clocks.** A monotonic clock primitive with defined resolution; the RTC service becomes the calendar-time service (5.6).
 - **K4. Accounted kernel objects.** Endpoints, tasks, capability slots and pending messages come from per-owner quotas instead of fixed global tables (1.7, 5.1).
 
@@ -111,7 +111,7 @@ Distribution (replication, fencing at the resource, remote capabilities through 
 
 Before the stage II gate, only work that does not depend on the kernel ABI is safe to parallelize:
 
-1. **Documents**: S0 (profile and models); new issues per D2.
+1. **Documents**: keep `docs/profile/` in step with the code; new issues per D2.
 2. **Assurance models**: specify and model-check capability revocation, MOVE commit and endpoint generations before implementing C1–C4; the review ranks this P1.
 3. **Marain M0–M2** on a host bench, including the comparison baseline "same scenario in Rust with generated bindings" that the review recommends.
 4. **Reproducible toolchain** (track C, first part): pinned toolchain, lockfile, build provenance.
@@ -126,8 +126,9 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Priority | Task | Done when |
 |---|---|---|
 | Done | D1 Constitution v1.6 and RFC v0.4 | Every v1.4 requirement kept, replaced or removed with a reason; timeout never creates a second owner |
-| P0 | S0 profile and models | TCB, threat/fault model, clocks, bootstrap authority written and referenced from the code |
-| P0 | K1 policy out of the kernel | Kernel has no shell or driver-selection policy; `init` holds bootstrap authority |
+| Done | S0 profile and models | TCB, threat/fault model, clocks, bootstrap authority written and referenced from the code |
+| Done | K1 policy out of the kernel | Kernel has no shell or driver-selection policy; `init` holds bootstrap authority |
+| P0 | K3, K4 clocks and accounted kernel objects | Per-owner quotas for tasks, endpoints, slots; clock resolution documented or improved |
 | P1 | C1–C3 capabilities | Stage II capability criteria pass in tests and in the model |
 | P1 | C4–C5 IPC modes and IDL | Bounded queues, MOVE/SHARE_RO/LEASE contracts, generated bindings |
 | P1 | C6–C7 supervision and budgets | Crash of any service is reported to its owner and restarted within a budget |
