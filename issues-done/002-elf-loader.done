@@ -1,6 +1,6 @@
-# 002 — ELF loader instead of flat binaries
+# 002 — ELF loader instead of flat binaries — done
 
-**Type:** feature (roadmap #1, priority per the handoff) · **Priority:** high · **Status:** open
+**Type:** feature (roadmap #1, priority per the handoff) · **Priority:** high · **Status:** done (2026-10-03)
 **Affects:** `bootloader/`, `02_build.sh`, `kernel/linker.ld`, `app/linker.ld`
 
 ## What the handoff requires
@@ -32,4 +32,8 @@ Drop `objcopy` and teach the loader (first step — the UEFI bootloader, not the
 
 ## Related
 
-[001](001-flat-binary-entry-offset-and-got-call.md) (temporary fix), [003](003-bss-and-heap-allocator.md) (gets unblocked), [006](006-bootloader-load-from-fat32.md).
+[001](001-flat-binary-entry-offset-and-got-call.done) (temporary fix), [003](003-bss-and-heap-allocator.done) (gets unblocked), [006](006-bootloader-load-from-fat32.done).
+
+## Resolution
+
+The bootloader loads ELF segments, zero-fills `memsz > filesz` and applies relocations; `02_build.sh` no longer calls `llvm-objcopy`. A corrupted image stops the bootloader with `Invalid ELF magic` / `Invalid ELF relocations`; applications are parsed by the kernel when the `loader` service spawns them (issue 015).

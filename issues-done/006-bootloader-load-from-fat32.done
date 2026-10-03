@@ -1,6 +1,6 @@
-# 006 — Bootloader: read the kernel and the application from FAT32 instead of `include_bytes!`
+# 006 — Bootloader: read the kernel and the application from FAT32 instead of `include_bytes!` — done
 
-**Type:** feature · **Priority:** medium · **Status:** open
+**Type:** feature · **Priority:** medium · **Status:** done (2026-10-03)
 **Affects:** `bootloader/src/main.rs`, `02_build.sh`, `usb_root/`
 
 ## Discrepancy with the handoff
@@ -24,4 +24,8 @@ Consequences of the current scheme: any kernel change requires rebuilding the bo
 
 ## Related
 
-Naturally done together with [002](002-elf-loader.md): read ELF directly.
+Naturally done together with [002](002-elf-loader.done): read ELF directly.
+
+## Resolution
+
+The bootloader opens the boot volume through UEFI SimpleFileSystem and reads the kernel and the service images (`BOOT_FILES`); applications are read later by the `loader` service through `vfs_server` (issue 015).

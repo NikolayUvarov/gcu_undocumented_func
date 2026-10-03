@@ -5,7 +5,7 @@
 
 ## Problem
 
-- `01_prepare_env.sh` runs `rustup default nightly` — it changes the user's global toolchain, and the nightly is "floating" at that: today `1.100.0-nightly (2026-09-14)`, tomorrow something else. The `-Z relax-elf-relocations` flag (issue [001](001-flat-binary-entry-offset-and-got-call.md)) and `abi_x86_interrupt` are nightly features; their behaviour may change.
+- `01_prepare_env.sh` runs `rustup default nightly` — it changes the user's global toolchain, and the nightly is "floating" at that: today `1.100.0-nightly (2026-09-14)`, tomorrow something else. The `-Z relax-elf-relocations` flag (issue [001](../issues-done/001-flat-binary-entry-offset-and-got-call.done)) and `abi_x86_interrupt` are nightly features; their behaviour may change.
 - `Cargo.lock` is in `.gitignore` — for binary crates it is customary to commit it; `uefi` is pinned to `=0.27.0`, but `bitflags`, `log`, `syn` etc. are pulled in at their latest versions.
 - Three separate crates without a workspace: three `target/` directories, three lock files, `BootInfo` duplicated.
 

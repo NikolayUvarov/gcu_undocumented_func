@@ -1,6 +1,6 @@
-# 001 — Flat binaries: `_start` is not at offset 0, `memset` is called at address 0
+# 001 — Flat binaries: `_start` is not at offset 0, `memset` is called at address 0 — superseded
 
-**Type:** bug · **Priority:** critical · **Status:** open
+**Type:** bug · **Priority:** critical · **Status:** superseded (2026-10-03)
 **Affects:** `kernel/linker.ld`, `app/linker.ld`, `*/.cargo/config.toml`, `02_build.sh`
 
 ## Problem
@@ -47,4 +47,8 @@ Expected sizes after the fix: `kernel.bin` ≈ 565 bytes, `app.bin` ≈ 808 byte
 
 ## Related
 
-- Fully superseded by issue [002](002-elf-loader.md) (the ELF loader applies relocations itself), but until then this fix is needed for stability.
+- Fully superseded by issue [002](002-elf-loader.done) (the ELF loader applies relocations itself), but until then this fix is needed for stability.
+
+## Resolution
+
+Superseded by [002](002-elf-loader.done): there are no flat binaries any more. The bootloader loads ELF images with relocations (`bootloader/src/main.rs` `load_elf`, `bootloader/src/elf_reloc.rs`), the kernel parses ELF for `SPAWN_IMAGE` (`kernel/src/elf.rs`).

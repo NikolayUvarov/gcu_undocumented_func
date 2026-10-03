@@ -16,7 +16,7 @@ The bootloader takes `current_mode_info()` and passes only `width/height/stride`
 
 1. Add `pixel_format: u32` (0=Rgb, 1=Bgr, 2=Bitmask, 3=BltOnly) and the masks for Bitmask to `BootInfo`; on `BltOnly` — iterate over `gop.modes()` and pick a mode with a linear buffer, otherwise report it and halt.
 2. Mode selection: prefer the maximum resolution with `Rgb|Bgr`, or a target one (1024×768) for predictable performance of per-pixel rendering.
-3. In kernel/app — a format-aware `put_pixel` (see [007](007-kernel-font-and-primitives.md)).
+3. In kernel/app — a format-aware `put_pixel` (see [007](../issues-done/007-kernel-font-and-primitives.done)).
 4. Document: `stride` is in pixels, 4 bytes per pixel.
 
 ## Acceptance criteria

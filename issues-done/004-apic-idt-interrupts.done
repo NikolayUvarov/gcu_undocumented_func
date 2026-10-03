@@ -1,6 +1,6 @@
-# 004 — IDT + Local APIC / IO-APIC instead of the 8259 PIC, interrupt-driven timer and keyboard
+# 004 — IDT + Local APIC / IO-APIC instead of the 8259 PIC, interrupt-driven timer and keyboard — done
 
-**Type:** feature (roadmap #2) · **Priority:** high · **Status:** open · **Blocked by:** [003](003-bss-and-heap-allocator.md) (statics are needed for IDT/GDT/TSS)
+**Type:** feature (roadmap #2) · **Priority:** high · **Status:** done (2026-10-03) · **Blocked by:** [003](003-bss-and-heap-allocator.done) (statics are needed for IDT/GDT/TSS)
 **Affects:** `kernel/`
 
 ## What the handoff requires
@@ -9,7 +9,7 @@ Rolled-back attempt: 8259 remap, IRQ0 (PIT) + IRQ1 (PS/2), asm context switching
 
 ## Current state
 
-There is no IDT, no GDT and no handlers in the code. Meanwhile the README describes "Hardware interrupts (IDT) for timing and keyboard input" as implemented — see [010](010-docs-sync.md).
+There is no IDT, no GDT and no handlers in the code. Meanwhile the README describes "Hardware interrupts (IDT) for timing and keyboard input" as implemented — see [010](010-docs-sync.done).
 
 ## Plan (order matters — each step is verified in QEMU separately)
 
@@ -27,3 +27,7 @@ There is no IDT, no GDT and no handlers in the code. Meanwhile the README descri
 - Key presses arrive via interrupts; the `0x64/0x60` polling is removed.
 - An exception (`ud2` in test code) shows diagnostics instead of rebooting QEMU.
 - The documentation in README/handoff is updated.
+
+## Resolution
+
+IDT and per-CPU GDT/TSS; Local APIC on every CPU; the 100 Hz PIT tick reaches the BSP through LAPIC ExtINT and is forwarded to APs by IPI; the keyboard is served by IRQ 1 in the ring-3 `ps2_kbd` driver; user exceptions terminate only the faulting task (`faults`). The I/O APIC is not used: that is a platform-profile detail for [ROADMAP](../ROADMAP.md) stage I.

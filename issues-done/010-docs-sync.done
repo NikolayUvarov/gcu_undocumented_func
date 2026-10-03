@@ -1,6 +1,6 @@
-# 010 — Sync README and handoff with the code
+# 010 — Sync README and handoff with the code — done
 
-**Type:** docs · **Priority:** medium · **Status:** open
+**Type:** docs · **Priority:** medium · **Status:** done (2026-10-03)
 **Affects:** `README.md`, the handoff document
 
 ## Discrepancies
@@ -9,15 +9,15 @@
 |---|---|---|
 | README, "How to Build" | `chmod +x patch_008_preemptive.sh` / `./patch_008_preemptive.sh` | the file does not exist; the build is `01_prepare_env.sh` + `02_build.sh` |
 | Handoff, section 3 | "the `fix_stable_boot.sh` script" | the file does not exist; `02_build.sh` is the current one |
-| README, "Event Model" | "Hardware interrupts (IDT) for timing and keyboard input, combined with software interrupts (`int 0x80`)" | neither IDT nor `int 0x80` exist in the code; the keyboard is port polling; see [004](004-apic-idt-interrupts.md), [005](005-syscalls.md) |
+| README, "Event Model" | "Hardware interrupts (IDT) for timing and keyboard input, combined with software interrupts (`int 0x80`)" | neither IDT nor `int 0x80` exist in the code; the keyboard is port polling; see [004](004-apic-idt-interrupts.done), [005](005-syscalls.done) |
 | README, "Toolchain" | "utilizing `naked_functions` and `abi_x86_interrupt`" | neither feature gate is used |
 | README | path `/usr/share/ovmf/OVMF.fd` | on Debian/Ubuntu: `/usr/share/OVMF/OVMF_CODE_4M.fd` (+ `OVMF_VARS_4M.fd`); the repository uses a local `OVMF.fd` (gitignored) |
 | README, title | "Iain M. Banks supposed # MIND CORE" | merged lines/typo |
-| Handoff, section 1 | the bootloader reads files from FAT32 | `include_bytes!` — [006](006-bootloader-load-from-fat32.md) |
-| Handoff, section 1 | font and primitive rendering | absent — [007](007-kernel-font-and-primitives.md) |
-| Handoff, section 1 | switch to userspace after a delay or on a key press | only on space — [008](008-kernel-timeout-handoff.md) |
-| Handoff, section 2 | "`.bss` without `linker.ld`" | `linker.ld` exists; the problem is in objcopy/allocation — [003](003-bss-and-heap-allocator.md) |
-| Handoff, section 3 | objcopy dumps `.text/.rodata/.data` | all alloc content is dumped — [001](001-flat-binary-entry-offset-and-got-call.md) |
+| Handoff, section 1 | the bootloader reads files from FAT32 | `include_bytes!` — [006](006-bootloader-load-from-fat32.done) |
+| Handoff, section 1 | font and primitive rendering | absent — [007](007-kernel-font-and-primitives.done) |
+| Handoff, section 1 | switch to userspace after a delay or on a key press | only on space — [008](008-kernel-timeout-handoff.done) |
+| Handoff, section 2 | "`.bss` without `linker.ld`" | `linker.ld` exists; the problem is in objcopy/allocation — [003](003-bss-and-heap-allocator.done) |
+| Handoff, section 3 | objcopy dumps `.text/.rodata/.data` | all alloc content is dumped — [001](001-flat-binary-entry-offset-and-got-call.done) |
 
 ## Plan
 
@@ -29,3 +29,7 @@
 ## Acceptance criteria
 
 Every statement in README/handoff either matches the code or is marked as "roadmap" with a link to an issue.
+
+## Resolution
+
+README is maintained together with the code (sections Current Runtime, System services, IPC, libmind SDK, tests); the handoff document is not part of the repository; `knowledge/04` is kept as a historical matrix. Further documentation work is tracked in [ROADMAP](../ROADMAP.md).

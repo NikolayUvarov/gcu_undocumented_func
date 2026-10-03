@@ -1,6 +1,6 @@
-# 005 — System calls (`int 0x80`) between userspace and the kernel
+# 005 — System calls (`int 0x80`) between userspace and the kernel — done
 
-**Type:** feature (roadmap #3) · **Priority:** medium · **Status:** open · **Blocked by:** [004](004-apic-idt-interrupts.md)
+**Type:** feature (roadmap #3) · **Priority:** medium · **Status:** done (2026-10-03) · **Blocked by:** [004](004-apic-idt-interrupts.done)
 **Affects:** `kernel/`, `app/`, shared protocol crate
 
 ## What the handoff requires
@@ -9,7 +9,7 @@ After the IDT/APIC are stabilized, bring back software vector `0x80` for request
 
 ## Current state
 
-The application receives `&BootInfo` and writes to the framebuffer directly; there is no "upward" interface at all; it cannot return to the kernel (`-> !`). The README claims `int 0x80` is implemented — see [010](010-docs-sync.md).
+The application receives `&BootInfo` and writes to the framebuffer directly; there is no "upward" interface at all; it cannot return to the kernel (`-> !`). The README claims `int 0x80` is implemented — see [010](010-docs-sync.done).
 
 ## Plan
 
@@ -28,3 +28,7 @@ The application receives `&BootInfo` and writes to the framebuffer directly; the
 - app animates based on `SYS_TICKS`; the speed does not depend on the CPU.
 - app does `SYS_EXIT` on the Esc key, and the kernel returns to its own loop.
 - No protocol structure is duplicated between crates.
+
+## Resolution
+
+DPL-3 `int 0x80` gate is the only user entry; the ABI lives in `common/abi.rs`, shared by the kernel and the `libmind` SDK; `SYSCALL_UPTIME`, `SYSCALL_EXIT` and IPC calls exist.

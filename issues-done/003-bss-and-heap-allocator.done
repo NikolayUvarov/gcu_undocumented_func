@@ -1,6 +1,6 @@
-# 003 — `.bss`, global statics and a heap (`linked_list_allocator`)
+# 003 — `.bss`, global statics and a heap (`linked_list_allocator`) — done
 
-**Type:** feature · **Priority:** high · **Status:** open · **Blocked by:** [002](002-elf-loader.md)
+**Type:** feature · **Priority:** high · **Status:** done (2026-10-03) · **Blocked by:** [002](002-elf-loader.done)
 **Affects:** `kernel/`, `bootloader/` (passing the memory map)
 
 ## What the handoff requires
@@ -14,7 +14,7 @@ Restore the rolled-back integration: `extern crate alloc`, `#[global_allocator]`
 
 ## Plan
 
-1. Wait for [002](002-elf-loader.md) (zeroing `memsz - filesz`). Interim option without ELF: `__bss_start`/`__bss_end` symbols in `linker.ld`, a `write_bytes` call from `_start` before any access to statics, and allocating `memory = file size + .bss size` (pass the size via `include_bytes!` of a second file or a constant from build.rs).
+1. Wait for [002](002-elf-loader.done) (zeroing `memsz - filesz`). Interim option without ELF: `__bss_start`/`__bss_end` symbols in `linker.ld`, a `write_bytes` call from `_start` before any access to statics, and allocating `memory = file size + .bss size` (pass the size via `include_bytes!` of a second file or a constant from build.rs).
 2. Heap region: for now — a static array in `.bss` (e.g. 1 MB) via `LockedHeap::init`. Later — from the UEFI memory map: in `bootloader`, keep the `MemoryMap` from `exit_boot_services`, select the `CONVENTIONAL` regions and pass them in `BootInfo` (pointer + descriptor count + descriptor size).
 3. Check that `linked_list_allocator` builds for `x86_64-unknown-none` without `std` (feature `use_spin`; `spin` needs atomics — fine on x86_64).
 4. `#[alloc_error_handler]` is no longer needed on current nightly (default handler = panic); verify on the current toolchain.
@@ -24,3 +24,7 @@ Restore the rolled-back integration: `extern crate alloc`, `#[global_allocator]`
 - `format!("{}x{}", info.width, info.height)` works in the kernel and the result is drawn/checked.
 - `static mut` values are zero-initialized (check: the frame counter starts at 0).
 - The `.bin`/ELF size is not "bloated" by `.bss` zeros (for ELF — `filesz < memsz`).
+
+## Resolution
+
+`.bss` is zero-filled by the ELF loader; the bootloader reserves a 64 MiB kernel heap; the kernel shell uses `format!`. Programs have their own private heap (issue 014).
