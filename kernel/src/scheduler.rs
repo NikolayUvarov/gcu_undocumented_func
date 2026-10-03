@@ -7,19 +7,19 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const MAX_TASKS: usize = 20; // сервисы + приложения
-pub const MAX_APPS: usize = 8; // сервисы не отнимают слоты у пользовательских программ
+pub const MAX_TASKS: usize = 20; // services + applications
+pub const MAX_APPS: usize = 8; // services don't take slots away from user programs
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 64;
-const AUDIO_DMA_BYTES: usize = 33 * 4096; // 32 буфера PCM + список дескрипторов AC97
-const AHCI_DMA_BYTES: usize = 128 * 1024; // команды, FIS и буфер данных 64 КиБ
-const XHCI_DMA_BYTES: usize = 256 * 1024; // кольца, контексты, scratchpad и буфер данных 64 КиБ
+const AUDIO_DMA_BYTES: usize = 33 * 4096; // 32 PCM buffers + AC97 descriptor list
+const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
+const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Capability { Endpoint(usize, u8), Memory(usize, usize), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64) }
 
-// Имя задачи (для ps и запросов запуска); образы приложений больше не индексируются таблицей ядра.
+// Task name (for ps and spawn requests); application images are no longer indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Name { bytes: [u8; NAME_MAX], len: u8 }
 impl Name {
@@ -27,10 +27,10 @@ impl Name {
     pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?") }
 }
 
-// Откуда берётся ELF: образ сервиса от загрузчика UEFI или буфер, переданный сервисом loader.
+// Where the ELF comes from: a service image from the UEFI bootloader or a buffer passed by the loader service.
 enum Source<'a> { Boot(usize), Image(&'a [u8]) }
 
-// Запрос шелла к loader: запуск или список программ; итог забирает шелл.
+// Shell request to loader: spawn or list programs; the shell collects the result.
 #[derive(Clone, Copy)]
 struct Request { id: usize, background: bool, spawned: Option<Result<u64, &'static str>>, done: Option<usize> }
 
@@ -48,18 +48,18 @@ struct Task {
     runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Queue<128>, log: Queue<4096>, log_line_start: bool, dirty: bool,
     cspace: [Option<Capability>; CAP_SLOTS],
-    pending_cap: Option<Capability>, pending_call: bool, send_seq: u64, // отправка, ждущая получателя
-    reply_to: Option<(usize, u64)>, // слот и PID клиента, ждущего ответа
+    pending_cap: Option<Capability>, pending_call: bool, send_seq: u64, // send waiting for a receiver
+    reply_to: Option<(usize, u64)>, // slot and PID of the client awaiting a reply
 }
 struct Scheduler {
     boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<Fault>; 16], fault_cursor: usize, next_pid: u64, foreground: usize, keyboard: Keyboard,
     shell_input: Queue<128>, shell_screen: Region, dirty: bool, notice: Option<(u64, bool)>,
     endpoints: [bool; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64,
-    orphans: Vec<Region>, // освобождённая владельцем память, которую ещё отображают или держат мандатом
+    orphans: Vec<Region>, // memory freed by its owner that is still mapped or held via a capability
     ac97: Option<pci::Ac97>, ahci: Option<pci::Device>, xhci: Option<pci::Device>,
-    dma: Vec<(&'static str, Region)>, // DMA-области драйверов переживают их перезапуск
-    composited: usize, // экран, на который у композитора уже есть мандат
+    dma: Vec<(&'static str, Region)>, // driver DMA regions survive driver restarts
+    composited: usize, // screen the compositor already holds a capability for
     request: Option<Request>, request_page: Region, next_request: usize, loader_notify: bool,
 }
 
@@ -103,7 +103,7 @@ impl Scheduler {
 
     fn mailbox(&self, slot: usize) -> *mut SyscallMailbox { unsafe { self.tasks[slot].as_ref().unwrap().abi.ptr().add(4096).cast() } }
 
-    // Общая точка завершения (exit, kill, исключение): будит клиентов, ждущих ответа от задачи.
+    // Common exit path (exit, kill, exception): wakes clients waiting for a reply from the task.
     fn terminate(&mut self, slot: usize, notify: bool) {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None;
         for other in 1..SLOTS { if self.tasks[other].as_ref().is_some_and(|t| t.state == State::BlockedReply(slot)) { self.fail_reply(other); } }
@@ -117,13 +117,13 @@ impl Scheduler {
     fn find(&self, pid: u64) -> Option<usize> { (1..SLOTS).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
     fn free_slot(cspace: &[Option<Capability>; CAP_SLOTS]) -> Option<usize> { (SLOT_DYNAMIC..CAP_SLOTS).find(|&i| cspace[i].is_none()) }
 
-    // Используется ли физический диапазон кем-то ещё: мандатом, отправкой в пути или отображением.
+    // Whether a physical range is still in use by someone else: via a capability, an in-flight send or a mapping.
     fn referenced(&self, physical: usize, size: usize) -> bool {
         self.tasks.iter().flatten().any(|t| t.cspace.iter().chain(core::iter::once(&t.pending_cap)).flatten().any(|c| c.overlaps(physical, size)) || t.heap.maps_foreign(physical, size))
     }
     fn retire(&mut self, region: Region) { if self.referenced(region.ptr() as usize, region.len()) { self.orphans.push(region); } }
 
-    // Освобождает завершённые задачи только после того, как их CPU переключился на другой CR3.
+    // Frees exited tasks only after their CPU has switched to a different CR3.
     fn reap(&mut self) {
         let mut released: Vec<Region> = Vec::new();
         for slot in 1..SLOTS {
@@ -131,7 +131,7 @@ impl Scheduler {
             let mut task = self.tasks[slot].take().unwrap();
             released.extend(task.heap.take_regions()); released.extend(task.screen.take());
         }
-        // Привязку IRQ снимаем, когда мандат линии больше никому не принадлежит.
+        // The IRQ binding is removed once nobody owns the line capability anymore.
         for irq in 0..16 {
             if self.irq_bind[irq].is_some() && !self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.contains(&Some(Capability::Interrupt(irq as u8)))) {
                 self.irq_bind[irq] = None; self.irq_pending[irq] = false; unsafe { interrupts::set_irq_masked(irq as u8, true); }
@@ -140,21 +140,21 @@ impl Scheduler {
         for region in released { self.retire(region); }
         let mut index = 0;
         while index < self.orphans.len() { let region = &self.orphans[index]; if self.referenced(region.ptr() as usize, region.len()) { index += 1; } else { self.orphans.swap_remove(index); } }
-        if self.orphans.is_empty() && self.orphans.capacity() != 0 { self.orphans = Vec::new(); } // пустой список не держит память кучи
+        if self.orphans.is_empty() && self.orphans.capacity() != 0 { self.orphans = Vec::new(); } // an empty list holds no heap memory
         let mut used = [false; ENDPOINTS]; used[..EP_RESERVED].fill(true);
         for task in self.tasks.iter().flatten() { for cap in task.cspace.iter().chain(core::iter::once(&task.pending_cap)).flatten() { if let Capability::Endpoint(id, _) = cap { used[*id] = true; } } }
         for ep in self.irq_bind.iter().flatten() { used[*ep] = true; }
         self.endpoints = used;
     }
 
-    // DMA-область драйвера (выровнена на 64 КиБ, чтобы буфер данных не пересекал границу для DMA).
+    // Driver DMA region (64 KiB aligned so the data buffer doesn't cross a DMA boundary).
     fn dma(&mut self, name: &'static str, bytes: usize) -> Option<Capability> {
         if !self.dma.iter().any(|(owner, _)| *owner == name) { self.dma.push((name, Region::new(bytes, 64 * 1024).ok()?)); }
         self.dma.iter().find(|(owner, _)| *owner == name).map(|(_, r)| Capability::Dma(r.ptr() as usize, r.len()))
     }
     fn mmio(bar: pci::Bar) -> Option<Capability> { (!bar.io && bar.size != 0).then(|| Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
 
-    // Сервис нужен, если для него есть оборудование (ahci, usb_storage) или он безусловный.
+    // A service is needed if its hardware is present (ahci, usb_storage) or it is unconditional.
     fn wanted(&self, service: usize) -> bool {
         match BOOT_SERVICES[service] { "ahci" => self.ahci.is_some(), "usb_storage" => self.xhci.is_some(), _ => true }
     }
@@ -175,13 +175,13 @@ impl Scheduler {
                 if let Some(device) = self.xhci { caps[SLOT_DEV0] = Self::mmio(device.bars[0]); caps[SLOT_MEM] = self.dma("usb_storage", XHCI_DMA_BYTES); }
             }
             "vfs_server" => {
-                // VFS видит только блочные устройства, драйверы которых действительно запускаются.
+                // VFS sees only block devices whose drivers are actually started.
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_VFS, all));
                 let devices = [(EP_BLOCK_ATA, true), (EP_BLOCK_AHCI, self.ahci.is_some()), (EP_BLOCK_USB, self.xhci.is_some())];
                 for (slot, (ep, _)) in (SLOT_BLOCK_FIRST..).zip(devices.into_iter().filter(|(_, present)| *present)) { caps[slot] = Some(Capability::Endpoint(ep, CAP_WRITE | CAP_GRANT)); }
             }
             "loader" => {
-                // Только loader может запускать образы из памяти; запрос шелла лежит в странице ядра.
+                // Only loader may spawn images from memory; the shell request lives in a kernel page.
                 caps[SLOT_SERVICE] = Some(Capability::Endpoint(EP_LOADER, all)); caps[SLOT_VFS] = Some(Capability::Endpoint(EP_VFS, CAP_WRITE | CAP_GRANT));
                 caps[SLOT_MEM] = Some(Capability::Memory(self.request_page.ptr() as usize, 4096)); caps[SLOT_PRIV] = Some(Capability::Spawn);
             }
@@ -218,7 +218,7 @@ impl Scheduler {
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::new(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
-        let screen = if service { None } else { Some(Region::new(self.shell_screen.len(), 4096)?) }; // сервисам экран не нужен
+        let screen = if service { None } else { Some(Region::new(self.shell_screen.len(), 4096)?) }; // services don't need a screen
         let mut info = self.boot; info.fb_ptr = if service { core::ptr::null_mut() } else { paging::USER_SCREEN as *mut u32 }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
@@ -226,7 +226,7 @@ impl Scheduler {
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
-        // Приложения распределяются по числу приложений на CPU: спящие сервисы не сдвигают баланс.
+        // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
         let cspace = self.initial_caps(name.as_str(), service, init_cap);
         self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), log_line_start: true, dirty: true, cspace, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None });
@@ -234,14 +234,14 @@ impl Scheduler {
     }
 
     fn cap(&self, slot: usize, index: usize) -> Option<Capability> { if index < CAP_SLOTS { self.tasks[slot].as_ref().unwrap().cspace[index] } else { None } }
-    // Копия мандата для передачи; права точки IPC сужаются маской отправителя.
+    // Copy of a capability for transfer; IPC endpoint rights are narrowed by the sender's mask.
     fn transfer(&self, slot: usize, index: usize, mask: usize) -> Option<Capability> {
         if index == 0 { return None; }
-        match self.cap(slot, index)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), Capability::Reply(..) => None, other => Some(other) } // ответ одноразовый, не передаётся
+        match self.cap(slot, index)? { Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, rights & mask as u8)), Capability::Reply(..) => None, other => Some(other) } // reply caps are one-shot and not transferable
     }
     fn blocked(&self, state: State) -> Option<usize> { (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
 
-    // Передаёт сообщение блокированного или текущего отправителя получателю.
+    // Delivers the message of a blocked or current sender to the receiver.
     unsafe fn deliver(&mut self, from: usize, to: usize) {
         let (from_mb, to_mb) = (self.mailbox(from), self.mailbox(to));
         let sender = self.tasks[from].as_mut().unwrap(); let (pid, call, cap) = (sender.pid, sender.pending_call, sender.pending_cap.take());
@@ -255,7 +255,7 @@ impl Scheduler {
         let sender = self.tasks[from].as_mut().unwrap();
         if call { sender.state = State::BlockedReply(to); } else { (*from_mb).result = 0; sender.state = State::Ready; }
     }
-    // Сообщение от ядра (IRQ или запрос шелла): отправитель с PID 0, без мандата.
+    // Message from the kernel (IRQ or shell request): sender PID 0, no capability.
     unsafe fn notify(&mut self, to: usize, flag: usize, value: usize) {
         let mb = self.mailbox(to);
         (*mb).msg = [0, flag, value, 0]; (*mb).arg1 = 0; (*mb).result = 0;
@@ -263,7 +263,7 @@ impl Scheduler {
     }
     unsafe fn notify_irq(&mut self, to: usize, irq: usize) { self.notify(to, MSG_FLAG_IRQ, irq) }
 
-    // Запрос шелла: страница [вид, фон, длина, имя]; loader получает уведомление или найдёт его при RECV.
+    // Shell request: page [kind, background, length, name]; loader gets a notification or finds it on RECV.
     fn post_request(&mut self, kind: u8, name: &[u8], background: bool) -> Result<usize, &'static str> {
         if !self.tasks.iter().flatten().any(|t| t.service && t.state != State::Exited && t.name.as_str() == "loader") { return Err("LOADER NOT RUNNING"); }
         if self.request.is_some_and(|r| r.done.is_none()) { return Err("LOADER BUSY"); }
@@ -274,7 +274,7 @@ impl Scheduler {
         match self.blocked(State::BlockedRecv(EP_LOADER)) { Some(loader) => unsafe { self.notify(loader, MSG_FLAG_KERNEL, id) }, None => self.loader_notify = true }
         Ok(id)
     }
-    // Прерывание линии: маска уже выставлена; будит драйвер или запоминает событие.
+    // Line interrupt: already masked; wakes the driver or records the event.
     unsafe fn raise_irq(&mut self, irq: usize) {
         if let Some(ep) = self.irq_bind[irq] {
             if let Some(receiver) = self.blocked(State::BlockedRecv(ep)) { self.notify_irq(receiver, irq); } else { self.irq_pending[irq] = true; }
@@ -285,7 +285,7 @@ impl Scheduler {
         if !woken { self.irq_pending[irq] = true; }
     }
 
-    // Ok(Some(sp)) — вызывающий заблокирован, переключаемся; Ok(None) — сразу вернуть 0.
+    // Ok(Some(sp)): caller is blocked, switch; Ok(None): return 0 immediately.
     unsafe fn ipc_send(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox, call: bool) -> Result<Option<usize>, usize> {
         let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
         if rights & CAP_WRITE == 0 { return Err(ERR_RIGHTS); }
@@ -311,7 +311,7 @@ impl Scheduler {
         let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true;
         Ok(Some(self.select(sp, cpu)))
     }
-    // Ответ последнему клиенту или клиенту из сохранённого мандата ответа (arg1 — его слот).
+    // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
     unsafe fn ipc_reply(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
         let target = if request.arg1 == 0 { self.tasks[slot].as_mut().unwrap().reply_to.take() } else {
             match self.cap(slot, request.arg1) { Some(Capability::Reply(caller, pid)) => { self.tasks[slot].as_mut().unwrap().cspace[request.arg1] = None; Some((caller, pid)) } _ => None }
@@ -366,7 +366,7 @@ impl Scheduler {
             },
             SYSCALL_CAP_DROP => if (1..CAP_SLOTS).contains(&request.arg1) { task.cspace[request.arg1] = None; Ok(0) } else { Err(ERR_INVALID) },
             SYSCALL_SPAWN_IMAGE => {
-                // ELF из памяти loader: ядро разбирает и копирует его, буфер loader освобождает сам.
+                // ELF from loader memory: the kernel parses and copies it; loader frees the buffer itself.
                 let length = request.arg2.min(NAME_MAX); let mut name = [0u8; NAME_MAX];
                 let image = match self.cap(slot, request.msg[0]) { Some(Capability::Memory(physical, size)) if request.msg[1] <= size => Some((physical, request.msg[1])), _ => None };
                 if !self.holds(slot, Capability::Spawn) { Err(ERR_RIGHTS) }
@@ -387,7 +387,7 @@ impl Scheduler {
                 }
             }
             SYSCALL_LOADER_DONE => {
-                // Итог запроса шелла: длина текста LIST или код ошибки запуска (после освобождения буфера образа).
+                // Shell request result: LIST text length or spawn error code (after the image buffer is freed).
                 let allowed = self.holds_spawn(slot);
                 match self.request.as_mut() { Some(r) if allowed && r.id == request.arg1 && r.done.is_none() => { r.done = Some(request.arg2); Ok(0) } _ => Err(ERR_INVALID) }
             }
@@ -398,7 +398,7 @@ impl Scheduler {
             },
             SYSCALL_MEM_MAP => match self.cap(slot, request.arg1) {
                 Some(cap @ (Capability::Memory(physical, size) | Capability::Dma(physical, size) | Capability::Mmio(physical, size))) => {
-                    core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // размер отображения для клиента
+                    core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // mapping size for the client
                     task.heap.map_shared(&mut task.space, physical, size, matches!(cap, Capability::Mmio(..))).ok_or(ERR_NO_MEMORY)
                 }
                 _ => Err(ERR_RIGHTS),
@@ -413,7 +413,7 @@ impl Scheduler {
                 if !matches!(width, 1 | 2 | 4) || !self.ports(slot, request.arg1, port, width) { Err(ERR_RIGHTS) } else { port_out(port as u16, width, request.msg[0]); Ok(0) }
             }
             SYSCALL_PORT_IN_BLOCK => {
-                // Чтение 16-битных слов (сектор ATA) прямо в буфер процесса, без системного вызова на слово.
+                // Reads 16-bit words (ATA sector) straight into the process buffer, without a syscall per word.
                 let (buffer, words) = (request.msg[2], request.msg[3]);
                 let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.writable(page * 4096).is_some());
                 if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
@@ -437,7 +437,7 @@ impl Scheduler {
             },
             SYSCALL_IRQ_ACK => match self.cap(slot, request.arg1) { Some(Capability::Interrupt(irq)) => { interrupts::set_irq_masked(irq, false); Ok(0) } _ => Err(ERR_RIGHTS) },
             SYSCALL_INPUT_EVENT => {
-                // Только драйвер с мандатом ввода может подмешивать нажатия в шелл и программы.
+                // Only a driver with the input capability may inject key presses into the shell and programs.
                 if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else { self.route_key(request.arg1 as u8, request.arg2 as u8, request.msg[0] != 0); Ok(0) }
             }
             SYSCALL_COMPOSITOR_PULL => {
@@ -445,12 +445,12 @@ impl Scheduler {
                     let screen = (self.foreground != 0).then(|| (*tasks.add(self.foreground)).as_mut()).flatten();
                     let (source, dirty) = match screen { Some(t) if t.screen.is_some() => (t.screen.as_ref().unwrap().ptr() as usize, core::mem::take(&mut t.dirty) | self.dirty), _ => (self.shell_screen.ptr() as usize, self.dirty) };
                     self.dirty = false;
-                    // Новый мандат только при смене экрана: композитор держит отображение между кадрами.
+                    // New capability only on screen change: the compositor keeps the mapping across frames.
                     if source != self.composited { self.composited = source; task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot))); Ok(2) } else { Ok(dirty as usize) }
                 }
             }
             SYSCALL_CAP_INFO => {
-                // Драйвер узнаёт, что ему выдано (например, базу портов BAR), не видя физических адресов памяти.
+                // Lets a driver learn what it was granted (e.g. the BAR port base) without seeing physical memory addresses.
                 let (kind, base, size) = match self.cap(slot, request.arg1) {
                     None => (CAP_KIND_NONE, 0, 0),
                     Some(Capability::Endpoint(_, rights)) => (CAP_KIND_ENDPOINT, 0, rights as usize),
@@ -474,7 +474,7 @@ impl Scheduler {
             }
             SYSCALL_IPC_REPLY => self.ipc_reply(slot, &request),
             SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::free_slot(&task.cspace)) {
-                // Отложенный ответ: сервер принимает следующие запросы и отвечает этому клиенту позже.
+                // Deferred reply: the server accepts further requests and replies to this client later.
                 (Some((caller, pid)), Some(index)) => { task.reply_to = None; task.cspace[index] = Some(Capability::Reply(caller, pid)); Ok(index) }
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
@@ -496,7 +496,7 @@ unsafe fn port_out(port: u16, width: usize, value: usize) {
 pub fn spawn_service(index: usize) -> Result<u64, &'static str> { locked(|| unsafe { scheduler().spawn_internal(Source::Boot(index), Name::new(BOOT_SERVICES[index].as_bytes()), true, None) }) }
 pub fn service_wanted(index: usize) -> bool { locked(|| unsafe { scheduler().wanted(index) }) }
 pub fn post_request(kind: u8, name: &[u8], background: bool) -> Result<usize, &'static str> { locked(|| unsafe { scheduler().post_request(kind, name, background) }) }
-// Итог запроса, когда loader его завершил: (запуск, код LOADER_DONE); текст LIST копируется в `text`.
+// Request result once loader has completed it: (spawn, LOADER_DONE code); LIST text is copied into `text`.
 pub fn take_request(id: usize, text: &mut [u8]) -> Option<(Option<Result<u64, &'static str>>, usize)> {
     locked(|| unsafe {
         let s = scheduler();
@@ -515,7 +515,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
         let irq = (33..48).contains(&vector).then_some(vector as usize - 32);
         if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
-        else if let Some(irq) = irq { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // линию откроет драйвер
+        else if let Some(irq) = irq { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // the driver will unmask the line
         else if vector == 48 { cpu::eoi(); }
 
         locked(|| {
@@ -552,7 +552,7 @@ pub fn logs(pid: u64, buffer: &mut [u8]) -> Result<usize, &'static str> { locked
 pub fn input() -> Option<u8> { locked(|| unsafe { let s = scheduler(); s.poll_serial(); s.shell_input.pop() }) }
 pub fn notice() -> Option<(u64, bool)> { locked(|| unsafe { scheduler().notice.take() }) }
 pub fn dirty() { locked(|| unsafe { scheduler().dirty = true; }); }
-// Вызывается шеллом на BSP: возвращает память завершённых задач (раньше это делал service()).
+// Called by the shell on the BSP: reclaims memory of exited tasks (formerly done by service()).
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
 pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { scheduler().states(cpu::id())[1..].iter().any(|s| *s == State::Ready) }); if ready { asm!("int 0x80"); } else { asm!("sti", "hlt", "cli"); } }); }

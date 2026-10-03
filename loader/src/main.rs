@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-// loader: читает ELF приложений с диска через vfs_server и запускает их (SPAWN_IMAGE)
-// по запросу шелла ядра или программ; ядро образов приложений не хранит.
+// loader: reads application ELFs from disk via vfs_server and starts them (SPAWN_IMAGE)
+// at the request of the kernel shell or programs; the kernel stores no application images.
 use core::fmt::Write;
 use mind::abi::*;
 use mind::fs::{self, File};
@@ -13,7 +13,7 @@ use mind::util::FixedBuf;
 const RECEIVED_CAP: usize = 9;
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
 
-// Имя программы -> файл: «clock» -> clock.elf; путь с точкой или каталогом используется как есть.
+// Program name -> file: "clock" -> clock.elf; a path with a dot or directory is used as is.
 fn path_for(name: &[u8], path: &mut FixedBuf<64>) -> Result<(), Error> {
     let text = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_graphic()) { return Err(Error::Invalid); }
@@ -21,7 +21,7 @@ fn path_for(name: &[u8], path: &mut FixedBuf<64>) -> Result<(), Error> {
     Ok(())
 }
 
-// Имя задачи для ps: файл без каталога и расширения .elf, строчными буквами.
+// Task name for ps: file name without directory and .elf extension, lowercased.
 fn task_name(path: &[u8]) -> FixedBuf<NAME_MAX> {
     let file = path.rsplit(|&b| b == b'/').next().unwrap_or(path);
     let stem = if file.len() > 4 && file[file.len() - 4..].eq_ignore_ascii_case(b".elf") { &file[..file.len() - 4] } else { file };
@@ -34,7 +34,7 @@ fn load(name: &[u8], init: usize, request: usize) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
     path_for(name, &mut path)?;
     let task = task_name(path.as_bytes());
-    // Сервисы запускает ядро из образов загрузчика; ядро как программа не запускается.
+    // Services are started by the kernel from bootloader images; the kernel itself is not runnable as a program.
     if task.as_bytes() == b"kernel" || BOOT_SERVICES.iter().any(|s| s.as_bytes() == task.as_bytes()) { return Err(Error::NotFound); }
     let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap())?;
     let size = file.size();
@@ -43,11 +43,11 @@ fn load(name: &[u8], init: usize, request: usize) -> Result<u64, Error> {
     if file.read_at(0, &mut image.as_mut_slice()[..size])? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
     let cap = image.share()?;
     let result = mind::process::spawn_image(task.as_bytes(), cap, size, init, CAP_READ | CAP_WRITE | CAP_GRANT, request);
-    let _ = ipc::drop_cap(cap); // ядро уже скопировало образ; буфер освобождается при выходе из функции
+    let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
 
-// Текст для LIST: программы *.elf в корне диска, кроме ядра; сервисы помечены.
+// Text for LIST: *.elf programs in the disk root, except the kernel; services are marked.
 fn listing(out: &mut [u8]) -> usize {
     let mut at = 0;
     let _ = fs::list("", |entry| {
@@ -70,7 +70,7 @@ fn main(_info: &'static BootInfo) {
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         if let Some(id) = request.kernel {
-            // Запрос шелла: [вид, фон, длина имени, имя...] в странице ядра.
+            // Shell request: [kind, background, name length, name...] in the kernel page.
             let bytes = page.as_slice(); let (kind, len) = (bytes[0], (bytes[2] as usize).min(NAME_MAX * 4));
             let mut name = [0u8; NAME_MAX * 4]; name[..len].copy_from_slice(&bytes[3..3 + len]);
             let code = match kind {
@@ -80,7 +80,7 @@ fn main(_info: &'static BootInfo) {
             };
             let _ = mind::process::loader_done(id, code);
         } else if request.is_call {
-            // Запуск из программы: имя в двух словах сообщения, необязательный мандат для слота INIT ребёнка.
+            // Spawn from a program: name in two message words, optional capability for the child's INIT slot.
             let mut packed = [0u8; NAME_MAX];
             packed[..8].copy_from_slice(&request.data[0].to_le_bytes()); packed[8..].copy_from_slice(&request.data[1].to_le_bytes());
             let len = packed.iter().position(|&b| b == 0).unwrap_or(NAME_MAX);

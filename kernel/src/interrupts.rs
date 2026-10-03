@@ -99,7 +99,7 @@ pub unsafe fn init() {
     IDT[0x80].type_attr = 0xee;
     load();
 
-    // Открыты таймер, клавиатура и каскад IRQ2; остальные линии открывают драйверы.
+    // Timer, keyboard and the IRQ2 cascade are unmasked; drivers unmask the other lines.
     for (port, value) in [
         (0x20, 0x11),
         (0xA0, 0x11),
@@ -125,7 +125,7 @@ pub unsafe fn init() {
 
 static PIC_MASK: AtomicU16 = AtomicU16::new(0xFFF8);
 
-// Маскирует или открывает линию PIC; вызывается под блокировкой планировщика.
+// Masks or unmasks a PIC line; called with the scheduler lock held.
 pub unsafe fn set_irq_masked(irq: u8, masked: bool) {
     let bit = 1u16 << irq;
     let mask = if masked { PIC_MASK.fetch_or(bit, Ordering::Relaxed) | bit } else { PIC_MASK.fetch_and(!bit, Ordering::Relaxed) & !bit };

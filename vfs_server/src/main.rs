@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
-// vfs_server: изолированный процесс, который получает секторы от блочных драйверов по IPC, разбирает FAT
-// и выдаёт клиентам дескрипторы, привязанные к их PID. Данные идут через буфер клиента.
+// vfs_server: an isolated process that receives sectors from block drivers over IPC, parses FAT
+// and hands clients descriptors bound to their PID. Data goes through the client's buffer.
 mod disk;
 mod fat;
 
@@ -13,12 +13,12 @@ const RECEIVED_CAP: usize = 9;
 const MAX_OPEN: usize = 32;
 
 #[derive(Clone, Copy)]
-struct Open { owner: u64, file: fat::Node, cursor: Option<(usize, u32)> } // cursor: (номер кластера в цепочке, кластер)
+struct Open { owner: u64, file: fat::Node, cursor: Option<(usize, u32)> } // cursor: (cluster index in the chain, cluster)
 
 struct Server { volume: Option<fat::Volume>, open: [Option<Open>; MAX_OPEN] }
 
 impl Server {
-    // Дескрипторы умерших клиентов освобождаются, когда таблица заполнена.
+    // Descriptors of dead clients are freed when the table is full.
     fn allocate(&mut self, open: Open) -> Option<usize> {
         if self.open.iter().all(Option::is_some) {
             for slot in self.open.iter_mut() { if slot.is_some_and(|o| !mind::process::alive(o.owner)) { *slot = None; } }
@@ -56,7 +56,7 @@ impl Server {
                 let mut name = [0u8; 255]; let path_len = path.len(); name[..path_len].copy_from_slice(path);
                 let dir = volume.resolve(&name[..path_len]).ok_or(ERR_NOT_FOUND)?;
                 if !dir.is_dir { return Err(ERR_INVALID); }
-                // Записи: размер u32, флаги u8 (1 = каталог), длина имени u8, имя.
+                // Entries: size u32, flags u8 (1 = directory), name length u8, name.
                 let (mut index, mut count, mut at, mut more) = (0usize, 0usize, 0usize, false);
                 volume.walk(&dir, |entry| {
                     if index < offset { index += 1; return true; }
@@ -74,7 +74,7 @@ impl Server {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    // Первый накопитель с томом FAT (порядок: ata, ahci, usb_storage) становится корнем.
+    // The first drive with a FAT volume (order: ata, ahci, usb_storage) becomes the root.
     let volume = (SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES)
         .filter(|&slot| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT)
         .filter_map(|slot| mind::block::Device::open(Endpoint(slot)).ok())

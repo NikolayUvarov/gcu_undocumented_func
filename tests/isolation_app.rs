@@ -91,7 +91,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'k' => {
-                // Обычное приложение не может пользоваться чужими привилегиями без мандатов.
+                // A regular application cannot use others' privileges without capabilities.
                 let image = _start as *const () as usize;
                 let checks = [
                     (abi::SYSCALL_INPUT_EVENT, b'x' as usize, b'x' as usize, abi::ERR_RIGHTS),
@@ -101,11 +101,11 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_IRQ_WAIT, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_MAP, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_PHYS, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
-                    (abi::SYSCALL_MEM_SHARE, image, 4096, abi::ERR_INVALID), // код не делится
-                    (abi::SYSCALL_MEM_SHARE, 0x80_0100_1000, 4096, abi::ERR_INVALID), // стек тоже
-                    (abi::SYSCALL_IPC_RECV, abi::SLOT_RTC, 0, abi::ERR_RIGHTS), // только запись в чужой сервис
+                    (abi::SYSCALL_MEM_SHARE, image, 4096, abi::ERR_INVALID), // code is not shareable
+                    (abi::SYSCALL_MEM_SHARE, 0x80_0100_1000, 4096, abi::ERR_INVALID), // nor is the stack
+                    (abi::SYSCALL_IPC_RECV, abi::SLOT_RTC, 0, abi::ERR_RIGHTS), // write-only access to another's service
                     (abi::SYSCALL_IPC_REPLY, 0, 0, abi::ERR_INVALID),
-                    (abi::SYSCALL_SPAWN_IMAGE, image, 4, abi::ERR_RIGHTS), // запуск образов — только у loader
+                    (abi::SYSCALL_SPAWN_IMAGE, image, 4, abi::ERR_RIGHTS), // spawning images is loader-only
                     (abi::SYSCALL_LOADER_DONE, 1, 0, abi::ERR_INVALID),
                 ];
                 for (number, a, b, expected) in checks {

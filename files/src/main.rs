@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Демонстрация VFS: список корня диска и чтение файла через vfs_server.
+// VFS demo: lists the disk root and reads a file via vfs_server.
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::fs::{self, File};
@@ -27,7 +27,7 @@ fn main(info: &'static BootInfo) {
         Err(error) => { out.clear(); let _ = write!(out, "[FILES] LIST FAILED: {:?}", error); line(out.as_bytes()); }
     }
 
-    // Читаем ELF целиком кусками и считаем простую контрольную сумму.
+    // Read the whole ELF in chunks and compute a simple checksum.
     for path in ["kernel.elf", "EFI/BOOT/BOOTX64.EFI"] {
         out.clear();
         match File::open(path) {

@@ -1,5 +1,5 @@
 #![no_std]
-//! libmind — SDK программ MIND CORE: системные вызовы, IPC, память, устройства, графика и клиенты сервисов.
+//! libmind is the MIND CORE program SDK: system calls, IPC, memory, devices, graphics and service clients.
 
 #[path = "../../common/abi.rs"]
 pub mod abi;
@@ -26,7 +26,7 @@ pub mod rt;
 pub use abi::BootInfo;
 pub use sys::{Error, Result};
 
-/// Объявляет точку входа `_start`, инициализирует mailbox и завершает процесс после `main`.
+/// Declares the `_start` entry point, initializes the mailbox and exits the process after `main`.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
@@ -41,7 +41,7 @@ macro_rules! entry {
     };
 }
 
-/// Форматированный вывод в журнал процесса (команда LOGS, UART для активной программы).
+/// Formatted output to the process log (LOGS command, UART for the active program).
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{ let _ = core::fmt::Write::write_fmt(&mut $crate::process::Log, format_args!($($arg)*)); }};

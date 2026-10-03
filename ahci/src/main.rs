@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Драйвер AHCI (SATA) в ring 3: регистры HBA по мандату MMIO, команды и данные в своей DMA-области.
+// Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region.
 use mind::abi::{BootInfo, EP_BLOCK_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{Dma, Mmio};
@@ -10,12 +10,12 @@ const CLB: usize = 0x00; const FB: usize = 0x08; const IS: usize = 0x10; const C
 const SIG: usize = 0x24; const SSTS: usize = 0x28; const SERR: usize = 0x30; const CI: usize = 0x38;
 const CMD_ST: u32 = 1; const CMD_SUD: u32 = 2; const CMD_POD: u32 = 4; const CMD_FRE: u32 = 1 << 4; const CMD_FR: u32 = 1 << 14; const CMD_CR: u32 = 1 << 15;
 const IS_TFES: u32 = 1 << 30;
-// Раскладка DMA-области: список команд, принятые FIS, таблица команды, буфер данных (выровнен на 64 КиБ).
+// DMA region layout: command list, received FIS, command table, data buffer (64 KiB aligned).
 const LIST: usize = 0; const FIS: usize = 0x400; const TABLE: usize = 0x1000; const DATA: usize = 0x10000;
 
 struct Ahci { hba: Mmio, dma: Dma, port: usize, sectors: u64 }
 
-// Ждёт условия, сначала активным опросом, потом со сном (QEMU завершает DMA асинхронно).
+// Waits for a condition, busy-polling first, then sleeping (QEMU completes DMA asynchronously).
 fn wait(mut done: impl FnMut() -> bool) -> bool {
     for attempt in 0..2_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
     false
@@ -27,8 +27,8 @@ impl Ahci {
 
     fn probe() -> Option<Self> {
         let (hba, dma) = (Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?);
-        hba.write32(GHC, hba.read32(GHC) | 1 << 31); // режим AHCI
-        if hba.read32(CAP2) & 1 != 0 { hba.write32(BOHC, hba.read32(BOHC) | 2); wait(|| hba.read32(BOHC) & 1 == 0); } // забрать контроллер у BIOS
+        hba.write32(GHC, hba.read32(GHC) | 1 << 31); // AHCI mode
+        if hba.read32(CAP2) & 1 != 0 { hba.write32(BOHC, hba.read32(BOHC) | 2); wait(|| hba.read32(BOHC) & 1 == 0); } // take the controller from the BIOS
         let implemented = hba.read32(PI);
         let port = (0..32).find(|&p| implemented & 1 << p != 0 && hba.read32(0x100 + p * 0x80 + SSTS) & 0xF == 3 && hba.read32(0x100 + p * 0x80 + SIG) == 0x0000_0101)?;
         let mut device = Self { hba, dma, port, sectors: 0 };
@@ -55,7 +55,7 @@ impl Ahci {
         wait(|| self.reg(TFD) & 0x88 == 0).then_some(())
     }
 
-    // Одна команда в слоте 0: H2D FIS + одна запись PRDT на буфер данных; ответ копируется в `out`.
+    // One command in slot 0: H2D FIS + one PRDT entry for the data buffer; the result is copied to `out`.
     fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8]) -> Option<()> {
         let bytes = out.len();
         let table = self.dma.physical(TABLE); let data = self.dma.physical(DATA);

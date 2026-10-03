@@ -1,4 +1,4 @@
-//! Клиент аудиошлюза audio_gw: PCM 16 бит стерео 48 кГц через разделяемый буфер, тоны.
+//! Client for the audio_gw audio gateway: 16-bit stereo 48 kHz PCM via a shared buffer, tones.
 use crate::abi::*;
 use crate::ipc::{Endpoint, Message};
 use crate::mem::Pages;
@@ -9,7 +9,7 @@ const CHUNK: usize = 16 * 1024;
 
 struct Channel { pages: Pages, cap: usize }
 struct Shared(UnsafeCell<Option<Channel>>);
-unsafe impl Sync for Shared {} // процессы однопоточны
+unsafe impl Sync for Shared {} // processes are single-threaded
 static CHANNEL: Shared = Shared(UnsafeCell::new(None));
 
 fn channel() -> Result<&'static mut Channel> {
@@ -29,13 +29,13 @@ pub struct Info { pub present: bool, pub rate: usize }
 
 pub fn info() -> Result<Info> { let [present, rate] = request(Message::new(AUDIO_INFO, 0))?; Ok(Info { present: present != 0, rate }) }
 
-/// Ставит в очередь синусоиду `hz` длительностью `ms`.
+/// Queues a sine wave of `hz` lasting `ms`.
 pub fn tone(hz: usize, ms: usize) -> Result<()> { request(Message::new(AUDIO_TONE | hz << 8, ms)).map(drop) }
 
-/// Сбрасывает очередь воспроизведения.
+/// Flushes the playback queue.
 pub fn stop() -> Result<()> { request(Message::new(AUDIO_STOP, 0)).map(drop) }
 
-/// Отдаёт часть чередующихся сэмплов L/R; возвращает число принятых сэмплов (0 — очередь полна).
+/// Submits part of the interleaved L/R samples; returns the number of samples accepted (0 means the queue is full).
 pub fn play(samples: &[i16]) -> Result<usize> {
     let channel = channel()?;
     let count = samples.len().min(CHUNK / 2) & !1;
@@ -45,10 +45,10 @@ pub fn play(samples: &[i16]) -> Result<usize> {
     Ok(accepted / 2)
 }
 
-/// Ждёт, пока в кольце DMA шлюза освободится `buffers` буферов по 4 КиБ (ответ приходит по прерыванию AC97).
+/// Waits until `buffers` 4 KiB buffers are free in the gateway's DMA ring (the reply comes on the AC97 interrupt).
 pub fn wait_space(buffers: usize) -> Result<usize> { request(Message::new(AUDIO_WAIT | buffers << 8, 0)).map(|[free, _]| free) }
 
-/// Проигрывает весь буфер, дожидаясь места в очереди по уведомлению шлюза.
+/// Plays the whole buffer, waiting for queue space via gateway notifications.
 pub fn play_all(mut samples: &[i16]) -> Result<()> {
     while samples.len() >= 2 {
         let accepted = play(samples)?;
@@ -58,13 +58,13 @@ pub fn play_all(mut samples: &[i16]) -> Result<()> {
     Ok(())
 }
 
-/// Потоковый вывод: сэмплы копируются прямо в разделяемый буфер и уходят шлюзу блоками по 16 КиБ,
-/// пока производитель (например, синтезатор речи) готовит следующие.
+/// Streaming output: samples are copied directly into the shared buffer and sent to the gateway in 16 KiB blocks
+/// while the producer (e.g. a speech synthesizer) prepares the next ones.
 pub struct Stream { filled: usize }
 
 impl Stream {
     pub fn new() -> Result<Self> { channel()?; Ok(Self { filled: 0 }) }
-    /// Добавляет чередующиеся сэмплы L/R.
+    /// Appends interleaved L/R samples.
     pub fn write(&mut self, samples: &[i16]) -> Result<()> {
         for sample in samples {
             if self.filled == CHUNK / 2 { self.flush()?; }
@@ -74,7 +74,7 @@ impl Stream {
         }
         Ok(())
     }
-    /// Отдаёт накопленное шлюзу целиком, ожидая места в кольце.
+    /// Hands everything accumulated to the gateway, waiting for space in the ring.
     pub fn flush(&mut self) -> Result<()> {
         while self.filled >= 2 {
             let channel = channel()?;

@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Демонстрация аудиошлюза: аккорд тонами и PCM-свип, сгенерированный в своей памяти.
+// Audio gateway demo: a chord of tones and a PCM sweep generated in its own memory.
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
 use mind::mem::Pages;
@@ -15,14 +15,14 @@ fn main(info: &'static BootInfo) {
     mind::println!("[BEEP] DEVICE={} RATE={}", info.present, info.rate);
     if !info.present { return; }
     for hz in [523, 659, 784] { let _ = mind::audio::tone(hz, 150); }
-    // Свип 300 -> 1200 Гц, 0.5 с, стерео: так клиент отдаёт произвольный PCM (например, от TTS).
+    // Sweep 300 -> 1200 Hz, 0.5 s, stereo: this is how a client submits arbitrary PCM (e.g. from TTS).
     let frames = info.rate / 2;
     let Some(mut pcm) = Pages::new(frames * 4) else { mind::println!("[BEEP] NO MEMORY"); return };
     let samples = unsafe { core::slice::from_raw_parts_mut(pcm.as_mut_slice().as_mut_ptr() as *mut i16, frames * 2) };
     let mut phase = 0u32;
     for (i, frame) in samples.chunks_exact_mut(2).enumerate() {
         let hz = 300 + 900 * i / frames;
-        phase = phase.wrapping_add((((hz as u64) << 32) / info.rate as u64) as u32); // фаза 2^32 на период
+        phase = phase.wrapping_add((((hz as u64) << 32) / info.rate as u64) as u32); // phase 2^32 per period
         let t = phase >> 16;
         let triangle = if t < 32768 { t as i32 - 16384 } else { 49152 - t as i32 };
         let value = (triangle / 2) as i16;

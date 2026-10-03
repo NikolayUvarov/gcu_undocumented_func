@@ -1,4 +1,4 @@
-//! Блочные устройства: клиент для vfs_server и общий цикл обслуживания для драйверов накопителей.
+//! Block devices: client for vfs_server and a common service loop for storage drivers.
 use crate::abi::*;
 use crate::ipc::{self, Endpoint, Message};
 use crate::mem::{Mapping, Pages};
@@ -7,14 +7,14 @@ use crate::sys::{check, Error, Result};
 const RECEIVED_CAP: usize = 9;
 pub const BUFFER: usize = BLOCK_MAX_SECTORS * BLOCK_SECTOR;
 
-/// Драйвер накопителя с секторами по 512 байт.
+/// Storage driver with 512-byte sectors.
 pub trait Driver {
     fn sectors(&self) -> u64;
-    /// Читает `count` секторов (не больше BLOCK_MAX_SECTORS) в `out`.
+    /// Reads `count` sectors (at most BLOCK_MAX_SECTORS) into `out`.
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool;
 }
 
-/// Цикл драйвера: INFO, ATTACH буфера клиента и READ. Без устройства отвечает NOT_FOUND.
+/// Driver loop: INFO, ATTACH of the client buffer, and READ. Without a device, replies NOT_FOUND.
 pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
     let mut buffer: Option<Mapping> = None;
     loop {
@@ -38,25 +38,25 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
     }
 }
 
-/// Блочное устройство по точке IPC драйвера (клиентская сторона).
+/// Block device behind a driver's IPC endpoint (client side).
 pub struct Device { endpoint: Endpoint, buffer: Pages, sectors: u64, kind: usize }
 
 impl Device {
-    /// Ждёт готовности драйвера; Err(NotFound), если накопителя нет.
+    /// Waits for the driver to be ready; Err(NotFound) if there is no drive.
     pub fn open(endpoint: Endpoint) -> Result<Self> {
         let info = endpoint.call(&Message::new(BLOCK_INFO, 0), 0)?;
         let sectors = check(info.data[0])? as u64;
         let buffer = Pages::new(BUFFER).ok_or(Error::NoMemory)?;
         let cap = buffer.share()?;
         let attached = endpoint.call(&Message::new(BLOCK_ATTACH, 0).with_cap(cap, 0), 0);
-        let _ = ipc::drop_cap(cap); // у драйвера своя копия мандата
+        let _ = ipc::drop_cap(cap); // the driver keeps its own copy of the capability
         check(attached?.data[0])?;
         Ok(Self { endpoint, buffer, sectors, kind: info.data[1] })
     }
     pub fn sectors(&self) -> u64 { self.sectors }
-    /// Точка драйвера (EP_BLOCK_*), чтобы различать накопители.
+    /// Driver endpoint (EP_BLOCK_*), to tell drives apart.
     pub fn kind(&self) -> usize { self.kind }
-    /// Читает до BLOCK_MAX_SECTORS секторов; срез действителен до следующего чтения.
+    /// Reads up to BLOCK_MAX_SECTORS sectors; the slice is valid until the next read.
     pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> {
         let reply = self.endpoint.call(&Message::new(BLOCK_READ | count.min(BLOCK_MAX_SECTORS) << 8, lba as usize), 0)?;
         let got = check(reply.data[0])?;

@@ -210,7 +210,7 @@ fn streq(a: &[u8], b: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-// Ждёт итог запроса к loader, продолжая освобождать задачи и отдавать CPU сервисам.
+// Waits for the loader request result while continuing to reap tasks and yield the CPU to services.
 fn await_loader(id: usize, text: &mut [u8]) -> Result<(Option<Result<u64, &'static str>>, usize), &'static str> {
     let start = interrupts::milliseconds();
     loop {
@@ -221,7 +221,7 @@ fn await_loader(id: usize, text: &mut [u8]) -> Result<(Option<Result<u64, &'stat
     }
 }
 
-// Список берётся с диска (loader + vfs_server), а не из таблицы в ядре.
+// The list comes from disk (loader + vfs_server), not from a table in the kernel.
 fn list_programs(term: &mut Console) {
     let mut text = [0u8; 4096 - abi::LOADER_REPLY];
     match scheduler::post_request(abi::LOADER_LIST, b"", true).and_then(|id| await_loader(id, &mut text)) {
@@ -237,7 +237,7 @@ fn list_programs(term: &mut Console) {
     term.print("\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.\n");
 }
 
-// Сервисы запускаются из образов загрузчика, приложения — через loader с диска.
+// Services are started from bootloader images, applications via loader from disk.
 fn run_program(name: &[u8], background: bool) -> Result<u64, &'static str> {
     if let Some(index) = scheduler::service_index(name) { return scheduler::spawn_service(index); }
     let id = scheduler::post_request(abi::LOADER_RUN, name, background)?;
@@ -453,7 +453,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
         fb = scheduler::init(info).expect("Scheduler init failed");
-        // Системные сервисы ищутся по имени, а не по жёстко заданным номерам образов.
+        // System services are looked up by name, not by hardcoded image numbers.
         for index in 0..abi::BOOT_IMAGES {
             if scheduler::service_wanted(index) { scheduler::spawn_service(index).expect("Service spawn"); }
         }

@@ -1,6 +1,6 @@
 use crate::{inl, outl};
 
-// Минимальный доступ к конфигурации PCI (механизм #1) для раздачи устройств драйверам ring 3.
+// Minimal PCI configuration access (mechanism #1) for handing devices to ring 3 drivers.
 unsafe fn read(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     outl(0xCF8, 0x8000_0000 | (bus as u32) << 16 | (device as u32) << 11 | (function as u32) << 8 | (offset as u32 & 0xFC));
     inl(0xCFC)
@@ -16,7 +16,7 @@ pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 #[derive(Clone, Copy)]
 pub struct Device { pub bars: [Bar; 6], pub irq: u8 }
 
-// Размер BAR определяется записью единиц при выключенном декодировании, затем значение восстанавливается.
+// BAR size is determined by writing all ones with decoding disabled, then the value is restored.
 unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     let mut result = [Bar::default(); 6];
     let command = read(bus, device, function, 0x04);
@@ -46,11 +46,11 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
         }
         index += 1;
     }
-    write(bus, device, function, 0x04, command | 0x7); // I/O, память, bus mastering
+    write(bus, device, function, 0x04, command | 0x7); // I/O, memory, bus mastering
     result
 }
 
-// Первое устройство с кодом класса (класс<<16 | подкласс<<8 | интерфейс), сравниваемым по маске.
+// First device whose class code (class<<16 | subclass<<8 | interface) matches under the mask.
 pub unsafe fn find(class: u32, mask: u32) -> Option<Device> {
     for bus in 0..=255u8 {
         for device in 0..32u8 {
@@ -71,7 +71,7 @@ pub unsafe fn find(class: u32, mask: u32) -> Option<Device> {
 #[derive(Clone, Copy)]
 pub struct Ac97 { pub mixer: u16, pub bus_master: u16, pub irq: u8 }
 
-// AC97: класс 04:01, два I/O BAR и линия IRQ.
+// AC97: class 04:01, two I/O BARs and an IRQ line.
 pub unsafe fn find_ac97() -> Option<Ac97> {
     find(0x04_01_00, 0xFF_FF_00)
         .filter(|d| d.bars[0].io && d.bars[1].io && d.irq != 0)

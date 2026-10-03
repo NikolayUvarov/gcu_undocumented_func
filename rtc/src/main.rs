@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Драйвер CMOS RTC в ring 3: отвечает на CALL временем от полуночи.
+// Ring 3 CMOS RTC driver: answers CALL with the time since midnight.
 use mind::abi::{BootInfo, RTC_UNAVAILABLE, SLOT_DEV0};
 use mind::dev::Ports;
 use mind::ipc::{self, Endpoint, Message};
@@ -36,7 +36,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let cmos = Ports(SLOT_DEV0);
     loop {
-        // Ответ идёт по CALL/REPLY: клиенту больше не нужна своя точка для ответа.
+        // The reply goes via CALL/REPLY: the client no longer needs its own endpoint for the reply.
         let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
         if !request.is_call { continue; }
         let _ = ipc::reply(&Message::new(read_time(cmos).unwrap_or(RTC_UNAVAILABLE), 0));

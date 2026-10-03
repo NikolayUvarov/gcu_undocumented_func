@@ -1,4 +1,4 @@
-//! Рантайм программ: обработчик паники (журнал + выход вместо вечного цикла) и mem*-функции.
+//! Program runtime: panic handler (log + exit instead of spinning forever) and mem* functions.
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 
@@ -10,7 +10,7 @@ fn panic(info: &PanicInfo) -> ! {
     crate::process::exit()
 }
 
-// Цель x86_64-unknown-none не даёт mem*-символов; volatile не даёт компилятору свернуть цикл в вызов самого себя.
+// The x86_64-unknown-none target provides no mem* symbols; volatile keeps the compiler from turning the loop into a call to itself.
 #[no_mangle]
 pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void {
     for i in 0..n { core::ptr::write_volatile((s as *mut u8).add(i), c as u8); }

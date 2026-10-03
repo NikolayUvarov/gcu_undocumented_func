@@ -1,4 +1,4 @@
-// Только чтение FAT12/16/32: MBR или «голый» том, каталоги, длинные имена (ASCII).
+// Read-only FAT12/16/32: MBR or bare volume, directories, long names (ASCII).
 use crate::disk::Disk;
 
 #[derive(Clone, Copy)]
@@ -39,7 +39,7 @@ impl Volume {
     fn sector_of(&self, cluster: u32) -> u32 { self.data_start + (cluster - 2) * self.sectors_per_cluster }
     fn byte(&mut self, offset: u32) -> Option<u8> { Some(self.disk.read(self.fat_start + offset / 512)?[(offset % 512) as usize]) }
 
-    // Следующий кластер цепочки или None в конце/при ошибке.
+    // Next cluster in the chain, or None at the end/on error.
     fn next(&mut self, cluster: u32) -> Option<u32> {
         let value = match self.bits {
             12 => { let at = cluster + cluster / 2; let raw = self.byte(at)? as u32 | (self.byte(at + 1)? as u32) << 8; if cluster & 1 == 0 { raw & 0xFFF } else { raw >> 4 } }
@@ -52,7 +52,7 @@ impl Volume {
 
     fn root(&self) -> Node { Node { cluster: self.root_cluster, size: 0, is_dir: true, root: self.bits != 32 } }
 
-    /// Перебор каталога; `visit` возвращает false, чтобы остановиться.
+    /// Directory iteration; `visit` returns false to stop.
     pub fn walk(&mut self, dir: &Node, mut visit: impl FnMut(&Entry) -> bool) {
         let mut long = [0u8; 255]; let mut long_len = 0usize; let mut long_sum: Option<u8> = None;
         let mut cluster = dir.cluster; let mut sector_index = 0u32;
@@ -71,7 +71,7 @@ impl Volume {
                 if raw[0] == 0 { return; }
                 if raw[0] == 0xE5 { long_sum = None; continue; }
                 if raw[11] == 0x0F {
-                    // Длинное имя: фрагменты идут с конца, по 13 символов UCS-2.
+                    // Long name: fragments come in reverse order, 13 UCS-2 characters each.
                     let order = (raw[0] & 0x1F) as usize; if order == 0 || order > 20 { long_sum = None; continue; }
                     if raw[0] & 0x40 != 0 { long_len = 0; long_sum = Some(raw[13]); }
                     for (i, at) in [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30].into_iter().enumerate() {
@@ -81,7 +81,7 @@ impl Volume {
                     }
                     continue;
                 }
-                if raw[11] & 0x08 != 0 { long_sum = None; continue; } // метка тома
+                if raw[11] & 0x08 != 0 { long_sum = None; continue; } // volume label
                 let checksum = raw[..11].iter().fold(0u8, |sum, &c| sum.rotate_right(1).wrapping_add(c));
                 let mut short = [0u8; 12]; let mut short_len = 0;
                 for &c in raw[..8].iter().filter(|&&c| c != b' ') { short[short_len] = c.to_ascii_lowercase(); short_len += 1; }
@@ -96,7 +96,7 @@ impl Volume {
         }
     }
 
-    /// Путь вида `dir/file.ext` (регистр не важен); пустой путь — корень.
+    /// Path of the form `dir/file.ext` (case-insensitive); an empty path is the root.
     pub fn resolve(&mut self, path: &[u8]) -> Option<Node> {
         let mut node = self.root();
         for part in path.split(|&c| c == b'/' || c == b'\\').filter(|p| !p.is_empty()) {
@@ -104,12 +104,12 @@ impl Volume {
             let mut found = None;
             self.walk(&node, |entry| { if entry.name.eq_ignore_ascii_case(part) { found = Some(entry.node); false } else { true } });
             node = found?;
-            if node.is_dir && node.cluster == 0 { node = self.root(); } // «..» в корень у FAT12/16
+            if node.is_dir && node.cluster == 0 { node = self.root(); } // ".." to the root on FAT12/16
         }
         Some(node)
     }
 
-    /// Читает с `offset`; `cursor` запоминает позицию в цепочке для последовательного чтения.
+    /// Reads from `offset`; `cursor` remembers the chain position for sequential reads.
     pub fn read(&mut self, file: &Node, offset: usize, out: &mut [u8], cursor: &mut Option<(usize, u32)>) -> usize {
         let size = file.size as usize; if offset >= size || file.cluster < 2 { return 0; }
         let want = out.len().min(size - offset); let per = self.cluster_bytes();

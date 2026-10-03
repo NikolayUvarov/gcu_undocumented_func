@@ -1,4 +1,4 @@
-//! Клиент vfs_server: файлы открываются по пути, данные идут через разделяемый буфер процесса.
+//! vfs_server client: files are opened by path, data goes through the process's shared buffer.
 use crate::abi::*;
 use crate::ipc::{Endpoint, Message};
 use crate::mem::Pages;
@@ -9,17 +9,17 @@ pub const CHUNK: usize = 4096;
 
 struct Channel { pages: Pages, cap: usize }
 struct Shared(UnsafeCell<Option<Channel>>);
-unsafe impl Sync for Shared {} // процессы однопоточны
+unsafe impl Sync for Shared {} // processes are single-threaded
 static CHANNEL: Shared = Shared(UnsafeCell::new(None));
 
-// Буфер обмена с сервером создаётся один раз и передаётся мандатом в каждом запросе.
+// The exchange buffer with the server is created once and passed as a capability in every request.
 fn channel() -> Result<&'static mut Channel> {
     let slot = unsafe { &mut *CHANNEL.0.get() };
     if slot.is_none() { let pages = Pages::new(CHUNK).ok_or(Error::NoMemory)?; let cap = pages.share()?; *slot = Some(Channel { pages, cap }); }
     Ok(slot.as_mut().unwrap())
 }
 
-/// Заранее создаёт буфер обмена с vfs_server (сервисы делают это при старте, чтобы не расти по ходу работы).
+/// Creates the vfs_server exchange buffer up front (services do this at startup so they don't grow while running).
 pub fn prepare() -> Result<()> { channel().map(drop) }
 
 fn request(op: usize, fd: usize, len: usize, offset: usize) -> Result<[usize; 2]> {
@@ -35,7 +35,7 @@ fn put_path(path: &str) -> Result<usize> {
     Ok(path.len())
 }
 
-/// Открытый файл (дескриптор принадлежит процессу и закрывается в Drop).
+/// Open file (the descriptor belongs to the process and is closed in Drop).
 pub struct File { fd: usize, size: usize, position: usize }
 
 impl File {
@@ -48,7 +48,7 @@ impl File {
     pub fn size(&self) -> usize { self.size }
     pub fn position(&self) -> usize { self.position }
     pub fn seek(&mut self, position: usize) { self.position = position.min(self.size); }
-    /// Читает с позиции `offset`, не меняя текущую.
+    /// Reads at `offset` without changing the current position.
     pub fn read_at(&self, offset: usize, buffer: &mut [u8]) -> Result<usize> {
         let mut done = 0;
         while done < buffer.len() {
@@ -67,10 +67,10 @@ impl File {
 
 impl Drop for File { fn drop(&mut self) { let _ = request(VFS_CLOSE, self.fd, 0, 0); } }
 
-/// Запись каталога.
+/// Directory entry.
 pub struct DirEntry<'a> { pub name: &'a [u8], pub size: u32, pub is_dir: bool }
 
-/// Перебирает каталог (`""` или `"/"` — корень); возвращает число записей.
+/// Iterates a directory (`""` or `"/"` is the root); returns the number of entries.
 pub fn list(path: &str, mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
     let mut index = 0; let mut total = 0;
     loop {

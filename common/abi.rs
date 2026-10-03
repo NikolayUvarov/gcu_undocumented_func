@@ -1,12 +1,12 @@
 #![allow(dead_code)]
-// Единый ABI ядра: подключается ядром, загрузчиком и libmind (не копировать).
+// Single kernel ABI: included by the kernel, bootloader and libmind (do not copy).
 
-// Загрузчик UEFI передаёт ядру только образы системных сервисов; приложения читает с диска сервис loader.
-// Драйверы ahci и usb_storage запускаются, только если на шине PCI есть их контроллер.
+// The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
+// The ahci and usb_storage drivers are started only if their controller is present on the PCI bus.
 pub const BOOT_IMAGES: usize = 10;
 pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts"];
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf"];
-pub const NAME_MAX: usize = 16; // имя задачи в ps и в запросе запуска
+pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
@@ -44,7 +44,7 @@ pub const SYSCALL_CAP_INFO: usize = 29;
 pub const SYSCALL_LOADER_DONE: usize = 30;
 pub const SYSCALL_IPC_SAVE_REPLY: usize = 31;
 
-// Ответ CAP_INFO: result=вид мандата, arg2=база/адрес, msg[2]=размер/число портов/права.
+// CAP_INFO reply: result=capability kind, arg2=base/address, msg[2]=size/port count/rights.
 pub const CAP_KIND_NONE: usize = 0;
 pub const CAP_KIND_ENDPOINT: usize = 1;
 pub const CAP_KIND_MEMORY: usize = 2;
@@ -57,7 +57,7 @@ pub const CAP_KIND_MMIO: usize = 8;
 pub const CAP_KIND_SPAWN: usize = 9;
 pub const CAP_KIND_REPLY: usize = 10;
 
-// Коды ошибок: usize::MAX - n. ALLOC по-прежнему возвращает 0 при отказе.
+// Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
 pub const ERR_NO_SLOT: usize = usize::MAX - 1;
 pub const ERR_RIGHTS: usize = usize::MAX - 2;
@@ -70,27 +70,27 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 pub const CAP_SLOTS: usize = 32;
 
-// Слоты мандатов приложения, которые ядро заполняет при запуске.
+// Application capability slots filled by the kernel at spawn.
 pub const SLOT_INIT: usize = 1;
 pub const SLOT_RTC: usize = 2;
 pub const SLOT_VFS: usize = 3;
 pub const SLOT_AUDIO: usize = 4;
 pub const SLOT_LOADER: usize = 5;
 pub const SLOT_TTS: usize = 6;
-// Слоты мандатов сервиса: обслуживаемая точка, устройства, IRQ, DMA/кадр, привилегия.
+// Service capability slots: served endpoint, devices, IRQ, DMA/frame, privilege.
 pub const SLOT_SERVICE: usize = 1;
 pub const SLOT_DEV0: usize = 2;
 pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// У vfs_server слоты 2..5 — точки блочных драйверов (ata, ahci, usb_storage), если они запущены.
+// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started.
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
-// Новые мандаты ядро выдаёт начиная с этого слота.
+// The kernel hands out new capabilities starting from this slot.
 pub const SLOT_DYNAMIC: usize = 8;
 
-// Зарезервированные номера точек IPC системных сервисов.
+// Reserved IPC endpoint numbers of system services.
 pub const EP_RTC: usize = 2;
 pub const EP_VFS: usize = 3;
 pub const EP_AUDIO: usize = 4;
@@ -101,44 +101,44 @@ pub const EP_LOADER: usize = 8;
 pub const EP_TTS: usize = 9;
 pub const EP_RESERVED: usize = 16;
 
-// Сообщение: msg[0]=слот передаваемого мандата, msg[1]=маска прав, msg[2..4]=данные.
-// У получателя: arg1=PID отправителя, msg[0]=1 если мандат получен, msg[1]=флаги.
+// Message: msg[0]=slot of the capability to transfer, msg[1]=rights mask, msg[2..4]=data.
+// At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
-pub const MSG_FLAG_KERNEL: usize = 4; // запрос от шелла ядра (msg[2] — номер запроса)
+pub const MSG_FLAG_KERNEL: usize = 4; // request from the kernel shell (msg[2] is the request number)
 
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
-// Отдельная квота для отображённой чужой памяти (кадр, буферы IPC).
+// Separate quota for mapped foreign memory (frame, IPC buffers).
 pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 
-// Протокол RTC: CALL без данных, ответ msg[2]=секунды от полуночи или RTC_UNAVAILABLE.
-// Протокол VFS: msg[2]=операция|fd<<8|длина<<16, msg[3]=смещение; буфер передаётся мандатом памяти.
+// RTC protocol: CALL with no data, reply msg[2]=seconds since midnight or RTC_UNAVAILABLE.
+// VFS protocol: msg[2]=op|fd<<8|length<<16, msg[3]=offset; the buffer is passed as a memory capability.
 pub const VFS_OPEN: usize = 1;
 pub const VFS_READ: usize = 2;
 pub const VFS_CLOSE: usize = 3;
 pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
-// Загрузчик программ. Запрос шелла лежит в странице запроса (мандат в SLOT_MEM у loader):
-// [вид, фон, длина имени, имя...]; ответ LIST — текст со смещения LOADER_REPLY.
-// Приложения просят запуск CALL-ом в SLOT_LOADER: msg[2..4] — имя (до 16 байт), мандат — точка для ребёнка.
+// Program loader. The shell request lives in the request page (capability in loader's SLOT_MEM):
+// [kind, background, name length, name...]; the LIST reply is text at offset LOADER_REPLY.
+// Applications request a spawn via CALL on SLOT_LOADER: msg[2..4] is the name (up to 16 bytes), the capability is an endpoint for the child.
 pub const LOADER_RUN: u8 = 1;
 pub const LOADER_LIST: u8 = 2;
 pub const LOADER_REPLY: usize = 512;
-// SPAWN_IMAGE (нужна привилегия запуска): arg1/arg2 — имя, msg[0] — мандат образа, msg[1] — длина ELF,
-// msg[2] — мандат точки для слота INIT ребёнка (0 — нет), msg[3] — маска прав | номер запроса шелла << 16.
-// Протокол блочного устройства: msg[2]=операция|число секторов<<8, msg[3]=LBA.
-// ATTACH передаёт мандат буфера клиента (до BLOCK_MAX_SECTORS секторов), READ заполняет его.
+// SPAWN_IMAGE (requires the spawn privilege): arg1/arg2 is the name, msg[0] the image capability, msg[1] the ELF length,
+// msg[2] the endpoint capability for the child's INIT slot (0 for none), msg[3] the rights mask | shell request number << 16.
+// Block device protocol: msg[2]=op|sector count<<8, msg[3]=LBA.
+// ATTACH passes the client's buffer capability (up to BLOCK_MAX_SECTORS sectors), READ fills it.
 pub const BLOCK_INFO: usize = 1;
 pub const BLOCK_ATTACH: usize = 2;
 pub const BLOCK_READ: usize = 3;
 pub const BLOCK_SECTOR: usize = 512;
 pub const BLOCK_MAX_SECTORS: usize = 128;
-// Протокол аудио: msg[2]=операция|аргумент<<8, msg[3]=второй аргумент.
+// Audio protocol: msg[2]=op|argument<<8, msg[3]=second argument.
 pub const AUDIO_INFO: usize = 1;
 pub const AUDIO_PLAY: usize = 2;
 pub const AUDIO_TONE: usize = 3;
 pub const AUDIO_STOP: usize = 4;
-pub const AUDIO_WAIT: usize = 5; // ответ откладывается, пока в кольце DMA не освободится аргумент буферов
-// Синтез речи: мандат страницы с текстом UTF-8, msg[2]=TTS_SAY|длина<<8, msg[3]=высота тона Гц|темп %<<16 (0 — по умолчанию).
+pub const AUDIO_WAIT: usize = 5; // the reply is deferred until the argument's number of buffers is free in the DMA ring
+// Speech synthesis: capability to a page of UTF-8 text, msg[2]=TTS_SAY|length<<8, msg[3]=pitch Hz|rate %<<16 (0 for default).
 pub const TTS_SAY: usize = 1;
 pub const AUDIO_RATE: usize = 48_000;

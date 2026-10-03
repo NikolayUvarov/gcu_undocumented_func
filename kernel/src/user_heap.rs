@@ -5,7 +5,7 @@ use crate::paging::{Space, PAGE, USER_END, USER_HEAP};
 struct Block {
     address: usize,
     physical: usize,
-    memory: Option<Region>, // None: чужая физическая память (разделяемое отображение)
+    memory: Option<Region>, // None: foreign physical memory (shared mapping)
     size: usize,
 }
 
@@ -45,7 +45,7 @@ impl Heap {
         Some(address)
     }
 
-    // Отображения чужой памяти считаются по своей квоте и не съедают приватную кучу.
+    // Mappings of foreign memory count against their own quota and don't eat into the private heap.
     pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, device: bool) -> Option<usize> {
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
@@ -58,24 +58,24 @@ impl Heap {
         Some(address)
     }
 
-    // Делиться можно только целым началом блока кучи: так нельзя выдать код, стек или чужие страницы.
+    // Only the exact start of a heap block can be shared: this prevents handing out code, stack or foreign pages.
     pub fn shareable(&self, address: usize, requested: usize) -> Option<(usize, usize)> {
         let block = self.blocks.iter().flatten().find(|b| b.address == address)?;
         let size = if requested == 0 { block.size } else { requested.checked_add(PAGE - 1)? & !(PAGE - 1) };
         (size <= block.size).then_some((block.physical, size))
     }
 
-    // Пересекает ли отображённый чужой блок данный физический диапазон.
+    // Whether a mapped foreign block overlaps the given physical range.
     pub fn maps_foreign(&self, physical: usize, size: usize) -> bool {
         self.blocks.iter().flatten().any(|b| b.memory.is_none() && b.physical < physical + size && physical < b.physical + b.size)
     }
 
-    // Отдаёт собственные регионы при уничтожении задачи, чтобы ядро решило, можно ли их освобождать.
+    // Hands back owned regions when the task is destroyed so the kernel can decide whether they can be freed.
     pub fn take_regions(&mut self) -> impl Iterator<Item = Region> + '_ {
         self.blocks.iter_mut().filter_map(|b| b.as_mut().and_then(|b| b.memory.take()))
     }
 
-    // Возвращает освобождённый регион вызывающему: если им ещё пользуются другие, ядро его придержит.
+    // Returns the freed region to the caller: if others still use it, the kernel holds on to it.
     pub fn free(&mut self, space: &mut Space, address: usize) -> Option<Option<Region>> {
         let slot = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address))?;
         let block = self.blocks[slot].take().unwrap();

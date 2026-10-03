@@ -1,4 +1,4 @@
-/// Десятичная запись числа без аллокаций.
+/// Decimal formatting of a number without allocation.
 pub struct Decimal { bytes: [u8; 20], start: usize }
 
 impl Decimal {
@@ -10,7 +10,7 @@ impl Decimal {
     pub fn as_bytes(&self) -> &[u8] { &self.bytes[self.start..] }
 }
 
-/// Буфер фиксированного размера с `core::fmt::Write` (лишнее отбрасывается).
+/// Fixed-size buffer implementing `core::fmt::Write` (excess is discarded).
 pub struct FixedBuf<const N: usize> { bytes: [u8; N], len: usize }
 
 impl<const N: usize> FixedBuf<N> {

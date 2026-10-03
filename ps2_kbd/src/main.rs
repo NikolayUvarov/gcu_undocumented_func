@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Драйвер клавиатуры PS/2 в ring 3: IRQ1 -> скан-код -> событие ввода в ядро.
+// Ring 3 PS/2 keyboard driver: IRQ1 -> scan code -> input event to the kernel.
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ};
 use mind::dev::{input_event, Irq, Ports};
 
@@ -29,7 +29,7 @@ fn main(_info: &'static BootInfo) {
     let mut state = KbdState::new();
     loop {
         if irq.wait().is_err() { mind::process::exit(); }
-        // Забираем все байты из буфера контроллера: пока линия замаскирована, новые IRQ не придут.
+        // Drain all bytes from the controller buffer: no new IRQs arrive while the line is masked.
         while status.in8(0x64) & 1 != 0 {
             let aux = status.in8(0x64) & 0x20 != 0;
             let scancode = data.in8(0x60);

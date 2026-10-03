@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Сервер: запускает ping, принимает мандат памяти, читает строку из общей страницы и отвечает.
+// Server: spawns ping, receives a memory capability, reads the string from the shared page and replies.
 use mind::abi::{BootInfo, CAP_GRANT, CAP_WRITE};
 use mind::gfx::Screen;
 use mind::ipc::{self, Endpoint, Message};

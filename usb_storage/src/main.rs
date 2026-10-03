@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Драйвер USB mass storage в ring 3: контроллер xHCI по мандату MMIO, Bulk-Only Transport, SCSI READ(10).
+// Ring 3 USB mass storage driver: xHCI controller via an MMIO capability, Bulk-Only Transport, SCSI READ(10).
 mod xhci;
 
 use mind::abi::{BootInfo, EP_BLOCK_USB, SLOT_DEV0, SLOT_MEM};
@@ -10,12 +10,12 @@ use xhci::{Xhci, DATA, IOC, ISP, SMALL, TYPE_NORMAL};
 
 const CBW: usize = SMALL + 0x800; const CSW: usize = SMALL + 0xC00;
 
-// Состояние Bulk-Only Transport: номера контекстов bulk-точек и счётчик тегов.
+// Bulk-Only Transport state: bulk endpoint context indices and the tag counter.
 struct Bot { dci_out: u32, dci_in: u32, tag: u32 }
 
 struct Storage { host: Xhci, bot: Bot, sectors: u64 }
 
-// Один цикл BOT: CBW по bulk OUT, данные по bulk IN (если есть), CSW по bulk IN. Возвращает принятые байты.
+// One BOT cycle: CBW on bulk OUT, data on bulk IN (if any), CSW on bulk IN. Returns bytes received.
 fn scsi(host: &mut Xhci, bot: &mut Bot, command: &[u8], length: usize) -> Option<usize> {
     bot.tag = bot.tag.wrapping_add(1);
     let cbw = host.dma.bytes(CBW, 31);
@@ -30,7 +30,7 @@ fn scsi(host: &mut Xhci, bot: &mut Bot, command: &[u8], length: usize) -> Option
     (&status[..4] == b"USBS" && status[4..8] == bot.tag.to_le_bytes() && status[12] == 0).then_some(length - residue)
 }
 
-// Дескрипторы конфигурации: интерфейс класса 08/06/50 и его bulk-точки; затем SET_CONFIGURATION и Configure Endpoint.
+// Configuration descriptors: class 08/06/50 interface and its bulk endpoints; then SET_CONFIGURATION and Configure Endpoint.
 fn attach(host: &mut Xhci) -> Option<Bot> {
     host.address()?;
     host.control(0x80, 6, 0x0200, 0, 9)?;
@@ -55,7 +55,7 @@ fn attach(host: &mut Xhci) -> Option<Bot> {
     Some(Bot { dci_out, dci_in, tag: 0 })
 }
 
-// TEST UNIT READY (с REQUEST SENSE после «unit attention»), затем READ CAPACITY(10); нужны секторы по 512 байт.
+// TEST UNIT READY (with REQUEST SENSE after "unit attention"), then READ CAPACITY(10); 512-byte sectors required.
 fn capacity(host: &mut Xhci, bot: &mut Bot) -> Option<u64> {
     for _ in 0..5 {
         if scsi(host, bot, &[0x00, 0, 0, 0, 0, 0], 0).is_some() { break; }
@@ -69,7 +69,7 @@ fn capacity(host: &mut Xhci, bot: &mut Bot) -> Option<u64> {
 }
 
 impl Storage {
-    // Первый порт с устройством класса mass storage; остальные устройства получают адрес и пропускаются.
+    // First port with a mass storage class device; other devices get an address and are skipped.
     fn probe() -> Option<Self> {
         let mut host = Xhci::init(Mmio::map(SLOT_DEV0).ok()?, Dma::map(SLOT_MEM).ok()?)?;
         for port in 1..=host.ports() {

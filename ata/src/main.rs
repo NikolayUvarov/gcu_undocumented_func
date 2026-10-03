@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Драйвер первичного канала ATA в ring 3: PIO LBA28 без прерываний (nIEN), блочный протокол для vfs_server.
+// Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server.
 use mind::abi::{BootInfo, EP_BLOCK_ATA, SLOT_DEV0, SLOT_DEV1};
 use mind::block::{self, Driver};
 use mind::dev::Ports;
@@ -16,13 +16,13 @@ impl Ata {
         let (io, control) = (Ports(SLOT_DEV0), Ports(SLOT_DEV1));
         control.out8(CONTROL, 0x02);
         io.out8(DRIVE, 0xA0);
-        if matches!(io.in8(COMMAND), 0xFF | 0x00) { return None; } // плавающая шина или нет устройства
+        if matches!(io.in8(COMMAND), 0xFF | 0x00) { return None; } // floating bus or no device
         for port in [COUNT, LBA0, LBA1, LBA2] { io.out8(port, 0); }
         io.out8(COMMAND, 0xEC);
         if io.in8(COMMAND) == 0 { return None; }
         let mut disk = Self { io, control, sectors: 0 };
         let mut spins = 0; while io.in8(COMMAND) & BSY != 0 { spins += 1; if spins > 1_000_000 { return None; } }
-        if io.in8(LBA1) != 0 || io.in8(LBA2) != 0 { return None; } // ATAPI/SATA-сигнатура: не наш случай
+        if io.in8(LBA1) != 0 || io.in8(LBA2) != 0 { return None; } // ATAPI/SATA signature: not our case
         disk.wait_data()?;
         let mut identify = [0u16; 256];
         io.read_words(DATA, &mut identify).ok()?;
@@ -31,7 +31,7 @@ impl Ata {
     }
 
     fn wait_data(&self) -> Option<()> {
-        for _ in 0..4 { self.control.in8(CONTROL); } // задержка 400 нс по альтернативному статусу
+        for _ in 0..4 { self.control.in8(CONTROL); } // 400 ns delay via the alternate status register
         for _ in 0..1_000_000 {
             let status = self.io.in8(COMMAND);
             if status & BSY != 0 { continue; }
@@ -44,7 +44,7 @@ impl Ata {
 
 impl Driver for Ata {
     fn sectors(&self) -> u64 { self.sectors }
-    // Пачками до 256 секторов одной командой READ SECTORS; каждый сектор — отдельный DRQ.
+    // Batches of up to 256 sectors per READ SECTORS command; each sector is a separate DRQ.
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
         while self.io.in8(COMMAND) & BSY != 0 {}
         self.io.out8(DRIVE, 0xE0 | ((lba >> 24) & 0x0F) as u8);

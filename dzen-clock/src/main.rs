@@ -77,7 +77,7 @@ fn main(info: &'static BootInfo) {
                 },
             );
         }
-        // Время теперь приходит от драйвера rtc по IPC, а не системным вызовом ядра.
+        // Time now comes from the rtc driver over IPC rather than a kernel syscall.
         let seconds = mind::rtc::seconds_since_midnight().unwrap_or(abi::RTC_UNAVAILABLE);
         let now = mind::time::uptime_ms();
         cycle.observe(seconds, now);

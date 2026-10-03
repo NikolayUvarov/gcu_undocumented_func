@@ -1,8 +1,8 @@
-//! Страничная память процесса и разделяемые буферы. Это не аллокатор мелких объектов.
+//! Process page memory and shared buffers. This is not a small-object allocator.
 use crate::abi::*;
 use crate::sys::{call, check, syscall, Error, Result};
 
-/// Приватный обнулённый блок страниц; освобождается в Drop (а также при выходе процесса).
+/// Private zeroed block of pages; freed in Drop (and on process exit).
 pub struct Pages { address: usize, length: usize }
 
 impl Pages {
@@ -14,13 +14,13 @@ impl Pages {
     pub fn is_empty(&self) -> bool { self.length == 0 }
     pub fn as_slice(&self) -> &[u8] { unsafe { core::slice::from_raw_parts(self.address as *const u8, self.length) } }
     pub fn as_mut_slice(&mut self) -> &mut [u8] { unsafe { core::slice::from_raw_parts_mut(self.address as *mut u8, self.length) } }
-    /// Мандат на этот блок для передачи другому процессу по IPC.
+    /// Capability for this block, to pass to another process over IPC.
     pub fn share(&self) -> Result<usize> { check(call(SYSCALL_MEM_SHARE, self.address, 0)) }
 }
 
 impl Drop for Pages { fn drop(&mut self) { call(SYSCALL_FREE, self.address, 0); } }
 
-/// Отображение чужой памяти по мандату; снимается в Drop.
+/// Mapping of another process's memory via a capability; unmapped in Drop.
 pub struct Mapping { address: usize, length: usize }
 
 impl Mapping {
@@ -38,7 +38,7 @@ impl Mapping {
 
 impl Drop for Mapping { fn drop(&mut self) { call(SYSCALL_FREE, self.address, 0); } }
 
-/// Физический адрес DMA-области (только для мандатов DMA, выданных драйверу ядром).
+/// Physical address of a DMA region (only for DMA capabilities granted to a driver by the kernel).
 pub fn dma_physical(cap_slot: usize) -> Result<usize> {
     let physical = check(call(SYSCALL_MEM_PHYS, cap_slot, 0))?;
     if physical == 0 { Err(Error::Invalid) } else { Ok(physical) }

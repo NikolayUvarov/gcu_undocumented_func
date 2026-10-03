@@ -22,7 +22,7 @@ global_asm!(r#"
         jmp context_entry
     .endm
     interrupt task_timer_entry, 32
-    // Линии PIC для драйверов в ring 3 (7 и 15 остаются ложными прерываниями).
+    // PIC lines for ring 3 drivers (7 and 15 remain spurious interrupts).
     .irp n,1,3,4,5,6,9,10,11,12,13,14
         interrupt task_irq_\n, (32 + \n)
     .endr

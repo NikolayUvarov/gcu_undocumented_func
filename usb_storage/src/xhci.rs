@@ -1,9 +1,9 @@
-// Минимальный xHCI: кольца команд/событий/передач, сброс порта, адресация и настройка конечных точек.
+// Minimal xHCI: command/event/transfer rings, port reset, device addressing and endpoint configuration.
 use mind::dev::{Dma, Mmio};
 
 pub const TRB: usize = 16;
 const RING_TRBS: usize = 256;
-// Раскладка DMA-области драйвера (выровнена на 64 КиБ).
+// Driver DMA region layout (64 KiB aligned).
 const DCBAA: usize = 0x0000; const SCRATCH_ARRAY: usize = 0x0800; const COMMAND_RING: usize = 0x1000; const EVENT_RING: usize = 0x2000;
 const ERST: usize = 0x3000; const INPUT: usize = 0x4000; const OUTPUT: usize = 0x5000;
 pub const EP0_RING: usize = 0x6000; pub const OUT_RING: usize = 0x7000; pub const IN_RING: usize = 0x8000;
@@ -15,7 +15,7 @@ const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIG
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 const SUCCESS: u32 = 1; const SHORT_PACKET: u32 = 13;
-// Биты PORTSC, которые можно записывать обратно без побочных эффектов (без RW1C и PED).
+// PORTSC bits that can be written back without side effects (excluding RW1C and PED).
 const PORT_NEUTRAL: u32 = 0x4E00_FFE9; const PORT_PED: u32 = 1 << 1; const PORT_PR: u32 = 1 << 4; const PORT_PRC: u32 = 1 << 21;
 
 #[derive(Clone, Copy)]
@@ -24,7 +24,7 @@ struct Ring { offset: usize, index: usize, cycle: u32 }
 pub struct Xhci { mmio: Mmio, pub dma: Dma, op: usize, runtime: usize, doorbells: usize, context: usize, ports: usize,
     command: Ring, event: Ring, rings: [Ring; 3], pub slot: u32, pub port: usize, pub speed: u32 }
 
-// Активный опрос, затем сон: команды QEMU завершает сразу, чтение диска — асинхронно.
+// Busy-poll, then sleep: QEMU completes commands immediately, disk reads asynchronously.
 pub fn wait(mut done: impl FnMut() -> bool) -> bool {
     for attempt in 0..3_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
     false
@@ -35,7 +35,7 @@ impl Xhci {
         let caplength = mmio.read8(0) as usize; let hcs1 = mmio.read32(0x04); let hcs2 = mmio.read32(0x08); let hcc1 = mmio.read32(0x10);
         let (doorbells, runtime) = ((mmio.read32(0x14) & !3) as usize, (mmio.read32(0x18) & !0x1F) as usize);
         let context = if hcc1 & 4 != 0 { 64 } else { 32 };
-        // Забрать контроллер у прошивки (USB Legacy Support), затем остановить и сбросить его.
+        // Take the controller from firmware (USB Legacy Support), then halt and reset it.
         let mut cap = ((hcc1 >> 16) << 2) as usize;
         while cap != 0 {
             let value = mmio.read32(cap);
@@ -52,7 +52,7 @@ impl Xhci {
         dma.zero(0, DATA);
         for i in 0..scratch { let page = dma.physical(SCRATCH_PAGES + i * 4096); dma.write64(SCRATCH_ARRAY + i * 8, page); }
         if scratch > 0 { let array = dma.physical(SCRATCH_ARRAY); dma.write64(DCBAA, array); }
-        mmio.write32(op + 0x38, (hcs1 & 0xFF).min(8)); // до 8 слотов: пропущенные не-накопители занимают свои
+        mmio.write32(op + 0x38, (hcs1 & 0xFF).min(8)); // up to 8 slots: skipped non-storage devices occupy their own
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize,
             command: Ring { offset: COMMAND_RING, index: 0, cycle: 1 }, event: Ring { offset: EVENT_RING, index: 0, cycle: 1 },
@@ -65,12 +65,12 @@ impl Xhci {
         xhci.mmio.write32(interrupter + 0x08, 1);
         xhci.mmio.write64(interrupter + 0x18, event);
         xhci.mmio.write64(interrupter + 0x10, xhci.dma.physical(ERST));
-        xhci.mmio.write32(op, 1); // RS, прерывания не используются
+        xhci.mmio.write32(op, 1); // RS; interrupts are not used
         if !wait(|| xhci.mmio.read32(op + 4) & 1 == 0) { return None; }
         Some(xhci)
     }
 
-    // Последний TRB кольца — ссылка на начало с переключением бита цикла.
+    // The last TRB of a ring is a Link back to the start with Toggle Cycle.
     fn link(&mut self, ring: usize) {
         let start = self.dma.physical(ring);
         self.dma.write64(ring + (RING_TRBS - 1) * TRB, start); self.dma.write32(ring + (RING_TRBS - 1) * TRB + 12, TYPE_LINK << 10 | 2);
@@ -88,7 +88,7 @@ impl Xhci {
         address
     }
 
-    // Следующее событие нужного типа (прочие, например смена состояния порта, пропускаются).
+    // Next event of the requested type (others, e.g. Port Status Change, are skipped).
     fn event(&mut self, kind: u32) -> Option<(u64, u32, u32)> {
         let mut found = None;
         wait(|| {
@@ -113,7 +113,7 @@ impl Xhci {
         (status >> 24 == SUCCESS).then_some(control >> 24)
     }
 
-    /// Передача по кольцу `ring` (0 — EP0, 1 — bulk OUT, 2 — bulk IN) с ожиданием события; возвращает остаток.
+    /// Transfer on ring `ring` (0 = EP0, 1 = bulk OUT, 2 = bulk IN), waiting for the event; returns the residue.
     pub fn transfer(&mut self, ring: usize, dci: u32, trbs: &[(u64, u32, u32)]) -> Option<u32> {
         for &(parameter, status, control) in trbs { Self::enqueue(&mut self.dma, &mut self.rings[ring], parameter, status, control); }
         self.mmio.write32(self.doorbells + self.slot as usize * 4, dci);
@@ -121,7 +121,7 @@ impl Xhci {
         matches!(status >> 24, SUCCESS | SHORT_PACKET).then_some(status & 0xFF_FFFF)
     }
 
-    /// Стандартный запрос по EP0; данные (до 512 байт) в области SMALL.
+    /// Standard request on EP0; data (up to 512 bytes) in the SMALL area.
     pub fn control(&mut self, request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Option<()> {
         let setup = request_type as u64 | (request as u64) << 8 | (value as u64) << 16 | (index as u64) << 32 | (length as u64) << 48;
         let input = request_type & 0x80 != 0;
@@ -134,7 +134,7 @@ impl Xhci {
 
     fn portsc(&self, port: usize) -> usize { self.op + 0x400 + 0x10 * (port - 1) }
 
-    /// Подключённый порт с включённым устройством: USB3 включается сам, USB2 сбрасывается.
+    /// Connected port with an enabled device: USB3 enables itself, USB2 is reset.
     pub fn ports(&self) -> usize { self.ports }
     pub fn enable_port(&mut self, port: usize) -> bool {
         let register = self.portsc(port);
@@ -165,7 +165,7 @@ impl Xhci {
         self.dma.write32(at + 16, if kind == 4 { 8 } else { 1024 });
     }
 
-    /// Enable Slot + Address Device для устройства на включённом порту.
+    /// Enable Slot + Address Device for the device on an enabled port.
     pub fn address(&mut self) -> Option<()> {
         self.slot = self.command(0, TYPE_ENABLE_SLOT << 10)?;
         self.dma.zero(OUTPUT, 0x1000);
@@ -179,7 +179,7 @@ impl Xhci {
         self.command(input, TYPE_ADDRESS << 10 | self.slot << 24).map(drop)
     }
 
-    /// Configure Endpoint для пары bulk-точек (номер точки и максимальный размер пакета).
+    /// Configure Endpoint for a pair of bulk endpoints (endpoint number and max packet size).
     pub fn configure(&mut self, out: (u32, u32), input: (u32, u32)) -> Option<(u32, u32)> {
         let (dci_out, dci_in) = (out.0 * 2, input.0 * 2 + 1);
         self.input_reset();

@@ -1,4 +1,4 @@
-// Секторы тома через блочный драйвер по IPC, с упреждающим чтением и небольшим кэшем.
+// Volume sectors via a block driver over IPC, with read-ahead and a small cache.
 use mind::block::Device;
 use mind::mem::Pages;
 

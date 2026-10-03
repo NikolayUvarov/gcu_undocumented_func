@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-// audio_gw: аудиошлюз в ring 3. Драйвер AC97 (DMA-кольцо из 32 буферов), прерывания приходят
-// IPC-сообщениями в точку сервиса, PCM от клиентов — через их разделяемые буферы.
-// Точка расширения для TTS: синтезатор речи — обычный клиент, отдающий PCM в AUDIO_PLAY.
+// audio_gw: ring 3 audio gateway. AC97 driver (DMA ring of 32 buffers); interrupts arrive
+// as IPC messages on the service endpoint, client PCM comes through their shared buffers.
+// Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to AUDIO_PLAY.
 use mind::abi::*;
 use mind::dev::{Irq, Ports};
 use mind::ipc::{self, Endpoint, Message};
@@ -11,19 +11,19 @@ use mind::mem::{self, Mapping};
 const RECEIVED_CAP: usize = 9;
 const BUFFERS: usize = 32;
 const BUFFER_BYTES: usize = 4096;
-// Регистры микшера (NAM) и канала PCM OUT контроллера шины (NABM).
+// Mixer registers (NAM) and the bus master PCM OUT channel (NABM).
 const RESET: u16 = 0x00; const MASTER: u16 = 0x02; const PCM_OUT: u16 = 0x18; const EXT_ID: u16 = 0x28; const EXT_CTRL: u16 = 0x2A; const FRONT_RATE: u16 = 0x2C;
 const BDBAR: u16 = 0x10; const CIV: u16 = 0x14; const LVI: u16 = 0x15; const SR: u16 = 0x16; const CR: u16 = 0x1B; const GLOB_CNT: u16 = 0x2C;
 const SR_DCH: u16 = 0x01; const SR_CLEAR: u16 = 0x1C; const CR_RUN: u8 = 0x01; const CR_RESET: u8 = 0x02; const CR_IOCE: u8 = 0x10;
 
-// Четверть периода синуса, амплитуда 12000.
+// Quarter sine period, amplitude 12000.
 const SINE: [i16; 17] = [0, 2341, 4592, 6667, 8485, 9978, 11087, 11769, 12000, 11769, 11087, 9978, 8485, 6667, 4592, 2341, 0];
-fn sine(phase: u32) -> i16 { // phase: 0..64 на период
+fn sine(phase: u32) -> i16 { // phase: 0..64 per period
     let (quarter, i) = ((phase / 16) % 4, (phase % 16) as usize);
     match quarter { 0 => SINE[i], 1 => SINE[16 - i], 2 => -SINE[i], _ => -SINE[16 - i] }
 }
 
-// Регистры BAR, адресуемые смещением от базы выданного диапазона.
+// BAR registers, addressed by offset from the base of the granted range.
 #[derive(Clone, Copy)]
 struct Regs { ports: Ports, base: u16 }
 impl Regs {
@@ -42,7 +42,7 @@ impl Ac97 {
         let ring = Mapping::new(SLOT_MEM).ok()?;
         let physical = mem::dma_physical(SLOT_MEM).ok()? as u32;
         let (mixer, bus) = (Regs::open(SLOT_DEV0)?, Regs::open(SLOT_DEV1)?);
-        bus.out32(GLOB_CNT, 0x2); // снять холодный сброс кодека
+        bus.out32(GLOB_CNT, 0x2); // release the codec cold reset
         mind::time::sleep(20);
         mixer.out16(RESET, 0);
         mixer.out16(MASTER, 0x0000);
@@ -55,25 +55,25 @@ impl Ac97 {
     fn reset(&mut self) {
         self.bus.out8(CR, CR_RESET);
         for _ in 0..1000 { if self.bus.in8(CR) & CR_RESET == 0 { break; } }
-        // Список дескрипторов лежит в последней странице DMA-области.
+        // The buffer descriptor list lives in the last page of the DMA region.
         let list = BUFFERS * BUFFER_BYTES;
         for i in 0..BUFFERS {
             let entry = &mut self.ring.as_mut_slice()[list + i * 8..list + i * 8 + 8];
             entry[..4].copy_from_slice(&(self.physical + (i * BUFFER_BYTES) as u32).to_le_bytes());
             entry[4..6].copy_from_slice(&((BUFFER_BYTES / 2) as u16).to_le_bytes());
-            entry[6..8].copy_from_slice(&0x8000u16.to_le_bytes()); // прерывание по завершении буфера
+            entry[6..8].copy_from_slice(&0x8000u16.to_le_bytes()); // interrupt on buffer completion
         }
         self.bus.out32(BDBAR, self.physical + list as u32);
         self.head = 0; self.started = false;
     }
-    // Свободные буферы: всё, что не стоит в очереди между CIV и head (один держим зазором).
+    // Free buffers: everything not queued between CIV and head (one is kept as a gap).
     fn free(&self) -> usize {
         if !self.started { return BUFFERS - 1; }
         if self.bus.in16(SR) & SR_DCH != 0 { return BUFFERS - 1; }
         let civ = self.bus.in8(CIV) as usize;
         BUFFERS - 1 - (self.head + BUFFERS - civ) % BUFFERS
     }
-    // Ставит буфер в очередь и запускает/возобновляет DMA.
+    // Queues a buffer and starts/resumes DMA.
     fn submit(&mut self, fill: impl FnOnce(&mut [u8]) -> usize) {
         let at = self.head * BUFFER_BYTES; let list = BUFFERS * BUFFER_BYTES + self.head * 8;
         let bytes = fill(&mut self.ring.as_mut_slice()[at..at + BUFFER_BYTES]) & !3;
@@ -109,12 +109,12 @@ impl Ac97 {
     }
     fn interrupt(&mut self) {
         let status = self.bus.in16(SR);
-        self.bus.out16(SR, status & SR_CLEAR); // сброс флагов «запись 1»
+        self.bus.out16(SR, status & SR_CLEAR); // clear write-1-to-clear flags
         self.interrupts += 1;
     }
 }
 
-// Клиенты, ждущие места в кольце: сохранённый мандат ответа и нужное число свободных буферов.
+// Clients waiting for ring space: saved reply capability and the number of free buffers needed.
 const WAITERS: usize = 8;
 
 fn release(device: &Option<Ac97>, waiters: &mut [Option<(usize, usize)>; WAITERS], all: bool) {
@@ -141,7 +141,7 @@ fn main(_info: &'static BootInfo) {
                 if device.interrupts % 64 == 1 { mind::println!("[AUDIO] IRQ COUNT {}", device.interrupts); }
             }
             let _ = irq.ack();
-            release(&device, &mut waiters, false); // буферы доиграны: будим ждущих клиентов
+            release(&device, &mut waiters, false); // buffers finished playing: wake waiting clients
             continue;
         }
         let (op, arg) = (request.data[0] & 0xFF, request.data[0] >> 8);

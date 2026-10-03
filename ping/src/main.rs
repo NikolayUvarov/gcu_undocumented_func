@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Клиент: пишет строку в свою разделяемую страницу и передаёт мандат на неё серверу через CALL.
+// Client: writes a string into its shared page and passes a capability for it to the server via CALL.
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
@@ -17,7 +17,7 @@ fn main(info: &'static BootInfo) {
     screen.text(40, 40, b"[ PING / CLIENT ]", 1, 0x00FF0000, None);
     let mut shared = Pages::new(4096).expect("ALLOC FAILED");
     let cap = shared.share().expect("MEM SHARE FAILED");
-    let server = Endpoint::INIT; // точку сервера передал родитель при SPAWN
+    let server = Endpoint::INIT; // the parent passed the server endpoint at SPAWN
     for counter in 1000.. {
         screen.fill(40, 70, 560, 130, BACKGROUND);
         let mut text = FixedBuf::<64>::new();

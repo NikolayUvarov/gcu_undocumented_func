@@ -1,4 +1,4 @@
-//! Рисование в собственный экран процесса (композитор переносит его в кадр GOP).
+//! Drawing into the process's own screen (the compositor copies it into the GOP framebuffer).
 use crate::abi::BootInfo;
 use crate::font::FONT;
 
@@ -6,7 +6,7 @@ use crate::font::FONT;
 pub struct Screen { fb: *mut u32, pub width: usize, pub height: usize, pub stride: usize }
 
 impl Screen {
-    /// None у сервисов: экран им не выделяется.
+    /// None for services: they are not given a screen.
     pub fn new(info: &BootInfo) -> Option<Self> {
         (!info.fb_ptr.is_null()).then_some(Self { fb: info.fb_ptr, width: info.width, height: info.height, stride: info.stride })
     }
@@ -20,7 +20,7 @@ impl Screen {
         for row in y..(y + height).min(self.height) { for column in x..(x + width).min(self.width) { unsafe { core::ptr::write_volatile(self.fb.add(row * self.stride + column), color) } } }
     }
     pub fn clear(&self, color: u32) { self.fill(0, 0, self.width, self.height, color) }
-    /// Текст шрифтом 8x8 (строчные выводятся заглавными); `background` закрашивает фон глифа.
+    /// Text in an 8x8 font (lowercase is drawn as uppercase); `background` fills the glyph background.
     pub fn text(&self, x: usize, y: usize, text: &[u8], scale: usize, color: u32, background: Option<u32>) {
         for (index, &ch) in text.iter().enumerate() {
             let code = ch.to_ascii_uppercase();

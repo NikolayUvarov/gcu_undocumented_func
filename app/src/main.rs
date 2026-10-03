@@ -72,7 +72,7 @@ fn main(info: &'static BootInfo) {
     let cx = (info.width as isize) / 2; let cy = (info.height as isize) / 2;
     let total_pixels = info.height * info.stride;
 
-    let mut color_theme: u32 = 0x0000FFFF; // Бирюзовый по умолчанию
+    let mut color_theme: u32 = 0x0000FFFF; // Cyan by default
     let mut last_seen_key: u8 = 0;
     for i in 0..total_pixels { unsafe { core::ptr::write_volatile(info.fb_ptr.add(i), 0x00111111); } }
 
@@ -90,7 +90,7 @@ fn main(info: &'static BootInfo) {
                     _ => {}
                 }
                 
-                // ВЫХОД ПО ESC (0x01 = PS/2 клавиатура, 0x1B = MSYS2 COM-порт)
+                // EXIT ON ESC (0x01 = PS/2 keyboard, 0x1B = MSYS2 COM port)
                 if os_key == 0x01 || os_key == 0x1B {
                     os_print(b"[SYSTEM] ESC PRESSED. EXITING APP...\r\n");
                     break; 

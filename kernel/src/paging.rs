@@ -10,13 +10,13 @@ pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
 pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
-pub const USER_END: usize = USER_IMAGE + 0x1000_0000; // окно кучи 160 МиБ: приватная квота + отображения кадра/IPC
+pub const USER_END: usize = USER_IMAGE + 0x1000_0000; // 160 MiB heap window: private quota + frame/IPC mappings
 const PRESENT: u64 = 1;
 const WRITE: u64 = 2;
 const USER: u64 = 4;
 const NX: u64 = 1 << 63;
-const UNCACHED: u64 = 0x18; // PCD | PWT: регистры устройств без кэширования
-const TABLES: usize = 128; // хватает на окно кучи с разделяемыми буферами кадра
+const UNCACHED: u64 = 0x18; // PCD | PWT: uncached device registers
+const TABLES: usize = 128; // enough for the heap window with shared frame buffers
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
@@ -197,7 +197,7 @@ impl Space {
         self.map_with(virtual_start, physical, size, writable, executable, false)
     }
 
-    // Регистры MMIO отображаются некэшируемыми (RW+NX).
+    // MMIO registers are mapped uncached (RW+NX).
     pub fn map_device(&mut self, virtual_start: usize, physical: usize, size: usize) -> Result<(), &'static str> {
         self.map_with(virtual_start, physical, size, true, false, true)
     }
@@ -359,7 +359,7 @@ impl Space {
         Some(table + (address & 4095))
     }
 
-    // Как readable, но только для страниц с правом записи (буферы, заполняемые ядром).
+    // Like readable, but only for writable pages (buffers filled by the kernel).
     pub fn writable(&self, address: usize) -> Option<usize> {
         if !(USER_IMAGE..USER_END).contains(&address) {
             return None;
