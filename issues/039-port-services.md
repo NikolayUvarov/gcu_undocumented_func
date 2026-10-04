@@ -19,3 +19,7 @@ Only `rtc` uses MIND IDL; the other services use numeric conventions and share h
 ## Related
 
 [ROADMAP](../ROADMAP.md) C8; [044](../issues-done/044-idl-v02-records-strings.done), [048](048-write-path-ramdisk-vfs2.md).
+
+## Progress
+
+- 2026-10-04: `block.wit` (sectors, kind, attach, read) used by `ata`, `ahci`, `usb_storage` and the VFS block client. The buffer is lent to the driver (a copy the client can revoke). A restarted driver answers a read with not-found until the buffer is attached again. `loader.wit` came with issue 044.

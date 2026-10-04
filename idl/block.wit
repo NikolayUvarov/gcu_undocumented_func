@@ -1,0 +1,15 @@
+/// Block devices with 512-byte sectors: drivers serve it, vfs_server is the client (MIND IDL, word calls).
+package mind:block@1.0.0;
+
+interface block {
+    /// Number of sectors; error not-found without a drive.
+    sectors: func() -> result<u64, error-code>;
+    /// Device kind (BLOCK_KIND_*), to tell drives apart.
+    kind: func() -> u8;
+    /// Lends the client's transfer buffer (up to BLOCK_MAX_SECTORS sectors) to this driver instance; the driver writes
+    /// read data into it, the client reads it after the reply.
+    attach: func(buffer: borrow<memory>) -> result<_, error-code>;
+    /// Reads `count` sectors from `lba` into the attached buffer; returns the sectors read. Error not-found: no buffer is
+    /// attached to this instance (the driver was restarted), invalid: past the end or an empty request.
+    read: func(count: u16, lba: u64) -> result<u16, error-code>;
+}

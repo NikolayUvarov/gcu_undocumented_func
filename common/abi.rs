@@ -256,11 +256,7 @@ pub const fn event_char(event: usize) -> u32 { (event >> 40) as u32 }
 // CONSOLE_READ / TASK_LOGS: arg1 = PID, msg[0] = buffer address, msg[1] = length; drains and returns the byte count.
 // CPU_INFO: arg1 = CPU index; result = APIC id, arg2 = online, msg[2] = timer ticks. KERNEL_HEAP: result = used,
 // arg2 = free, msg[2] = 1 if a test allocation was fully released.
-// Block device protocol: msg[2]=op|sector count<<8, msg[3]=LBA.
-// ATTACH passes the client's buffer capability (up to BLOCK_MAX_SECTORS sectors), READ fills it.
-pub const BLOCK_INFO: usize = 1;
-pub const BLOCK_ATTACH: usize = 2;
-pub const BLOCK_READ: usize = 3;
+// Block device protocol: idl/block.wit (bindings in mind::idl::block).
 pub const BLOCK_SECTOR: usize = 512;
 pub const BLOCK_MAX_SECTORS: usize = 128;
 // Audio protocol: msg[2]=op|argument<<8, msg[3]=second argument.
