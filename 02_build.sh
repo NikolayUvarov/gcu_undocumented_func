@@ -94,6 +94,9 @@ for entry in "${USER_CRATES[@]}"; do
     cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
+# Licences travel with the image: tts.elf embeds third-party dictionaries (THIRD_PARTY.md).
+mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
+cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 
 trap - ERR
 finish

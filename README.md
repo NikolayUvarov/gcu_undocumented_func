@@ -15,7 +15,7 @@ Every Mind needs its first processor tick. We are providing exactly that.
 * **Kernel:** The basic reality dispatcher. Handling hardware interrupts, system calls, and preemptive multitasking.
 * **Isolated Environment (Userspace):** A space for the genesis and parallel execution of high-level processes and future cognitive functions.
 
-The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.1 ([Russian](ROADMAP_RU.md)); what the implementation guarantees and under which assumptions is in the platform profile [docs/profile](docs/profile/README.md). Near-term work items are in [issues/](issues/README.md) (finished ones in [issues-done/](issues-done)); background analyses are in [knowledge/](knowledge).
+The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.1 ([Russian](ROADMAP_RU.md)); what the implementation guarantees and under which assumptions is in the platform profile [docs/profile](docs/profile/README.md); system calls, `libmind` and service interfaces are in [docs/api](docs/api/README.md). Near-term work items are in [issues/](issues/README.md) (finished ones in [issues-done/](issues-done)); background analyses are in [knowledge/](knowledge).
 
 ---
 
@@ -626,3 +626,20 @@ python3 tests/test_context_export.py
 These cover lexical preservation on all runtime Rust sources, literal/comment
 edge cases, explicit test omissions, scope/deduplication, determinism,
 source immutability, exact reconstruction of split bodies and stale cleanup.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): where to start, how to build and test, and the project's rules. Security issues: [SECURITY.md](SECURITY.md). Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option. Data files from other projects keep their own licences, listed in [THIRD_PARTY.md](THIRD_PARTY.md): the Russian stress dictionary `tts/data/stress_ru.txt` is CC BY-SA 4.0 (OpenRussian), the English lexicon `tts/data/lexicon_en.txt` is under the CMUdict BSD-style licence.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

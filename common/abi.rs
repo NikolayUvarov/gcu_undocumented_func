@@ -158,7 +158,7 @@ pub const HANDLE_GENERATION_SHIFT: usize = 8;
 
 // Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
 // through capabilities (MC-3.3).
-// Block device kinds reported by BLOCK_INFO (protocol data, not authority).
+// Block device kinds reported by block.kind (protocol data, not authority).
 pub const BLOCK_KIND_ATA: usize = 1;
 pub const BLOCK_KIND_AHCI: usize = 2;
 pub const BLOCK_KIND_USB: usize = 3;
