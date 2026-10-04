@@ -36,7 +36,8 @@ Required authority is in brackets; "none" means every task may call it.
 | 3 | `LOG` | `arg1` = address, `arg2` = length (≤ 4096) → bytes written to the task's log and console [none] |
 | 7 | `EXIT` | ends the task [none] |
 | 2 | `READ_KEY` | → legacy byte of the next input event that has one, 0 if none [focused task] |
-| 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`), 0 if none [focused task] |
+| 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`; pointer events: `KEY_POINTER`, `pointer_fields`), 0 if none [focused task] |
+| 56 | `INPUT_POINTER` | `arg1` = 1 to receive pointer events, 0 to stop (the caller only; without it the kernel drops them) [none] |
 
 ### Memory
 

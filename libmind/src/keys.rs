@@ -19,7 +19,7 @@ pub const KEY_F12: u16 = KEY_F1 + 11;
 
 impl Key {
     /// The key press an event word describes; None for a release or an event that carries only a legacy byte.
-    pub fn from_event(word: usize) -> Option<Self> { (event_pressed(word) && event_key(word) != 0).then_some(Self(word)) }
+    pub fn from_event(word: usize) -> Option<Self> { (event_pressed(word) && event_key(word) != 0 && event_key(word) != KEY_POINTER).then_some(Self(word)) }
     pub fn code(self) -> Code {
         match event_key(self.0) {
             KEY_CHAR => Code::Char, KEY_ENTER => Code::Enter, KEY_ESC => Code::Esc, KEY_BACKSPACE => Code::Backspace, KEY_TAB => Code::Tab,

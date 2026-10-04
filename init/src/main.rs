@@ -20,7 +20,7 @@ const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
 const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
-    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
+    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "observe privilege", "screen; process control; input; COM1"];
@@ -145,6 +145,7 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "ps2_kbd")?, ALL); // requests from the shell's keyboard client (151)
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
                 grants.add(SLOT_IRQ, minted.mint(PLATFORM_IRQ, 1, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
+                grants.add(SLOT_MEM, minted.mint(PLATFORM_IRQ, 12, 0)?, 0); // the mouse on the auxiliary port (issue 156)
             }
             "compositor" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "compositor")?, ALL); // requests from the shell's display client (151)

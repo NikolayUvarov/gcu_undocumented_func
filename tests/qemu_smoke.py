@@ -437,6 +437,18 @@ def keys_suite(vm):
             at += 1
         assert at < len(got), (line, got)
         at += 1
+    # The PS/2 mouse (issue 156): movement, a button, the wheel reach the focused program that asked for them.
+    start = len(vm.log)
+    for command in ("mouse_move 10 5", "mouse_button 1", "mouse_button 0", "mouse_move 0 0 1"):
+        vm.hmp(command)
+        time.sleep(.1)
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    got = re.findall(r"\[KEYS\] (pointer [^\r\n]*)", vm.log[start:])
+    assert "pointer buttons=0 dx=10 dy=5 wheel=0" in got, got
+    assert any(line.startswith("pointer buttons=1 ") for line in got), got
+    assert any(line.endswith("wheel=1") or line.endswith("wheel=-1") for line in got), got
     vm.output = ""
     # The text UI (mind::tui) on the real screen: frame, title, the latest event, the key bar.
     screen = screen_text(vm)
@@ -448,7 +460,8 @@ def keys_suite(vm):
     vm.send_bytes(b"\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
-    require(vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN"), "[KBD] LAYOUT RU")
+    log = vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN")
+    require(log, "[KBD] LAYOUT RU"); require(log, "[KBD] MOUSE ON THE AUXILIARY PORT WITH A WHEEL")
     assert task_rows(vm) == {}
     assert heap_used(vm) == baseline
     # keymap (issue 085): the layout and its switch through the shell's keyboard client (idl/keyboard.wit).
@@ -456,8 +469,12 @@ def keys_suite(vm):
     require(vm.command("keymap ru"), "LAYOUT: RU  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
     require(vm.command("keymap --switch caps"), "LAYOUT: RU  SWITCH: CAPS LOCK")
     require(vm.command("keymap --switch sideways"), "USAGE: KEYMAP")
+    # Pointer events while the shell has the focus (it did not ask for them) are dropped, not kept for the next program.
+    vm.hmp("mouse_move 7 7"); vm.serial(); time.sleep(.2)
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
+    time.sleep(.3); vm.collect()
+    assert "pointer" not in vm.log[vm.log.rindex("[KEYS] READY"):], vm.log[-500:]
     start = len(vm.log)
     # Russian at once; Ctrl+Shift no longer switches; Caps Lock switches (and locks no capitals).
     for key in ("q", "ctrl-shift", "q", "caps_lock", "q"):

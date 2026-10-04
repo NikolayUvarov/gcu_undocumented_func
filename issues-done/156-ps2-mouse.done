@@ -1,0 +1,50 @@
+# 156 — PS/2 mouse: pointer events for the focused program — done
+
+**Type:** driver + kernel · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G (needed by 088) · **Constitution:** MC-3.3, Appendix B.6
+
+## Problem
+
+There is no pointing device. The text window manager (088) needs to drag windows by their title and corner, and `fm` and `edit` could use clicks.
+
+## Plan
+
+- **`ps2_kbd` drives the auxiliary port of the i8042 too.** It enables the mouse, takes IRQ 12 from `init` as a second line on its service endpoint, and decodes the 3-byte packets (buttons and relative movement; the wheel with the IntelliMouse handshake when present).
+- **Pointer events go to the focused task** like keys, through the kernel's input path: a new event kind in the input event word (buttons, dx, dy, wheel). Programs that do not ask for pointer events never see them. `mind::input` and `mind::keys::Event` gain a pointer variant.
+- **Positions.** A text program gets cell positions from `mind::tui`, which accumulates movement within its grid. `wm` gets raw movement and keeps its own pointer.
+- **Legacy.** The i8042 is legacy hardware, so the code is marked `LEGACY:` and listed in `docs/legacy.md`. USB HID through xHCI is the modern path, later.
+
+## Acceptance criteria
+
+- QEMU `keys` suite: mouse movement and clicks sent with QEMU's `mouse_move` and `mouse_button` arrive at a focused test program as pointer events with the right buttons and deltas.
+- The keyboard keeps working.
+- An unfocused program gets nothing.
+
+## Related
+
+[088](../issues/088-text-window-manager.md), [085](085-keymap.done), [docs/legacy.md](../docs/legacy.md).
+
+## Resolution
+
+- **Driver:** `ps2_kbd/src/mouse.rs` (`LEGACY:`):
+  - enables the i8042 auxiliary port and its IRQ (init grants IRQ 12 in slot 5);
+  - sets the mouse to its defaults and, with the IntelliMouse handshake (sample rates 200, 100, 80, ID 3), reads 4-byte packets with a wheel;
+  - resynchronizes on the first-byte bit and drops overflowing packets;
+  - logs `[KBD] MOUSE ON THE AUXILIARY PORT [WITH A WHEEL]`.
+  
+  IRQ 12 arrives on the same service endpoint as IRQ 1.
+- **Event word** (`common/abi.rs`):
+  - `KEY_POINTER` in the key field;
+  - the buttons (`POINTER_LEFT/RIGHT/MIDDLE`) in the modifier byte;
+  - dx, dy (9 bits signed each, dy downwards) and the wheel (4 bits signed) in the character field.
+  
+  `pointer_event` and `pointer_fields` encode and decode it.
+- **Kernel:** `INPUT_POINTER` (56) lets a task ask for pointer events for itself. `route_key` drops them for a task that did not, so a program that never asked never sees one and nothing queues for later.
+- **libmind:**
+  - `mind::input::pointer(on)`, and `read_input()` with `Input::Key` and `Input::Pointer`;
+  - `read_event` and `read_key` skip pointer events.
+- **Test:**
+  - `keys` shows pointer events;
+  - the `keys` suite moves the mouse, presses a button and turns the wheel through QEMU's monitor and checks the events;
+  - movement while the shell has the focus does not reach the next program.
+- **Not done:** absolute pointers (usb-tablet, virtio-tablet) and USB HID. Positions in cells are left to `mind::tui` and `wm` (088).
+
