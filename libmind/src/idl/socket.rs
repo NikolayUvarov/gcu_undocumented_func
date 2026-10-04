@@ -13,6 +13,8 @@
 //! Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
 //! goes out through the interface whose network holds the destination, otherwise through the first interface with a
 //! gateway; `config` describes that default interface, `interfaces` all of them.
+//!
+//! 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -22,7 +24,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 1, 0);
+pub const VERSION: (u8, u8, u8) = (2, 2, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -287,6 +289,15 @@ pub fn interfaces(endpoint: Endpoint) -> Result<core::result::Result<List<Interf
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Interface, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Turns transmit checksum offload on or off (operator only, 2.2); returns the cards that use it now (bit n: card n).
+pub fn offload(endpoint: Endpoint, enable: bool) -> Result<core::result::Result<u32, Error>> {
+    let words = [15 | MAJOR << 8 | ((enable) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -307,6 +318,7 @@ pub enum Request<'a> {
     PolicyDrop { badge: u16 },
     PolicyUsage { badge: u16 },
     Interfaces,
+    Offload { enable: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -418,6 +430,10 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Interfaces, call))
         }
+        15 => {
+            wire::body(request, cap, [0x10000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Offload { enable: wire::field(&words, 0, 16, 1) != 0 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -477,4 +493,8 @@ pub fn reply_policy_usage(call: Call, value: core::result::Result<&Usage, Error>
 pub fn reply_interfaces(call: Call, value: core::result::Result<&[Interface], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Interface, 4>(value, w))
+}
+pub fn reply_offload(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

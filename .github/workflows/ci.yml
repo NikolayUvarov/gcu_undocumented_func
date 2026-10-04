@@ -46,6 +46,9 @@ jobs:
         include:
           - name: boot, display, network, TLS, shell, memory, clock
             args: --suites boot,display,net,tls,normal,memory,dzen
+          - name: network benchmark (user networking and tap)
+            args: --suites netbench
+            tap: true
           - name: services, storage, audio
             args: --suites services,ahci,audio,tts,listen
           - name: scheduling, isolation, heap
@@ -75,6 +78,12 @@ jobs:
               "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
           done
           (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
+      - name: Tap interface for the benchmark (host 10.0.2.2/24; a card on it offers checksum offload)
+        if: ${{ matrix.tap }}
+        run: |
+          sudo ip tuntap add dev mindtap0 mode tap user "$(id -un)"
+          sudo ip addr add 10.0.2.2/24 dev mindtap0
+          sudo ip link set mindtap0 up
       - name: QEMU suites
         if: ${{ !matrix.usb }}
         run: |
@@ -82,6 +91,9 @@ jobs:
             --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
             --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
             --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
+      - name: Benchmark over the tap interface (checksum offload off and on)
+        if: ${{ matrix.tap }}
+        run: python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd --suites netbench --tap mindtap0 --bench-runs 2
       - name: USB image
         if: ${{ matrix.usb }}
         run: |

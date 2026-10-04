@@ -13,7 +13,7 @@ mod policy;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
 use mind::idl::codec::List;
 use mind::idl::{net, socket, wire};
@@ -40,22 +40,63 @@ const EPHEMERAL: u16 = 49152;
 const CARDS: usize = 2; // card drivers: SLOT_DEV0, SLOT_DEV1 (init starts one virtio_net instance per card)
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1];
 
+// Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
+// (docs/profile/network.md) showed no gain worth trusting the device with it by default.
+static OFFLOAD: AtomicBool = AtomicBool::new(false);
+
 // Frames each card sent and received.
 static SENT: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 
 // A driver's frames as a smoltcp device: one IDL call per frame.
-struct Card { endpoint: Endpoint, index: usize, frame: [u8; FRAME_MAX] }
+// `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on).
+struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX] }
 struct Rx<'a>(&'a [u8]);
-struct Tx(Endpoint, usize);
+struct Tx(Endpoint, usize, bool);
+
+// For an IPv4 TCP or UDP frame (not a fragment): puts the pseudo-header sum in its checksum field and returns where the
+// summed bytes start, where the field is from there (virtio_net_hdr `csum_start`, `csum_offset`) and where the IP
+// packet ends.
+fn partial(frame: &mut [u8]) -> Option<(usize, usize, usize)> {
+    if frame.len() < 34 || frame[12..14] != [0x08, 0x00] || frame[14] >> 4 != 4 { return None; }
+    let ihl = (frame[14] & 0x0F) as usize * 4;
+    let field = match frame[23] { 6 => 16, 17 => 6, _ => return None };
+    if frame[20] & 0x3F != 0 || frame[21] != 0 { return None; } // more fragments or an offset
+    let total = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+    let (start, length) = (14 + ihl, total.checked_sub(ihl)?);
+    if ihl < 20 || 14 + total > frame.len() || field + 2 > length { return None; }
+    let mut sum = frame[26..34].chunks(2).map(|w| u16::from_be_bytes([w[0], w[1]]) as u32).sum::<u32>() + frame[23] as u32 + length as u32;
+    while sum > 0xFFFF { sum = (sum & 0xFFFF) + (sum >> 16); }
+    frame[start + field..start + field + 2].copy_from_slice(&(sum as u16).to_be_bytes());
+    Some((start, field, 14 + total))
+}
+
+// Completes a partial checksum in software: the one's complement of the sum from `start` to `end`.
+fn complete(frame: &mut [u8], start: usize, field: usize, end: usize) {
+    let data = &frame[start..end];
+    let mut sum = data.chunks_exact(2).map(|w| u16::from_be_bytes([w[0], w[1]]) as u32).sum::<u32>();
+    if data.len() % 2 == 1 { sum += (data[data.len() - 1] as u32) << 8; }
+    while sum > 0xFFFF { sum = (sum & 0xFFFF) + (sum >> 16); }
+    let mut value = !(sum as u16);
+    if value == 0 && frame[23] == 17 { value = 0xFFFF; } // UDP: 0 means "no checksum"
+    frame[start + field..start + field + 2].copy_from_slice(&value.to_be_bytes());
+}
 impl smoltcp::phy::RxToken for Rx<'_> {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R { f(self.0) }
 }
 impl smoltcp::phy::TxToken for Tx {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let mut frame = [0u8; FRAME_MAX];
-        let result = f(&mut frame[..len.min(FRAME_MAX)]);
-        if matches!(net::send(self.0, &frame[..len.min(FRAME_MAX)]), Ok(Ok(_))) { SENT[self.1].fetch_add(1, Ordering::Relaxed); }
+        let len = len.min(FRAME_MAX);
+        let result = f(&mut frame[..len]);
+        // TCP and UDP checksums are finished here: by the card with offload, else in software (smoltcp leaves them).
+        let offloaded = match partial(&mut frame[..len]) {
+            Some((start, field, _)) if self.2 && matches!(net::send_partial(self.0, &frame[..len], start as u16, field as u16), Ok(Ok(()))) => Some(true),
+            Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); None }
+            None => None,
+        };
+        let sent = offloaded.unwrap_or_else(|| matches!(net::send(self.0, &frame[..len]), Ok(Ok(()))));
+        if sent { SENT[self.1].fetch_add(1, Ordering::Relaxed); }
         result
     }
 }
@@ -64,14 +105,17 @@ impl Device for Card {
     type TxToken<'a> = Tx;
     fn receive(&mut self, _: Instant) -> Option<(Rx<'_>, Tx)> {
         match net::receive(self.endpoint, &mut self.frame) {
-            Ok(Ok(len)) => { RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed); Some((Rx(&self.frame[..len.min(FRAME_MAX)]), Tx(self.endpoint, self.index))) }
+            Ok(Ok(len)) => { RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed); Some((Rx(&self.frame[..len.min(FRAME_MAX)]), Tx(self.endpoint, self.index, self.offload))) }
             _ => None,
         }
     }
-    fn transmit(&mut self, _: Instant) -> Option<Tx> { Some(Tx(self.endpoint, self.index)) }
+    fn transmit(&mut self, _: Instant) -> Option<Tx> { Some(Tx(self.endpoint, self.index, self.offload)) }
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet; caps.max_transmission_unit = FRAME_MAX;
+        // smoltcp verifies received checksums; TCP and UDP ones to send are finished in `Tx` (by the card or in software),
+        // so offload can be switched while the interface runs.
+        caps.checksum.tcp = smoltcp::phy::Checksum::Rx; caps.checksum.udp = smoltcp::phy::Checksum::Rx;
         caps
     }
 }
@@ -111,7 +155,8 @@ impl Link {
         let endpoint = Endpoint(DRIVERS[index]);
         let info = match net::info(endpoint) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
-        let mut card = Card { endpoint, index, frame: [0; FRAME_MAX] };
+        let offers = net::offloads(endpoint).is_ok_and(|o| o & 1 != 0);
+        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX] };
         let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])));
         config.random_seed = mind::time::rdtsc();
         let iface = Interface::new(config, &mut card, instant());
@@ -121,7 +166,7 @@ impl Link {
                                          icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 8], vec![0; 4096]));
         let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
         let icmp = sockets.add(echo);
-        mind::println!("[NETSTACK] CARD {} READY, WAITING FOR DHCP", index);
+        mind::println!("[NETSTACK] CARD {} READY{}, WAITING FOR DHCP", index, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms() })
     }
 
@@ -348,6 +393,13 @@ impl Stack {
                 for link in self.links.iter().flatten() { list.push(link.describe()); }
                 socket::reply_interfaces(call, Ok(list.as_slice()))
             }
+            socket::Request::Offload { enable } => {
+                OFFLOAD.store(enable, Ordering::Relaxed);
+                let mut cards = 0;
+                for link in self.links.iter_mut().flatten() { link.card.offload = enable && link.card.offers; cards |= (link.card.offload as u32) << link.card.index; }
+                mind::println!("[NETSTACK] CHECKSUM OFFLOAD {} (CARDS {:#b})", if enable { "ON" } else { "OFF" }, cards);
+                socket::reply_offload(call, Ok(cards))
+            }
             socket::Request::Ping { address, timeout_ms } => match self.ping(address, timeout_ms) {
                 Ok((link, sequence, deadline)) => self.wait(call, |call| Waiting::Ping { call, link, sequence, sent: mind::time::monotonic_ns(), deadline }),
                 Err(error) => socket::reply_ping(call, Err(error)),
@@ -492,6 +544,7 @@ fn main(_info: &'static BootInfo) {
             Access::Operator => Ok(()),
             Access::Policy => if matches!(decoded, socket::Request::Config) { Ok(()) } else { Err(Error::Denied) }, // the broker reads the DNS server
             Access::Grant(_) if matches!(decoded, socket::Request::Interfaces) => Ok(()),
+            Access::Grant(_) if matches!(decoded, socket::Request::Offload { .. }) => Err(Error::Denied),
             Access::Nothing => Err(Error::Denied),
             Access::Grant(grant) => match &decoded {
                 socket::Request::Config => Ok(()),
@@ -534,5 +587,6 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::PolicyDrop { .. } => socket::reply_policy_drop(call, Err(error)),
         socket::Request::PolicyUsage { .. } => socket::reply_policy_usage(call, Err(error)),
         socket::Request::Interfaces => socket::reply_interfaces(call, Err(error)),
+        socket::Request::Offload { .. } => socket::reply_offload(call, Err(error)),
     }
 }

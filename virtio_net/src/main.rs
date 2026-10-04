@@ -16,7 +16,8 @@ use mind::idl::{net, wire};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 
-const F_MAC: u32 = 1 << 5; const F_STATUS: u32 = 1 << 16;
+const F_CSUM: u32 = 1 << 0; const F_MAC: u32 = 1 << 5; const F_STATUS: u32 = 1 << 16;
+const HDR_NEEDS_CSUM: u8 = 1; // virtio_net_hdr flags: the device completes the checksum (issue 106)
 const DESC_WRITE: u16 = 2;
 const RX: usize = 0; const TX: usize = 1;
 // DMA layout: the two virtqueues in the first 64 KiB (up to 1024 entries each), then receive and transmit buffers.
@@ -99,7 +100,7 @@ impl Device {
         let layout = Layout::read(SLOT_DEV0)?;
         layout.single_bar()?;
         let modern = Modern { bar: Mmio::map(SLOT_DEV0).ok()?, layout };
-        let features = modern.negotiate((F_MAC | F_STATUS) as u64)? as u32;
+        let features = modern.negotiate((F_CSUM | F_MAC | F_STATUS) as u64)? as u32;
         // init grants an MSI-X vector as a line above 15 (the device accepts vector numbers even with MSI-X off).
         let (kind, line, _) = cap_info(SLOT_IRQ);
         let mut msix = kind == CAP_KIND_IRQ && line >= 16;
@@ -191,13 +192,21 @@ impl Device {
         self.queues[TX].last_used = last;
     }
 
-    fn send(&mut self, frame: &[u8]) -> Result<(), net::Error> {
+    // `partial`: (start, offset) of a checksum the device completes (only with F_CSUM).
+    fn send(&mut self, frame: &[u8], partial: Option<(u16, u16)>) -> Result<(), net::Error> {
         if frame.len() < 14 || frame.len() > FRAME_MAX { return Err(net::Error::Invalid); }
+        if let Some((start, offset)) = partial {
+            if self.features & F_CSUM == 0 || start as usize + offset as usize + 2 > frame.len() { return Err(net::Error::Invalid); }
+        }
         self.service();
         let id = self.tx_free.iter().position(|&free| free).ok_or(net::Error::Busy)?;
         self.tx_free[id] = false;
         let at = self.tx_buffer(id);
-        for i in 0..self.header { unsafe { core::ptr::write_volatile(self.memory.add(at + i), 0) } }
+        let mut header = [0u8; HEADER_MODERN];
+        if let Some((start, offset)) = partial {
+            header[0] = HDR_NEEDS_CSUM; header[6..8].copy_from_slice(&start.to_le_bytes()); header[8..10].copy_from_slice(&offset.to_le_bytes());
+        }
+        for (i, &byte) in header[..self.header].iter().enumerate() { unsafe { core::ptr::write_volatile(self.memory.add(at + i), byte) } }
         for (i, &byte) in frame.iter().enumerate() { unsafe { core::ptr::write_volatile(self.memory.add(at + self.header + i), byte) } }
         self.offer(TX, id as u16, at, self.header + frame.len(), 0);
         self.notify(TX);
@@ -269,7 +278,10 @@ fn main(_info: &'static BootInfo) {
             (net::Request::Receive, None) => net::reply_receive(call, Err(net::Error::NoDevice)),
             (net::Request::Wait, None) => net::reply_wait(call, 0),
             (net::Request::Info, Some(d)) => net::reply_info(call, Ok(&d.info())),
-            (net::Request::Send { frame: data }, Some(d)) => net::reply_send(call, d.send(data)),
+            (net::Request::Send { frame: data }, Some(d)) => net::reply_send(call, d.send(data, None)),
+            (net::Request::SendPartial { frame: data, start, offset }, Some(d)) => net::reply_send_partial(call, d.send(data, Some((start, offset)))),
+            (net::Request::Offloads, d) => net::reply_offloads(call, d.map_or(0, |d| (d.features & F_CSUM != 0) as u32)),
+            (net::Request::SendPartial { .. }, None) => net::reply_send_partial(call, Err(net::Error::NoDevice)),
             (net::Request::Receive, Some(d)) => {
                 let got = d.receive().map(|data| { frame[..data.len()].copy_from_slice(data); data.len() });
                 net::reply_receive(call, got.map(|len| &frame[..len]).ok_or(net::Error::Empty))

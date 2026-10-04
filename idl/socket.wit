@@ -12,7 +12,9 @@
 /// Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
 /// goes out through the interface whose network holds the destination, otherwise through the first interface with a
 /// gateway; `config` describes that default interface, `interfaces` all of them.
-package mind:socket@2.1.0;
+///
+/// 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
+package mind:socket@2.2.0;
 
 interface socket {
     /// Why a request failed.
@@ -64,4 +66,6 @@ interface socket {
     policy-usage: func(badge: u16) -> result<usage, error>;
     /// Every interface whose card driver answered (2.1).
     interfaces: func() -> result<list<interface, 4>, error>;
+    /// Turns transmit checksum offload on or off (operator only, 2.2); returns the cards that use it now (bit n: card n).
+    offload: func(enable: bool) -> result<u32, error>;
 }
