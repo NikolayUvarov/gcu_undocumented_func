@@ -131,7 +131,7 @@ let n = file.read(&mut chunk)?;
 mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
 ```
 
-Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
+Requests follow `idl/vfs.wit` (open, read, size, close, list in pages of 16 entries): the path and the file data travel in a buffer the client lends for one call and revokes before reading the reply. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
 
 ### Audio gateway
 
@@ -496,7 +496,7 @@ This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. MIND IDL v0.2 adds records, strings and lists with declared bounds, carried in the client's buffer: the server copies the request into private memory before checking it, the client revokes the server's access before reading the reply. `rtc`, `loader`, `init`, `tts`, `audio_gw` and the block drivers use MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. MIND IDL v0.2 adds records, strings and lists with declared bounds, carried in the client's buffer: the server copies the request into private memory before checking it, the client revokes the server's access before reading the reply. All services that answer requests (`rtc`, `loader`, `init`, `tts`, `audio_gw`, `vfs_server` and the block drivers) use MIND IDL.
 
 ### Runtime checks
 

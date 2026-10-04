@@ -183,12 +183,7 @@ pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; p
 pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 
 // RTC protocol: idl/rtc.wit (MIND IDL, bindings in mind::idl::rtc).
-// VFS protocol: msg[2]=op|fd<<8|length<<16, msg[3]=offset; the buffer is passed as a memory capability.
-pub const VFS_OPEN: usize = 1;
-pub const VFS_READ: usize = 2;
-pub const VFS_CLOSE: usize = 3;
-pub const VFS_LIST: usize = 4;
-pub const VFS_STAT: usize = 5;
+// VFS protocol: idl/vfs.wit (bindings in mind::idl::vfs).
 // Program loader: idl/loader.wit (list, run with arguments). Legacy adapter until loader v1: CALL on SLOT_LOADER with
 // the program name packed into msg[2..4] and an optional endpoint for the child's INIT slot; reply msg[2] = PID or error.
 

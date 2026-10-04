@@ -6,8 +6,11 @@ mod disk;
 mod fat;
 
 use mind::abi::*;
-use mind::ipc::{self, Endpoint, Message};
-use mind::mem::Mapping;
+use mind::idl::codec::Text;
+use mind::idl::wire::{self, Call};
+use mind::idl::vfs;
+use mind::ipc::Endpoint;
+use mind::sys::Error;
 
 const RECEIVED_CAP: usize = 9;
 const MAX_OPEN: usize = 32;
@@ -28,46 +31,41 @@ impl Server {
         Some(fd)
     }
 
-    fn handle(&mut self, op: usize, fd: usize, len: usize, offset: usize, sender: u64, buffer: Option<&mut [u8]>) -> Result<[usize; 2], usize> {
-        let volume = self.volume.as_mut().ok_or(ERR_NOT_FOUND)?;
+    fn handle(&mut self, request: vfs::Request, sender: u64, call: Call) -> mind::sys::Result<()> {
+        let Some(volume) = self.volume.as_mut() else { return wire::reply_error(call, Error::NotFound) };
         let owned = |open: &Option<Open>| open.filter(|o| o.owner == sender);
-        match op {
-            VFS_OPEN => {
-                let buffer = buffer.ok_or(ERR_INVALID)?;
-                let path = buffer.get(..len).ok_or(ERR_INVALID)?;
-                let node = volume.resolve(path).ok_or(ERR_NOT_FOUND)?;
-                if node.is_dir { return Err(ERR_INVALID); }
-                let fd = self.allocate(Open { owner: sender, file: node, cursor: None }).ok_or(ERR_NO_SLOT)?;
-                Ok([fd, node.size as usize])
+        match request {
+            vfs::Request::Open { path } => {
+                let node = match volume.resolve(path.as_str().as_bytes()) { Some(node) if !node.is_dir => node, Some(_) => return vfs::reply_open(call, Err(Error::Invalid)), None => return vfs::reply_open(call, Err(Error::NotFound)) };
+                let result = self.allocate(Open { owner: sender, file: node, cursor: None }).ok_or(Error::NoSlot).map(|fd| vfs::File { fd: fd as u32, size: node.size as u64 });
+                vfs::reply_open(call, result.as_ref().map_err(|e| *e))
             }
-            VFS_READ => {
-                let buffer = buffer.ok_or(ERR_INVALID)?;
-                let mut open = self.open.get(fd).and_then(owned).ok_or(ERR_INVALID)?;
-                let want = len.min(buffer.len());
-                let got = volume.read(&open.file, offset, &mut buffer[..want], &mut open.cursor);
-                self.open[fd] = Some(open);
-                Ok([got, 0])
+            vfs::Request::Read { fd, offset, length } => {
+                let Some(mut open) = self.open.get(fd as usize).and_then(owned) else { return vfs::reply_read(call, Err(Error::Invalid)) };
+                let mut data = [0u8; 4096];
+                let want = (length as usize).min(data.len());
+                let got = volume.read(&open.file, offset as usize, &mut data[..want], &mut open.cursor);
+                self.open[fd as usize] = Some(open);
+                vfs::reply_read(call, Ok(&data[..got]))
             }
-            VFS_STAT => self.open.get(fd).and_then(owned).map(|o| [o.file.size as usize, 0]).ok_or(ERR_INVALID),
-            VFS_CLOSE => { self.open.get(fd).and_then(owned).ok_or(ERR_INVALID)?; self.open[fd] = None; Ok([0, 0]) }
-            VFS_LIST => {
-                let buffer = buffer.ok_or(ERR_INVALID)?;
-                let path = buffer.get(..len).ok_or(ERR_INVALID)?;
-                let mut name = [0u8; 255]; let path_len = path.len(); name[..path_len].copy_from_slice(path);
-                let dir = volume.resolve(&name[..path_len]).ok_or(ERR_NOT_FOUND)?;
-                if !dir.is_dir { return Err(ERR_INVALID); }
-                // Entries: size u32, flags u8 (1 = directory), name length u8, name.
-                let (mut index, mut count, mut at, mut more) = (0usize, 0usize, 0usize, false);
+            vfs::Request::Size { fd } => vfs::reply_size(call, self.open.get(fd as usize).and_then(owned).map(|o| o.file.size as u64).ok_or(Error::Invalid)),
+            vfs::Request::Close { fd } => {
+                let result = self.open.get(fd as usize).and_then(owned).map(|_| ()).ok_or(Error::Invalid);
+                if result.is_ok() { self.open[fd as usize] = None; }
+                vfs::reply_close(call, result)
+            }
+            vfs::Request::List { path, start } => {
+                let Some(dir) = volume.resolve(path.as_str().as_bytes()) else { return vfs::reply_list(call, Err(Error::NotFound)) };
+                if !dir.is_dir { return vfs::reply_list(call, Err(Error::Invalid)); }
+                let mut page = vfs::Page::default(); let mut index = 0u32;
                 volume.walk(&dir, |entry| {
-                    if index < offset { index += 1; return true; }
-                    let need = 6 + entry.name.len();
-                    if at + need > buffer.len() { more = true; return false; }
-                    buffer[at..at + 4].copy_from_slice(&entry.node.size.to_le_bytes()); buffer[at + 4] = entry.node.is_dir as u8; buffer[at + 5] = entry.name.len() as u8;
-                    buffer[at + 6..at + need].copy_from_slice(entry.name); at += need; count += 1; index += 1; true
+                    if index < start { index += 1; return true; }
+                    let name = Text::new(core::str::from_utf8(entry.name).unwrap_or("?")).unwrap_or_default();
+                    if !page.entries.push(vfs::Entry { name, size: entry.node.size, directory: entry.node.is_dir }) { page.next = index; return false; }
+                    index += 1; true
                 });
-                Ok([count, if more { index } else { 0 }])
+                vfs::reply_list(call, Ok(&page))
             }
-            _ => Err(ERR_INVALID),
         }
     }
 }
@@ -87,13 +85,10 @@ fn main(_info: &'static BootInfo) {
     let mut server = Server { volume, open: [None; MAX_OPEN] };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
-        if !request.is_call { if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); } continue; }
-        let (op, fd, len) = (request.data[0] & 0xFF, (request.data[0] >> 8) & 0xFF, request.data[0] >> 16);
-        let mut mapping = if request.cap_received { Mapping::new(RECEIVED_CAP).ok() } else { None };
-        let result = server.handle(op, fd, len, request.data[1], request.sender, mapping.as_mut().map(|m| m.as_mut_slice()));
-        drop(mapping);
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
-        let reply = match result { Ok(data) => data, Err(error) => [error, 0] };
-        let _ = ipc::reply(&Message::new(reply[0], reply[1]));
+        // idl/vfs.wit; descriptors belong to the sender's PID.
+        match vfs::decode(&request, RECEIVED_CAP) {
+            Ok((decoded, call)) => { let _ = server.handle(decoded, request.sender, call); }
+            Err(reason) => if request.is_call { let _ = wire::reject(reason); },
+        }
     }
 }

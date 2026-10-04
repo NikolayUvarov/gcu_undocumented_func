@@ -88,7 +88,6 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage` (client: `vfs_server`) | 1.0.0 |
+| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`; the write path and directory handles come with issue 048) | 1.0.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`) | 1.0.0 |
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; the start with an endpoint for the child is a legacy adapter until loader v1, issue 046) | 1.0.0 |
-
-VFS still uses the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8 (issue 039).

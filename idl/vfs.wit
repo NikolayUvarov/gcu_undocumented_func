@@ -1,0 +1,21 @@
+/// Files on the boot volume (read-only FAT). Descriptors belong to the calling process. VFS v2 (directory handles,
+/// writing) follows in issue 048.
+package mind:vfs@1.0.0;
+
+interface vfs {
+    /// An open file.
+    record file { fd: u32, size: u64 }
+    /// A directory entry.
+    record entry { name: string<255>, size: u32, directory: bool }
+    /// Entries of a directory from some index on; `next` is the index of the following page, 0 at the end.
+    record page { entries: list<entry, 16>, next: u32 }
+    /// Opens a file by path. Errors: not-found, invalid (a directory), no-slot (descriptor table full).
+    open: func(path: string<255>) -> result<file, error-code>;
+    /// Reads up to `length` bytes at `offset`; fewer at the end of the file.
+    read: func(fd: u32, offset: u64, length: u16) -> result<list<u8, 4096>, error-code>;
+    /// Size of an open file.
+    size: func(fd: u32) -> result<u64, error-code>;
+    close: func(fd: u32) -> result<_, error-code>;
+    /// Lists the directory `path` ("" is the root) from entry `start`.
+    list: func(path: string<255>, start: u32) -> result<page, error-code>;
+}

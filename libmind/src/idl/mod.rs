@@ -8,3 +8,4 @@ pub mod init;
 pub mod loader;
 pub mod rtc;
 pub mod tts;
+pub mod vfs;
