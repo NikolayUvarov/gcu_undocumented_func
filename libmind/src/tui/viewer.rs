@@ -1,6 +1,6 @@
 //! File viewer core (the `view` program, F3 in `fm`): UTF-8 text with or without wrapping and a hex dump, search,
 //! go to a line/offset/percentage. The file is read on demand through a 64 KiB window, never loaded whole.
-use super::widgets::{fkey_bar, input_dialog, message, Edit, InputLine};
+use super::widgets::{fkey_bar, input_dialog, message, Edit, InputLine, KeyBars};
 use super::{Grid, Rect, Style, Theme};
 use crate::keys::{Code, Key};
 use core::fmt::Write;
@@ -60,6 +60,8 @@ pub struct Viewer<'b, S: Source> {
     query: [u8; 128], query_len: usize, found: Option<(u64, usize)>,
     prompt: Option<(Prompt, InputLine)>, note: Option<&'static str>, help: bool,
     line_mark: (u64, u64), // (offset, number of the line starting there): line numbers are counted from the nearest known point
+    /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bar shows what the keys do with them.
+    pub modifiers: u8,
 }
 
 impl<'b, S: Source> Viewer<'b, S> {
@@ -69,7 +71,7 @@ impl<'b, S: Source> Viewer<'b, S> {
         while !name.is_char_boundary(len) { len -= 1; }
         bytes[..len].copy_from_slice(&name.as_bytes()[..len]);
         Self { cache: Cache::new(source, buf), mode: Mode::Text, wrap: true, top: 0, left: 0, width: 80, height: 24, name: bytes, name_len: len,
-               query: [0; 128], query_len: 0, found: None, prompt: None, note: None, help: false, line_mark: (0, 1) }
+               query: [0; 128], query_len: 0, found: None, prompt: None, note: None, help: false, line_mark: (0, 1), modifiers: 0 }
     }
     pub fn top(&self) -> u64 { self.top }
     pub fn size(&self) -> u64 { self.cache.size() }
@@ -334,8 +336,9 @@ impl<'b, S: Source> Viewer<'b, S> {
         {
             let wrap_label = if self.wrap { "Unwrap" } else { "Wrap" };
             let mode_label = if self.mode == Mode::Hex { "Text" } else { "Hex" };
-            let labels = ["Help", if self.mode == Mode::Text { wrap_label } else { "" }, "Quit", mode_label, "Goto", "", "Search", "", "", "Quit"];
-            fkey_bar_at(grid, area, &labels, theme);
+            let bars = KeyBars { plain: ["Help", if self.mode == Mode::Text { wrap_label } else { "" }, "Quit", mode_label, "Goto", "", "Search", "", "", "Quit"],
+                                 shift: ["", "", "", "", "", "", "Next", "", "", ""], ctrl: [""; 10], alt: [""; 10] };
+            fkey_bar_at(grid, area, bars.labels(self.modifiers), theme);
         }
         if let Some(note) = self.note { grid.text_padded(area.x, area.bottom() - 2, note, area.w, theme.error); }
         if self.help {

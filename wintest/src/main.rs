@@ -37,6 +37,7 @@ fn show(title: &str, seconds: u64) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("wintest — test program of the window broker: a text window, or an intruder with a plain client.\nUsage: wintest show <title> <seconds> | wintest intrude");
     let mut words = mind::process::args_str().split_whitespace();
     match words.next().unwrap_or("") {
         "show" => show(words.next().unwrap_or("W"), words.next().and_then(|s| s.parse().ok()).unwrap_or(30)),

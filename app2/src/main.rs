@@ -53,6 +53,7 @@ fn bounce(frame: usize, limit: usize) -> usize {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("app2 — the second demo program: a bouncing square on its own screen.\nUsage: app2\nCtrl+Z: back to the shell; Esc: exit.");
     os_print(
         b"\r\n[APP2] HELLO FROM THE SECOND ELF PROGRAM!\r\n",
     );

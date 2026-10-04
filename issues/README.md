@@ -22,7 +22,8 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [088](088-text-window-manager.md) | `wm`: window manager for text and pixel programs (dragging, snapping to edges and corners; detach keeps programs running) | tools | P2 | — (157, 156 done) | track G |
 | [089](089-text-clock-faces.md) | Text faces for `clock` and `dzen-clock` (compatibility: text windows, consoles) | tools | P2 | — | track G |
-| [090](090-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088) | track G |
+| [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088) | track G |
+| [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
 | [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
@@ -124,6 +125,10 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [084](../issues-done/084-reboot.done) | `reboot [-f]`: flush, services stopped in reverse order, reset | done (2026-10-04) |
 | [085](../issues-done/085-keymap.done) | `keymap`: layout and switch key (`keyboard.wit` 1.0) | done (2026-10-04) |
 | [086](../issues-done/086-screenshot.done) | `screenshot`: the screen as a BMP (`display.wit` 1.0) | done (2026-10-04) |
+| [087](../issues-done/087-tts-idle-tone.done) | `tts`: a quiet tone stayed after every phrase (fixed-point limit cycle; filters cleared after 30 ms without excitation) | done (2026-10-04) |
+| [090](../issues-done/090-read-only-status-and-modifier-key-bars.done) | Editor says READ-ONLY; key bars follow Shift, Ctrl and Alt | done (2026-10-04) |
+| [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
+| [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

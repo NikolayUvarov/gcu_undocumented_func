@@ -21,7 +21,7 @@ MIND Core can speak (`tts`) and hear (`listen`, voice V0–V2), but it cannot se
    - `video_gw` gets a synthetic source (moving test pattern, frame counter, timestamps) when no camera is present and the test asks for it. It plays the role the WAV source plays for voice.
    - A real camera reaches QEMU with USB passthrough (`-device qemu-xhci -device usb-host,vendorid=…,productid=…`) for manual tests on a host with a webcam.
 5. **Programs** (tools track):
-   - `camera`: shows the stream in a window (088) or full screen, takes a still (BMP, as `screenshot`) and records (AVI/MJPEG, as `record` in 090);
+   - `camera`: shows the stream in a window (088) or full screen, takes a still (BMP, as `screenshot`) and records (AVI/MJPEG, as `record` in 093);
    - later, vision for the voice dialogue: describing what the camera sees through a model on the host bench, the way `hear` works.
 
 ## Acceptance criteria
@@ -37,4 +37,4 @@ MIND Core can speak (`tts`) and hear (`listen`, voice V0–V2), but it cannot se
 
 ## Related
 
-[090](090-screen-recording.md), [088](088-text-window-manager.md), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).
+[093](093-screen-recording.md), [088](088-text-window-manager.md), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).

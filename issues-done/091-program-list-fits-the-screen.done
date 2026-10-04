@@ -1,0 +1,22 @@
+# 091 — `list`: every program in sight, and what each one does — done
+
+**Type:** bug / usability · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: `fm` was not in the program list. It was — first of 55 lines in the disk's directory order (programs and services mixed, with sizes in bytes), on a screen of 50 lines, so it had scrolled off the top. Nothing said what a program does.
+
+## Plan
+
+- `list`: applications only, sorted, down columns that fit the screen; the services on their own line.
+- `list -l`: one line per program with its size and what it does.
+
+## Acceptance criteria
+
+- QEMU: the list is short enough for the screen, sorted down the columns, holds every application (`fm` among them) and no service; `list -l` describes the known programs and shows only the size of one it does not know.
+
+## Resolution
+
+- `shell/src/programs.rs`: `list` sorts the loader's applications and writes them down as many columns as fit (at most 8; on the 160-column screen 33 programs take 5 lines), then `SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): …` and a line on Ctrl+Z, Esc and `help`. `list -l` gives `name  size KB  what it does` from a table of the system's programs; another program shows its size only (since [092](092-help-for-every-program.done) the line comes from the program itself). `run` without a name shows the short list. `help` names `list -l`.
+- Tests: QEMU `services` suite (the columns, their order, the count in the header, no service among them, `fm` present, `list -l` for `fm` and the unknown `hello`, `list x` usage); `shell` suite's edited `list`.
+- Docs: README (`LIST`).

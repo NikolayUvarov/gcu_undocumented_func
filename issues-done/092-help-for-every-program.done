@@ -1,0 +1,25 @@
+# 092 — `help <program>`, and `--help` in every application — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Asked by the user: the shell needs `help <app>` that tells what an application does, and every application needs a `--help` key that prints it. Until now only the shell's own commands had a help text; a program's purpose and arguments were in the README or its source.
+
+## Plan
+
+- One text per program, in the program: `mind::about!("name — what it does\nUsage: …")`, the first statement of `main`. It prints the text and exits when the argument is `--help`, and keeps the text in the program file.
+- The shell reads the text from the file without starting the program: `help <name>`, `<name> --help` for a program with a screen (its own output would leave with it), and the summaries of `list -l`.
+
+## Acceptance criteria
+
+- Every application on the boot disk has a text; `list -l` shows a summary for each.
+- QEMU: `help fm` and `fm --help` show fm's text and start nothing; `help cat` shows the shell's line; `help voice` shows the command and the program; `help rtc` names a service; an unknown name is an error; a console program (`uptime --help`) prints its own text.
+
+## Resolution
+
+- `mind::about!` (`libmind/src/process.rs`): a `.mind_about` section with the text (`about_note`, a const copy) and, at run time, `--help` → print and exit. Every application's linker script keeps the section (`KEEP`, 43 scripts); `mind::process::section` finds a named section in an ELF file read through a callback (64 sections, 4 KiB of names, as the loader reads the request note).
+- Texts for all 32 applications (the demos, the monitors, the disk and search tools, `fm`, `edit`, `view`, the voice and network tools): the first line `name — what it does`, then `Usage:` and the keys or options.
+- The shell (`shell/src/programs.rs`): `help <name>` prints the lines of its own help that name the command (`help cat` → `- ls [path], cat <file>: …`), then the program's text read from `<name>.elf` (`PROGRAM voice:` when both exist), or that a boot service is one, or an error. `<name> --help` and `run <name> --help` show the text from the file for a program with a screen and start nothing; a console program runs and prints its own text. `list -l` takes each summary from the programs (the table in the shell is gone). `help` lists `help [command or program]`.
+- Tests: QEMU `services` suite (the checks above, `list -l` with a summary for every program, including `hello`, the test's copy of `clock.elf`, which carries clock's text).
+- Docs: README (`HELP`, `--help`, `mind::about!` with `mind::request!`), `docs/api` (`process`).

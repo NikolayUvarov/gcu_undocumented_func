@@ -1,0 +1,32 @@
+# 087 — `tts`: a quiet tone stays after every phrase — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P3 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+After the last sound of a phrase the synthesizer does not fall silent: it keeps producing a periodic signal of about RMS 55 (−55 dBFS), a tone near 1.6 kHz (period of 10 samples at 16 kHz), until the phrase's samples end. `tests/voice_host.rs` found it while testing speech detection (issue 077): the tail of "hello world" is 300 ms of `−66, −84, −63, −43, −52, −74, −67, −28, −2, −22, …` repeating. On a loudspeaker it is barely audible; to a speech detector working down to digital silence it is sound, which is why `mind::voice::Detector` ignores everything under −50 dBFS.
+
+The likely cause is a limit cycle of the fixed-point filters: `Resonator::run` and the DC blocker in `synth.rs` (`self.dc_y * 4064 >> 12`) round their feedback with an arithmetic shift, which rounds toward minus infinity, so a small state never decays to zero (the same fault the voice front end had in its DC blocker and fixed by dividing, which rounds toward zero). The frication resonator also keeps running with input 0 while `af` is 0.
+
+## Plan
+
+- Find which filter cycles (log each resonator's state in the tail of a phrase on the host).
+- Round the feedback paths toward zero (or to nearest) in `Resonator`, `Antiresonator` and the DC blocker; clear the frication resonator's state when frication stops; if a cycle remains, reset the filters' state once the amplitudes reach 0 in a pause.
+- Keep the voice unchanged otherwise: the formant targets, timing and levels stay as they are.
+
+## Acceptance criteria
+
+- A host test synthesizes phrases in both languages and checks that within 50 ms after the last segment with non-zero amplitude the output is digital silence (all samples 0), and that pauses between words are silent the same way.
+- `tests/tts_host.rs` and the QEMU `tts` suite pass; with `--asr-model` the recognized share of words does not drop.
+- `tests/voice_host.rs` still passes; the detector's −50 dBFS floor may then be lowered (a separate change, measured on real recordings).
+
+## Resolution
+
+- Measured on the host (every pause and phrase end of five phrases): the output stayed at RMS 30–80 until the next sound in almost every pause and to the end of every phrase. Rounding the resonators' feedback and the DC blocker toward zero (the plan's first step) silenced most of them within 38 ms, but the F2 resonator after «Er» in "over" kept a cycle of ±7 that the cascade carried to ±70 at the output — a second-order filter can hold a limit cycle with either rounding — and it changed the speech itself by a broadband difference 26 dB below the signal.
+- Done instead (the plan's fallback): `synth.rs` counts samples without excitation (voicing, aspiration and frication amplitudes all 0) and after 30 ms (`SETTLE`, 480 samples) clears every filter's state — the cascade, the nasal pole and zero, the frication resonator, the source tilt and the DC blocker (`Resonator::clear`, `Antiresonator::clear`). The ringing of the last sound has decayed below −60 dBFS by then. Rounding stays as it was, so speech changes only by the cycle no longer carried into the next sound (about 40 dB below the signal); the noise and glottal sequences are untouched.
+- Test: `tests/tts_host.rs` `pauses_and_phrase_ends_fall_silent` — six phrases in English and Russian at three voices (pitch 85–160 Hz, rate 80–130 %): from 50 ms into every pause and phrase end all samples are 0 (the last non-zero sample now comes at most 39 ms in). The voice model was retrained on the corrected synthesizer (`scripts/voice_train.rs`, same seeds); `tests/voice_host.rs` and the QEMU `tts` and `listen` suites pass.
+- The detector's −50 dBFS floor stays, as planned: lowering it is a separate change to be measured on real recordings.
+
+## Related
+
+[017](017-tts-on-audio-gateway.done), [077](077-voice-audio-front-end.done).

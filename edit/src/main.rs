@@ -66,6 +66,7 @@ fn save(path: &str, text: &[u8]) -> Result<usize, String> {
 }
 
 fn main(info: &'static mind::BootInfo) {
+    mind::about!("edit — text editor: UTF-8 text in Russian and English, up to 8 MiB.\nUsage: edit [file]   (without a file: a new one on ram:)\nF1 keys, F2 save, Shift+F2 save as, F7 find, Shift+F7 next, Ctrl+F7 replace, Alt+F8 go to line, F9 menu, F10 or Esc quit.\nFiles on ram: and in data/ can be changed, others open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     let path = mind::process::args_str().trim();
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
         // The client's root is the file's directory.
@@ -84,10 +85,12 @@ fn main(info: &'static mind::BootInfo) {
     let mut editor = Editor::new(text, path, read_only);
     mind::println!("[EDIT] READY {} RO={}", editor.status(), read_only as u8);
     loop {
+        editor.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); editor.draw(&mut grid, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
-        let key = loop { if let Some(key) = mind::input::wait_key(1000) { break key; } };
+        // Shift, Ctrl or Alt going down or up changes the key bar: drawn again.
+        let Some(key) = mind::input::wait_key_or_modifiers(editor.modifiers) else { continue };
         let (path, quit) = match editor.key(key) {
             Outcome::Quit => break,
             Outcome::Save(path) => (path, false),

@@ -1,0 +1,30 @@
+# 090 — Editor: say READ-ONLY; key bars follow Shift, Ctrl and Alt — done
+
+**Type:** bug / usability · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: in `fm`, F4 opened a file in which no character could be typed. The file was on the boot disk outside `data/`, which the user's file client may not change, so the editor had opened it read-only — but it said so only with a small `RO` in the status line and, after a key, in the bottom line. And the key bar of `fm` and `edit` never showed what F1–F10 do with Shift, Ctrl or Alt (Shift+F4 new file, Alt+F7 find, Shift+F2 save as …): the PS/2 decoder did not report a modifier going down or up on its own, so a program could not know one was held.
+
+## Plan
+
+- The editor says READ-ONLY at once: a notice in the bottom line when the file opens (in `fm`: where the user may write and that Shift+F2 saves a copy there), and a highlighted READ-ONLY in the status line for as long as the file is open.
+- The PS/2 decoder reports modifiers going down and up (`KEY_SHIFT`, `KEY_CTRL`, `KEY_ALT`, already in the event ABI); `mind::input` keeps the modifiers held; key bars show the Shift, Ctrl or Alt set while that modifier alone is held.
+
+## Acceptance criteria
+
+- Host tests: modifier events from the decoder; the editor's notice, status and key bars; `fm`'s key bars, also in its viewer and editor.
+- QEMU: holding Shift on the PS/2 keyboard changes `fm`'s key bar, and releasing it brings the plain bar back.
+
+## Resolution
+
+- `mind::keys::Ps2` reports a modifier going down or up as a `KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT` event with the modifiers held after it, once per change (the make code of a held key repeats), without a legacy byte (so `READ_KEY` readers never see it). When a Ctrl+Shift or Alt+Shift layout switch takes a modifier's release, `ps2_kbd` follows the layout event with `Ps2::modifiers()`. `Key::from_event` is no key for a modifier event; `mind::input::modifiers()` is the state at the last event read, and `wait_key_or_modifiers(shown)` returns None when it changed, so a program draws its key bar again.
+- `mind::tui::widgets::KeyBars` (plain, Shift, Ctrl, Alt labels): `fm` (Shift: 4 New; Ctrl: 3 Name, 4 Ext, 5 Time, 6 Size; Alt: 1 Left, 2 Right, 7 Find), `edit` (Shift: 2 Save as, 7 Next; Ctrl: 7 Replace; Alt: 8 Go to), `view` (Shift: 7 Next). With two modifiers held the plain bar stays. While a modifier is held the key bar is drawn over the editor's notice.
+- The editor: `READ-ONLY: this file cannot be changed here (Shift+F2 saves a copy where you may write)` when it opens and at any key that would change the text; in `fm` the notice names the places: `on the boot disk only data/ may be changed, and ram:`. The status line starts with READ-ONLY in the error colours.
+- Over the UART nothing changes: a terminal reports modifiers only with a key.
+- Tests: `tests/keys_host.rs` (modifier events, repeats, no legacy byte, the layout switch and `modifiers()`; the character tests filter modifier events), `tests/edit_host.rs` (notice at open, READ-ONLY highlighted, key bars for Shift, Ctrl, Alt and two modifiers), `tests/fm_host.rs` (key bars, the viewer's and the read-only editor's); QEMU `keys` suite: `sendkey shift 3000` turns fm's bar into the Shift bar (4New, no Help or Edit) and back.
+- Docs: README (keyboard, `edit`, `fm`), `docs/tools` §4.2 (EN/RU).
+
+## Related
+
+[063](063-file-manager-read-only.done), [067](067-editor.done), [068](068-fm-write-df-fsck.done).

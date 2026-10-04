@@ -16,6 +16,7 @@ const TITLE: &str = "Files — демо VFS-сервера ╞═╡ Esc: вых
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("files — VFS demo: lists the root of the disk and reads a file through vfs_server.\nUsage: files\nEsc: exit.");
     let screen = Screen::new(info);
     if let Some(s) = screen { s.clear(BACKGROUND); s.text16(24, 24, TITLE, ACCENT, Some(BACKGROUND)); }
     let mut y = 64;

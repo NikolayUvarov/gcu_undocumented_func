@@ -16,6 +16,7 @@ impl Source for Disk {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("view — text and hex viewer.\nUsage: view <file>\n↑↓ PgUp PgDn Space Home End scroll, F2 wrap, F4 hex or text, F5 go to, F7 search, Shift+F7 next, F1 keys, Esc F3 F10 quit.");
     let path = mind::process::args_str().trim();
     if path.is_empty() { mind::println!("[VIEW] USAGE: VIEW <FILE>"); return; }
     let file = match File::open(path) {
@@ -28,11 +29,13 @@ fn main(info: &'static BootInfo) {
     let mut viewer = Viewer::new(Disk(file), window.as_mut_slice(), path);
     mind::println!("[VIEW] OPEN {} {} BYTES", path, size);
     loop {
+        viewer.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); let area = grid.area(); viewer.draw(&mut grid, area, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
         mind::println!("[VIEW] TOP {:#X}", viewer.top());
-        let key = loop { if let Some(key) = mind::input::wait_key(1000) { break key; } };
+        // Shift going down or up changes the key bar: drawn again.
+        let Some(key) = mind::input::wait_key_or_modifiers(viewer.modifiers) else { continue };
         if viewer.key(key) == Action::Quit { mind::println!("[VIEW] DONE"); return; }
     }
 }

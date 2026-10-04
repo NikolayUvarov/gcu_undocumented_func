@@ -9,6 +9,7 @@ mod keymap;
 mod net;
 mod observe;
 mod power;
+mod programs;
 mod screenshot;
 mod voicectl;
 
@@ -24,6 +25,9 @@ use mind::ipc::Endpoint;
 use mind::keys::{Event, Vt};
 use mind::mem::Pages;
 use mind::sys::Error;
+
+// The shell's commands (`help`); `help <name>` shows the lines that name it.
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list: programs on the disk and services; list -l: what each program does\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const COMMANDS: [&str; 46] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "tls", "voice", "write"];
@@ -127,20 +131,6 @@ impl Shell {
         Ok(())
     }
 
-    fn list_programs(&mut self) {
-        // idl/loader.wit: a typed list instead of text.
-        match mind::idl::loader::list(Endpoint::LOADER) {
-            Ok(programs) => {
-                let _ = writeln!(self.term, "PROGRAMS ON DISK:");
-                for p in programs.as_slice() { let _ = writeln!(self.term, "  {:<12} {} BYTES{}", p.name.as_str(), p.size, if p.service { " (SERVICE)" } else { "" }); }
-            }
-            Err(_) => self.report("CANNOT LIST THE BOOT DISK"),
-        }
-        let _ = write!(self.term, "SERVICES (STARTED AT BOOT): ");
-        for name in BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()) { let _ = write!(self.term, "{} ", name); }
-        let _ = writeln!(self.term, "\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.");
-    }
-
     // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
     // client for `REQUEST_SYSINFO`, a VFS client confined to the named file's directory for `REQUEST_FILE` (its own
@@ -220,6 +210,16 @@ impl Shell {
         }
     }
 
+    // `<program> --help`: a console program prints its own text into the shell; one with a screen would print it out
+    // of sight — it exits before it is in front, and its output goes with it — so the shell shows the same text from
+    // the program's file instead of starting it.
+    fn help_instead(&mut self, name: &[u8], args: &[u8]) -> bool {
+        if args != b"--help" { return false; }
+        let Ok(name) = core::str::from_utf8(name) else { return false };
+        let console = loader::inspect_requests(Endpoint::LOADER, name).ok().and_then(Result::ok).is_some_and(|r| r & mind::process::REQUEST_CONSOLE != 0);
+        !console && programs::show_about(&mut self.term, name)
+    }
+
     fn run_program(&mut self, name: &[u8], args: &[u8], background: bool) {
         let service = BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).any(|s| s.as_bytes().eq_ignore_ascii_case(name));
         match self.start(name, args, service) {
@@ -253,9 +253,10 @@ impl Shell {
             // run <name> [arguments] [&]
             let split = words.iter().position(|b| b.is_ascii_whitespace()).unwrap_or(words.len());
             let (name, program_args) = (&words[..split], words[split..].trim_ascii());
-            if name.is_empty() { let _ = writeln!(self.term, "USAGE: RUN <NAME> [ARGUMENTS] [&]"); return self.list_programs(); }
+            if name.is_empty() { let _ = writeln!(self.term, "USAGE: RUN <NAME> [ARGUMENTS] [&]"); return programs::list(&mut self.term, false); }
             if name.len() > NAME_MAX { return self.report("PROGRAM NAME TOO LONG"); }
             if program_args.len() > ARGS_MAX { return self.report("ARGUMENTS TOO LONG"); }
+            if self.help_instead(name, program_args) { return; }
             self.run_program(name, program_args, background);
         } else if is(b"ls") {
             files::ls(&mut self.term, args);
@@ -299,12 +300,12 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
+        } else if !args.is_empty() && [&b"cpus"[..], b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            if args.is_empty() { let _ = write!(self.term, "{}", HELP); } else { programs::help(&mut self.term, args, HELP); }
         } else if is(b"list") {
-            self.list_programs();
+            match args { b"" => programs::list(&mut self.term, false), b"-l" | b"-L" => programs::list(&mut self.term, true), _ => self.report("USAGE: LIST [-L]") }
         } else if is(b"cpus") {
             observe::cpus(&mut self.term);
         } else if is(b"free") {
@@ -394,6 +395,7 @@ impl Shell {
             let _ = writeln!(self.term, "HEAP: USED={} FREE={} TEST FREED={}", used, free, freed);
         } else if cmd.len() <= NAME_MAX && cmd.is_ascii() && !BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
             // Any other word runs the program of that name in the foreground: `say hello`, `listen 3`.
+            if self.help_instead(cmd, args) { return; }
             match self.start(cmd, args, false) {
                 Ok(pid) => self.started(pid, cmd, false),
                 Err(Error::NotFound) => self.report("UNKNOWN COMMAND"),

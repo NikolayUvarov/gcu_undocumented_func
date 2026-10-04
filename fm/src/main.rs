@@ -70,6 +70,7 @@ impl Disk for Vfs {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
+    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
     let mut disk = Vfs;
@@ -81,6 +82,7 @@ fn main(info: &'static mind::BootInfo) {
     if !start.is_empty() { fm.load(0, start, None, &mut disk); }
     mind::println!("[FM] READY {}", fm.status());
     loop {
+        fm.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); fm.draw(&mut grid, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
@@ -91,7 +93,8 @@ fn main(info: &'static mind::BootInfo) {
             if !fm.busy() { mind::println!("[FM] {}", fm.status()); } // finished, or waiting for an answer
             match mind::input::read_key() { Some(key) => key, None => continue }
         } else {
-            loop { if let Some(key) = mind::input::wait_key(1000) { break key; } }
+            // Shift, Ctrl or Alt going down or up changes the key bar: drawn again.
+            match mind::input::wait_key_or_modifiers(fm.modifiers) { Some(key) => key, None => continue }
         };
         let outcome = fm.key(key, &mut disk);
         mind::println!("[FM] {}", fm.status());

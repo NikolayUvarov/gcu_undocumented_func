@@ -11,6 +11,7 @@ const USAGE: &str = "USAGE: FORMAT RAM: [-l LABEL] [-y]";
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("format — a new, empty file system on the RAM disk: everything on it is erased.\nUsage: format ram: [-l label] -y   (without -y it only says what it would do)");
     let (mut volume, mut label, mut yes) = (None, "MIND RAM", false);
     let mut words = mind::process::args_str().split_whitespace();
     while let Some(word) = words.next() {

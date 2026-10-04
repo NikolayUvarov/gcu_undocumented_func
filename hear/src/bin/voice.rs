@@ -50,6 +50,7 @@ fn listen(input: &mut Input) -> Result<Option<Utterance>, String> {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
+    mind::about!("voice — voice control's listener: hears, recognizes and speaks for the shell.\nUsage: voice on [--wav file] [seconds]   (a shell command: the shell starts this program and answers it)\nF12 in the shell is push-to-talk; the shell decides what a phrase does.");
     // Least authority: voice needs neither the clock nor the loader.
     let _ = mind::ipc::drop_cap(SLOT_RTC);
     let _ = mind::ipc::drop_cap(SLOT_LOADER);

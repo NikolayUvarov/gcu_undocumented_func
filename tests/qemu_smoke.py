@@ -491,8 +491,24 @@ def keys_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("keymap us --switch both"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
     require(vm.service_logs("ps2_kbd", "[KBD] SWITCH CtrlOrAltShift"), "[KBD] SWITCH CapsLock")
+    # A modifier held on the PS/2 keyboard reaches the program on its own: fm's key bar shows what Shift does.
+    vm.send("fm\n")
+    status_line(vm, "[FM] READY")
+    plain = screen_text(vm)[-1]
+    vm.hmp("sendkey shift 3000")  # held for 3 s
+    time.sleep(.8)
+    held = screen_text(vm)[-1]
+    time.sleep(3)
+    released = screen_text(vm)[-1]
+    vm.serial()
+    assert plain.startswith("1Help") and "4Edit" in plain, plain
+    assert "4New" in held and "Help" not in held and "Edit" not in held, held
+    assert released == plain, released
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
     print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc; "
-          "keymap sets the layout and the switch key", flush=True)
+          "keymap sets the layout and the switch key; a held Shift changes fm's key bar", flush=True)
 
 
 def shell_suite(vm):
@@ -511,7 +527,7 @@ def shell_suite(vm):
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
-    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK:")
+    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
     keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
     vm.command("clock")
@@ -1547,6 +1563,21 @@ def services_suite(vm):
     for name in ("clock", "dzen-clock", "hello", "files"):
         require(listing, f"  {name} ")
     assert "kernel " not in listing
+    # Sorted down the columns and short enough for the screen (one per line, fm scrolled off the top); the services
+    # on their own line; -l says what each program does.
+    rows = [line for line in listing.splitlines() if line.startswith("  ")]
+    count = int(re.search(r"PROGRAMS ON DISK \((\d+)\)", listing)[1])
+    names = [name for row in rows for name in row.split()]
+    assert len(names) == count and "fm" in names and "vfs_server" not in names and len(rows) < 20, listing
+    assert sorted(names) == [rows[r].split()[c] for c in range(len(rows[0].split())) for r in range(len(rows)) if c < len(rows[r].split())], listing
+    require(listing, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): init logd rtc")
+    # Every program says what it does (mind::about!, issue 091): list -l takes the first line from the program file.
+    detailed = vm.command("list -l")
+    described = re.findall(r"^  ([\w-]+) +\d+ KB  (.*)$", detailed, re.M)
+    assert len(described) == count and all(text.strip() for _, text in described), detailed
+    assert re.search(r"^  fm +\d+ KB  file manager \(Norton Commander keys\)", detailed, re.M), detailed
+    assert re.search(r"^  hello +\d+ KB  clock — a digital clock", detailed, re.M), detailed  # a copy of clock.elf
+    require(vm.command("list x"), "USAGE: LIST [-L]")
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
@@ -1630,10 +1661,31 @@ def services_suite(vm):
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
     lifecycle_check(vm)
+    # help <name>: the program's text read from its file, the shell's own lines, or a service; nothing is started.
+    output = vm.command("help fm")
+    require(output, "Usage: fm [directory]")
+    assert "STARTED" not in output, output
+    output = vm.command("fm --help")  # a program with a screen: the shell shows its text instead of starting it
+    require(output, "fm — file manager")
+    assert "STARTED" not in output, output
+    require(vm.command("help cat"), "- ls [path], cat <file>: files")
+    output = vm.command("help voice")
+    require(output, "- voice on [--wav file] [seconds], voice off, voice listen: voice control")
+    require(output, "PROGRAM voice:")
+    require(vm.command("help rtc"), "rtc — a service init starts at boot")
+    require(vm.command("help nosuch"), "ERROR: NO COMMAND OR PROGRAM CALLED nosuch.")
+    # A console program answers --help itself, into the shell; for one with a screen (whose output would leave with it)
+    # the shell shows the same text from its file, with or without `run`.
+    output = vm.command("uptime --help")
+    require(output, "NAME=uptime FOREGROUND")
+    require(output, "uptime — uptime, load averages")
+    output = vm.command("run view --help")
+    require(output, "view — text and hex viewer.")
+    assert "STARTED" not in output, output
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), halt without init, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), help and --help from the programs' files, halt without init, reclaim", flush=True)
 
 
 def lifecycle_check(vm):

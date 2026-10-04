@@ -13,6 +13,7 @@ fn print(text: &[u8]) { mind::process::log(text) }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("dzen-clock — the Dzen clock on its own screen.\nUsage: dzen-clock\nEsc: exit.");
     print(
         b"\r\n[DZEN-CLOCK] STARTED. D: DIGITS, C: ORBIT, P: 10S TICKS, H: TEXT, CTRL+Z: SHELL, ESC: EXIT.\r\n",
     );

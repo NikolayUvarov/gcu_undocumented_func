@@ -11,6 +11,7 @@ const RECEIVED_CAP: usize = 9;
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("pong — IPC demo server: starts ping, reads the string from the page ping lends and replies.\nUsage: run pong &\nEsc: exit.");
     let Some(screen) = Screen::new(info) else { return };
     screen.clear(BACKGROUND);
     screen.text(40, 40, b"[ PONG / SUPERVISOR ]", 1, 0x0000FF00, None);

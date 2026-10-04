@@ -63,6 +63,7 @@ fn usize_to_str(mut val: usize, buf: &mut [u8]) -> usize {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("app — graphics demo: an animation on its own screen.\nUsage: app (or boot)\nCtrl+Z: back to the shell, the demo keeps running; Esc: exit.");
     unsafe { init_thread(); }
     
     os_print(b"\r\n========================================\r\n");

@@ -9,6 +9,7 @@ mind::request!(REQUEST_CONSOLE);
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("fsck — checks FAT volumes without changing them: lost and cross-linked clusters, broken chains, sizes, entries.\nUsage: fsck [A:|ram:]   (without an argument: every volume)");
     let wanted = mind::process::args_str().trim().trim_end_matches('/').trim_end_matches(':');
     let volumes = [("", "A:"), ("ram", "ram:")];
     if !wanted.is_empty() && !volumes.iter().any(|(name, shown)| wanted.eq_ignore_ascii_case(name) || wanted.eq_ignore_ascii_case(shown.trim_end_matches(':'))) {

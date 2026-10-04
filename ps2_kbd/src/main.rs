@@ -32,7 +32,11 @@ fn drain(data: &Ports, status: &Ports, decoder: &mut Ps2, mouse: &mut Option<mou
         match decoder.feed(scancode) {
             Some(Event::Key(event)) => { let _ = input_key(event, event, false); }
             Some(Event::Attention) => { let _ = input_key(0, 0, true); }
-            Some(Event::Layout(layout)) => mind::println!("[KBD] LAYOUT {}", name(layout)),
+            Some(Event::Layout(layout)) => {
+                mind::println!("[KBD] LAYOUT {}", name(layout));
+                // The switch took a modifier's release: programs still learn which modifiers are held.
+                if let Event::Key(event) = decoder.modifiers() { let _ = input_key(event, event, false); }
+            }
             None => {}
         }
     }

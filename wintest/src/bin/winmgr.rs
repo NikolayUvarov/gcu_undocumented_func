@@ -35,6 +35,7 @@ fn manage(seconds: u64) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("winmgr — test window manager of the window broker: lists, moves and closes windows.\nUsage: winmgr manage <seconds> | winmgr closeall | winmgr second");
     let mut words = mind::process::args_str().split_whitespace();
     match words.next().unwrap_or("") {
         "manage" => manage(words.next().and_then(|s| s.parse().ok()).unwrap_or(0)),

@@ -2,7 +2,7 @@
 //! saving is asked for with `Outcome::Save`, and the program reports back with `saved`.
 use crate::buffer::{decode, Buffer};
 use crate::keys::{Code, Key};
-use crate::tui::widgets::{fkey_bar, input_dialog, message, Edit, InputLine, MenuAction, MenuBar};
+use crate::tui::widgets::{fkey_bar, input_dialog, message, Edit, InputLine, KeyBars, MenuAction, MenuBar};
 use crate::tui::{Grid, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
@@ -20,6 +20,10 @@ const EDIT_ITEMS: [&str; 6] = ["Undo  Ctrl+U", "Redo  Ctrl+Y", "Cut  Ctrl+X", "C
 const SEARCH_ITEMS: [&str; 4] = ["Find  F7", "Find next  Shift+F7", "Replace  Ctrl+F7", "Go to line  Alt+F8"];
 const OPTION_ITEMS: [&str; 2] = ["Tab width 4 / 8", "Insert / overwrite  Ins"];
 const ITEMS: [&[&str]; 4] = [&FILE_ITEMS, &EDIT_ITEMS, &SEARCH_ITEMS, &OPTION_ITEMS];
+/// What a read-only editor says when it opens and when a key would change the text.
+pub const READ_ONLY: &str = "READ-ONLY: this file cannot be changed here (Shift+F2 saves a copy where you may write)";
+const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "Save", "", "", "", "", "Search", "", "Menu", "Quit"], shift: ["", "Save as", "", "", "", "", "Next", "", "", ""],
+                                         ctrl: ["", "", "", "", "", "", "Replace", "", "", ""], alt: ["", "", "", "", "", "", "", "Go to", "", ""] };
 const HELP: [&str; 9] = [
     "Arrows, Home/End, PgUp/PgDn; Ctrl+Home/End: text; Ctrl+←/→: words",
     "Shift + movement selects; Ctrl+A: all; Ctrl+C/X/V: copy, cut, paste",
@@ -50,14 +54,18 @@ pub struct Editor {
     query: String,
     height: usize,
     width: usize,
+    /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bar shows what the keys do with them.
+    pub modifiers: u8,
 }
 
 fn is_word(c: char) -> bool { c.is_alphanumeric() || c == '_' }
 
 impl Editor {
+    /// A read-only editor says so at once (and READ-ONLY stays in the status line).
     pub fn new(text: Vec<u8>, path: &str, read_only: bool) -> Self {
+        let notice = read_only.then(|| String::from(READ_ONLY));
         Self { buffer: Buffer::new(text), cursor: 0, anchor: None, goal: None, top: 0, left: 0, path: String::from(path), read_only, overwrite: false, tab: 4,
-               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice: None, query: String::new(), height: 20, width: 80 }
+               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0 }
     }
 
     pub fn line(&self) -> usize { self.buffer.line_of(self.cursor) }
@@ -122,7 +130,7 @@ impl Editor {
 
     // Changes need a writable file.
     fn writable(&mut self) -> bool {
-        if self.read_only { self.notice = Some(String::from("Read-only: this file may not be changed here")); }
+        if self.read_only { self.notice = Some(String::from(READ_ONLY)); }
         !self.read_only
     }
 
@@ -421,14 +429,17 @@ impl Editor {
         }
         // Status: name, position, state.
         grid.fill(Rect::new(0, 0, w, 1), ' ', theme.status);
-        let state = format!("Ln {} Col {}{}{}{}{}  UTF-8 {}", line + 1, column + 1, if self.buffer.modified() { "  *" } else { "" },
-                            if self.overwrite { "  OVR" } else { "  INS" }, if self.read_only { "  RO" } else { "" }, if self.tab == 8 { "  TAB 8" } else { "" },
-                            if self.buffer.crlf() { "CRLF" } else { "LF" });
+        let state = format!("{}Ln {} Col {}{}{}{}  UTF-8 {}", if self.read_only { "READ-ONLY  " } else { "" }, line + 1, column + 1, if self.buffer.modified() { "  *" } else { "" },
+                            if self.overwrite { "  OVR" } else { "  INS" }, if self.tab == 8 { "  TAB 8" } else { "" }, if self.buffer.crlf() { "CRLF" } else { "LF" });
         let name = if self.path.is_empty() { "(new)" } else { self.path.as_str() };
+        let state_width = state.chars().count() + 1;
         grid.text_right(w, 0, &format!("{} ", state), theme.status);
-        grid.text_max(1, 0, name, w.saturating_sub(state.chars().count() + 3), theme.status);
-        fkey_bar(grid, h - 1, &["Help", "Save", "", "", "", "", "Search", "", "Menu", "Quit"], theme);
-        if let Some(notice) = &self.notice { grid.text_padded(0, h - 1, notice, w, theme.error); }
+        // READ-ONLY stands out in the status line for as long as the file is open.
+        if self.read_only && state_width <= w { grid.text_padded(w - state_width, 0, "READ-ONLY", 9, theme.error); }
+        grid.text_max(1, 0, name, w.saturating_sub(state_width + 2), theme.status);
+        fkey_bar(grid, h - 1, KEYS.labels(self.modifiers), theme);
+        // A notice covers the key bar until the next key, unless a modifier is held to see what the keys do.
+        if let Some(notice) = self.notice.as_ref().filter(|_| self.modifiers == 0) { grid.text_padded(0, h - 1, notice, w, theme.error); }
         if self.menu.open { self.menu.draw(grid, 0, theme); }
         let cursor = Some((column - self.left, 1 + line - self.top));
         match self.dialog.as_mut() {

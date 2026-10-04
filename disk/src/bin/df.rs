@@ -8,6 +8,7 @@ mind::request!(REQUEST_CONSOLE);
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("df — the volumes: FAT type, cluster size, size, used and free space (KiB).\nUsage: df");
     mind::println!("VOLUME  LABEL        TYPE   CLUSTER    SIZE KB    USED KB    FREE KB  USE");
     for (name, shown) in [("", "A:"), ("ram", "ram:")] {
         match mind::fs::volume(name) {

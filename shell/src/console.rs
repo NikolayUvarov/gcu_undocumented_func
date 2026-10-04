@@ -52,6 +52,8 @@ impl Console {
     fn last(&self) -> u64 { self.total - 1 }
 
     pub fn position(&self) -> Position { Position { line: self.last(), col: self.cx } }
+    /// Characters per line (80 without a screen).
+    pub fn cols(&self) -> usize { self.cols }
 
     fn newline(&mut self) {
         self.total += 1;

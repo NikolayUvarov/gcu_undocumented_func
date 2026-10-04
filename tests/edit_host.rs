@@ -277,13 +277,31 @@ fn editing_keys() {
 }
 
 #[test]
+fn key_bar_follows_the_modifiers() {
+    let mut e = Editor::new(b"text".to_vec(), "ram:a.txt", false);
+    let bar = |e: &mut Editor, modifiers: u8| { e.modifiers = modifiers; draw(e, 100, 10).0[9].clone() };
+    assert!(bar(&mut e, 0).starts_with("1Help     2Save     3"), "{}", bar(&mut e, 0));
+    let shifted = bar(&mut e, MOD_SHIFT);
+    assert!(shifted.contains("2Save as") && shifted.contains("7Next") && !shifted.contains("Help"), "{}", shifted);
+    assert!(bar(&mut e, MOD_CTRL).contains("7Replace"));
+    assert!(bar(&mut e, MOD_ALT).contains("8Go to"));
+    assert!(bar(&mut e, MOD_CTRL | MOD_SHIFT).starts_with("1Help"), "two modifiers: the plain bar");
+}
+
+#[test]
 fn read_only_refuses_changes() {
     let mut e = Editor::new(b"boot file".to_vec(), "kernel.elf", true);
+    // It says so at once, and READ-ONLY stays in the status line.
+    let (screen, _, _) = draw(&mut e, 100, 10);
+    assert!(screen[9].starts_with("READ-ONLY: this file cannot be changed here"), "{}", screen[9]);
     typed(&mut e, "x");
     e.key(code(KEY_DELETE));
     e.key(ctrl('v'));
     assert_eq!(text(&e), "boot file");
-    assert!(e.notice.as_deref().unwrap().contains("Read-only"));
+    assert!(e.notice.as_deref().unwrap().contains("READ-ONLY"));
+    let (screen, cells, _) = draw(&mut e, 100, 10);
+    let at = screen[0][..screen[0].find("READ-ONLY").expect("READ-ONLY in the status line")].chars().count();
+    assert_eq!(cells[at].style, CLASSIC.error, "it stands out");
     // Save as elsewhere is allowed.
     e.key(fmod(2, MOD_SHIFT));
     assert!(e.status().contains("DIALOG=SAVEAS"));

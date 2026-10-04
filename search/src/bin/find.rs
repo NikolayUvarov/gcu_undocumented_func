@@ -23,6 +23,7 @@ impl Tree for Fs {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
+    mind::about!("find — finds entries by name mask, type and size, from a directory down.\nUsage: find [path] [-name mask[,mask]] [-type f|d] [-size +N|-N (bytes, k or M)]");
     let options = match find::parse(mind::process::args_str()) { Ok(options) => options, Err(usage) => { mind::println!("{}", usage); return; } };
     find::walk(&mut Fs, &options, &mut |path, item| mind::println!("{}{}", path, if item.dir { "/" } else { "" }), &mut |path, error| mind::println!("FIND: {}: {}", path, error));
 }

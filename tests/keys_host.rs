@@ -9,10 +9,12 @@ use keys::{event, with_byte, Event, Key, Layout, Ps2, Switch, Vt};
 
 // Events without their legacy byte (the scan code or UART byte), which `legacy_bytes` checks.
 fn plain(event: Event) -> Event { match event { Event::Key(word) => Event::Key(with_byte(word, 0)), other => other } }
+// Not a modifier going down or up (`ps2_modifiers_going_down_and_up` checks those).
+fn not_modifier(event: &Event) -> bool { !matches!(event, Event::Key(word) if keys::is_modifier(event_key(*word))) }
 
 fn ps2(bytes: &[u8]) -> (Vec<Event>, Ps2) {
     let mut decoder = Ps2::new();
-    let events = bytes.iter().filter_map(|&b| decoder.feed(b)).map(plain).collect();
+    let events = bytes.iter().filter_map(|&b| decoder.feed(b)).filter(not_modifier).map(plain).collect();
     (events, decoder)
 }
 fn ch(c: char, mods: u8) -> Event { Event::Key(event(0, c as u32, mods)) }
@@ -62,7 +64,7 @@ fn ps2_russian_layout_switch_by_clean_chord() {
 
 #[test]
 fn ps2_switch_key_and_layout_are_set() {
-    let feed = |decoder: &mut Ps2, bytes: &[u8]| bytes.iter().filter_map(|&b| decoder.feed(b)).map(plain).collect::<Vec<_>>();
+    let feed = |decoder: &mut Ps2, bytes: &[u8]| bytes.iter().filter_map(|&b| decoder.feed(b)).filter(not_modifier).map(plain).collect::<Vec<_>>();
     let (ctrl_shift, alt_shift, caps) = ([0x1D, 0x2A, 0xAA, 0x9D], [0x38, 0x2A, 0xB8, 0xAA], [0x3A, 0xBA]);
     let mut decoder = Ps2::new();
     assert_eq!(decoder.switch(), Switch::CtrlOrAltShift);
@@ -86,6 +88,26 @@ fn ps2_switch_key_and_layout_are_set() {
     assert!(feed(&mut decoder, &ctrl_shift).is_empty() && feed(&mut decoder, &alt_shift).is_empty());
     assert_eq!(feed(&mut decoder, &[0x3A, 0xBA, 0x1E]), vec![ch('A', MOD_CAPS)]);
     assert_eq!(decoder.layout(), Layout::Us);
+}
+
+#[test]
+fn ps2_modifiers_going_down_and_up() {
+    // Shift down (its make code repeats while held: reported once), Shift+F4, Shift up; right Ctrl; left Alt.
+    let m = |key: u16, mods: u8, pressed: bool| Event::Key(input_event(0, key, mods, pressed, 0));
+    let mut decoder = Ps2::new();
+    let events: Vec<Event> = [0x2A, 0x2A, 0x2A, 0x3E, 0xAA, 0xE0, 0x1D, 0xE0, 0x9D, 0x38, 0xB8].iter().filter_map(|&b| decoder.feed(b)).collect();
+    assert_eq!(events, vec![m(KEY_SHIFT, MOD_SHIFT, true), Event::Key(with_byte(event(KEY_F1 + 3, 0, MOD_SHIFT), 0x3E)), m(KEY_SHIFT, 0, false),
+                            m(KEY_CTRL, MOD_CTRL, true), m(KEY_CTRL, 0, false), m(KEY_ALT, MOD_ALT, true), m(KEY_ALT, 0, false)]);
+    // They are no key presses and carry no legacy byte (READ_KEY never sees them).
+    for event in &events {
+        if let Event::Key(word) = *event { if keys::is_modifier(event_key(word)) { assert!(Key::from_event(word).is_none() && event_byte(word) == 0); } }
+    }
+    // Ctrl+Shift switching the layout: Shift's release goes into the switch; `modifiers()` says Ctrl is still held.
+    let mut decoder = Ps2::new();
+    let events: Vec<Event> = [0x1D, 0x2A, 0xAA].iter().filter_map(|&b| decoder.feed(b)).collect();
+    assert_eq!(events, vec![m(KEY_CTRL, MOD_CTRL, true), m(KEY_SHIFT, MOD_CTRL | MOD_SHIFT, true), Event::Layout(Layout::Ru)]);
+    assert_eq!(decoder.modifiers(), m(KEY_SHIFT, MOD_CTRL, false));
+    assert_eq!(decoder.feed(0x9D), Some(m(KEY_CTRL, 0, false)));
 }
 
 #[test]
