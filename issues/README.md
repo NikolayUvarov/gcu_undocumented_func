@@ -15,7 +15,7 @@ Tasks that need a person (repository settings, legal decisions, coordination of 
 
 ## Open tasks
 
-Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** (077–099) builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`); the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** (077–099) builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`); the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. The **porting track** (200–249) brings MIND Core to other architectures (track H, aarch64 first) and coordinates with the kernel track on `kernel/src/arch/`. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
@@ -28,6 +28,11 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell + kernel | P2 | — (extends 154) | track G |
 | [156](156-ps2-mouse.md) | PS/2 mouse: pointer events for the focused program | kernel | P2 | — | track G (for 088) |
 | [157](157-window-broker.md) | `windows`: window broker, windows that outlive the window manager | services | P2 | — | track G (for 088) |
+| [200](200-architecture-layer.md) | Architecture layer in the kernel and libmind (x86-64 first, no change in behavior) | porting | P2 | — | track H |
+| [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | 200 | track H |
+| [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
+| [203](203-aarch64-smp-and-power.md) | aarch64 SMP, reset and power off through PSCI | porting | P2 | 201 | track H |
+| [204](204-aarch64-profile-and-ci.md) | aarch64 profile and CI | porting | P2 | 202, 203 | track H |
 
 ## Finished tasks (`issues-done/`)
 
