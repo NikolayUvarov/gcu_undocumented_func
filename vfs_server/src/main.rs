@@ -331,6 +331,28 @@ impl Server {
                 })();
                 vfs::reply_scope(call, result)
             }
+            Request::Format { handle, label } => {
+                let result = (|| {
+                    let h = self.get(handle, sender, badge)?;
+                    let volume = h.volume;
+                    // Only the RAM disk (its contents never outlive the boot anyway), only from its root, only for a
+                    // client that may write there (the user's badge).
+                    if self.volumes[volume].name != "ram" || h.zone != Zone::Writable { return Err(Error::Denied); }
+                    if h.node.entry.is_some() || !h.node.is_dir() { return Err(Error::Invalid); }
+                    let label = label.as_str();
+                    if !label.bytes().all(|b| b.is_ascii_graphic() || b == b' ') { return Err(Error::Name); }
+                    // Handles below the root and scopes on the volume end; root handles stay valid (clients cache them).
+                    for slot in self.handles.iter_mut() { if slot.as_ref().is_some_and(|h| h.volume == volume && h.node.entry.is_some()) { *slot = None; } }
+                    for index in 0..self.scopes.len() { if self.scopes[index].as_ref().is_some_and(|s| s.volume == volume) { self.end_scope(index); } }
+                    let label = if label.trim().is_empty() { "MIND RAM" } else { label };
+                    self.volumes[volume].volume.reformat(label, now()).map_err(error)?;
+                    let root = self.volumes[volume].volume.root();
+                    for h in self.handles.iter_mut().flatten().filter(|h| h.volume == volume) { h.node = root; }
+                    mind::println!("[VFS] FORMATTED RAM: AS {} (FAT{})", self.volumes[volume].volume.label(), self.volumes[volume].volume.bits());
+                    Ok(())
+                })();
+                vfs::reply_format(call, result)
+            }
             Request::Flush { handle } => {
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
                 vfs::reply_flush(call, result)

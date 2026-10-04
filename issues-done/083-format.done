@@ -1,0 +1,28 @@
+# 083 — `format`: a new FAT volume on the RAM disk — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T3 · **Constitution:** Appendix B.6
+
+## Problem
+
+There is no way to empty or re-create a volume ([docs/tools](../docs/tools/README.md) §2.1). Only `vfs_server` holds write-badged block clients, so formatting must be a VFS operation, not a tool writing sectors.
+
+## Plan
+
+- `idl/vfs.wit` 2.3: `format(volume: string<16>, label: string<11>) -> result<_, error>`: `vfs_server` writes a new FAT16 (or FAT12 for small devices) on the volume's block device, flushes, and remounts it. Allowed only to a client whose zone covers the whole volume (the user's badge) and only for the RAM disk (`ram:`); the boot disk is refused (`denied`). Open handles on the volume become stale (`not-found`).
+- `format ram: [-l LABEL]`: asks `Format ram: (all files are lost)? [y/N]` and calls `format`; `REQUEST_FILES` (the user's client).
+- Host test in `tests/fat_host.rs` (formatted image passes `fsck.fat`); QEMU `disk` suite: files on `ram:` disappear after `format ram:`; `df` shows the new label; `format A:` is refused.
+
+## Acceptance criteria
+
+- The tests above pass; README and `docs/tools` describe `format`.
+
+## Resolution
+
+- `idl/vfs.wit` 2.3 `format(handle, label)`: `vfs_server` accepts it only for the root of `ram` opened with the user's badge (writable zone); the boot disk is refused (`denied`), a non-ASCII label too (`name`). It ends the handles below the root and the scopes on the volume, drops the disk cache without writing it (`Sectors::discard`), writes a new FAT16 (FAT12 for small devices) with `fat::format`, flushes, and mounts it in place (`Volume::reformat`, which re-reads the geometry through a borrowed disk). Root handles stay valid, so clients that cache them (`mind::fs`) keep working.
+- `format ram: [-l LABEL] -y` in `disk/` (`REQUEST_CONSOLE | REQUEST_FILES`), `mind::fs::Dir::format`.
+- Deviation: the plan's `[y/N]` question is replaced by `-y` — a console program gets no keys (the shell keeps them while it runs; only Esc and Ctrl+C reach it, as a kill). Without `-y` the program says what it would erase and changes nothing. Interactive console programs would need the shell to pass keys on.
+- Tests: `tests/fat_host.rs` `reformat_replaces_the_volume_in_place` (files gone, new label, the volume usable, flushed, `fsck.fat` clean, a read-only medium refused); QEMU `disk` suite: without `-y` nothing changes, `format A:` is refused, with `-y` the label is new, `ls ram:` is empty, `df` shows it, a new file is written and `fsck ram:` is clean, and the shell's cached root still works.
+
+## Related
+
+[065](065-ramdisk.done), [066](066-vfs-v2-fat-write.done), [068](068-fm-write-df-fsck.done).

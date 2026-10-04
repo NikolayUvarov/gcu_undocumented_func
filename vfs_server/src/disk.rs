@@ -81,6 +81,8 @@ impl Sectors for Disk {
         !core::mem::take(&mut self.failed) && self.device.flush().is_ok()
     }
 
+    fn discard(&mut self) { self.tags = [u32::MAX; LINES]; self.dirty = [false; LINES]; self.failed = false; }
+
     fn sectors(&self) -> u64 { self.device.sectors() }
     fn writable(&self) -> bool { !self.device.read_only() }
 }

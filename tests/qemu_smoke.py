@@ -1939,6 +1939,19 @@ def disk_check(vm):
     require(output, "fsck: 1 volume with errors (nothing was changed)")
     require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
     print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+    # format (issue 083): only ram:, only with -y; the files are gone, the label is new, the volume works at once.
+    require(vm.command("write ram:keep.txt kept"), "WROTE")
+    require(vm.command("format ram: -l scratch"), "FORMAT: THIS ERASES ALL FILES ON ram: (NOTHING WAS CHANGED). TO GO ON: format ram: -l scratch -y")
+    require(vm.command("cat ram:keep.txt"), "kept")
+    require(vm.command("format A:"), "FORMAT: ONLY THE RAM DISK (ram:) CAN BE FORMATTED, NOT A:")
+    require(vm.command("format ram: -l scratch -y"), "FORMATTED ram: AS SCRATCH")
+    require(vm.service_logs("vfs_server", "[VFS] FORMATTED RAM: AS SCRATCH"), "[VFS] FORMATTED RAM: AS SCRATCH (FAT16)")
+    require(vm.command("ls ram:"), "0 ENTRIES")
+    assert re.search(r"^ram: +SCRATCH +FAT16 ", vm.command("df"), re.M)
+    require(vm.command("write ram:new.txt again"), "WROTE")
+    require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
+    require(vm.command("format ram: -y"), "FORMATTED ram: AS MIND RAM")
+    print("PASS: format: ram: only, only with -y (without it nothing changes); a new label and an empty volume that works at once", flush=True)
 
 
 def disk_suite(args):

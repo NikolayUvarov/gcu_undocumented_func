@@ -26,6 +26,18 @@ pub trait Sectors {
     fn flush(&mut self) -> bool;
     fn sectors(&self) -> u64;
     fn writable(&self) -> bool;
+    /// Forgets cached sectors without writing them (before the medium is overwritten as a whole).
+    fn discard(&mut self) {}
+}
+
+/// A volume can be mounted through a borrowed disk (`Volume::reformat` re-reads its geometry that way).
+impl<S: Sectors> Sectors for &mut S {
+    fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool { (**self).read(lba, out) }
+    fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool { (**self).write(lba, data) }
+    fn flush(&mut self) -> bool { (**self).flush() }
+    fn sectors(&self) -> u64 { (**self).sectors() }
+    fn writable(&self) -> bool { (**self).writable() }
+    fn discard(&mut self) { (**self).discard() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +192,20 @@ impl<S: Sectors> Volume<S> {
             }
         }
         Ok(volume)
+    }
+
+    /// Writes a new empty volume over the whole disk and mounts it in place (the RAM disk's `format` request). What was
+    /// cached for the old volume is dropped first, so none of it is written over the new one. Nodes of the old volume
+    /// mean nothing afterwards; the caller forgets them.
+    pub fn reformat(&mut self, label: &str, stamp: u32) -> Result<()> {
+        self.disk.discard();
+        format(&mut self.disk, label, stamp)?;
+        if !self.disk.flush() { return Err(Error::Io); }
+        let Ok(fresh) = Volume::mount(&mut self.disk) else { return Err(Error::Io) };
+        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, next_free, free } = fresh;
+        (self.start, self.bits, self.spc, self.fats, self.fat_size, self.fat_start, self.root_start, self.root_sectors) = (start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors);
+        (self.data_start, self.root_cluster, self.clusters, self.fsinfo, self.label, self.changed, self.next_free, self.free) = (data_start, root_cluster, clusters, fsinfo, label, changed, next_free, free);
+        Ok(())
     }
 
     pub fn bits(&self) -> u8 { self.bits }

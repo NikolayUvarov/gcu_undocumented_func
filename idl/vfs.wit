@@ -4,7 +4,7 @@
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
 /// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files are never writable. Major version 2: directory
 /// handles change the meaning of `open` and `list` of 1.0.
-package mind:vfs@2.2.0;
+package mind:vfs@2.3.0;
 
 interface vfs {
     /// Why a request failed.
@@ -55,4 +55,8 @@ interface vfs {
     /// only if `writable` and the caller may (never more than `dir`, MC-3.4). It works for the first task that uses it
     /// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory (2.2).
     scope: func(dir: u32, writable: bool) -> result<borrow<endpoint>, error>;
+    /// Writes a new empty FAT volume labelled `label` (ASCII, upper-cased) over the RAM disk and mounts it; `handle` is
+    /// the root of `ram` opened with the user's badge. Handles below the root and scopes on the volume end; root handles
+    /// stay valid. The boot disk is refused (denied) (2.3).
+    format: func(handle: u32, label: string<11>) -> result<_, error>;
 }
