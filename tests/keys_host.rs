@@ -5,7 +5,7 @@ mod abi;
 #[path = "../libmind/src/keys.rs"]
 mod keys;
 use abi::*;
-use keys::{event, Event, Layout, Ps2, Vt};
+use keys::{event, Event, Key, Layout, Ps2, Vt};
 
 fn ps2(bytes: &[u8]) -> (Vec<Event>, Ps2) {
     let mut decoder = Ps2::new();
@@ -122,4 +122,17 @@ fn vt_utf8_after_an_old_sequence_is_not_dropped_by_poll() {
     decoder.poll(5_000, &mut |e| events.push(e));
     decoder.feed(0x96, 5_010, &mut |e| events.push(e));
     assert_eq!(events, vec![key(KEY_UP, 0), ch('Ж', 0)]);
+}
+
+#[test]
+fn letter_commands_in_either_layout() {
+    let key = |ch: char| Key(event(0, ch as u32, 0));
+    assert_eq!(key('з').latin(), Some('p'));
+    assert_eq!(key('З').latin(), Some('P'));
+    assert_eq!(key('е').latin(), Some('t'));
+    assert_eq!(key('Ы').latin(), Some('S'));
+    assert_eq!(key('q').latin(), Some('q'));
+    assert_eq!(key('+').latin(), Some('+'));
+    assert_eq!(Key(event(0, 'з' as u32, KEY_MOD_CTRL)).latin(), None);
+    assert_eq!(Key(event(KEY_ENTER, '\n' as u32, 0)).latin(), None);
 }

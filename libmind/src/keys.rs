@@ -33,6 +33,15 @@ impl Key {
     pub fn is_escape(self) -> bool { self.code() == Code::Esc }
     /// Ctrl + the given lower-case letter.
     pub fn is_ctrl(self, letter: char) -> bool { self.ctrl() && self.code() == Code::Char && self.char() == Some(letter) }
+    /// The typed character as the US layout puts it on the same key (`з` → `p`, `З` → `P`), so letter commands work in
+    /// either layout; other characters are returned as they are.
+    pub fn latin(self) -> Option<char> {
+        let ch = self.text()?;
+        if ch.is_ascii() { return Some(ch); }
+        if let Some(i) = RU.iter().position(|&c| c == ch) { return Some(US[i] as char); }
+        if let Some(i) = RU_SHIFT.iter().position(|&c| c == ch) { return Some(US_SHIFT[i] as char); }
+        Some(ch)
+    }
 }
 
 /// What a decoder produced.

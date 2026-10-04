@@ -86,7 +86,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_key`, `wait_or_exit` (Esc exits) → `Key` (`code()`: character, Enter, Esc, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12; `char()`, `text()`, `shift()`/`ctrl()`/`alt()`) |
 | `tui::viewer` | file viewer core shared by `view` and the file manager: a `Source` read through a window cache, text with or without wrapping and line numbers, hex dump, search ignoring case, go to |
 | `tui` | text UI on the 8×16 font: `Grid` of cells (text with clipping, frames with titles, fills, bars in 1/8 cells, braille time-series graphs), `Terminal` (the grid on the program's screen, redraws only changed cells, cursor), themes `CLASSIC` (Norton Commander colours) and `DARK`, widgets (`ListState`, `InputLine` with UTF-8 editing, `History`, `MenuBar`, `fkey_bar`, dialogs, `progress`) |
-| `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8) |
+| `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8); `Key::latin()` gives letter commands in either layout |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
 | `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
@@ -339,6 +339,10 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `view <file>` — text and hex viewer: UTF-8 text (Cyrillic), ↑/↓/PgUp/PgDn/Space/Home/End, F2 wrap on/off (←/→ shift long lines), F4 hex/text, F5 go to a line, `0x` offset or `N%`, F7 search ignoring case (Shift+F7 next), F1 keys, Esc/F3/F10 exit. The file is read on demand through a 64 KiB window, so large files open at once.
 * `RUN keys` — show the key events a program receives: key code, modifiers, character (Esc exits).
+* `top` — task monitor: uptime, task states, a busy bar per CPU, load averages, kernel memory, IPC/syscall/interrupt rates; a table with PID, parent, state, CPU, %CPU (from run-time deltas), CPU time, syscalls/s, memory, heap, shared mappings, capabilities and endpoints. P/M/N/T sort by CPU, memory, PID, time; S hides services; t shows the spawn tree; Enter shows a task's details (what it waits for, memory, address space, capabilities, quotas); +/- refresh interval; q or Esc quits.
+* `memmap` — memory map in four views (Tab or 1–4): the physical address space as a coloured bar with the firmware ranges and the platform layout (m merges or shows raw ranges, z zooms to RAM); the kernel arena by use with its limits and fragmentation; the address space of a chosen task with guard pages, heap and shared mappings; task and endpoint quotas as a tree by spawner.
+* `load` — graphs over 30 s (1) or 10 min (2): busy time per CPU (c: all CPUs in one), interrupts, syscalls, IPC messages and context switches per second, kernel arena and tasks; load averages.
+* `hw` — hardware: processor (CPUID: vendor, model, NX, invariant TSC, APIC, SSE/AVX), TSC rate and clock resolution, the framebuffer, PCI devices with class, BARs, IRQ and the service holding each, interrupt lines with counts and holders, platform memory.
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * Console programs (`uptime`): a program that asks for the console in its ELF has no screen; in the foreground the shell stays in front, shows its output and waits for it (Esc or Ctrl+C stops it). `LOGS` also reads the output of the last such program that exited, so `run uptime &` then `logs <id>` works.
 * `RUN <name> [arguments] &` — launch a new background instance and retain the shell. Arguments reach the program through `mind::process::args()`.
@@ -528,6 +532,7 @@ rustc --edition=2021 --test tests/viewer_host.rs -o /tmp/mind-core-viewer-tests 
 rustc --edition=2021 --test tests/idl_host.rs -o /tmp/mind-core-idl-tests && /tmp/mind-core-idl-tests   # generated bindings over a loopback
 rustc --edition=2021 --test tests/rtc_host.rs -o /tmp/mind-core-rtc-tests && /tmp/mind-core-rtc-tests
 rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests && /tmp/mind-core-sysmon-tests
+rustc --edition=2021 --test tests/monitor_host.rs -o /tmp/mind-core-monitor-tests && /tmp/mind-core-monitor-tests   # top, memmap, load, hw on a fake sysmon
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```

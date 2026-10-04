@@ -70,6 +70,10 @@ USER_CRATES=(
     "keys:keys:keys.elf"
     "view:view:view.elf"
     "uptime:uptime:uptime.elf"
+    "monitor:top:top.elf"
+    "monitor:memmap:memmap.elf"
+    "monitor:load:load.elf"
+    "monitor:hw:hw.elf"
     "beep:beep:beep.elf"
 )
 

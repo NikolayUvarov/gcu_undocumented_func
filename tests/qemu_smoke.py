@@ -433,10 +433,16 @@ def shell_suite(vm):
     def keys(data, fragment):
         # Redraws of the edited line also print the prompt: wait for the command's output followed by a prompt.
         vm.send_bytes(data)
-        seen = ""
-        while not (fragment in seen and seen.rfind("MIND> ") > seen.find(fragment)):
-            seen += vm.expect("MIND> ")
-        return seen
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            vm.collect()
+            seen = to_ordinal(ANSI.sub("", vm.output).replace("\r", ""))
+            at = seen.find(fragment)
+            if at >= 0 and seen.rfind("MIND> ") > at:
+                vm.output = ""
+                return seen
+            time.sleep(.01)
+        raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK:")
     # Delete: "cpusX", Left, Delete -> "cpus".
@@ -450,7 +456,7 @@ def shell_suite(vm):
     keys(b"heap\r", "HEAP: USED=")
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
-    keys(b"kil\t1\r", "KILLED PID=1")
+    keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
     # Several matches are listed under the line.
     vm.send_bytes(b"c\t")
     listing = vm.expect("cpus")
@@ -543,6 +549,161 @@ def tools_suite(vm):
     require(vm.command("view nothing.txt"), "PID=")
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+    monitors_check(vm)
+
+
+def table_row(screen, pattern):
+    return next((row for row in screen if re.search(pattern, row)), None)
+
+
+def status_line(vm, text, timeout=8, raw=False):
+    # The whole line from `text` on (expect() may return before the line ends); `raw` keeps real PIDs.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        vm.collect()
+        clean = ANSI.sub("", vm.output).replace("\r", "")
+        clean = clean if raw else to_ordinal(clean)
+        at = clean.find(text)
+        if at >= 0 and "\n" in clean[at:]:
+            vm.output = ""
+            return clean[at:clean.index("\n", at)]
+        time.sleep(.01)
+    raise AssertionError(f"Timeout waiting for the line {text!r}: {vm.output[-3000:]}")
+
+
+def tool_status(vm, text):
+    # The state line a monitor logs after a key: x is bound in none of them. (The line after the Enter that leaving
+    # the QEMU monitor sends may be dropped by serial().)
+    vm.send("x")
+    return status_line(vm, text)
+
+
+def monitors_check(vm):
+    """top, memmap, load and hw on sysmon's data. Each logs its state after every key; leaving the QEMU monitor after
+    a screenshot sends Enter to the program in front."""
+    baseline = heap_used(vm)
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    tasks = BASE + 2  # the services, clock and the monitor
+    # top: the task table agrees with ps; details, sorting, filter and tree.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: the details window of the selected task
+    assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
+    assert canon("load average") in screen[0], screen[0]
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"/64\.0M used"), screen
+    assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
+    assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter closes it
+    assert table_row(screen, canon("Capabilities")) and table_row(screen, canon("Address space:")), screen
+    tool_status(vm, "DETAILS=0")
+    vm.send("N")
+    vm.expect("[TOP] SORT=PID")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    header = next(i for i, row in enumerate(screen) if "PPID" in row)
+    assert re.match(r"^ +1 +0 init ", screen[header + 1]), screen[header + 1]
+    assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=PID"))
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
+    vm.send("S")
+    assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
+    vm.send("t")
+    vm.expect("TREE=1")
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # memmap: physical map, kernel arena, the known layout of clock's address space, quotas.
+    vm.send("memmap\n")
+    vm.expect("[MEMMAP] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
+    assert table_row(screen, canon("Physical address space")) and table_row(screen, canon("free RAM")), screen
+    assert table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    usable = re.search(r"RAM (\d+(?:\.\d)?)M usable", "\n".join(screen))
+    assert usable and 128 < float(usable[1]) < 512, screen  # the VM has 512 MiB
+    vm.send("2")
+    vm.expect("VIEW=ARENA")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/24")), screen
+    vm.send("3")
+    vm.expect("VIEW=PROCESS")
+    for _ in range(30):
+        vm.send_bytes(b"\x1b[B")
+        if f"PID={clock + BASE} " in status_line(vm, "VIEW=PROCESS", raw=True):
+            break
+    else:
+        raise AssertionError("clock not in memmap's task list")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
+    for line in (r"0x0000008000000000 +\S+ +r-x +code", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
+                 r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
+        assert table_row(screen, line), (line, screen)
+    vm.send("4")
+    vm.expect("VIEW=QUOTAS")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, r" loader +2/8 "), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[MEMMAP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # load: a graph per CPU and per counter; total CPU; the 10-minute window.
+    vm.send("load\n")
+    vm.expect("[LOAD] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial()
+    assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 24"]:
+        assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
+    vm.send("c")
+    vm.expect("TOTAL=1")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon(f"CPU total ({vm.cpus})"))), screen
+    vm.send("2")
+    vm.expect("WINDOW=10MIN")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert canon("10 min, 1 s samples") in screen[0], screen[0]
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[LOAD] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # hw: CPUID, clocks, the framebuffer, PCI devices and interrupt lines with their holders.
+    vm.send("hw\n")
+    vm.expect("[HW] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    tool_status(vm, "[HW] TOP=0")
+    for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
+                 "00:01.1  010180  IDE controller", "Interrupt lines", "kernel arena 64.0M"):
+        assert table_row(screen, re.escape(canon(text))), (text, screen)
+    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\)"), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command(f"kill {clock}"), "KILLED")
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    assert heap_used(vm) == baseline
+    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders)", flush=True)
 
 
 def busy_suite(vm):
@@ -559,6 +720,20 @@ def busy_suite(vm):
     time.sleep(1.5)
     cpu = int(re.search(r"cpu (\d+)%", vm.command("uptime"))[1])
     assert cpu >= 100 // vm.cpus // 2, cpu
+    # top sees the busy loop at about 100 % of its CPU.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(2.2)
+    screen = screen_text(vm)
+    vm.serial()
+    row = next((r for r in screen if re.search(r" app2 ", r)), None)
+    assert row and float(row.split()[5]) >= 80, (row, screen)
+    if "DETAILS=0" not in tool_status(vm, "[TOP] SORT"):  # opened by the Enter after the screenshot
+        vm.send_bytes(b"\x1b")
+        vm.expect("DETAILS=0")
+    vm.send("q")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
     # TSC accounting (STAT): a task that never yields gets most of its CPU.
     run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
     before, started = run(), time.monotonic()
@@ -569,7 +744,7 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill", flush=True)
+    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU", flush=True)
 
 
 def smp_suite(vm):

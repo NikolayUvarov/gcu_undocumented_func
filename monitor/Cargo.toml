@@ -1,0 +1,31 @@
+[package]
+name = "monitor"
+version = "0.1.0"
+edition = "2021"
+
+# System monitors on sysmon's data (idl/sysinfo.wit): one library, one ELF per tool.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "top"
+path = "src/bin/top.rs"
+
+[[bin]]
+name = "memmap"
+path = "src/bin/memmap.rs"
+
+[[bin]]
+name = "load"
+path = "src/bin/load.rs"
+
+[[bin]]
+name = "hw"
+path = "src/bin/hw.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
