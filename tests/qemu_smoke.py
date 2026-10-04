@@ -25,7 +25,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -2271,10 +2271,14 @@ def _msix_only(vm):
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
-    web = socketserver.TCPServer(("127.0.0.1", 0), _Http)
+    web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
+    web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
     dns = _dns_server()
     web_port, dns_port = web.server_address[1], dns.getsockname()[1]
+    # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing.
+    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\n")
+    shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -2293,6 +2297,38 @@ def net_suite(args, disk):
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
         require(page, "HTTP/1.0 200 OK"); require(page, "hello from the host: /mind")
         require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
+        # Flow grants (issue 102): what the policy names and nothing else; a program without policy gets no grant.
+        checks = vm.command(f"netcheck tcp:10.0.2.2:{web_port} tcp:10.0.2.2:{web_port + 1} udp:10.0.2.2:9 ping:10.0.2.2 ping:10.0.2.3")
+        for line in (f"NETCHECK tcp:10.0.2.2:{web_port} OK", f"NETCHECK tcp:10.0.2.2:{web_port + 1} Denied", "NETCHECK udp:10.0.2.2:9 Denied",
+                     "NETCHECK ping:10.0.2.2 OK", "NETCHECK ping:10.0.2.3 Denied"):
+            require(checks, line)
+        rogue = vm.command(f"rogue tcp:10.0.2.2:{web_port}")
+        require(rogue, "NETWORK FOR rogue: NoPolicy"); require(rogue, f"NETCHECK tcp:10.0.2.2:{web_port} NO GRANT")
+        for _ in range(20):
+            if "NO NETWORK GRANTS" in vm.command("netgrants"):
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError("the grant of an ended program was not dropped")
+        log = vm.command("dmesg -s netpolicy")
+        for line in ("[NETPOLICY] GRANT 1 TO netcheck: 2 RULES, 600 S, 100000 BYTES", "[NETPOLICY] REFUSED rogue: NO POLICY", "[NETPOLICY] PROCESS ENDED, DROPPED 1 OF netcheck"):
+            require(log, line)
+        require(vm.command("dmesg -s netstack"), "[NETSTACK] DENIED FOR GRANT 1")
+        # Revoking a grant removes the program's capability and closes its connection.
+        holder = int(re.search(r"PID=(\d+) NAME=netcheck", vm.command(f"run netcheck hold:10.0.2.2:{web_port}:30 &"))[1])
+        for _ in range(20):
+            if "NETCHECK HOLDING" in vm.command(f"logs {holder}"):
+                break
+            time.sleep(.25)
+        require(vm.command("netgrants"), "netcheck RULES=2")
+        require(vm.command("netrevoke netcheck"), "REVOKED 1 GRANTS OF netcheck")
+        for _ in range(20):
+            ended = re.search(fr"NETCHECK hold:10.0.2.2:{web_port}:30 (NO GRANT|Denied|NoSocket|Closed)", vm.command(f"logs {holder}"))
+            if ended:
+                break
+            time.sleep(.25)
+        assert ended, vm.command(f"logs {holder}")
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] REVOKED 2 OF netcheck: 1 COPIES REMOVED, 1 SOCKETS CLOSED")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -2349,6 +2385,7 @@ def net_suite(args, disk):
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
+          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
 

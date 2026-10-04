@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed.
@@ -133,6 +133,21 @@ pub fn inspect(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Ne
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Needs as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The raw request flags of `name` (`mind::process::REQUEST_*`), including flags `needs` has no field for (1.2).
+pub fn inspect_requests(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -143,6 +158,7 @@ pub enum Request {
     Commit { session: u32 },
     Abort { session: u32 },
     Inspect { name: Text<64> },
+    InspectRequests { name: Text<64> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -197,6 +213,14 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Inspect { name }, call))
         }
+        8 => {
+            let mut copy = [0u8; 66];
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::InspectRequests { name }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -225,6 +249,10 @@ pub fn reply_abort(call: Call, value: core::result::Result<(), Error>) -> Result
     wire::finish(call, [0, 0])
 }
 pub fn reply_inspect(call: Call, value: core::result::Result<&Needs, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_inspect_requests(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

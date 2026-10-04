@@ -3,11 +3,25 @@
 /// opened it (PID and endpoint badge); a client has at most 8 sockets, the stack 32, each with bounded buffers.
 /// Calls that wait for the network (`ping`, `resolve`, `tcp-connect`) are answered later, when the answer arrives or
 /// the timeout passes; the other calls never block (error `again`: try later).
-package mind:socket@1.0.0;
+///
+/// What a client may do comes from the badge of its endpoint capability (issue 102): the operator's badge (the shell)
+/// may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
+/// protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
+/// unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
+package mind:socket@2.0.0;
 
 interface socket {
     /// Why a request failed.
-    enum error { no-network, no-socket, closed, again, refused, timeout, invalid, limit, unreachable, not-found }
+    enum error { no-network, no-socket, closed, again, refused, timeout, invalid, limit, unreachable, not-found, denied }
+
+    /// A protocol a rule allows.
+    enum protocol { tcp, udp, icmp }
+
+    /// One destination a grant may reach: an address (never 0), a port (0: any; ICMP has none) and a protocol.
+    record rule { address: u32, port: u16, protocol: protocol }
+
+    /// What a grant used: bytes sent and received, sockets open, milliseconds left (0: expired).
+    record usage { sent: u64, received: u64, sockets: u32, left-ms: u32 }
 
     /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
     /// configured it (or the static fallback did).
@@ -34,4 +48,10 @@ interface socket {
     tcp-receive: func(socket: u32, length: u32) -> result<bytes<4096>, error>;
     /// Closes a socket (TCP: after the queued data is sent) and frees its handle.
     close: func(socket: u32) -> result<_, error>;
+    /// Registers what clients with `badge` may reach, for `seconds`, up to `bytes` in both directions (policy badge only).
+    policy-set: func(badge: u16, rules: list<rule, 16>, seconds: u32, bytes: u64) -> result<_, error>;
+    /// Drops a grant: its sockets are closed and further requests with its badge are refused (policy badge only).
+    policy-drop: func(badge: u16) -> result<u32, error>;
+    /// What a grant has used (policy badge only).
+    policy-usage: func(badge: u16) -> result<usage, error>;
 }

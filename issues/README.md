@@ -25,8 +25,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [084](084-reboot.md) | `reboot` | tools | P2 | — (152 done) | track G, T3 |
 | [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | — (151 done) | track G, T3 |
 | [086](086-screenshot.md) | `screenshot` | tools | P2 | — (151 done) | track G, T3 |
-| [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | — (101 done) | track D |
-| [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 102 | track D |
+| [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | — (102 done) | track D |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
 | [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | benchmark | track D |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
@@ -120,6 +119,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
+| [102](../issues-done/102-network-policy-broker.done) | Network policy broker and flow grants | done (2026-10-04) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 

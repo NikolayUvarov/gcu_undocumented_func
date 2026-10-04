@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 17;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 18;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "sysmon.elf", "shell.elf"];
 pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
@@ -187,7 +187,10 @@ pub const SLOT_DISPLAY: usize = 15;
 pub const SLOT_NET: usize = 16;
 // The shell's client of the network stack (idl/socket.wit): ip, ping, nslookup, fetch.
 pub const SLOT_SOCKET: usize = 17;
-// 18..19 are reserved for further fixed grants.
+// A flow grant of the network policy broker: in an application, a network stack client limited to what the policy
+// names for it (REQUEST_NETWORK, issue 102); in the shell, its client of the broker.
+pub const SLOT_NETWORK: usize = 18;
+pub const SLOT_NETPOLICY: usize = 19;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 20;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
@@ -236,7 +239,7 @@ pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 pub const SPAWN_BOOT: usize = 1 << 63;
 pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
-pub const SPAWN_GRANTS_MAX: usize = 16;
+pub const SPAWN_GRANTS_MAX: usize = 24;
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;

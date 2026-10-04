@@ -97,6 +97,7 @@ pub const REQUEST_FILE: u32 = 4; // the directory of the file named in the argum
 pub const REQUEST_LIFECYCLE: u32 = 8; // service lifecycle control in SLOT_LIFECYCLE
 pub const REQUEST_LOG: u32 = 16; // the system log
 pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, data/), for fm
+pub const REQUEST_NETWORK: u32 = 64; // a flow grant from the network policy broker in SLOT_NETWORK (issue 102)
 pub const REQUEST_MAGIC: &[u8; 8] = b"MINDREQ1";
 
 /// Contents of the `.mind_request` section: magic, flags, reserved.

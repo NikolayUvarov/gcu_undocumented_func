@@ -22,7 +22,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "observe privilege", "screen; process control; input; COM1"];
+    "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "observe privilege", "screen; process control; input; COM1"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -187,6 +187,13 @@ impl Init {
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL); self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; }
+            // The broker mints flow grants from an unbadged stack client (which itself may open nothing), registers them
+            // through the stack's policy client and reads netpolicy.txt through a VFS client.
+            "netpolicy" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "netpolicy")?, ALL);
+                self.lend(&mut grants, 2, "netstack")?; self.lend(&mut grants, 3, "vfs_server")?;
+                grants.add(4, self.badged(&mut minted, "netstack", mind::network::BADGE_POLICY)?, CLIENT);
+            }
             "virtio_net" => {
                 // VirtIO network card (vendor 1AF4, class 02:00): modern-only (device 1041) or transitional (1000).
                 let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1041_1AF4, 0).or_else(|_| platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0))?;
@@ -222,7 +229,8 @@ impl Init {
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
                 self.lend(&mut grants, SLOT_KEYBOARD, "ps2_kbd")?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
-                self.lend(&mut grants, SLOT_SOCKET, "netstack")?;
+                grants.add(SLOT_SOCKET, self.badged(&mut minted, "netstack", mind::network::BADGE_OPERATOR)?, CLIENT); // every destination
+                self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
             }
             _ => return Err(Error::NotFound),
         }
