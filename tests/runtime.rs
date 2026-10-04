@@ -141,3 +141,16 @@ fn idl_codec_round_trips_and_rejects_malformed_payloads() {
     assert!(Text::<8>::decode(&mut r).is_some() && !r.done(), "trailing bytes are visible to the caller");
     assert_eq!(<List<Text<16>, 64> as Wire>::MAX, 2 + 64 * 18);
 }
+
+#[test]
+fn pixels_reach_every_framebuffer_format() {
+    use abi::{pixel_to_device, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB};
+    let orange = 0x00FF_8000;
+    assert_eq!(pixel_to_device(orange, PIXEL_BGR, [0; 3]), 0x00FF_8000);
+    assert_eq!(pixel_to_device(orange, PIXEL_RGB, [0; 3]), 0x0000_80FF);
+    // 8-bit channels at the BGR positions give the same word; 10-bit channels (2:10:10:10) are scaled.
+    assert_eq!(pixel_to_device(orange, PIXEL_BITMASK, [0xFF_0000, 0xFF00, 0xFF]), 0x00FF_8000);
+    assert_eq!(pixel_to_device(0x00FF_0001, PIXEL_BITMASK, [0x3FF0_0000, 0xF_FC00, 0x3FF]), 0x3FC0_0004);
+    // A 5:6:5 layout keeps the high bits of each channel.
+    assert_eq!(pixel_to_device(0x00FF_FFFF, PIXEL_BITMASK, [0xF800, 0x07E0, 0x001F]), 0xFFFF);
+}

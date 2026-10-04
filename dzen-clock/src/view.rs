@@ -26,7 +26,7 @@ pub struct View<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{ProgramImage, BOOT_IMAGES};
+    use crate::abi::{ProgramImage, BOOT_IMAGES, PIXEL_BGR};
 
     #[test]
     fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
@@ -47,6 +47,8 @@ mod tests {
             apic_ids: [0; 8],
             memory_map: core::ptr::null(),
             memory_map_len: 0,
+            pixel_format: PIXEL_BGR,
+            pixel_masks: [0; 3],
         };
         let view = View::new(&info);
         view.clear();

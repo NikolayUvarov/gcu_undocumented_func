@@ -36,7 +36,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, prompt=True):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, prompt=True, display=()):
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
@@ -48,7 +48,7 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot",
+             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *display,
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -988,6 +988,25 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def display_suite(args, disk):
+    # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
+    for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), display=display)
+        try:
+            require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
+            vm.send("fg 1\n")
+            vm.expect("FOREGROUND PID=1")
+            time.sleep(.3)
+            assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
+            vm.serial()  # the screenshot switched the console to the QEMU monitor
+            vm.send(" \n")
+            time.sleep(.3)
+            assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
+        finally:
+            vm.close()
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
+
+
 def boot_suite(args, disk):
     # The bootloader names a broken or missing boot file instead of hanging silently.
     kernel = (disk / "kernel.elf").read_bytes()
@@ -1033,10 +1052,10 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1064,6 +1083,9 @@ def main():
                 large_bss(disk / "app2.elf")
             if suite == "boot":
                 boot_suite(args, disk)
+                continue
+            if suite == "display":
+                display_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),

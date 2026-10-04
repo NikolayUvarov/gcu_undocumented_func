@@ -10,7 +10,25 @@ pub const MAX_APPS: usize = 8; // init's policy: live applications loader may st
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, }
+// Framebuffer: `stride` pixels per line, 4 bytes per pixel, in `pixel_format`. Screens of tasks always hold 0x00RRGGBB
+// (PIXEL_BGR in memory); the compositor converts to the framebuffer's format.
+pub const PIXEL_RGB: u32 = 0; pub const PIXEL_BGR: u32 = 1; pub const PIXEL_BITMASK: u32 = 2; // pixel_masks = red, green, blue
+pub const fn pixel_to_device(pixel: u32, format: u32, masks: [u32; 3]) -> u32 {
+    let (r, g, b) = ((pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF);
+    match format {
+        PIXEL_RGB => r | g << 8 | b << 16,
+        PIXEL_BITMASK => channel(r, masks[0]) | channel(g, masks[1]) | channel(b, masks[2]),
+        _ => pixel & 0x00FF_FFFF,
+    }
+}
+// An 8-bit channel value scaled to the width of `mask` and placed at its position.
+const fn channel(value: u32, mask: u32) -> u32 {
+    if mask == 0 { return 0; }
+    let (shift, width) = (mask.trailing_zeros(), mask.count_ones());
+    let scaled = if width >= 8 { value << (width - 8) } else { value >> (8 - width) };
+    (scaled << shift) & mask
+}
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 

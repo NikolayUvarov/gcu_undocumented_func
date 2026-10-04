@@ -3,13 +3,13 @@
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use uefi::prelude::*;
-use uefi::proto::console::gop::GraphicsOutput;
+use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, ProgramImage, StatPhys}; mod elf_reloc;
+use abi::{BootInfo, ProgramImage, StatPhys, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -28,6 +28,28 @@ impl Write for Serial {
         Ok(())
     }
 }
+// A mode the compositor can draw into: a linear framebuffer with 32-bit pixels.
+fn drawable(info: &ModeInfo) -> bool {
+    match (info.pixel_format(), info.pixel_bitmask()) {
+        (PixelFormat::Rgb | PixelFormat::Bgr, _) => true,
+        (PixelFormat::Bitmask, Some(m)) => 32 - (m.red | m.green | m.blue | m.reserved).leading_zeros() > 24,
+        _ => false,
+    }
+}
+
+// Keeps the firmware's mode if it has a linear framebuffer, else switches to the largest such mode up to 1920x1200.
+fn select_display(services: &BootServices) -> Result<(*mut u32, ModeInfo), &'static str> {
+    let handle = services.get_handle_for_protocol::<GraphicsOutput>().map_err(|_| "no graphics output")?;
+    let mut gop = services.open_protocol_exclusive::<GraphicsOutput>(handle).map_err(|_| "cannot open graphics output")?;
+    if !drawable(&gop.current_mode_info()) {
+        let area = |mode: &Mode| { let (w, h) = mode.info().resolution(); if w <= 1920 && h <= 1200 { w * h } else { 0 } };
+        let best = gop.modes(services).filter(|mode| drawable(mode.info())).max_by_key(area).ok_or("no mode with a linear framebuffer (BltOnly)")?;
+        gop.set_mode(&best).map_err(|_| "cannot set a mode with a linear framebuffer")?;
+    }
+    let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>();
+    Ok((fb_ptr, gop.current_mode_info()))
+}
+
 fn halt() -> ! { loop { unsafe { core::arch::asm!("cli; hlt"); } } }
 fn fail(system_table: &mut SystemTable<Boot>, file: &str, reason: &str) -> ! {
     let _ = writeln!(Serial, "\r\nBOOT ERROR: {}: {}\r", file, reason);
@@ -107,11 +129,18 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         })()
     };
     let (kernel_entry, programs) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
+    let display = select_display(system_table.boot_services());
+    let (fb_ptr, mode) = match display { Ok(display) => display, Err(reason) => fail(&mut system_table, "display", reason) };
+    let (pixel_format, pixel_masks) = match (mode.pixel_format(), mode.pixel_bitmask()) {
+        (PixelFormat::Rgb, _) => (PIXEL_RGB, [0; 3]),
+        (PixelFormat::Bitmask, Some(m)) => (PIXEL_BITMASK, [m.red, m.green, m.blue]),
+        _ => (PIXEL_BGR, [0; 3]),
+    };
     let (boot_info, kernel_stack) = {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize; let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24; if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() { let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap(); for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } } }
-        let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap(); let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap(); let mode = gop.current_mode_info(); let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>(); let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0 }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
+        let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
     };
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.
