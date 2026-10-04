@@ -2,6 +2,10 @@
 //! Network card driver (`virtio_net`): raw Ethernet frames of one device. Its only clients are the network stack and
 //! the shell's diagnostics (Appendix B.6: the driver gets no say over what the frames mean). Frames travel in MIND IDL
 //! buffers, so the driver works on its own copy of a frame to send.
+//!
+//! 1.1 (issue 106): transmit checksum offload. When the device offers it (`offloads` bit 0), `send-partial` hands it a
+//! frame whose TCP or UDP checksum the device completes: the field holds the pseudo-header sum, `start` is where the
+//! summed bytes begin (from the start of the frame) and `offset` where the checksum field is, from `start`.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -11,7 +15,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:net";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -110,8 +114,34 @@ pub fn counters(endpoint: Endpoint) -> Result<Counters> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Counters as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
+/// What the device can do for the sender (1.1): bit 0, completing TCP and UDP checksums (`send-partial`).
+pub fn offloads(endpoint: Endpoint) -> Result<u32> {
+    let words = [6 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 32) as u32)
+}
+
+/// Like `send`, with the checksum completed by the device (1.1). Error invalid also when the device cannot do it or
+/// `start` and `offset` do not leave room for the 16-bit field inside the frame.
+pub fn send_partial(endpoint: Endpoint, frame: &[u8], start: u16, offset: u16) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<1514>(frame, &mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        offset.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
-pub const REQUEST_MAX: usize = 1516;
+pub const REQUEST_MAX: usize = 1520;
 
 /// A request to the `net` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +151,8 @@ pub enum Request<'a> {
     Receive,
     Wait,
     Counters,
+    Offloads,
+    SendPartial { frame: &'a [u8], start: u16, offset: u16 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -164,6 +196,20 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Counters, call))
         }
+        6 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Offloads, Call::words(request, cap)))
+        }
+        7 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let frame = codec::decode_bytes::<1514>(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let offset = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SendPartial { frame, start, offset }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -185,4 +231,11 @@ pub fn reply_wait(call: Call, value: u32) -> Result<()> {
 }
 pub fn reply_counters(call: Call, value: &Counters) -> Result<()> {
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_offloads(call: Call, value: u32) -> Result<()> {
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_send_partial(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

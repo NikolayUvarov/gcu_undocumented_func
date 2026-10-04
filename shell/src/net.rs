@@ -83,7 +83,19 @@ fn address(out: &mut impl Write, host: &str) -> Option<u32> {
     }
 }
 
-pub fn ip(out: &mut impl Write) {
+pub fn ip(out: &mut impl Write, args: &[u8]) {
+    // ip offload on|off (issue 106): the cards complete TCP and UDP checksums of sent frames, or the stack does.
+    let mut words = core::str::from_utf8(args).unwrap_or("").split_whitespace();
+    if let Some(word) = words.next() {
+        if word != "offload" { let _ = writeln!(out, "IP [OFFLOAD ON|OFF]"); return }
+        let enable = match words.next().unwrap_or("") { "on" => true, "off" => false, _ => { let _ = writeln!(out, "IP OFFLOAD ON|OFF"); return } };
+        match socket::offload(STACK, enable) {
+            Ok(Ok(cards)) => { let _ = writeln!(out, "CHECKSUM OFFLOAD {}: {} CARD(S)", if enable { "ON" } else { "OFF" }, cards.count_ones()); }
+            Ok(Err(error)) => failed(out, "IP OFFLOAD", error),
+            Err(_) => stack_failed(out),
+        }
+        return;
+    }
     match socket::config(STACK) {
         Ok(Ok(c)) => {
             let _ = write!(out, "IP "); dotted(out, c.address); let _ = write!(out, "/{} GATEWAY ", c.prefix); dotted(out, c.gateway);

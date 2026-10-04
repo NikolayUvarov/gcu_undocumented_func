@@ -1,7 +1,11 @@
 /// Network card driver (`virtio_net`): raw Ethernet frames of one device. Its only clients are the network stack and
 /// the shell's diagnostics (Appendix B.6: the driver gets no say over what the frames mean). Frames travel in MIND IDL
 /// buffers, so the driver works on its own copy of a frame to send.
-package mind:net@1.0.0;
+///
+/// 1.1 (issue 106): transmit checksum offload. When the device offers it (`offloads` bit 0), `send-partial` hands it a
+/// frame whose TCP or UDP checksum the device completes: the field holds the pseudo-header sum, `start` is where the
+/// summed bytes begin (from the start of the frame) and `offset` where the checksum field is, from `start`.
+package mind:net@1.1.0;
 
 interface net {
     /// Why a request failed.
@@ -23,4 +27,9 @@ interface net {
     /// Answers once a received frame is waiting (the reply comes from the interrupt); returns how many are waiting.
     wait: func() -> u32;
     counters: func() -> counters;
+    /// What the device can do for the sender (1.1): bit 0, completing TCP and UDP checksums (`send-partial`).
+    offloads: func() -> u32;
+    /// Like `send`, with the checksum completed by the device (1.1). Error invalid also when the device cannot do it or
+    /// `start` and `offset` do not leave room for the 16-bit field inside the frame.
+    send-partial: func(frame: bytes<1514>, start: u16, offset: u16) -> result<_, error>;
 }

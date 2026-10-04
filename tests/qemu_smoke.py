@@ -2768,6 +2768,75 @@ def tls_suite(args, disk):
           "which only the TLS service may ask; no RDRAND: no key and no connection", flush=True)
 
 
+class _Bench(socketserver.StreamRequestHandler):
+    # netbench's TCP side: `DOWN n` sends n bytes and closes; `UP n` reads n bytes and answers `OK n`.
+    def handle(self):
+        command, count = self.rfile.readline().split()
+        count = int(count)
+        if command == b"DOWN":
+            block = bytes(range(256)) * 256
+            while count > 0:
+                self.wfile.write(block[:min(count, len(block))]); count -= len(block)
+        else:
+            while count > 0:
+                data = self.rfile.read(min(count, 65536))
+                if not data:
+                    return
+                count -= len(data)
+            self.wfile.write(f"OK {count}\n".encode())
+
+
+def _bench_server(host):
+    # netbench's host side: TCP on a free port and a UDP echo on the same port number.
+    tcp = socketserver.ThreadingTCPServer((host, 0), _Bench)
+    tcp.daemon_threads = True
+    threading.Thread(target=tcp.serve_forever, daemon=True).start()
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp.bind((host, tcp.server_address[1]))
+
+    def echo():
+        while True:
+            try:
+                data, peer = udp.recvfrom(2048)
+                udp.sendto(data, peer)
+            except OSError:
+                return
+    threading.Thread(target=echo, daemon=True).start()
+    return tcp, udp
+
+
+def netbench_suite(args, disk):
+    # Network stack benchmark (issue 106): TCP down/upload and UDP round trips through virtio_net and netstack, with
+    # the CPU time of the stack and the drivers. The numbers are printed (and recorded in docs/profile/network.md); the
+    # suite checks only that every phase completes. QEMU's user networking has no virtio-net header, so its card offers
+    # no offloads; with --tap (a tap interface at 10.0.2.2/24 on the host, see .github/workflows/ci.yml) the card offers
+    # checksum offload and both settings are measured (the host's TCP drops segments with a wrong checksum).
+    tcp, udp = _bench_server("10.0.2.2" if args.tap else "127.0.0.1")
+    port = tcp.server_address[1]
+    (disk / "netpolicy.txt").write_text(f"netbench 10.0.2.2 tcp {port} 3600 1000000000\nnetbench 10.0.2.2 udp {port}\n")
+    backend = f"tap,id=n0,ifname={args.tap},script=no,downscript=no,vnet_hdr=on" if args.tap else "user,id=n0"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", backend, "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        require(vm.service_logs("netstack", "10.0.2.15/24"), "STATIC 10.0.2.15/24" if args.tap else "DHCP 10.0.2.15/24")
+        offers = "[NETSTACK] CARD 0 READY (CHECKSUM OFFLOAD AVAILABLE)" in vm.command("dmesg -s netstack")
+        assert offers == bool(args.tap), "checksum offload offered only with the tap backend"
+        for offload in ("off", "on"):
+            require(vm.command(f"ip offload {offload}"), f"CHECKSUM OFFLOAD {offload.upper()}: {int(offers and offload == 'on')} CARD(S)")
+            for run in range(args.bench_runs):
+                vm.send(f"netbench 10.0.2.2:{port} {args.bench_mib}\n")
+                output = vm.expect("MIND> ", timeout=600)
+                for phase in ("DOWN", "UP"):
+                    assert re.search(fr"NETBENCH {phase} {args.bench_mib * 1048576} BYTES \d+ MS [1-9]\d* KIB/S", output), output
+                assert re.search(r"NETBENCH UDP 500 OF 500 ROUND TRIPS", output), output
+                for line in re.findall(r"NETBENCH .*", output):
+                    print(f"  offload {offload} run {run + 1}: " + line.strip(), flush=True)
+    finally:
+        vm.close()
+        tcp.shutdown(); udp.close()
+    print(f"PASS: netbench ({'tap, checksum offload offered' if args.tap else 'user networking, no offloads offered'}): TCP download and "
+          "upload, UDP round trips, CPU time of netstack and the drivers, offload off and on", flush=True)
+
+
 def display_suite(args, disk):
     # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
@@ -2845,10 +2914,13 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
+    parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
+    parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "tls", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -2915,6 +2987,9 @@ def main():
                 continue
             if suite == "tls":
                 tls_suite(args, disk)
+                continue
+            if suite == "netbench":
+                netbench_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),

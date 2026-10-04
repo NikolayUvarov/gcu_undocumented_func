@@ -1,0 +1,42 @@
+# 106 — Checksum and segmentation offloads, after measurement — done
+
+**Type:** performance · **Owner:** network track · **Priority:** P3 · **Status:** done (2026-10-04) · **Blocked by:** 101, a throughput benchmark · **Roadmap:** track D · **Constitution:** Appendix B.2 (performance decided by measurement on a profile), MC-1.5, MC-12.1
+
+## Problem
+
+VirtIO devices can compute and verify checksums (`VIRTIO_NET_F_CSUM`, `GUEST_CSUM`) and split or merge large segments (TSO, GSO, mergeable receive buffers). They save CPU time, but receive-side checksum checking means the stack trusts the device for data integrity.
+
+## Plan
+
+1. Benchmark first: throughput and CPU use of `netstack` over `virtio_net` (TCP bulk transfer to a host-forwarded port, small-packet rate), recorded in `docs/profile`.
+2. Only if the benchmark shows checksum or segmentation work as a bottleneck: negotiate the features in `virtio_net`, carry the per-frame flags in `idl/net.wit` (a minor version), use them in the stack.
+3. Profile: state that with receive checksum offload the device is trusted for integrity of received data (it already is in the TCB without an IOMMU, MC-1.5); keep a switch that turns offloads off.
+
+## Acceptance criteria
+
+- A recorded benchmark before and after; offloads enabled only with a measured gain; the profile names the trust consequence; the `net` suites pass with offloads on and off.
+
+## Related
+
+[101](101-network-stack.done), [104](104-virtio-modern-msix.done)., [107](../issues/107-batched-frame-path.md).
+
+## Resolution
+
+- **Benchmark:** the `netbench` program and suite measure:
+  - TCP download and upload, and UDP round trips, each with the CPU time of `netstack` and the drivers;
+  - the software checksum on its own;
+  - over QEMU user networking and over a tap backend (`--tap`; CI job "network benchmark").
+  - The results and the decision are in [docs/profile/network.md](../docs/profile/network.md).
+- **Finding:** checksums are about 0.3 % of the stack's CPU time (about 1 ms per MiB against about 300 ms). The cost is per frame (about 275 µs in `netstack`, 210 µs in the driver), in the IDL call that carries each frame. Follow-up: [107](../issues/107-batched-frame-path.md).
+  - QEMU's user networking offers no offloads at all (no virtio-net header in the backend).
+- **Transmit checksum offload, implemented and off by default** (no gain beyond the noise: about 3–4 % of the stack's CPU on upload):
+  - `virtio_net` negotiates `VIRTIO_NET_F_CSUM` on the modern interface;
+  - `net.wit` 1.1 adds `offloads` and `send-partial` (`NEEDS_CSUM` with `csum_start` and `csum_offset`);
+  - `netstack` writes the pseudo-header sum for TCP and UDP and lets the card finish it, or computes the checksum itself (smoltcp no longer does, so the switch works while interfaces run; a refused `send-partial` falls back to software);
+  - `socket.wit` 2.2 `offload` (operator only) and `ip offload on|off` in the shell.
+  - Both settings pass the benchmark's TCP and UDP phases over tap, where the host's TCP drops wrong checksums. The `net` and `tls` suites use the software path (user networking offers no offload).
+- **Not done, by decision:**
+  - Receive checksum offload (`GUEST_CSUM`): the stack keeps verifying, and the card is not trusted for received data.
+  - Segmentation offloads: frames larger than 1514 bytes would need a different frame path, smoltcp does not build TSO segments, and the per-frame cost comes first.
+- **Profile:** [network.md](../docs/profile/network.md) states the trust consequence. The card already sees what it sends and is in the TCB for memory (MC-1.5).
+

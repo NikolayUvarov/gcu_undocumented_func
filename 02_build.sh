@@ -69,6 +69,7 @@ USER_CRATES=(
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
     "netcheck:netcheck:netcheck.elf"
+    "netbench:netbench:netbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
     "sysmon:sysmon:sysmon.elf"
