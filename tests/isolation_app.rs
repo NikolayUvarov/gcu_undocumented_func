@@ -61,6 +61,7 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             // Mode 5 keeps reading a lease until the owner revokes it (a page fault ends the task).
             if mode == 5 { loop { core::ptr::read_volatile(address as *const usize); } }
         }
+        6 => {}
         4 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [abi::SLOT_INIT, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 5, 0]) != 0 { fail(); },
         _ => fail(),
     }
@@ -110,7 +111,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             }
             b'l' => {
                 // A lease whose capability was dropped after mapping still ends when the owner revokes.
-                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
+                let mint = |handle: usize, mask: u8| { (*mb).msg = [0; 4]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
                 let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
                 let lease = mint(memory, abi::CAP_READ | abi::CAP_WRITE);
                 let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
@@ -121,7 +122,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             }
             b'm' | b'v' => {
                 // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
-                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
+                let mint = |handle: usize, mask: u8| { (*mb).msg = [0; 4]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
                 let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
                 let lease = mint(memory, if mode == b'm' { abi::CAP_READ } else { abi::CAP_READ | abi::CAP_WRITE });
                 let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
@@ -220,7 +221,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     asm!("ud2", options(noreturn));
                 }
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
-                let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg[0] = offset; (*mb).msg[1] = length; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
+                let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg = [offset, length, 0, 0]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
                 let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };
                 let writer = mint(abi::SLOT_RTC, abi::CAP_WRITE as usize, 0, 0);
                 let wider = mint(writer, (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT) as usize, 0, 0);
@@ -370,6 +371,21 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_NONE { fail(); }
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 0x0B1EC7 { fail(); }
                 print(mb, b"MOVE OK\r\n");
+                return;
+            }
+            b'i' => {
+                // Badges: the child holds a capability we labelled 0x42; its call arrives with that badge. A badge is
+                // set once: a different one is refused, a child of the badged capability keeps it.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let badged = ipc(mb, abi::SYSCALL_CAP_MINT, endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, [0, 0, 0x42, 0]);
+                let again = ipc(mb, abi::SYSCALL_CAP_MINT, badged, abi::CAP_WRITE as usize, [0, 0, 0x43, 0]);
+                let kept = ipc(mb, abi::SYSCALL_CAP_MINT, badged, abi::CAP_WRITE as usize, [0; 4]);
+                let badge = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0); (*mb).arg2 };
+                if again != abi::ERR_INVALID || badge(kept) != 0x42 || badge(endpoint) != 0 { fail(); }
+                spawn_child(mb, badged);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).arg2 != 0x42 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 6, 0]) != 0 { fail(); }
+                print(mb, b"BADGE OK\r\n");
                 return;
             }
             b'b' => {

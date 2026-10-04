@@ -62,6 +62,9 @@ pub const SYSCALL_KERNEL_HEAP: usize = 42;
 pub const SYSCALL_HALT: usize = 43;
 // CLOCK: result = monotonic nanoseconds since boot, arg2 = resolution in ns, msg[2] = calibrated TSC Hz (0: tick clock).
 pub const SYSCALL_CLOCK: usize = 44;
+// Endpoint badges: CAP_MINT with msg[2] = badge (1..=BADGE_MAX) labels an endpoint capability once; its children keep
+// the badge and another one is refused. A receiver gets the badge of the capability the sender used in arg2 (0: none).
+pub const BADGE_MAX: usize = 0xFFFF;
 // CAP_MINT: arg1 = handle, arg2 = rights mask (endpoints and memory), msg[0] = offset, msg[1] = length (0: to the end) for port and
 // memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
 // from all tasks; the capability itself stays (MC-3.4-3.6).

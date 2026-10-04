@@ -25,6 +25,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |
 | A killed service is restarted by `init` and serves clients started before the failure; after 3 restarts in 60 s it is quarantined until `RUN`; killing `init` halts the system | `services` suite |
 | A send queued for a server that dies fails with `ERR_PEER` instead of waiting for a new instance | `isolation` suite, case `f` |
+| An endpoint badge set by `CAP_MINT` reaches the receiver, is kept by children and cannot be replaced | `isolation` suite, case `i` |
 | Five children sending at once: four wait, the fifth gets `ERR_BUSY`; a reply after the caller's timeout fails with `ERR_PEER`; a memory object moves to a child (the sender's handle dies); revoke removes a capability waiting in a blocked send; a child reading a revoked lease faults | `isolation` suite, cases q, j, z, b, x |
 | A killed AHCI driver is restarted after its device was stopped and its DMA cleared; reads continue through the same endpoint | `ahci` suite |
 | `init` drops the platform privilege before READY; quotas are reported per task | `services` suite |

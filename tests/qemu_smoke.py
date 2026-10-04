@@ -414,7 +414,7 @@ def isolation_suite(vm):
         rows, faults = task_rows(vm), vm.command("faults")
         assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
         return pid, faults
-    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 1, "MOVE OK"), ("b", 1, "REVOKE PENDING OK")]:
+    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 1, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
     # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).

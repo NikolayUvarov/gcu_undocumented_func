@@ -17,7 +17,7 @@ impl Message {
 
 /// Received message or reply.
 #[derive(Clone, Copy, Debug)]
-pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub exit: Option<Exit> }
+pub struct Received { pub data: [usize; 2], pub sender: u64, pub badge: u16, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub exit: Option<Exit> }
 
 /// Exit notice of a watched task (`process::watch`): its PID, why it ended and how many notices the kernel had to drop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub struct Exit { pub pid: u64, pub reason: usize, pub lost: usize }
 fn received(raw: crate::sys::Raw) -> Received {
     let irq = (raw.msg[1] & MSG_FLAG_IRQ != 0).then_some(raw.msg[2]);
     let exit = (raw.msg[1] & MSG_FLAG_EXIT != 0).then_some(Exit { pid: raw.msg[2] as u64, reason: raw.msg[3] & 0xFFFF_FFFF, lost: raw.msg[3] >> 32 });
-    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq, exit }
+    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, badge: raw.arg2 as u16, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq, exit }
 }
 
 /// IPC endpoint capability in a process slot.
@@ -108,6 +108,12 @@ pub fn drop_cap(slot: usize) -> Result<()> { check(call(SYSCALL_CAP_DROP, slot, 
 /// of a port range or a page-aligned memory/DMA/MMIO range. Returns its handle.
 pub fn mint(handle: usize, mask: u8, offset: usize, length: usize) -> Result<usize> {
     check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [offset, length, 0, 0]).result)
+}
+
+/// Endpoint capability with narrower rights and a badge (1..=BADGE_MAX) the server sees in `Received::badge`; a badge
+/// is set once and kept by every child.
+pub fn mint_badged(handle: usize, mask: u8, badge: u16) -> Result<usize> {
+    check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge as usize, 0]).result)
 }
 
 /// Removes every capability derived from `handle` (copies, mints and their descendants) from all tasks; the capability
