@@ -210,3 +210,74 @@ pub fn revoke(out: &mut impl Write, args: &[u8]) {
         Err(_) => { let _ = writeln!(out, "NET: NO POLICY BROKER"); }
     }
 }
+
+// TLS over the shell's own flow (idl/tls.wit, issue 103): https, tls cert.
+use mind::abi::SLOT_TLS;
+use mind::idl::tls;
+
+const TLS: Endpoint = Endpoint(SLOT_TLS);
+
+// https [-c] <host>[:port] [path] [name]: HTTP/1.0 GET over TLS 1.3; the server must present a certificate for `name`
+// (default: the host) from a root in tlsroots.pem. -c offers the device certificate when the server asks for one.
+pub fn https(out: &mut impl Write, args: &[u8]) {
+    let text = core::str::from_utf8(args).unwrap_or("");
+    let mut words = text.split_whitespace().peekable();
+    let client_certificate = words.next_if_eq(&"-c").is_some();
+    let Some(target) = words.next() else { let _ = writeln!(out, "HTTPS [-C] <HOST>[:PORT] [PATH] [NAME]"); return };
+    let path = words.next().unwrap_or("/");
+    let (host, port) = target.split_once(':').unwrap_or((target, "443"));
+    let name = words.next().unwrap_or(host);
+    let Ok(port) = port.parse::<u16>() else { let _ = writeln!(out, "HTTPS: BAD PORT"); return };
+    let Some(address) = address(out, host) else { return };
+    let session = match tls::attach(TLS, SLOT_SOCKET) {
+        Ok(Ok(session)) => session,
+        Ok(Err(error)) => { let _ = writeln!(out, "HTTPS: {:?}", error); return }
+        Err(_) => { let _ = writeln!(out, "HTTPS: NO TLS SERVICE"); return }
+    };
+    match tls::connect(TLS, session, name, address, port, client_certificate, 10_000) {
+        Ok(Ok(peer)) => { let _ = writeln!(out, "HTTPS: {} VERIFIED, TLS 1.3 SUITE {:04X}{}", name, peer.suite, if peer.client_certificate { ", CLIENT CERTIFICATE SENT" } else { "" }); }
+        Ok(Err(error)) => { let _ = writeln!(out, "HTTPS: {:?}", error); let _ = tls::close(TLS, session); return }
+        Err(_) => { let _ = writeln!(out, "HTTPS: NO TLS SERVICE"); return }
+    }
+    let mut request = mind::util::FixedBuf::<512>::new();
+    let _ = write!(request, "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: mind-core\r\n\r\n", path, name);
+    if !matches!(tls::send(TLS, session, request.as_bytes()), Ok(Ok(_))) { let _ = writeln!(out, "HTTPS: SEND FAILED"); let _ = tls::close(TLS, session); return }
+    let (mut total, mut shown) = (0usize, 0usize);
+    let mut buffer = [0u8; 4096];
+    let deadline = mind::time::uptime_ms() + 10_000;
+    loop {
+        match tls::receive(TLS, session, 4096, &mut buffer) {
+            Ok(Ok(n)) => {
+                let show = n.min(2048 - shown);
+                for &byte in &buffer[..show] { let _ = out.write_char(if byte == b'\n' || (0x20..0x7F).contains(&byte) { byte as char } else if byte == b'\r' { continue } else { '.' }); }
+                shown += show; total += n;
+            }
+            Ok(Err(tls::Error::Again)) if mind::time::uptime_ms() < deadline => { mind::time::sleep(10); }
+            Ok(Err(tls::Error::Closed)) => break,
+            Ok(Err(error)) => { let _ = writeln!(out, "HTTPS: {:?}", error); break }
+            Err(_) => { let _ = writeln!(out, "HTTPS: NO TLS SERVICE"); break }
+        }
+    }
+    let _ = tls::close(TLS, session);
+    let _ = writeln!(out, "\nHTTPS: {} BYTES", total);
+}
+
+// tls cert: the device certificate in PEM (the key service keeps the private key).
+pub fn tls_command(out: &mut impl Write, args: &[u8]) {
+    if core::str::from_utf8(args).unwrap_or("").trim() != "cert" { let _ = writeln!(out, "TLS CERT"); return }
+    let mut der = [0u8; 512];
+    let length = match tls::certificate(TLS, &mut der) {
+        Ok(Ok(length)) => length,
+        Ok(Err(error)) => { let _ = writeln!(out, "TLS: {:?}", error); return }
+        Err(_) => { let _ = writeln!(out, "TLS: NO TLS SERVICE"); return }
+    };
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let _ = writeln!(out, "-----BEGIN CERTIFICATE-----");
+    for (index, chunk) in der[..length].chunks(3).enumerate() {
+        let bits = chunk.iter().enumerate().fold(0u32, |acc, (i, &b)| acc | (b as u32) << (16 - 8 * i));
+        for i in 0..4 { let _ = out.write_char(if i <= chunk.len() { ALPHABET[(bits >> (18 - 6 * i) & 63) as usize] as char } else { '=' }); }
+        if index % 16 == 15 { let _ = writeln!(out); }
+    }
+    if length % 48 != 0 { let _ = writeln!(out); }
+    let _ = writeln!(out, "-----END CERTIFICATE-----");
+}

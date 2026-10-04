@@ -27,6 +27,7 @@ pub mod mem;
 pub mod network;
 pub mod platform;
 pub mod process;
+pub mod random;
 pub mod rtc;
 pub mod stat;
 pub mod sys;

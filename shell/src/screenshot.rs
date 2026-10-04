@@ -30,6 +30,8 @@ pub fn command(out: &mut Console, args: &[u8], receive: usize) {
         let _ = write!(name, "{}", given);
     }
     let path = text(&name);
+    // The console draws lazily: show the command line as typed before the copy is taken.
+    out.render(None);
     let Ok(mode) = display::mode(DISPLAY) else { let _ = writeln!(out, "ERROR: SCREENSHOT: NO COMPOSITOR"); return };
     match display::capture(DISPLAY, receive) {
         Ok(Ok(())) => {}

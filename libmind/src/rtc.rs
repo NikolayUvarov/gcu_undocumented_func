@@ -12,6 +12,13 @@ pub fn date() -> Option<(u32, u32, u32)> {
     Some(civil_from_days(days))
 }
 
+/// Seconds since 1970-01-01 (UTC when the CMOS clock keeps UTC, as QEMU's does by default).
+pub fn unix_time() -> Option<u64> {
+    let (year, month, day) = date()?;
+    let days = days_from_civil(year, month, day)? as u64 + 10957; // 1970-01-01 to 2000-01-01
+    Some(days * 86400 + seconds_since_midnight()? as u64)
+}
+
 /// Days since 2000-01-01 for a valid date in 2000..=9999.
 pub fn days_from_civil(year: u32, month: u32, day: u32) -> Option<u32> {
     let leap = |y: u32| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);

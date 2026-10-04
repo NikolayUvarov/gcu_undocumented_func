@@ -1,0 +1,15 @@
+[package]
+name = "keystore"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # used by ed25519-dalek; no SHA-NI: the target has no SSE in its ABI
+
+[profile.release]
+panic = "abort"
+opt-level = 3

@@ -23,7 +23,7 @@ MIND Core has no network at all (profile: "One node; no network"). Track D (netw
 
 ## Related
 
-[ROADMAP](../ROADMAP.md) tracks A and D; [101](101-network-stack.done), [102](../issues/102-network-policy-broker.md), [103](../issues/103-tls-service.md).
+[ROADMAP](../ROADMAP.md) tracks A and D; [101](101-network-stack.done), [102](102-network-policy-broker.done), [103](103-tls-service.done).
 
 ## Resolution
 

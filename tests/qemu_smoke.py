@@ -16,6 +16,7 @@ import re
 import shutil
 import socket
 import socketserver
+import ssl
 import struct
 import subprocess
 import tempfile
@@ -25,7 +26,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -1541,7 +1542,7 @@ def services_suite(vm):
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
-    require(details, "CAPS=5/63")
+    require(details, "CAPS=5/95")
     # The standard client endpoints in slots 2..6, write and grant only; no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):
@@ -2519,6 +2520,124 @@ def net_suite(args, disk):
           "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
 
 
+def _certificates(directory):
+    # A test CA (RSA) and a server certificate it signs (ECDSA P-256) for mind.test and 10.0.2.2; a second CA nobody
+    # trusts and a server certificate from it for the same names.
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    names = directory / "names.cnf"
+    names.write_text("subjectAltName=DNS:mind.test,IP:10.0.2.2\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\n")
+    for ca in ("ca", "rogue-ca"):
+        run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", f"{ca}.key", "-out", f"{ca}.pem", "-days", "2",
+            "-subj", f"/CN=MIND {ca}", "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+        server = "server" if ca == "ca" else "rogue"
+        run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", f"{server}.key", "-out", f"{server}.csr", "-subj", "/CN=mind.test")
+        run("x509", "-req", "-in", f"{server}.csr", "-CA", f"{ca}.pem", "-CAkey", f"{ca}.key", "-CAcreateserial", "-out", f"{server}.pem", "-days", "2", "-extfile", "names.cnf")
+
+
+class _Https(_Http):
+    def do_GET(self):
+        peer = self.request.getpeercert()
+        client = dict(item[0] for item in peer["subject"])["commonName"] if peer else "nobody"
+        body = f"hello from the host: {self.path} to {client}\n".encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+
+def _https_server(directory, certificate):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / f"{certificate}.pem", directory / f"{certificate}.key")
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Https)
+    server.daemon_threads = True
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, context
+
+
+def tls_suite(args, disk):
+    # TLS service and key service (issue 103): HTTPS with the server certificate verified against tlsroots.pem, wrong
+    # name and untrusted CA refused, the device certificate (key in the key service only) for a server that asks for
+    # one; without RDRAND both services fail closed.
+    certificates = Path(tempfile.mkdtemp(prefix="mind-tls-"))
+    _certificates(certificates)
+    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    good, _ = _https_server(certificates, "server")
+    rogue, _ = _https_server(certificates, "rogue")
+    asking, asking_context = _https_server(certificates, "server")
+    ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
+    network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", "qemu64,+rdrand"])
+    try:
+        require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
+        require(vm.service_logs("tls", "[TLS] READY"), "[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM RDRAND")
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
+        for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):
+            require(page, line)
+        assert "CLIENT CERTIFICATE SENT" not in page, page
+        require(vm.command(f"https 10.0.2.2:{ports['good']} /by-address"), "hello from the host: /by-address to nobody")
+        # The other cipher suites and the other key exchange group, from an OpenSSL server limited to each.
+        for suite, number, group, group_number in (("TLS_CHACHA20_POLY1305_SHA256", "1303", "X25519", "001D"), ("TLS_AES_128_GCM_SHA256", "1301", "P-256", "0017")):
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]
+            server = subprocess.Popen(["openssl", "s_server", "-accept", f"127.0.0.1:{port}", "-cert", "server.pem", "-key", "server.key", "-www",
+                                       "-tls1_3", "-ciphersuites", suite, "-groups", group], cwd=certificates, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(40):
+                    with socket.socket() as probe:
+                        if probe.connect_ex(("127.0.0.1", port)) == 0:
+                            break
+                    time.sleep(.1)
+                page = vm.command(f"https 10.0.2.2:{port} / mind.test")
+                require(page, f"VERIFIED, TLS 1.3 SUITE {number}"); require(page, "HTTP/1.0 200 ok")
+                require(vm.command("dmesg -s tls"), f"SUITE {number}, GROUP {group_number}")
+            finally:
+                server.kill(); server.wait()
+        require(vm.command(f"https 10.0.2.2:{ports['good']} / other.test"), "HTTPS: Certificate")
+        require(vm.command(f"https 10.0.2.2:{ports['rogue']} / mind.test"), "HTTPS: Certificate")
+        require(vm.command("https 10.0.2.2:1 / mind.test"), "HTTPS: Refused")
+        log = vm.command("dmesg -s tls")
+        for line in ("mind.test VERIFIED, SUITE", "other.test REFUSED: CERTIFICATE NotValidForName", "mind.test REFUSED: CERTIFICATE UnknownIssuer"):
+            require(log, line)
+        # The device certificate: the server trusts exactly it; offered only with -c.
+        pem = re.search(r"-----BEGIN CERTIFICATE-----\r?\n.*?-----END CERTIFICATE-----", vm.command("tls cert"), re.S)[0].replace("\r", "")
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        name = re.search(r"MIND [0-9A-F]{8}", der.decode("latin-1"))[0]
+        asking_context.verify_mode = ssl.CERT_REQUIRED
+        asking_context.load_verify_locations(cadata=pem)
+        # TLS 1.3: the server refuses after the client's Finished; its alert may be lost to the RST of the closed socket.
+        page = vm.command(f"https 10.0.2.2:{ports['asking']} /refused mind.test")
+        assert "200 OK" not in page and ("HTTPS: Handshake" in page or "HTTPS: 0 BYTES" in page), page
+        page = vm.command(f"https -c 10.0.2.2:{ports['asking']} /device mind.test")
+        require(page, "CLIENT CERTIFICATE SENT"); require(page, f"hello from the host: /device to {name}")
+        require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsClient FOR PID")
+        # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
+        # only the TLS service holds a capability to the key service, with the signer's badge.
+        servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+        real = vm.services()
+        keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
+        holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
+        assert holders == ["tls"], holders
+        assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+    finally:
+        vm.close()
+        for server in (good, rogue, asking):
+            server.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-tls-{args.cpus}cpu.log").write_text(vm.log)
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=network)
+    try:
+        require(vm.service_logs("keystore", "NO RDRAND"), "[KEYSTORE] NO RDRAND: NO DEVICE KEY")
+        require(vm.service_logs("tls", "[TLS] READY"), "NO RDRAND: EVERY CONNECTION WILL BE REFUSED")
+        require(vm.command(f"https 10.0.2.2:{ports['good']} / mind.test"), "HTTPS: NoEntropy")
+        require(vm.command("tls cert"), "TLS: NotFound")
+    finally:
+        vm.close()
+    shutil.rmtree(certificates, ignore_errors=True)
+    print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
+          "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
+          "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
+          "which only the TLS service may ask; no RDRAND: no key and no connection", flush=True)
+
+
 def display_suite(args, disk):
     # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
@@ -2596,10 +2715,10 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -2660,6 +2779,9 @@ def main():
                 continue
             if suite == "net":
                 net_suite(args, disk)
+                continue
+            if suite == "tls":
+                tls_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),

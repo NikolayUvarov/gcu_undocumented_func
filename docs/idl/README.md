@@ -94,6 +94,8 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt) | 1.0.0 |
 | [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge) | 2.0.0 |
 | [`idl/netpolicy.wit`](../../idl/netpolicy.wit) | `netpolicy` (a grant is handed over by a word call, `take`, which carries the capability) | 1.0.0 |
+| [`idl/tls.wit`](../../idl/tls.wit) | `tls` (a client lends its flow with a word call, `attach`, that carries the capability as a parameter; the handshake runs inside `connect`) | 1.0.0 |
+| [`idl/keystore.wit`](../../idl/keystore.wit) | `keystore` (no call returns the private key; `sign` only for the signer's badge, a purpose and a budget) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
 | [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result), `format` of the RAM disk (2.3) | 2.3.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`; 1.1 adds the lifecycle requests of `svc` and `top`) | 1.1.0 |
