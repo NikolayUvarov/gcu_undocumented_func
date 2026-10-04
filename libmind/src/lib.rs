@@ -31,6 +31,7 @@ pub mod time;
 pub mod tts;
 pub mod tui;
 pub mod util;
+pub mod virtio;
 #[doc(hidden)]
 pub mod rt;
 

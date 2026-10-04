@@ -90,6 +90,9 @@ pub unsafe fn init() {
             cs,
         );
     }
+    for index in 0..16 {
+        set_handler(0x40 + index, (core::ptr::addr_of!(super::context::msi_table) as u64).wrapping_add(super::context::msi_table[index]), cs);
+    }
     set_handler(0x30, super::context::task_ipi_entry as *const () as u64, cs);
     set_handler(0x31, super::context::task_stop_entry as *const () as u64, cs);
     set_handler(0x32, super::context::task_wake_entry as *const () as u64, cs);
@@ -127,9 +130,11 @@ pub unsafe fn init() {
 static PIC_MASK: AtomicU16 = AtomicU16::new(0xFFF8);
 
 // Masks or unmasks a PIC line; called with the scheduler lock held.
-pub fn irq_masked(irq: u8) -> bool { PIC_MASK.load(Ordering::Relaxed) & (1 << irq) != 0 }
+// Lines 16 and up are MSI-X vectors: edge messages to the local APIC, never masked here.
+pub fn irq_masked(irq: u8) -> bool { irq < 16 && PIC_MASK.load(Ordering::Relaxed) & (1 << irq) != 0 }
 
 pub unsafe fn set_irq_masked(irq: u8, masked: bool) {
+    if irq >= 16 { return; }
     let bit = 1u16 << irq;
     let mask = if masked { PIC_MASK.fetch_or(bit, Ordering::Relaxed) | bit } else { PIC_MASK.fetch_and(!bit, Ordering::Relaxed) & !bit };
     if irq < 8 { outb(0x21, mask as u8); } else { outb(0xA1, (mask >> 8) as u8); }

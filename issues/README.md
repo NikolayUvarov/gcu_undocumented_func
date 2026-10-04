@@ -21,7 +21,6 @@ Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` an
 |---|---|---|---|---|---|
 | [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | — (101 done) | track D |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 102 | track D |
-| [104](104-virtio-modern-msix.md) | Modern VirtIO interface and MSI-X interrupts | kernel + driver | P2 | — | track A |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
 | [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | benchmark | track D |
 | — | Tools track: none open; the next tools in the plan are `ipc` and `caps` (P1, [docs/tools](../docs/tools/README.md) §2.2) | | | | |
@@ -108,5 +107,6 @@ Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` an
 | [076](../issues-done/076-monitors-show-restored-stat-fields.done) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0) | done (2026-10-04) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
+| [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

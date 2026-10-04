@@ -20,7 +20,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "network card ports and IRQ; 160 KiB DMA", "a client of the network card driver", "observe privilege", "screen; process control; input; COM1"];
+    "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "observe privilege", "screen; process control; input; COM1"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -181,9 +181,20 @@ impl Init {
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL); self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; }
             "virtio_net" => {
-                // VirtIO network card, legacy interface (vendor 1AF4, device 1000, class 02:00): ports in BAR0 and the IRQ line.
-                let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0)?; self.devices[index] = Some(device);
-                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, 0); grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?, 0);
+                // VirtIO network card (vendor 1AF4, class 02:00): modern-only (device 1041) or transitional (1000).
+                let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1041_1AF4, 0).or_else(|_| platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0))?;
+                self.devices[index] = Some(device);
+                // The modern interface when the device describes it in one memory BAR: that BAR and an MSI-X vector (the
+                // legacy line if MSI-X cannot be set up); otherwise the legacy registers in I/O BAR0 and the legacy line.
+                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                let modern = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar());
+                match modern {
+                    Some(bar) => {
+                        grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                        grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                    }
+                    None => { grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, 0); grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?, 0); }
+                }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "virtio_net")?, ALL); grants.copy(SLOT_MEM, self.dma(index, NET_DMA_BYTES)?, 0);
             }
             // The observe privilege (read-only statistics, MC-10.2) goes to sysmon and to logd, which names the sender

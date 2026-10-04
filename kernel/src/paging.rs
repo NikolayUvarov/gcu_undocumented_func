@@ -424,3 +424,13 @@ impl Space {
         }
     }
 }
+
+/// Makes the kernel's identity mapping of the 2 MiB page holding `physical` (below 4 GiB) uncached, for device
+/// registers the kernel itself writes (MSI-X tables). The caller checks that the page holds no RAM.
+pub unsafe fn uncached(physical: usize) {
+    let pdpt = KERNEL_PDPT.load(Ordering::Acquire) as *const u64;
+    let pd = (pdpt.add(physical >> 30).read() & !0xFFF) as *mut u64;
+    let entry = pd.add(physical >> 21 & 511);
+    entry.write(entry.read() | 0x18);
+    core::arch::asm!("invlpg [{}]", in(reg) physical, options(nostack));
+}

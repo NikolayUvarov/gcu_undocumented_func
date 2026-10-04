@@ -26,7 +26,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
 | `tts` | server endpoint, client endpoint of `audio_gw` |
-| `virtio_net` | server endpoint; if a VirtIO network card (1AF4:1000) is present: its I/O BAR0, its IRQ, 160 KiB DMA |
+| `virtio_net` | server endpoint; if a VirtIO network card (1AF4:1041 or 1000) is present: the memory BAR holding its modern configuration structures and an MSI-X vector (the IRQ line if MSI-X cannot be set up), or for a legacy-only card its I/O BAR0 and IRQ line; 160 KiB DMA |
 | `netstack` | server endpoint, a client of `virtio_net` (slot 2) |
 | `sysmon` | server endpoint, observe privilege (read-only statistics; only `sysmon` and `logd` get it) |
 | `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12), `virtio_net` (slot 13, the `net` diagnostics), `netstack` (slot 14); process-control and input privileges; ports 0x3F8–0x3FF |

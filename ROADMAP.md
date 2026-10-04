@@ -96,7 +96,7 @@ graph LR
 
 | Track | Constitution stage | Contents | Can start | Hard dependency for completion |
 |---|---|---|---|---|
-| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II; started: `virtio_net` (issue 100), modern VirtIO and MSI-X next (104); the AHCI, xHCI and AC97 drivers already restart after device quiesce | — |
+| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II; started: `virtio_net` with the modern interface and MSI-X (issues 100, 104); next: VirtIO block and input on `mind::virtio`; the AHCI, xHCI and AC97 drivers already restart after device quiesce | — |
 | **B. State and recovery** | IV | Checksummed block store → CID and immutable blocks → manifests/Merkle-DAG → transactional Head/Refs service → retention/GC → checkpoint/rebind; a recovery set usable without the main store | After II (on a RAM disk) | Durable block path from track A |
 | **C. Update and provenance** | V | Signed manifests and launch records (the manifest requests, it never grants: 3.11); A/B activation with last-known-good; key roles; reproducible toolchain (pinned `rust-toolchain`, `Cargo.lock`); AOT recipe keys | Signing and reproducible builds: now | Durable image storage from track B |
 | **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II; started: network stack `netstack` (101); next: policy broker (102), TLS (103) | NIC driver from track A (issue 100); import into track B |
@@ -131,8 +131,8 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Done | K3, K4 clocks and accounted kernel objects | Monotonic clock with stated resolution; per-owner quotas for tasks and endpoints |
 | Done | C1–C8: capabilities, IPC modes, MIND IDL, supervision, budgets, services ported | Stage II capability, IPC and supervision criteria pass in tests (issues 025–039, 044) |
 | P1 | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked (the remaining stage II exit criterion) |
-| P1 | Track A: VirtIO net, then block and input | Drivers restart under the supervisor with device quiesce (issue 100) |
-| P2 | Track D: network stack, policy broker, TLS | Flows as capabilities with quotas (issues 101–103) |
+| P1 | Track A: VirtIO block and input on `mind::virtio` | Drivers restart under the supervisor with device quiesce; MSI-X (done for net: 100, 104) |
+| P2 | Track D: policy broker, TLS | Flows as capabilities with quotas (stack done: 101; next 102, 103) |
 | P2 | Tracks B, C, E–G in parallel | Per track |
 
 ## 7. Maintenance of this roadmap

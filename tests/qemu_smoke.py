@@ -2117,6 +2117,13 @@ def _dns_server():
     return server
 
 
+def _msix_only(vm):
+    # The driver's interrupts arrive on an MSI-X vector (lines 16 and up), and it holds no legacy line.
+    driver = vm.services()["virtio_net"]
+    rows = [(int(line), int(count)) for line, count, holder in re.findall(r"IRQ=(\d+) COUNT=(\d+) HOLDER=(\d+)", vm.command("irqs", raw=True)) if int(holder) == driver]
+    assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -2127,7 +2134,7 @@ def net_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
-        require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP")
+        require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
@@ -2139,6 +2146,7 @@ def net_suite(args, disk):
         require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
+        _msix_only(vm)
         # A killed stack is restarted by init and configures itself again.
         require(vm.command(f"kill {vm.services()['netstack']}", raw=True), "KILLED PID=")
         require(vm.service_logs("init", "netstack RESTARTED"), "netstack RESTARTED")
@@ -2168,6 +2176,17 @@ def net_suite(args, disk):
         vm.close()
         web.shutdown(); dns.close()
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
+    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X).
+    for device, mode in [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
+        try:
+            require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), mode)
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+            if mode == "MODERN MSI-X":
+                _msix_only(vm)
+        finally:
+            vm.close()
     # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card; the stack reports no network.
     vm = VM(args, disk.relative_to(ROOT).as_posix())
     try:
@@ -2178,7 +2197,8 @@ def net_suite(args, disk):
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
-          "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; e1000 not taken", flush=True)
+          "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
+          "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
 
 
 def display_suite(args, disk):

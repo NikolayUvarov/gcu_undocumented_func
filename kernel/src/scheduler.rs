@@ -18,6 +18,8 @@ const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
+// Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
+const MSI_FIRST: usize = 16; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 // Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
 // The PIC, PIT and PCI configuration ports stay with the kernel.
@@ -32,12 +34,12 @@ struct Pending { cap: Capability, node: Node, moved_from: Option<usize> }
 // Counters for STAT (MC-10.2: observation, never authority).
 struct Accounting {
     last_switch: [u64; cpu::MAX], busy_ns: [u64; cpu::MAX], idle_ns: [u64; cpu::MAX], interrupts: [u64; cpu::MAX], switches: [u64; cpu::MAX],
-    irqs: [u64; 16], endpoint: [EndpointCounters; ENDPOINTS],
+    irqs: [u64; LINES], endpoint: [EndpointCounters; ENDPOINTS],
 }
 #[derive(Clone, Copy, Default)]
 struct EndpointCounters { messages: u64, busy: u64, timeouts: u64 }
 impl Accounting {
-    fn new() -> Self { Self { last_switch: [0; cpu::MAX], busy_ns: [0; cpu::MAX], idle_ns: [0; cpu::MAX], interrupts: [0; cpu::MAX], switches: [0; cpu::MAX], irqs: [0; 16], endpoint: [EndpointCounters::default(); ENDPOINTS] } }
+    fn new() -> Self { Self { last_switch: [0; cpu::MAX], busy_ns: [0; cpu::MAX], idle_ns: [0; cpu::MAX], interrupts: [0; cpu::MAX], switches: [0; cpu::MAX], irqs: [0; LINES], endpoint: [EndpointCounters::default(); ENDPOINTS] } }
 }
 // Memory kept alive by references after its owner let go; charged to the owner's heap quota while that owner lives.
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
@@ -83,7 +85,7 @@ struct Scheduler {
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
-    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
+    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -121,7 +123,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -314,7 +316,7 @@ impl Scheduler {
             released.extend(task.heap.take_regions()); released.extend(task.screen.take());
         }
         // The IRQ binding is removed once nobody owns the line capability anymore.
-        for irq in 0..16 {
+        for irq in 0..LINES {
             if self.irq_bind[irq].is_some() && !self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.contains(&Some(Capability::Interrupt(irq as u8)))) {
                 self.irq_bind[irq] = None; self.irq_pending[irq] = false; unsafe { interrupts::set_irq_masked(irq as u8, true); }
             }
@@ -356,6 +358,22 @@ impl Scheduler {
                 if bar.io { Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)) } else { Ok(Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
             }
             PLATFORM_DEVICE_IRQ => match self.devices.get(a).ok_or(ERR_NOT_FOUND)?.irq { 0 | 2 => Err(ERR_NOT_FOUND), irq => Ok(Capability::Interrupt(irq)) },
+            // An MSI-X vector for table entry `b` of device `a`, aimed at the BSP; the entry is programmed here, so a
+            // driver never chooses where its device's messages go. The vector stays with that entry for good.
+            PLATFORM_DEVICE_MSIX => {
+                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?;
+                let entry = u16::try_from(b).map_err(|_| ERR_INVALID)?;
+                let index = match self.msi.iter().position(|m| *m == Some((a, entry))) { Some(index) => index, None => self.msi.iter().position(Option::is_none).ok_or(ERR_NO_SLOT)? };
+                // The table's 2 MiB page becomes uncached in the kernel's identity map, unless the firmware lists RAM there.
+                let at = unsafe { pci::msix_entry(&device, entry) }.ok_or(ERR_NOT_FOUND)? as usize & !0x1F_FFFF;
+                let ram = (0..self.boot.memory_map_len).map(|i| unsafe { *self.boot.memory_map.add(i) })
+                    .any(|r| !matches!(r.kind, 11 | 12) && (r.start as usize) < at + 0x20_0000 && at < r.start as usize + r.pages as usize * 4096);
+                if ram { return Err(ERR_RIGHTS); }
+                unsafe { paging::uncached(at); }
+                unsafe { pci::msix(&device, entry, cpu::apic_id(0), 0x40 + index as u8) }.ok_or(ERR_NOT_FOUND)?;
+                self.msi[index] = Some((a, entry));
+                Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
+            }
             PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
@@ -551,7 +569,7 @@ impl Scheduler {
     unsafe fn ipc_recv(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox) -> Result<Option<usize>, usize> {
         let Some(Capability::Endpoint(ep, rights, _)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
-        if let Some(irq) = (0..16).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
+        if let Some(irq) = (0..LINES).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
@@ -793,6 +811,12 @@ impl Scheduler {
                     self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask && (request.msg[1] == 0 || d.id == request.msg[1] as u32)).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
+            // Configuration space, read only, of the PCI function one of whose BARs the capability covers.
+            SYSCALL_DEVICE_CONFIG => {
+                let base = match self.cap(slot, request.arg1) { Some(Capability::Mmio(base, _)) => Some(base as u64), Some(Capability::IoPorts(base, _)) => Some(base as u64), _ => None };
+                let device = base.and_then(|base| self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)));
+                match device { Some(device) if request.arg2 < 256 => Ok(unsafe { pci::config(device, request.arg2 as u8) } as usize), Some(_) => Err(ERR_INVALID), None => Err(ERR_RIGHTS) }
+            }
             SYSCALL_SCHED_SET => match self.find(request.arg1 as u64) {
                 None => Err(ERR_NOT_FOUND),
                 Some(target) => {
@@ -986,9 +1010,10 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         let registers = context::registers(sp); let vector = registers[15]; let cpu = cpu::id();
         if vector == 0x31 { asm!("cli"); loop { asm!("hlt"); } }
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
-        let irq = (33..48).contains(&vector).then_some(vector as usize - 32);
+        let irq = if (33..48).contains(&vector) { Some(vector as usize - 32) } else if (0x40..0x50).contains(&vector) { Some(MSI_FIRST + vector as usize - 0x40) } else { None };
         if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
-        else if let Some(irq) = irq { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // the driver will unmask the line
+        else if let Some(irq) = irq.filter(|&irq| irq < MSI_FIRST) { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // the driver will unmask the line
+        else if irq.is_some() { cpu::eoi(); } // MSI-X: an edge message, nothing to mask
         else if vector == 48 || vector == 50 { cpu::eoi(); }
 
         locked(|| {
