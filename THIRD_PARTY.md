@@ -9,6 +9,8 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `tts/data/stress_ru.txt` | [OpenRussian dictionary](https://github.com/Badestrand/russian-dictionary) (word forms with stress); word selection by a frequency list from [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) (content CC BY-SA 4.0) | **CC BY-SA 4.0** ([text](LICENSES/CC-BY-SA-4.0.txt)) | Selected and converted by `scripts/stress_openrussian.py` and `scripts/stress_exceptions.py`. This file, and any modified version of it, is shared under CC BY-SA 4.0. It is embedded in `tts.elf`, so a distributed boot image must keep this attribution. |
 | `tts/data/lexicon_en.txt` | [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict), Copyright (C) 1993-2015 Carnegie Mellon University; word selection by a frequency list from hermitdave/FrequencyWords | **BSD-style** ([text](LICENSES/CMUdict-BSD.txt)) | Converted to the tts phoneme alphabet by `scripts/lexicon_en.py`. Redistributions in source or binary form (it is embedded in `tts.elf`) must reproduce the CMU copyright notice and disclaimer. |
 
+Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.
+
 ## Rust dependencies (fetched by Cargo, not stored here)
 
 | Crate | Used by | Licence |
