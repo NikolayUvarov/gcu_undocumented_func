@@ -720,13 +720,38 @@ def monitors_check(vm):
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
+    # ipc: endpoints with their servers, the holders of one, who waits for whom (issue 080).
+    vm.send("ipc\n")
+    vm.expect("[IPC] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: the holders of the selected (first) endpoint
+    assert table_row(screen, r"\d+ endpoints, .* messages, a queue holds at most 4 senders"), screen
+    for service in ("vfs_server", "loader", "sysmon", "logd", "rtc"):
+        assert table_row(screen, fr"^ +\d+ +{service} \(PID \d+\) +\d+ +\d/4 "), (service, screen)
+    status = tool_status(vm, "[IPC] VIEW=ENDPOINTS SORT=INDEX")
+    first, holders = int(re.search(r"SELECTED=(\d+)", status)[1]), int(re.search(r"HOLDERS=(\d+)", status)[1])
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter closes the window
+    assert holders >= 1 and table_row(screen, re.escape(canon(f"Endpoint {first}: {holders} holders"))), (status, screen)
+    tool_status(vm, "HOLDERS=0")
+    vm.send("2")
+    status_line(vm, "[IPC] VIEW=WAITS")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter does nothing in this view
+    assert table_row(screen, r"tasks wait for a message on their own endpoints; \d+ edges, 0 deadlocks"), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[IPC] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command(f"kill {clock}"), "KILLED")
     for _ in range(20):
         if heap_used(vm) == baseline:
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders)", flush=True)
+    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders), ipc (endpoints, holders, waits)", flush=True)
     fm_check(vm)
 
 

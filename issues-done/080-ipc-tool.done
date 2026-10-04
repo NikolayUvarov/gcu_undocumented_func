@@ -1,0 +1,28 @@
+# 080 — `ipc`: endpoints, holders and the wait-for graph — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T3 · **Constitution:** MC-10.2
+
+## Problem
+
+The plan's `ipc` tool ([docs/tools](../docs/tools/README.md) §2.2, §4.7) does not exist; the shell's `endpoints` command prints raw records. `STAT` version 2 (075) has what it needs: each endpoint's server, holders, waiting senders and receivers, bound IRQ, message/busy/timeout counts, and each task's wait state.
+
+## Plan
+
+- `idl/sysinfo.wit` 2.1: `holders(index: u32) -> result<list<holder, 64>, error>` — the tasks holding a capability for that endpoint (PID, slot, rights, badge), collected by `sysmon` from `STAT_CAPS`.
+- `ipc` in `monitor/`: a table of endpoints (index, server, holders, waiting senders/receivers out of `ENDPOINT_QUEUE`, messages, busy, timeouts, IRQ), sortable; Enter shows the holders of one endpoint; a second view lists who waits for whom (task → endpoint → server, task → server for a reply) with cycles marked as deadlocks; `REQUEST_SYSINFO`.
+- Host test in `tests/monitor_host.rs` (a fake with a cycle); QEMU `tools` suite: `ipc` shows the services' endpoints with their servers and, with `pong` waiting on `ping`, the wait edge.
+
+## Acceptance criteria
+
+- The tests above pass; README and `docs/tools` describe `ipc`.
+
+## Resolution
+
+- `idl/sysinfo.wit` 2.1: `holder` record and `holders(index)`; `sysmon` reads `STAT_TASKS`, then `STAT_CAPS` of every live task, and returns the endpoint capabilities for that index (not-found for an index no endpoint has).
+- `monitor/src/ipc.rs`, program `ipc` (`REQUEST_SYSINFO`): view 1 — endpoints (index, server, holders, waiting senders of `ENDPOINT_QUEUE`, receivers, messages, busy, timeouts, IRQ, creator), sorted by index, messages or waiting, Enter shows the holders (task, slot, rights, badge); view 2 — the wait-for graph from the tasks' wait states (`WAIT_SEND` → the endpoint's server, `WAIT_REPLY` → the task) with cycles reported as deadlocks. The model gained `EndpointInfo`, `Holder` and `Source::endpoints/holders`.
+- Tests: `tests/monitor_host.rs` (`ipc_wait_graph_and_deadlocks`: edges, a two-task deadlock reported once, a sender to an endpoint without a server; `ipc_endpoints_and_holders`: table, sorting, the holders window, the waits view; `ipc` in the draw-everything test); QEMU `tools` suite: the services' endpoints with their servers, the holders window of the first endpoint, the waits view with no deadlock.
+- Deviation from the plan: saved replies are not shown — `STAT` does not count them. A deadlock in QEMU is covered by the host test only.
+
+## Related
+
+[075](075-stat-fields-for-the-monitors.done), [076](076-monitors-show-restored-stat-fields.done), [061](061-top-memmap-load-hw.done).

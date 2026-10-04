@@ -18,4 +18,4 @@ The plan's `caps` tool ([docs/tools](../docs/tools/README.md) §2.2, §4.7) show
 
 ## Related
 
-[151](151-shell-grant-slots-13-15.md), [080](080-ipc-tool.md).
+[151](151-shell-grant-slots-13-15.md), [080](../issues-done/080-ipc-tool.done).

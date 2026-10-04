@@ -76,6 +76,7 @@ USER_CRATES=(
     "monitor:memmap:memmap.elf"
     "monitor:load:load.elf"
     "monitor:hw:hw.elf"
+    "monitor:ipc:ipc.elf"
     "fm:fm:fm.elf"
     "edit:edit:edit.elf"
     "disk:df:df.elf"

@@ -105,6 +105,15 @@ impl Source for Client {
         let l = take(sysinfo::load(Endpoint::SYSINFO))?;
         Ok(Load { one: l.one, five: l.five, fifteen: l.fifteen, uptime_ms: l.uptime_ms, fast_ms: l.fast_ms, slow_ms: l.slow_ms, fast_count: l.fast_count, slow_count: l.slow_count })
     }
+    fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> {
+        let list = take(sysinfo::endpoints(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().map(|e| EndpointInfo { index: e.index, creator: e.creator, server: e.server, holders: e.holders, receivers: e.receivers, senders: e.senders,
+                                                         receiving: e.receiving, messages: e.messages, busy: e.busy, timeouts: e.timeouts, irq: e.irq }).collect())
+    }
+    fn holders(&mut self, index: u32) -> Result<Vec<Holder>, Problem> {
+        let list = take(sysinfo::holders(Endpoint::SYSINFO, index))?;
+        Ok(list.as_slice().iter().map(|h| Holder { pid: h.pid, slot: h.slot, rights: h.rights, badge: h.badge }).collect())
+    }
     fn now_ns(&self) -> u64 { mind::time::monotonic_ns() }
 }
 
