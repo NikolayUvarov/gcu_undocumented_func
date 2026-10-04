@@ -91,12 +91,13 @@ class Layout(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for part in ("libmind", "common"):
                 shutil.copytree(ROOT / part, Path(tmp) / part, ignore=shutil.ignore_patterns("target"))
+            shutil.copy(ROOT / "rust-toolchain.toml", tmp)  # the pinned toolchain, not the user's default
             (Path(tmp) / "idl").mkdir()
             for wit in (ROOT / "idl").glob("*.wit"):
                 shutil.copy(wit, Path(tmp) / "idl")
             (Path(tmp) / "idl" / "selftest.wit").write_text(SELFTEST)
             subprocess.run([sys.executable, str(ROOT / "scripts" / "mind_idl.py"), "--root", tmp], check=True, capture_output=True)
-            build = subprocess.run(["cargo", "+nightly", "build", "--release", "--target", "x86_64-unknown-none"], cwd=Path(tmp) / "libmind", capture_output=True, text=True)
+            build = subprocess.run(["cargo", "build", "--release", "--target", "x86_64-unknown-none"], cwd=Path(tmp) / "libmind", capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr[-3000:])
             self.assertNotIn("src/idl/", build.stderr, "generated code must build without warnings")
 

@@ -507,7 +507,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root` (the `boot` suite first checks that the bootloader names a corrupt or missing boot file), exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
+The QEMU integration test boots an isolated copy of `usb_root` (the `boot` suite first checks that the bootloader names a corrupt or missing boot file and, with `--panic-kernel`, that a kernel panic reports message, location, CPU and task), exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
 
 ```bash
 for fixture in busy_app isolation_app heap_app; do
@@ -516,9 +516,12 @@ for fixture in busy_app isolation_app heap_app; do
     -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
     "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
 done
+# Test-only kernel that panics on the first LOG call (boot suite checks the panic report):
+(cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 \
   --firmware OVMF.fd --busy-elf /tmp/mind-core-busy_app.elf \
-  --isolation-elf /tmp/mind-core-isolation_app.elf --heap-elf /tmp/mind-core-heap_app.elf
+  --isolation-elf /tmp/mind-core-isolation_app.elf --heap-elf /tmp/mind-core-heap_app.elf \
+  --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel
 # Repeat SMP/fault/heap handling on a single CPU:
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --cpus 1 \
   --busy-elf /tmp/mind-core-busy_app.elf \

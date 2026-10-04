@@ -1008,6 +1008,20 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(original)
     print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    if args.panic_kernel:
+        # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
+        target = disk / "kernel.elf"
+        target.write_bytes(Path(args.panic_kernel).read_bytes())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            deadline, pattern = time.monotonic() + 30, re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n")
+            while not pattern.search(vm.output.replace("\r", "")):
+                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
+                vm.collect(); time.sleep(.05)
+        finally:
+            vm.close()
+        target.write_bytes(kernel)
+        print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
 
 
 def main():
@@ -1018,6 +1032,7 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
+    parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--suites", help="comma-separated subset: boot,normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()

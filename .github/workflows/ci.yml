@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install && rustc -V
       - name: Build
@@ -46,7 +46,7 @@ jobs:
             usb: true
     name: QEMU (${{ matrix.name }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: QEMU and OVMF
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
       - name: Toolchain from rust-toolchain.toml
@@ -60,12 +60,14 @@ jobs:
               -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
               "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
           done
+          (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
       - name: QEMU suites
         if: ${{ !matrix.usb }}
         run: |
           python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd \
             --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
-            --heap-elf /tmp/mind-core-heap_app.elf ${{ matrix.args }}
+            --heap-elf /tmp/mind-core-heap_app.elf \
+            --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
       - name: USB image
         if: ${{ matrix.usb }}
         run: |

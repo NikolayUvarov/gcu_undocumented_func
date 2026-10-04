@@ -136,13 +136,36 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
     }
 }
 
+// Serial output without locks or allocation: the panic may come from the allocator or inside the scheduler lock.
+struct PanicSerial;
+impl core::fmt::Write for PanicSerial {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_print(text); Ok(()) }
+}
+
+static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe {
-        asm!("cli");
-        for &b in b"KERNEL PANIC\r\n" {
-            serial_write_byte(b);
-        }
-        cpu::halt_all();
+fn panic(info: &PanicInfo) -> ! {
+    use core::fmt::Write;
+    unsafe { asm!("cli"); }
+    // One report: a second panic (another CPU, or inside the formatting) only stops the machine.
+    if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { cpu::halt_all(); }
+    // Other CPUs stop first, so their output does not interleave with the report.
+    cpu::stop_others();
+    let cpu = cpu::id();
+    let mut out = PanicSerial;
+    let _ = write!(out, "\nKERNEL PANIC: {}", info.message());
+    if let Some(location) = info.location() { let _ = write!(out, " at {}:{}:{}", location.file(), location.line(), location.column()); }
+    let _ = write!(out, " CPU={}", cpu);
+    let running = &cpu::RUNNING[cpu];
+    let pid = running[0].load(core::sync::atomic::Ordering::Relaxed);
+    if pid != 0 {
+        let mut name = [0u8; 16];
+        name[..8].copy_from_slice(&running[1].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
+        name[8..].copy_from_slice(&running[2].load(core::sync::atomic::Ordering::Relaxed).to_le_bytes());
+        let len = name.iter().position(|&b| b == 0).unwrap_or(16);
+        let _ = write!(out, " PID={} NAME={}", pid, core::str::from_utf8(&name[..len]).unwrap_or("?"));
     }
+    let _ = write!(out, "\n");
+    cpu::halt_all();
 }

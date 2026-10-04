@@ -1,0 +1,30 @@
+# 018 — Kernel panic diagnostics — done
+
+**Type:** robustness · **Priority:** medium · **Status:** done (2026-10-04)
+
+## Problem
+
+`kernel/src/main.rs` `panic_handler` prints only `KERNEL PANIC` to the serial port and halts all CPUs. The message and the source location are lost, which makes kernel faults hard to analyse (Constitution v1.6, Article 10.4: sufficient evidence for failure analysis). Split from issue 007.
+
+## Plan
+
+- Print `PanicInfo` message and location to the serial port without allocating (the heap may be the cause of the panic).
+- Print the CPU number and, if available, the current task PID and name.
+- Keep the path lock-free: a panic inside the scheduler lock must not deadlock the output.
+
+## Acceptance criteria
+
+- A deliberate `panic!("test")` in a debug build prints `KERNEL PANIC: test at kernel/src/....rs:LINE:COL CPU=n` on the serial port.
+- A QEMU smoke check covers it (behind a test-only feature).
+
+## Related
+
+[007](007-kernel-font-and-primitives.done), [ROADMAP](../ROADMAP.md) — assurance.
+
+## Resolution
+
+- `kernel/src/main.rs` panic handler: interrupts off, other CPUs stopped first (`cpu::stop_others`), then one line on COM1 through a `core::fmt::Write` adapter over the serial port, with no lock and no allocation: `KERNEL PANIC: <message> at <file>:<line>:<column> CPU=<n> PID=<pid> NAME=<task>`. A second panic (another CPU, or during formatting) only halts.
+- The running task comes from `cpu::RUNNING` (PID and 16-byte name per CPU, atomics written by the scheduler at every switch), so the report does not need the scheduler lock.
+- Test: the kernel feature `panic-test` panics on the first `LOG` system call, inside the scheduler lock. The `boot` suite with `--panic-kernel` boots that kernel and expects `KERNEL PANIC: panic test at src/scheduler.rs:L:C CPU=0 PID=1 NAME=init`; CI builds it and runs the check.
+
+The file path is relative to the kernel crate (`src/...`), as rustc records it.
