@@ -1,15 +1,24 @@
 //! Keyboard input of the focused program: event words (`common/abi.rs`: legacy byte, key, modifiers, pressed,
 //! character) from the PS/2 driver and the UART, decoded in ring 3 (`mind::keys`). `read_key` gives key presses,
-//! `read_event` every event.
+//! `read_event` every event; `modifiers` tells which of Shift, Ctrl and Alt are held, as far as the events said.
 use crate::abi::*;
 use crate::sys::call;
+use core::sync::atomic::{AtomicU8, Ordering};
+
+static MODIFIERS: AtomicU8 = AtomicU8::new(0);
+
+/// The modifiers (MOD_SHIFT, MOD_CTRL, MOD_ALT) held at the last input event read: a key bar shows what F1–F10 do
+/// with them. The PS/2 keyboard reports a modifier going down or up on its own; a terminal only with a key.
+pub fn modifiers() -> u8 { MODIFIERS.load(Ordering::Relaxed) & (MOD_SHIFT | MOD_CTRL | MOD_ALT) }
+
+fn seen(word: usize) -> usize { if event_key(word) != 0 { MODIFIERS.store(event_mods(word), Ordering::Relaxed); } word }
 
 pub use crate::keys::{Code, Key};
 
 /// Next key press of the calling (focused) task; releases and events without a decoded key are skipped.
 pub fn read_key() -> Option<Key> {
     loop {
-        match call(SYSCALL_READ_INPUT, 0, 0) { 0 => return None, word => if let Some(key) = Key::from_event(word) { return Some(key); } }
+        match call(SYSCALL_READ_INPUT, 0, 0) { 0 => return None, word => if let Some(key) = Key::from_event(seen(word)) { return Some(key); } }
     }
 }
 
@@ -21,6 +30,14 @@ pub fn wait_key(ms: usize) -> Option<Key> {
     if let Some(key) = read_key() { return Some(key); }
     crate::time::sleep(ms);
     read_key()
+}
+
+/// Waits for a key; None as soon as the modifiers held are no longer `shown` (a key bar to draw again).
+pub fn wait_key_or_modifiers(shown: u8) -> Option<Key> {
+    loop {
+        if let Some(key) = wait_key(1000) { return Some(key); }
+        if modifiers() != shown { return None; }
+    }
 }
 
 /// Drains pending input, exits the process on Esc, then sleeps `ms`. Returns the last key.
@@ -47,7 +64,7 @@ impl KeyEvent {
 }
 
 /// Next input event of the active program, if any.
-pub fn read_event() -> Option<KeyEvent> { match call(SYSCALL_READ_INPUT, 0, 0) { 0 => None, word => Some(KeyEvent::from_word(word)) } }
+pub fn read_event() -> Option<KeyEvent> { match call(SYSCALL_READ_INPUT, 0, 0) { 0 => None, word => Some(KeyEvent::from_word(seen(word))) } }
 
 /// Waits up to `ms` for an input event (the sleep ends early when one arrives).
 pub fn wait_event(ms: usize) -> Option<KeyEvent> {

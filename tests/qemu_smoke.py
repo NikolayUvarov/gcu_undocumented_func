@@ -474,8 +474,24 @@ def keys_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("keymap us --switch both"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
     require(vm.service_logs("ps2_kbd", "[KBD] SWITCH CtrlOrAltShift"), "[KBD] SWITCH CapsLock")
+    # A modifier held on the PS/2 keyboard reaches the program on its own: fm's key bar shows what Shift does.
+    vm.send("fm\n")
+    status_line(vm, "[FM] READY")
+    plain = screen_text(vm)[-1]
+    vm.hmp("sendkey shift 3000")  # held for 3 s
+    time.sleep(.8)
+    held = screen_text(vm)[-1]
+    time.sleep(3)
+    released = screen_text(vm)[-1]
+    vm.serial()
+    assert plain.startswith("1Help") and "4Edit" in plain, plain
+    assert "4New" in held and "Help" not in held and "Edit" not in held, held
+    assert released == plain, released
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
     print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc; "
-          "keymap sets the layout and the switch key", flush=True)
+          "keymap sets the layout and the switch key; a held Shift changes fm's key bar", flush=True)
 
 
 def shell_suite(vm):

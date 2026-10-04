@@ -81,6 +81,7 @@ fn main(info: &'static mind::BootInfo) {
     if !start.is_empty() { fm.load(0, start, None, &mut disk); }
     mind::println!("[FM] READY {}", fm.status());
     loop {
+        fm.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); fm.draw(&mut grid, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
@@ -91,7 +92,8 @@ fn main(info: &'static mind::BootInfo) {
             if !fm.busy() { mind::println!("[FM] {}", fm.status()); } // finished, or waiting for an answer
             match mind::input::read_key() { Some(key) => key, None => continue }
         } else {
-            loop { if let Some(key) = mind::input::wait_key(1000) { break key; } }
+            // Shift, Ctrl or Alt going down or up changes the key bar: drawn again.
+            match mind::input::wait_key_or_modifiers(fm.modifiers) { Some(key) => key, None => continue }
         };
         let outcome = fm.key(key, &mut disk);
         mind::println!("[FM] {}", fm.status());

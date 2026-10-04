@@ -238,6 +238,18 @@ pub fn fkey_bar(grid: &mut Grid, y: usize, labels: &[&str], theme: &Theme) {
     }
 }
 
+/// What F1–F10 do alone and with Shift, Ctrl or Alt held (empty labels leave their slot blank).
+pub struct KeyBars<'a> { pub plain: [&'a str; 10], pub shift: [&'a str; 10], pub ctrl: [&'a str; 10], pub alt: [&'a str; 10] }
+
+impl<'a> KeyBars<'a> {
+    /// The labels for the modifiers held (MOD_*): while Shift, Ctrl or Alt alone is held the bar shows what the
+    /// keys do with it, as Norton Commander does; otherwise the plain labels.
+    pub fn labels(&self, modifiers: u8) -> &[&'a str; 10] {
+        use crate::abi::{MOD_ALT, MOD_CTRL, MOD_SHIFT};
+        match modifiers & (MOD_SHIFT | MOD_CTRL | MOD_ALT) { MOD_SHIFT => &self.shift, MOD_CTRL => &self.ctrl, MOD_ALT => &self.alt, _ => &self.plain }
+    }
+}
+
 /// A dialog frame centred on the grid; returns the area inside the frame.
 pub fn dialog(grid: &mut Grid, title: &str, w: usize, h: usize, theme: &Theme) -> Rect {
     let area = grid.area().centered(w, h);

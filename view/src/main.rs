@@ -28,11 +28,13 @@ fn main(info: &'static BootInfo) {
     let mut viewer = Viewer::new(Disk(file), window.as_mut_slice(), path);
     mind::println!("[VIEW] OPEN {} {} BYTES", path, size);
     loop {
+        viewer.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); let area = grid.area(); viewer.draw(&mut grid, area, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
         mind::println!("[VIEW] TOP {:#X}", viewer.top());
-        let key = loop { if let Some(key) = mind::input::wait_key(1000) { break key; } };
+        // Shift going down or up changes the key bar: drawn again.
+        let Some(key) = mind::input::wait_key_or_modifiers(viewer.modifiers) else { continue };
         if viewer.key(key) == Action::Quit { mind::println!("[VIEW] DONE"); return; }
     }
 }

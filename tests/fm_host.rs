@@ -387,6 +387,30 @@ fn draws_on_any_screen() {
     }
 }
 
+#[test]
+fn key_bars_follow_the_modifiers() {
+    let mut disk = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    let bar = |fm: &mut Fm, modifiers: u8| { fm.modifiers = modifiers; draw(fm, 100, 30)[29].clone() };
+    assert!(bar(&mut fm, 0).starts_with("1Help") && bar(&mut fm, 0).contains("4Edit"), "{}", bar(&mut fm, 0));
+    let shifted = bar(&mut fm, MOD_SHIFT);
+    assert!(shifted.contains("4New") && !shifted.contains("Help") && !shifted.contains("Quit"), "{}", shifted);
+    let ctrl = bar(&mut fm, MOD_CTRL);
+    assert!(ctrl.contains("3Name") && ctrl.contains("4Ext") && ctrl.contains("5Time") && ctrl.contains("6Size"), "{}", ctrl);
+    let alt = bar(&mut fm, MOD_ALT);
+    assert!(alt.contains("1Left") && alt.contains("2Right") && alt.contains("7Find"), "{}", alt);
+    // The viewer and the editor inside fm follow them too.
+    fm.load(0, "", Some("readme.txt"), &mut disk);
+    fm.key(f(3), &mut disk);
+    assert!(bar(&mut fm, MOD_SHIFT).contains("7Next"));
+    fm.key(f(10), &mut disk);
+    fm.key(f(4), &mut disk);
+    // A read-only file: the notice covers the bar until a key, but holding Shift shows what the keys do.
+    assert!(bar(&mut fm, 0).starts_with("READ-ONLY: on the boot disk only data/ may be changed"), "{}", bar(&mut fm, 0));
+    assert!(bar(&mut fm, MOD_SHIFT).contains("2Save as"));
+}
+
 fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }
 fn alt_f2() -> Key { alt_f(2) }
 fn typed(fm: &mut Fm, disk: &mut Mem, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
@@ -625,7 +649,8 @@ fn built_in_editor() {
     typed(&mut fm, &mut disk, "x");
     assert!(fm.status().contains("MODIFIED=0"));
     let screen = draw(&mut fm, 100, 30);
-    assert!(screen[0].contains("RO"), "{}", screen[0]);
+    assert!(screen[0].contains("READ-ONLY  Ln 1"), "{}", screen[0]);
+    assert!(fm.editor.as_ref().unwrap().notice.as_deref().unwrap().contains("READ-ONLY"));
     fm.key(f(10), &mut disk);
     assert!(fm.editor.is_none());
     // F4 on a directory says what it does.

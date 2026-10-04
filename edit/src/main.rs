@@ -84,10 +84,12 @@ fn main(info: &'static mind::BootInfo) {
     let mut editor = Editor::new(text, path, read_only);
     mind::println!("[EDIT] READY {} RO={}", editor.status(), read_only as u8);
     loop {
+        editor.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); editor.draw(&mut grid, &CLASSIC) };
         term.set_cursor(cursor);
         term.present();
-        let key = loop { if let Some(key) = mind::input::wait_key(1000) { break key; } };
+        // Shift, Ctrl or Alt going down or up changes the key bar: drawn again.
+        let Some(key) = mind::input::wait_key_or_modifiers(editor.modifiers) else { continue };
         let (path, quit) = match editor.key(key) {
             Outcome::Quit => break,
             Outcome::Save(path) => (path, false),

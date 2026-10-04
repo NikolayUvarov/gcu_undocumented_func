@@ -2,8 +2,9 @@
 //! `Ps2` turns PS/2 set 1 scan codes (as the i8042 translates them) into key events with modifiers and the US or
 //! Russian layout; `Vt` turns UART bytes from a VT100/xterm terminal (UTF-8 text, CSI/SS3 sequences) into the same
 //! events. The event word is described in `common/abi.rs` (`input_event`: legacy byte, KEY_*, MOD_*, pressed,
-//! character); the decoders produce presses only, with the scan code or UART byte as the legacy byte. This file builds
-//! on the host for tests.
+//! character); the decoders produce presses, with the scan code or UART byte as the legacy byte, and `Ps2` also a
+//! KEY_SHIFT, KEY_CTRL or KEY_ALT event when a modifier goes down or up (so a key bar can show what Shift+F4 does
+//! while Shift is held; a terminal cannot tell). This file builds on the host for tests.
 use crate::abi::*;
 
 /// Which key: a plain character or a special key.
@@ -17,9 +18,15 @@ pub struct Key(pub usize);
 /// F12 (the function keys are KEY_F1..=KEY_F12).
 pub const KEY_F12: u16 = KEY_F1 + 11;
 
+/// Shift, Ctrl, Alt or Caps Lock on its own: the event only says which modifiers are held now.
+pub const fn is_modifier(key: u16) -> bool { matches!(key, KEY_SHIFT | KEY_CTRL | KEY_ALT | KEY_CAPS_LOCK) }
+
 impl Key {
-    /// The key press an event word describes; None for a release or an event that carries only a legacy byte.
-    pub fn from_event(word: usize) -> Option<Self> { (event_pressed(word) && event_key(word) != 0).then_some(Self(word)) }
+    /// The key press an event word describes; None for a release, a modifier going down or up, or an event that
+    /// carries only a legacy byte.
+    pub fn from_event(word: usize) -> Option<Self> {
+        (event_pressed(word) && event_key(word) != 0 && !is_modifier(event_key(word))).then_some(Self(word))
+    }
     pub fn code(self) -> Code {
         match event_key(self.0) {
             KEY_CHAR => Code::Char, KEY_ENTER => Code::Enter, KEY_ESC => Code::Esc, KEY_BACKSPACE => Code::Backspace, KEY_TAB => Code::Tab,
@@ -113,10 +120,13 @@ impl Ps2 {
     fn ctrl(&self) -> bool { self.ctrl[0] || self.ctrl[1] }
     fn alt(&self) -> bool { self.alt[0] || self.alt[1] }
     pub fn mods(&self) -> u8 { (self.shift() as u8 * MOD_SHIFT) | (self.ctrl() as u8 * MOD_CTRL) | (self.alt() as u8 * MOD_ALT) | (self.caps as u8 * MOD_CAPS) }
+    /// An event that only says which modifiers are held now (after a layout switch took a modifier's release).
+    pub fn modifiers(&self) -> Event { Event::Key(input_event(0, KEY_SHIFT, self.mods(), false, 0)) }
 
     /// One byte from the controller; a key press carries the scan code as its legacy byte.
     pub fn feed(&mut self, byte: u8) -> Option<Event> {
-        match self.decode(byte) { Some(Event::Key(word)) => Some(Event::Key(with_byte(word, byte))), other => other }
+        // A modifier going down or up carries no legacy byte: READ_KEY readers never saw those scan codes.
+        match self.decode(byte) { Some(Event::Key(word)) if !is_modifier(event_key(word)) => Some(Event::Key(with_byte(word, byte))), other => other }
     }
 
     fn decode(&mut self, byte: u8) -> Option<Event> {
@@ -134,7 +144,11 @@ impl Ps2 {
             _ => None,
         };
         if let Some(state) = modifier {
+            // A held key repeats its make code: only a change is reported.
+            let changed = *state == released;
             *state = !released;
+            let which = match code { 0x2A | 0x36 => KEY_SHIFT, 0x1D => KEY_CTRL, _ => KEY_ALT };
+            let report = changed.then(|| Event::Key(input_event(0, which, self.mods(), !released, 0)));
             if !released {
                 // Ctrl+Shift or Alt+Shift (as `switch` says): the layout switches when one of them is released with no
                 // other key between.
@@ -145,10 +159,11 @@ impl Ps2 {
                     Switch::CapsLock | Switch::None => false,
                 };
                 if chord { self.chord = true; }
-                return None;
+                return report;
             }
+            // The driver follows a layout switch with `modifiers()`, so the release is not lost.
             if core::mem::take(&mut self.chord) { return self.toggle(); }
-            return None;
+            return report;
         }
         if released { return None; }
         self.chord = false;

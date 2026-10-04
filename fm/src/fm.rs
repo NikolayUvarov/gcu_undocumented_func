@@ -6,7 +6,7 @@ use crate::editor::{Editor, Outcome as EditOutcome};
 use crate::keys::{Code, Key};
 use crate::panel::{self, display, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use crate::tui::viewer::{Action, Source, Viewer};
-use crate::tui::widgets::{buttons_key, dialog, fkey_bar, input_dialog, message, progress, Edit, InputLine, ListState, MenuAction, MenuBar};
+use crate::tui::widgets::{buttons_key, dialog, fkey_bar, input_dialog, message, progress, Edit, InputLine, KeyBars, ListState, MenuAction, MenuBar};
 use crate::tui::{Grid, Line, Rect, Theme};
 use alloc::boxed::Box;
 use alloc::format;
@@ -94,6 +94,9 @@ const FILES_ITEMS: [&str; 11] = ["View  F3", "Edit  F4", "New file  Shift+F4", "
 const COMMAND_ITEMS: [&str; 2] = ["Find file  Alt+F7", "Swap panels  Ctrl+U"];
 const OPTION_ITEMS: [&str; 1] = ["Hidden and system files  Ctrl+H"];
 const MENU_ITEMS: [&[&str]; 5] = [&PANEL_ITEMS, &FILES_ITEMS, &COMMAND_ITEMS, &OPTION_ITEMS, &PANEL_ITEMS];
+const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "", "View", "Edit", "Copy", "RenMov", "Mkdir", "Delete", "PullDn", "Quit"],
+                                         shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["", "", "Name", "Ext", "Time", "Size", "", "", "", ""],
+                                         alt: ["Left", "Right", "", "", "", "", "Find", "", "", ""] };
 
 const HELP: [&str; 13] = [
     "Tab — other panel; Enter — open a directory, run a program, view a file",
@@ -269,13 +272,16 @@ pub struct Fm<'b> {
     quick: Vec<u8>,
     preview: Option<(String, Vec<u8>, u64)>, // name, first bytes, size: what quick view shows
     volumes: [String; 2], // the volume line of each panel for the information panel
+    /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bars show what the keys do with them.
+    pub modifiers: u8,
 }
 
 impl<'b> Fm<'b> {
     /// Both panels on the root; `window` is the viewer's buffer (64 KiB is plenty).
     pub fn new(window: &'b mut [u8], disk: &mut dyn Disk) -> Self {
         let mut fm = Self { panels: [Panel::new(Mode::Full), Panel::new(Mode::Brief)], active: 0, menu: MenuBar::new(&MENU_TITLES, &MENU_ITEMS), dialog: None, notice: None,
-                            job: None, editor: None, viewer: None, window: Some(window), quick: vec![0; PREVIEW], preview: None, volumes: [String::new(), String::new()] };
+                            job: None, editor: None, viewer: None, window: Some(window), quick: vec![0; PREVIEW], preview: None, volumes: [String::new(), String::new()],
+                            modifiers: 0 };
         fm.load(0, "", None, disk);
         fm.load(1, "", None, disk);
         fm
@@ -364,7 +370,10 @@ impl<'b> Fm<'b> {
             None => { self.notice = Some(format!("Cannot open {}", display(path))); return; }
         };
         let read_only = !new && !disk.writable(path);
-        self.editor = Some(Editor::new(text, path, read_only));
+        let mut editor = Editor::new(text, path, read_only);
+        // Where the user may write: ram: and data/ on the boot disk.
+        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: (Shift+F2 saves a copy there)")); }
+        self.editor = Some(editor);
     }
 
     // Saves the editor's text: `name.tmp` first, then it replaces the file (best effort on FAT).
@@ -849,8 +858,8 @@ impl<'b> Fm<'b> {
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme) -> Option<(usize, usize)> {
         let (w, h) = (grid.cols, grid.rows);
         grid.clear(theme.panel);
-        if let Some(editor) = self.editor.as_mut() { return editor.draw(grid, theme); }
-        if let Some(viewer) = self.viewer.as_mut() { let area = grid.area(); return viewer.draw(grid, area, theme); }
+        if let Some(editor) = self.editor.as_mut() { editor.modifiers = self.modifiers; return editor.draw(grid, theme); }
+        if let Some(viewer) = self.viewer.as_mut() { viewer.modifiers = self.modifiers; let area = grid.area(); return viewer.draw(grid, area, theme); }
         let height = h.saturating_sub(2);
         let left = w / 2;
         for side in 0..2 {
@@ -864,7 +873,7 @@ impl<'b> Fm<'b> {
         // The line above the key bar: a notice, or where the active panel is.
         let line = self.notice.clone().unwrap_or_else(|| format!("{}>", display(&self.panels[self.active].path)));
         grid.text_padded(0, h - 2, &line, w, if self.notice.is_some() { theme.marked } else { theme.fkey_number });
-        fkey_bar(grid, h - 1, &["Help", "", "View", "Edit", "Copy", "RenMov", "Mkdir", "Delete", "PullDn", "Quit"], theme);
+        fkey_bar(grid, h - 1, KEYS.labels(self.modifiers), theme);
         if self.menu.open { self.menu.draw(grid, 0, theme); }
         if let Some(job) = self.job.as_ref() { Self::draw_job(job, grid, theme); return None; }
         match self.dialog.as_mut() {

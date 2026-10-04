@@ -192,10 +192,10 @@ Ten building blocks; the tools in §4 are thin on top of them.
 ### 4.2 `edit` — panel text editor
 
 - **Buffer:** a piece table (the original file, read-only, plus an append buffer) with a line index: large files open cheaply and undo is simple. The first limit is 8 MiB per file (per-task heap 16 MiB).
-- **Screen:** menu bar (F9), text area, status line (file name, line:column, modified, INS/OVR, UTF-8, LF/CRLF), F-key bar.
+- **Screen:** menu bar (F9), text area, status line (file name, line:column, modified, INS/OVR, UTF-8, LF/CRLF; READ-ONLY, highlighted, for a file that cannot be changed), F-key bar — while Shift, Ctrl or Alt is held it shows what F1–F10 do with it (Shift+F2 save as, Shift+F7 next, Ctrl+F7 replace, Alt+F8 go to line), as in `fm` and `view`.
 - **Keys:** arrows, Home/End, PgUp/PgDn, Ctrl+Home/End, Ctrl+←/→ by word, Shift + movement selects, Ctrl+C/X/V (the editor's clipboard; a system clipboard later), Del/Backspace, Tab, F2 save, Shift+F2 save as (needs a directory handle), F7 search, Ctrl+F7 replace, Alt+F8 go to line, F10 quit with an unsaved-changes dialog; undo Ctrl+U / Alt+Backspace, redo Ctrl+Y.
 - **Text:** UTF-8 (Russian and English), line endings preserved, tab width 4 or 8, invalid UTF-8 shown with a replacement glyph and saved byte for byte.
-- **Modes:** read-only (opened with a read-only handle) and hex (shared with `view`).
+- **Modes:** read-only (opened with a read-only handle; said at once in the bottom line, and again at any key that would change the text) and hex (shared with `view`).
 - **Later:** syntax highlighting (Rust, TOML, WIT, Markdown), column selection.
 - The core (buffer, cursor, search, undo) is a `no_std` module that also builds on the host and is tested there, like `tests/tts_host.rs`.
 - Done in issue 067 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Since issue 071 the editor gets a VFS client confined to its file's directory (`vfs.wit` `scope`) rather than a handle for the one file: saving through `name.tmp` and a rename needs the directory. Deviation: no hex mode yet (use `view`).
