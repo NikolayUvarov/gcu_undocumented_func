@@ -17,8 +17,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge: PCI location, guard page, the driver as holder, limits, kernel memory | kernel | P2 | — | track G, T1 |
-| [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | 075 | track G, T1 |
+| [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | — (075 done) | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
 
@@ -98,5 +97,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [072](../issues-done/072-fixed-grant-slots.done) | Fixed capability slots for launcher grants (`SLOT_DYNAMIC` 16) | done (2026-10-04) |
 | [073](../issues-done/073-port-out-block.done) | `PORT_OUT_BLOCK`: block writes of 16-bit words to a port | done (2026-10-04) |
 | [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
+| [075](../issues-done/075-stat-fields-for-the-monitors.done) | `STAT` fields the monitors lost in the merge (`STAT_VERSION` 2) | done (2026-10-04) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

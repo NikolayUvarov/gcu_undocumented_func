@@ -1,10 +1,10 @@
 # 076 — The monitors show the restored `STAT` fields
 
-**Type:** tool · **Owner:** tools track (`idl/sysinfo.wit`, `sysmon/`, `monitor/`) · **Priority:** P2 · **Status:** open · **Blocked by:** [075](075-stat-fields-for-the-monitors.md) · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
+**Type:** tool · **Owner:** tools track (`idl/sysinfo.wit`, `sysmon/`, `monitor/`) · **Priority:** P2 · **Status:** open · **Blocked by:** — ([075](../issues-done/075-stat-fields-for-the-monitors.done) done) · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
 
 ## Problem
 
-Issue [075](075-stat-fields-for-the-monitors.md) adds back to `STAT` what the monitors lost in the merge ([051](../issues-done/051-merge-main-into-tools.done)). `sysmon` and `idl/sysinfo.wit` do not carry those fields yet, and the monitors still show less than on the tools branch: `hw` lists PCI devices by index, `memmap` has no largest free block, names the guard page "?", and takes the table limits from constants, `top` has no kernel memory per task. The QEMU `tools` suite was relaxed in the merge to match.
+Issue [075](../issues-done/075-stat-fields-for-the-monitors.done) adds back to `STAT` what the monitors lost in the merge ([051](../issues-done/051-merge-main-into-tools.done)). `sysmon` and `idl/sysinfo.wit` do not carry those fields yet, and the monitors still show less than on the tools branch: `hw` lists PCI devices by index, `memmap` has no largest free block, names the guard page "?", and takes the table limits from constants, `top` has no kernel memory per task. The QEMU `tools` suite was relaxed in the merge to match.
 
 ## Plan
 
@@ -20,4 +20,4 @@ Issue [075](075-stat-fields-for-the-monitors.md) adds back to `STAT` what the mo
 
 ## Related
 
-[075](075-stat-fields-for-the-monitors.md), [061](../issues-done/061-top-memmap-load-hw.done), [060](../issues-done/060-sysmon.done), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
+[075](../issues-done/075-stat-fields-for-the-monitors.done), [061](../issues-done/061-top-memmap-load-hw.done), [060](../issues-done/060-sysmon.done), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
