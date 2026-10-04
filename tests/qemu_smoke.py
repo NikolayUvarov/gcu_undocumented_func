@@ -560,8 +560,8 @@ def table_row(screen, pattern):
     return next((row for row in screen if re.search(pattern, row)), None)
 
 
-def status_line(vm, text, timeout=8, raw=False):
-    # The whole line from `text` on (expect() may return before the line ends); `raw` keeps real PIDs.
+def status_line(vm, text, timeout=8, raw=False, whole=False):
+    # The line from `text` on (expect() may return before the line ends), or the `whole` line; `raw` keeps real PIDs.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         vm.collect()
@@ -570,7 +570,7 @@ def status_line(vm, text, timeout=8, raw=False):
         at = clean.find(text)
         if at >= 0 and "\n" in clean[at:]:
             vm.output = ""
-            return clean[at:clean.index("\n", at)]
+            return clean[clean.rfind("\n", 0, at) + 1 if whole else at:clean.index("\n", at)]
         time.sleep(.01)
     raise AssertionError(f"Timeout waiting for the line {text!r}: {vm.output[-3000:]}")
 
@@ -1552,6 +1552,154 @@ def edit_suite(args):
     print("PASS: edit image: fsck.fat clean; mtools reads the saved files byte for byte; no temporary files left", flush=True)
 
 
+def fat16_chain_link(image, start, name):
+    """The FAT16 volume at sector `start` of `image`: (offsets of the FAT entry of the second cluster of root file
+    `name` (8.3, upper case) in every FAT copy, its value)."""
+    with image.open("rb") as f:
+        f.seek(start * 512)
+        boot = f.read(512)
+        reserved, fats, root_entries, fat_size = struct.unpack_from("<H", boot, 14)[0], boot[16], struct.unpack_from("<H", boot, 17)[0], struct.unpack_from("<H", boot, 22)[0]
+        f.seek((start + reserved + fats * fat_size) * 512)
+        root = f.read(root_entries * 32)
+        short = name.split(".")[0].ljust(8).encode() + name.split(".")[1].ljust(3).encode()
+        first = next(struct.unpack_from("<H", root, i + 26)[0] for i in range(0, len(root), 32) if root[i:i + 11] == short)
+        fat_at = lambda copy, cluster: (start + reserved + copy * fat_size) * 512 + cluster * 2
+        f.seek(fat_at(0, first))
+        second = struct.unpack("<H", f.read(2))[0]
+        f.seek(fat_at(0, second))
+        value = struct.unpack("<H", f.read(2))[0]
+    return [fat_at(copy, second) for copy in range(fats)], value
+
+
+def patch_words(image, offsets, value):
+    with image.open("r+b") as f:
+        for offset in offsets:
+            f.seek(offset)
+            f.write(struct.pack("<H", value))
+
+
+def disk_check(vm):
+    """fm writes (copy a tree from the boot disk to ram:, rename, copy back to data/, delete, mkdir, edit in place),
+    df before and after, fsck on a volume with a broken chain and on a clean one."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    def leave(text):
+        vm.send_bytes(b"\x1b[21~")
+        require(vm.expect("EXITED. SHELL RESUMED."), text)
+        time.sleep(.1); vm.collect(); vm.output = ""
+    def ram_free():
+        line = next(l for l in vm.command("df").splitlines() if l.startswith("ram:"))
+        return int(line.split()[-2])
+    f5, f6, f7, f8, alt_f2, end = b"\x1b[15~", b"\x1b[17~", b"\x1b[18~", b"\x1b[19~", b"\x1b[12;3~", b"\x1b[F"
+    listing = vm.command("df")
+    require(listing, "VOLUME  LABEL        TYPE   CLUSTER    SIZE KB    USED KB    FREE KB  USE")
+    assert re.search(r"A:\s+MINDTEST\s+FAT16\s+\d+\s+\d+", listing), listing
+    assert re.search(r"ram:\s+MIND RAM\s+FAT16\s+\d+\s+8\d{3}\s+0\s+8\d{3}\s+0%", listing), listing
+    before = ram_free()
+    # Session 1: data/tree copied to ram: with F5.
+    vm.send("fm data\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/data FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=..")
+    keys(alt_f2, "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/ram: BRIEF")
+    keys(b"\x1b[B", "CURRENT=tree ")
+    keys(f5, "DIALOG=TARGET")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "RIGHT=/ram: BRIEF")
+    leave("[FM] DONE")
+    require(vm.command("ls ram:tree"), "2 ENTRIES, 1 FILES, 6 BYTES")
+    require(vm.command("ls ram:tree/sub"), "1 ENTRIES, 1 FILES, 9 BYTES")
+    copied = ram_free()
+    assert copied < before, (before, copied)
+    # Session 2: rename on ram:, copy back to data/, delete from ram:, a new directory, an edit in place.
+    vm.send("fm data\n")
+    status_line(vm, "[FM] READY")
+    keys(alt_f2, "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/ram: BRIEF")
+    keys(b"\t", "ACTIVE=R CURRENT=tree ")
+    keys(f6, "DIALOG=TARGET")
+    keys(b"\x7f" * 24, "DIALOG=TARGET")
+    keys(b"ram:/moved", "DIALOG=TARGET")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "CURRENT=moved ")
+    keys(f5, "DIALOG=TARGET")  # to the other panel: A:/data
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "ACTIVE=R")
+    keys(f8, "DIALOG=DELETE")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "RIGHT=/ram: BRIEF")
+    keys(f7, "DIALOG=MKDIR")
+    keys("готово".encode(), "DIALOG=MKDIR")
+    keys(b"\r", "CURRENT=готово ")
+    keys(b"\t", "ACTIVE=L CURRENT=moved ")  # the copy put the cursor on it
+    keys(b"\r", "LEFT=/data/moved FULL")
+    keys(end, "CURRENT=a.txt ")
+    keys(b"\x1bOS", "EDITOR LINE=1 COL=1 BYTES=6 LINES=2 MODIFIED=0")
+    keys(b"\x1b[1;5F", "EDITOR LINE=2 COL=1 ")
+    keys("ещё".encode(), "BYTES=12 ")
+    keys(b"\x1bOQ", "MODIFIED=0")
+    keys(b"\x1b[21~", "LEFT=/data/moved FULL")
+    leave("[FM] DONE")
+    require(vm.command("ls ram:"), "1 ENTRIES, 0 FILES, 0 BYTES")
+    require(vm.command("ls data/moved"), "2 ENTRIES, 1 FILES, 12 BYTES")
+    vm.send_bytes(b"cat data/moved/sub/b.txt\n")
+    require(vm.expect("MIND> "), "бета")
+    after = ram_free()
+    assert copied < after <= before, (before, copied, after)  # only the new directory's cluster (512 bytes) is used
+    # fsck: the boot disk has a broken chain (broken.txt), the RAM disk is clean; nothing is changed.
+    output = vm.command("fsck")
+    require(output, "ERRORS: lost clusters")
+    require(output, "broken chains 1, size mismatches 1")
+    require(output, "first: broken.txt: the cluster chain runs into a free or invalid cluster")
+    assert re.search(r"ram: MIND RAM FAT16: 0 files, 1 directories; 1 clusters used, \d+ free\s+clean", output), output
+    require(output, "fsck: 1 volume with errors (nothing was changed)")
+    require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
+    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+
+
+def disk_suite(args):
+    """fm's write operations, df and fsck on a raw FAT disk with a deliberately broken chain."""
+    if not raw_tools():
+        print("SKIP: disk suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / "usb_root") as temp:
+        temp = Path(temp)
+        (temp / "a.txt").write_text("alpha\n")
+        (temp / "b.txt").write_bytes("бета\n".encode())
+        (temp / "broken.txt").write_bytes(bytes(range(256)) * 64)  # 16 KiB: several clusters
+        image, start, fs_sectors = raw_fat_image(temp, {"broken.txt": temp / "broken.txt"})
+        part = f"{image}@@{start * 512}"
+        mtools = lambda *command: subprocess.run(list(command), env=MTOOLS_ENV, check=True, capture_output=True).stdout
+        for directory in ("data", "data/tree", "data/tree/sub"):
+            mtools("mmd", "-i", part, f"::/{directory}")
+        mtools("mcopy", "-i", part, str(temp / "a.txt"), "::/data/tree/a.txt")
+        mtools("mcopy", "-i", part, str(temp / "b.txt"), "::/data/tree/sub/b.txt")
+        # The second cluster of broken.txt is marked bad: the chain is broken and vfs_server never reuses the cluster.
+        offsets, value = fat16_chain_link(image, start, "BROKEN.TXT")
+        patch_words(image, offsets, 0xFFF7)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            disk_check(vm)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-disk-{args.cpus}cpu.log").write_text(vm.log)
+        # fsck.fat agrees that the chain is broken; restored, the volume is clean.
+        broken = image.parent / "broken.img"
+        with image.open("rb") as f:
+            f.seek(start * 512)
+            broken.write_bytes(f.read(fs_sectors * 512))
+        assert subprocess.run(["fsck.fat", "-n", str(broken)], capture_output=True).returncode != 0
+        broken.unlink()
+        patch_words(image, offsets, value)
+        fsck_volume(image, start, fs_sectors)
+        assert mtools("mtype", "-i", part, "::/data/moved/a.txt") == "alpha\nещё".encode()
+        assert mtools("mtype", "-i", part, "::/data/moved/sub/b.txt") == "бета\n".encode()
+        assert mtools("mtype", "-i", part, "::/broken.txt") == (temp / "broken.txt").read_bytes()
+    print("PASS: disk image: with the chain restored, fsck.fat is clean; the files fm copied and edited read back with mtools", flush=True)
+
+
 def block_suite(args, block_elf):
     """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
     stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
@@ -1712,10 +1860,10 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1733,6 +1881,9 @@ def main():
             continue
         if suite == "edit":
             edit_suite(args)
+            continue
+        if suite == "disk":
+            disk_suite(args)
             continue
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)

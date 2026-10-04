@@ -184,6 +184,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Keys (Norton Commander / FAR):** Tab — other panel; Enter — enter a directory, run an `.elf` (through the loader with the standard grants) or view a text; F3 view; F4 edit (starts `edit` with a read-write handle for that file); F5 copy; F6 move/rename; F7 mkdir; F8 delete; F9 menu; F10 quit; Ins select; `+`/`-` select by mask; Alt+F1/Alt+F2 volume for the left/right panel; Ctrl+R reread; Alt+F7 find.
 - **Operations:** progress dialog with cancel; on error retry / skip / abort; confirmation for delete and overwrite; copy between volumes (boot disk ↔ RAM disk).
 - **Phase 1** (read-only VFS): browse, view, run, information, find. **Phase 2** (after F8): write operations.
+- Phase 1 done in issue 043, phase 2 in issue 048: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILE`, as the editor does (narrowed in issue 051).
 - The viewer is built in rather than a separate process: every application with a screen costs a full frame of kernel memory.
 
 ### 4.2 `edit` — panel text editor
@@ -230,7 +231,7 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 - **`caps`:** a task's slots with handle and generation, kind, rights, range, derivation parent; the derivation tree across tasks; "what would a revoke of this capability remove". Needs a stronger right than plain observation.
 - **`dmesg`:** filter by source and level, follow mode.
 - **`svc`:** services from `init`: PID, state, restarts, devices held; start, stop, restart; restart budgets and generations once C6 exists.
-- **`df` / `fsck`:** volume type, cluster size, size, free space (from FSInfo or by counting the FAT); `fsck` checks lost clusters, cross-linked chains and size mismatches without writing.
+- **`df` / `fsck`:** volume type, cluster size, size, free space (from FSInfo or by counting the FAT); `fsck` checks lost clusters, cross-linked chains and size mismatches without writing. Done in issue 048: `df` from `volume` (free space counted in the FAT once, then kept); `fsck` is `vfs.wit` 2.1 `check`, run by `vfs_server` (it alone reads the sectors), which also reports chains that run into a free or bad cluster, invalid entries and the dirty flag.
 - **`format`, `screenshot`, `keymap`, `reboot`:** as in §2.
 
 ### 4.8 Shell

@@ -1,0 +1,20 @@
+[package]
+name = "disk"
+version = "0.1.0"
+edition = "2021"
+
+# Console tools for volumes through vfs_server: df (sizes and free space) and fsck (a read-only check).
+[[bin]]
+name = "df"
+path = "src/bin/df.rs"
+
+[[bin]]
+name = "fsck"
+path = "src/bin/fsck.rs"
+
+[dependencies]
+libmind = { path = "../libmind" }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

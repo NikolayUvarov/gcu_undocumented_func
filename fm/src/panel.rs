@@ -71,12 +71,48 @@ fn glob(mask: &str, name: &str) -> bool {
     i == m.len()
 }
 
-/// `path/name` (the root is the empty path).
-pub fn join(path: &str, name: &str) -> String { if path.is_empty() { name.into() } else { format!("{}/{}", path, name) } }
+/// The volume of a path and the path on it: `ram:docs` -> (`ram:`, `docs`); a path without one is on the boot disk
+/// (`docs` -> (``, `docs`)).
+pub fn volume(path: &str) -> (&str, &str) {
+    match path.find(':') { Some(i) if !path[..i].contains('/') => (&path[..=i], &path[i + 1..]), _ => ("", path) }
+}
+
+/// The path is the root of its volume.
+pub fn is_root(path: &str) -> bool { volume(path).1.is_empty() }
+
+/// Two paths are on the same volume.
+pub fn same_volume(a: &str, b: &str) -> bool { volume(a).0.eq_ignore_ascii_case(volume(b).0) }
+
+/// How a path is shown: `A:/docs`, `ram:/docs`.
+pub fn display(path: &str) -> String { let (v, rest) = volume(path); format!("{}/{}", if v.is_empty() { "A:" } else { v }, rest) }
+
+/// A path typed by the user, relative to `current` unless it names a volume (`A:/x`, `ram:x`) or starts with `/` (the
+/// root of `current`'s volume).
+pub fn resolve(current: &str, typed: &str) -> String {
+    let typed = typed.trim();
+    let (v, rest) = volume(typed);
+    let clean = |rest: &str| -> String { rest.split('/').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/") };
+    if v.eq_ignore_ascii_case("a:") { return clean(rest); }
+    if !v.is_empty() { return format!("{}{}", v.to_lowercase(), clean(rest)); }
+    if typed.starts_with('/') { return format!("{}{}", volume(current).0, clean(typed)); }
+    let mut path = String::from(current);
+    for part in typed.split('/').filter(|p| !p.is_empty()) { path = join(&path, part); }
+    path
+}
+
+/// `path/name` (`name` alone in the root of the boot disk, `ram:name` in the root of the RAM disk).
+pub fn join(path: &str, name: &str) -> String { if is_root(path) { format!("{}{}", path, name) } else { format!("{}/{}", path, name) } }
 
 /// The parent of `path` and the name of `path` in it.
 pub fn parent(path: &str) -> (String, String) {
-    match path.rfind('/') { Some(i) => (path[..i].into(), path[i + 1..].into()), None => (String::new(), path.into()) }
+    let (v, rest) = volume(path);
+    match rest.rfind('/') { Some(i) => (format!("{}{}", v, &rest[..i]), rest[i + 1..].into()), None => (v.into(), rest.into()) }
+}
+
+/// `path` is `dir` or below it.
+pub fn inside(path: &str, dir: &str) -> bool {
+    let (path, dir) = (path.to_lowercase(), dir.to_lowercase());
+    path == dir || path.starts_with(&format!("{}/", dir)) || (is_root(&dir) && same_volume(&path, &dir))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +159,7 @@ impl Panel {
         let keep: Option<String> = focus.map(String::from).or_else(|| self.current().map(|e| e.name.clone()));
         let mut items: Vec<Entry> = self.all.iter().filter(|e| self.hidden || !e.hidden()).cloned().collect();
         items.sort_by(|a, b| self.compare(a, b));
-        if !self.path.is_empty() { items.insert(0, Entry::up()); }
+        if !is_root(&self.path) { items.insert(0, Entry::up()); }
         self.items = items;
         if let Some(index) = keep.and_then(|name| self.items.iter().position(|e| e.name.eq_ignore_ascii_case(&name))) { self.list.selected = index; }
         self.scroll();
@@ -222,9 +258,9 @@ impl Panel {
     }
 
     /// Draws the listing (brief or full) in `area`, with the path in the frame and a status line at the bottom.
-    pub fn draw(&mut self, grid: &mut Grid, area: Rect, theme: &Theme, active: bool, volume: &str) {
+    pub fn draw(&mut self, grid: &mut Grid, area: Rect, theme: &Theme, active: bool) {
         if area.w < 8 || area.h < 6 { return; }
-        let title = format!("{}:/{}", volume, self.path);
+        let title = display(&self.path);
         let title_style = if active { theme.selected } else { theme.frame };
         grid.frame_titled(area, Line::Double, &title, theme.frame, title_style);
         let inner = area.inner();

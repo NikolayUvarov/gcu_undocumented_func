@@ -11,7 +11,7 @@ use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -57,6 +57,31 @@ impl<'a> wire::Item<'a> for Volume<'a> {
         Ok(())
     }
     fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { name: r.str(16)?, label: r.str(11)?, fat_bits: r.u8()?, bytes: r.u64()?, free: r.u64()?, cluster: r.u32()?, writable: r.bool()? }) }
+}
+
+/// What a check of a volume found (nothing is changed): `used` clusters are reached from the directory tree, `lost`
+/// ones are in use but reached by nothing (forming `lost-chains` chains), `cross-linked` ones are reached twice;
+/// `bad-chains` run into a free or invalid cluster; `sizes` counts files whose size does not match their chain,
+/// `bad-entries` invalid directory entries; `dirty`: not flushed since a change; `first`: the first problem found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Report<'a> { pub files: u32, pub directories: u32, pub used: u32, pub free: u32, pub lost: u32, pub lost_chains: u32, pub cross_linked: u32, pub bad_chains: u32, pub sizes: u32, pub bad_entries: u32, pub dirty: bool, pub first: &'a str }
+impl<'a> wire::Item<'a> for Report<'a> {
+    fn encode(&self, w: &mut wire::Writer) -> Result<()> {
+        w.u32(self.files)?;
+        w.u32(self.directories)?;
+        w.u32(self.used)?;
+        w.u32(self.free)?;
+        w.u32(self.lost)?;
+        w.u32(self.lost_chains)?;
+        w.u32(self.cross_linked)?;
+        w.u32(self.bad_chains)?;
+        w.u32(self.sizes)?;
+        w.u32(self.bad_entries)?;
+        w.bool(self.dirty)?;
+        w.str(self.first, 255)?;
+        Ok(())
+    }
+    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { files: r.u32()?, directories: r.u32()?, used: r.u32()?, free: r.u32()?, lost: r.u32()?, lost_chains: r.u32()?, cross_linked: r.u32()?, bad_chains: r.u32()?, sizes: r.u32()?, bad_entries: r.u32()?, dirty: r.bool()?, first: r.str(255)? }) }
 }
 
 /// The root directory of volume `name`.
@@ -260,6 +285,24 @@ pub fn close(endpoint: ipc::Endpoint, handle: u32) -> Result<core::result::Resul
     Ok(Ok(()))
 }
 
+/// Checks the volume of `handle` without changing it (version 2.1).
+pub fn check<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, handle: u32) -> Result<core::result::Result<Report<'b>, Error>> {
+    let wire::Buffer { cap, bytes } = buffer;
+    let mut writer = wire::Writer::new(bytes);
+    let payload = writer.len();
+    let bytes = writer.into_inner();
+    let words = [14 | MAJOR << 8 | ((handle) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, Some((cap, false)))?;
+    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
+    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+    let len = wire::field(&reply, 0, 16, 32);
+    if len > bytes.len() { return Err(SysError::Invalid); }
+    let bytes: &'b [u8] = bytes;
+    let mut reader = wire::Reader::new(&bytes[..len]);
+    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = <Report<'b> as wire::Item>::decode(r)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
+    Ok(Ok(value))
+}
+
 /// A request to the `vfs` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -276,6 +319,7 @@ pub enum Request {
     Volume { buffer: usize, handle: u32 },
     Flush { handle: u32 },
     Close { handle: u32 },
+    Check { buffer: usize, handle: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, enum values, capability
@@ -336,6 +380,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<Request, R
         13 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok(Request::Close { handle: wire::field(&words, 0, 16, 32) as u32 })
+        }
+        14 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
+            Ok(Request::Check { buffer: cap, handle: wire::field(&words, 0, 16, 32) as u32 })
         }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
@@ -458,4 +506,11 @@ pub fn reply_flush(value: core::result::Result<(), Error>) -> Result<()> {
 pub fn reply_close(value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
     wire::reply([0, 0])
+}
+pub fn reply_check(bytes: &mut [u8], value: core::result::Result<Report<'_>, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
+    let mut writer = wire::Writer::new(bytes);
+    let encoded = (|w: &mut wire::Writer| -> Result<()> { wire::Item::encode(&value, w)?; Ok(()) })(&mut writer);
+    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
+    wire::reply([(writer.len() as usize) << 16, 0])
 }

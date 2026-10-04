@@ -3,7 +3,7 @@
 /// endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
 /// the shell (Appendix B.6); boot files are never writable.
-package mind:vfs@2.0.0;
+package mind:vfs@2.1.0;
 
 interface vfs {
     /// Why a request failed.
@@ -15,6 +15,12 @@ interface vfs {
 
     /// A mounted volume: its name (empty for the boot disk, `ram`), FAT label and type, size and free space.
     record volume { name: string<16>, label: string<11>, fat-bits: u8, bytes: u64, free: u64, cluster: u32, writable: bool }
+
+    /// What a check of a volume found (nothing is changed): `used` clusters are reached from the directory tree, `lost`
+    /// ones are in use but reached by nothing (forming `lost-chains` chains), `cross-linked` ones are reached twice;
+    /// `bad-chains` run into a free or invalid cluster; `sizes` counts files whose size does not match their chain,
+    /// `bad-entries` invalid directory entries; `dirty`: not flushed since a change; `first`: the first problem found.
+    record report { files: u32, directories: u32, used: u32, free: u32, lost: u32, lost-chains: u32, cross-linked: u32, bad-chains: u32, sizes: u32, bad-entries: u32, dirty: bool, first: string<255> }
 
     /// The root directory of volume `name`.
     root: func(buffer: borrow<memory>, name: string<16>) -> result<u32, error>;
@@ -41,4 +47,6 @@ interface vfs {
     /// Writes what is cached for the volume of `handle` to the disk.
     flush: func(handle: u32) -> result<_, error>;
     close: func(handle: u32) -> result<_, error>;
+    /// Checks the volume of `handle` without changing it (version 2.1).
+    check: func(buffer: borrow<memory>, handle: u32) -> result<report, error>;
 }

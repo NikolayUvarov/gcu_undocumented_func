@@ -1,5 +1,7 @@
-//! Host tests of the file manager (fm/src): masks, sorting, marking, navigation, run/view/quick view/info/find and
-//! the menu, over a disk in memory; every state is drawn on small and large grids.
+//! Host tests of the file manager (fm/src): masks, paths with volumes, sorting, marking, navigation, run/view/quick
+//! view/info/find and the menu, copy/move/mkdir/delete jobs with conflicts, failures and stops, and the built-in
+//! editor, over a disk in memory (a boot disk whose `data/` is writable and a small `ram:`); every state is drawn on
+//! small and large grids.
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../common/abi.rs"]
@@ -10,61 +12,143 @@ mod keys;
 mod util;
 #[path = "../libmind/src/tui/mod.rs"]
 mod tui;
+#[path = "../edit/src/buffer.rs"]
+mod buffer;
+#[path = "../edit/src/editor.rs"]
+mod editor;
 #[path = "../fm/src/panel.rs"]
 mod panel;
 #[path = "../fm/src/fm.rs"]
 mod fm;
 
 use abi::*;
-use fm::{Disk, Fm, Outcome};
+use fm::{Disk, Failure, Fm, Outcome, Sink, VolumeInfo};
 use keys::{event, Key};
-use panel::{fat_time, join, matches, parent, Entry, Mode, Panel, Sort};
+use panel::{display, fat_time, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
+use std::cell::{Cell as Counter, RefCell};
+use std::rc::Rc;
 use tui::viewer::Source;
 use tui::{Cell, Grid, CLASSIC};
 
 // 2026-10-04 12:34:56
 const STAMP: u32 = ((2026 - 1980) << 9 | 10 << 5 | 4) << 16 | (12 << 11 | 34 << 5 | 28);
 
-struct MemFile(Vec<u8>);
+type Data = Rc<RefCell<Vec<u8>>>;
+fn data(bytes: &[u8]) -> Data { Rc::new(RefCell::new(bytes.to_vec())) }
+
+// A file read in memory; a broken one cannot be read past its first `good` bytes.
+struct MemFile { data: Vec<u8>, good: usize }
 impl Source for MemFile {
-    fn size(&self) -> u64 { self.0.len() as u64 }
+    fn size(&self) -> u64 { self.data.len() as u64 }
     fn read(&mut self, offset: u64, out: &mut [u8]) -> usize {
-        let start = (offset as usize).min(self.0.len());
-        let n = out.len().min(self.0.len() - start);
-        out[..n].copy_from_slice(&self.0[start..start + n]);
+        let start = (offset as usize).min(self.good);
+        let n = out.len().min(self.good - start);
+        out[..n].copy_from_slice(&self.data[start..start + n]);
         n
     }
 }
 
-#[derive(Default)]
-struct Mem { files: Vec<(String, Vec<u8>, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, lists: usize }
+// A file written in memory; on ram: it takes space.
+struct MemSink { data: Data, space: Option<Rc<Counter<u64>>> }
+impl Sink for MemSink {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+        if let Some(space) = &self.space {
+            if space.get() < bytes.len() as u64 { return Err(Failure::NoSpace); }
+            space.set(space.get() - bytes.len() as u64);
+        }
+        self.data.borrow_mut().extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String> }
+
+const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem::default();
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new() };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
-        for (path, data, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
-                                   ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
-                                   ("Zeta.TXT", vec![0; 10], STAMP)] {
-            disk.files.push((path.into(), data, time, 0));
+        for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
+                                    ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
+                                    ("Zeta.TXT", vec![0; 10], STAMP)] {
+            disk.files.push((path.into(), data(&bytes), time, 0));
         }
-        disk.files.push(("hidden.sys".into(), vec![], 0, VFS_ENTRY_HIDDEN | VFS_ENTRY_SYSTEM));
+        disk.files.push(("hidden.sys".into(), data(&[]), 0, VFS_ENTRY_HIDDEN | VFS_ENTRY_SYSTEM));
         disk
     }
+    fn file(&self, path: &str) -> Option<Vec<u8>> { self.files.iter().find(|f| f.0.eq_ignore_ascii_case(path)).map(|f| f.1.borrow().clone()) }
+    fn is_dir(&self, path: &str) -> bool { is_root(path) || self.dirs.iter().any(|d| d.eq_ignore_ascii_case(path)) }
+    // As vfs_server allows the shell: ram: and data/ of the boot disk.
+    fn allowed(path: &str) -> bool { inside(path, "ram:") || inside(path, "data") }
+    fn add_file(&mut self, path: &str, bytes: &[u8]) { self.files.push((path.into(), data(bytes), STAMP, 0)); }
 }
 
 impl Disk for Mem {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String> {
         self.lists += 1;
-        if !path.is_empty() && !self.dirs.iter().any(|d| d.eq_ignore_ascii_case(path)) { return Err("NotFound".into()); }
-        let mut out: Vec<Entry> = self.dirs.iter().filter(|d| parent(d).0 == path).map(|d| Entry::directory(&parent(d).1)).collect();
-        out.extend(self.files.iter().filter(|f| parent(&f.0).0 == path).map(|f| Entry { name: parent(&f.0).1, size: f.1.len() as u64, dir: false, flags: f.3, modified: f.2 }));
+        if !self.is_dir(path) { return Err("NotFound".into()); }
+        let mut out: Vec<Entry> = self.dirs.iter().filter(|d| parent(d).0.eq_ignore_ascii_case(path)).map(|d| Entry::directory(&parent(d).1)).collect();
+        out.extend(self.files.iter().filter(|f| parent(&f.0).0.eq_ignore_ascii_case(path)).map(|f| Entry { name: parent(&f.0).1, size: f.1.borrow().len() as u64, dir: false, flags: f.3, modified: f.2 }));
         Ok(out)
     }
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> {
-        self.files.iter().find(|f| f.0 == path).map(|f| Box::new(MemFile(f.1.clone())) as Box<dyn Source>)
+        let broken = self.broken.iter().any(|b| b.eq_ignore_ascii_case(path));
+        self.file(path).map(|bytes| { let good = if broken { bytes.len() / 2 } else { bytes.len() }; Box::new(MemFile { data: bytes, good }) as Box<dyn Source> })
     }
     fn run(&mut self, path: &str) -> Result<u64, String> { self.runs.push(path.into()); Ok(42) }
+    fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
+        if !Self::allowed(path) { return Err(Failure::Denied); }
+        if !self.is_dir(&parent(path).0) { return Err(Failure::NotFound); }
+        if self.is_dir(path) { return Err(Failure::Other("a directory".into())); }
+        let space = path.starts_with("ram:").then(|| self.space.clone());
+        if let Some(file) = self.files.iter().find(|f| f.0.eq_ignore_ascii_case(path)) {
+            if !replace { return Err(Failure::Exists); }
+            if let Some(space) = &space { space.set(space.get() + file.1.borrow().len() as u64); }
+            file.1.borrow_mut().clear();
+            return Ok(Box::new(MemSink { data: file.1.clone(), space }));
+        }
+        let bytes = data(&[]);
+        self.files.push((path.into(), bytes.clone(), STAMP, 0));
+        Ok(Box::new(MemSink { data: bytes, space }))
+    }
+    fn mkdir(&mut self, path: &str) -> Result<(), Failure> {
+        if !Self::allowed(path) { return Err(Failure::Denied); }
+        if self.file(path).is_some() { return Err(Failure::Exists); }
+        let (volume, rest) = panel::volume(path);
+        let mut at = String::from(volume);
+        for part in rest.split('/') { at = join(&at, part); if !self.is_dir(&at) { self.dirs.push(at.clone()); } }
+        Ok(())
+    }
+    fn remove(&mut self, path: &str) -> Result<(), Failure> {
+        if !Self::allowed(path) { return Err(Failure::Denied); }
+        if let Some(i) = self.files.iter().position(|f| f.0.eq_ignore_ascii_case(path)) {
+            let (name, bytes, _, _) = self.files.remove(i);
+            if name.starts_with("ram:") { self.space.set(self.space.get() + bytes.borrow().len() as u64); }
+            return Ok(());
+        }
+        let Some(i) = self.dirs.iter().position(|d| d.eq_ignore_ascii_case(path)) else { return Err(Failure::NotFound) };
+        if !self.list(path).unwrap().is_empty() { return Err(Failure::NotEmpty); }
+        self.dirs.remove(i);
+        Ok(())
+    }
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), Failure> {
+        if !Self::allowed(from) || !Self::allowed(to) { return Err(Failure::Denied); }
+        if !same_volume(from, to) { return Err(Failure::Other("another volume".into())); }
+        if self.is_dir(to) || self.file(to).is_some() { return Err(Failure::Exists); }
+        if !self.is_dir(&parent(to).0) { return Err(Failure::NotFound); }
+        let moved = |p: &str| -> Option<String> { inside(p, from).then(|| format!("{}{}", to, &p[from.len()..])) };
+        let mut found = false;
+        for d in self.dirs.iter_mut() { if let Some(new) = moved(d) { *d = new; found = true; } }
+        for f in self.files.iter_mut() { if let Some(new) = moved(&f.0) { f.0 = new; found = true; } }
+        if found { Ok(()) } else { Err(Failure::NotFound) }
+    }
+    fn writable(&mut self, path: &str) -> bool { Self::allowed(path) && self.file(path).is_some() }
+    fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
+        Some(if path.starts_with("ram:") { VolumeInfo { label: "MIND RAM".into(), fat_bits: 16, bytes: RAM, free: self.space.get() } }
+             else { VolumeInfo { label: "MINDTEST".into(), fat_bits: 16, bytes: 60 << 20, free: 50 << 20 } })
+    }
+    fn flush(&mut self, _path: &str) { self.flushes += 1; }
 }
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
@@ -94,6 +178,23 @@ fn masks_and_paths() {
     assert_eq!(join("EFI", "BOOT"), "EFI/BOOT");
     assert_eq!(parent("EFI/BOOT"), ("EFI".into(), "BOOT".into()));
     assert_eq!(parent("EFI"), ("".into(), "EFI".into()));
+    // The RAM disk: `ram:` is its root.
+    assert_eq!(join("ram:", "a"), "ram:a");
+    assert_eq!(join("ram:a", "b"), "ram:a/b");
+    assert_eq!(parent("ram:a/b"), ("ram:a".into(), "b".into()));
+    assert_eq!(parent("ram:a"), ("ram:".into(), "a".into()));
+    assert!(is_root("ram:") && is_root("") && !is_root("ram:a"));
+    assert_eq!((display(""), display("docs"), display("ram:"), display("ram:a/b")), ("A:/".into(), "A:/docs".into(), "ram:/".into(), "ram:/a/b".into()));
+    assert!(same_volume("ram:a", "RAM:b") && !same_volume("ram:a", "a"));
+    assert!(inside("docs/old", "docs") && inside("docs", "DOCS") && !inside("docsx", "docs") && inside("ram:x", "ram:") && !inside("x", "ram:"));
+    // What the user types in the copy and move dialogs.
+    assert_eq!(resolve("docs", "old"), "docs/old");
+    assert_eq!(resolve("docs", "A:/data/x"), "data/x");
+    assert_eq!(resolve("docs", "a:"), "");
+    assert_eq!(resolve("docs", "ram:/x/"), "ram:x");
+    assert_eq!(resolve("RAM:", "RAM:x"), "ram:x");
+    assert_eq!(resolve("ram:a", "/b"), "ram:b");
+    assert_eq!(resolve("", "/b"), "b");
     assert_eq!(fat_time(STAMP), (2026, 10, 4, 12, 34, 56));
     assert_eq!(panel::date_time(STAMP), ("2026-10-04".into(), "12:34".into()));
     assert_eq!(panel::short_size(123_456), "120K");
@@ -179,7 +280,7 @@ fn navigation_open_run_and_view() {
     fm.panels[0].arrange(Some("readme.txt"));
     fm.key(code(KEY_ENTER), &mut disk);
     assert!(fm.viewing());
-    assert!(fm.status().ends_with("VIEW=1"), "{}", fm.status());
+    assert!(fm.status().contains("VIEW=1 "), "{}", fm.status());
     let screen = draw(&mut fm, 100, 30);
     assert!(screen_has(&screen, "Привет, мир"), "{:#?}", screen);
     assert_eq!(fm.key(code(KEY_ESC), &mut disk), Outcome::Redraw, "Esc closes the viewer, not fm");
@@ -212,7 +313,7 @@ fn quick_view_info_find_and_menu() {
     fm.key(ctrl('l'), &mut disk);
     assert_eq!(fm.panels[1].mode, Mode::Info);
     let screen = draw(&mut fm, 100, 30);
-    assert!(screen_has(&screen, "Directory /") && screen_has(&screen, "kernel.elf") && screen_has(&screen, "modified 2026-10-04 12:34:56"), "{:#?}", screen);
+    assert!(screen_has(&screen, "Directory A:/") && screen_has(&screen, "A: boot disk MINDTEST FAT16") && screen_has(&screen, "kernel.elf") && screen_has(&screen, "modified 2026-10-04 12:34:56"), "{:#?}", screen);
     assert!(screen_has(&screen, "5 files"), "{:#?}", screen);
     // Find from the root: notes.* in docs and docs/old; Enter goes there.
     fm.key(alt_f(7), &mut disk);
@@ -232,15 +333,18 @@ fn quick_view_info_find_and_menu() {
     assert!(screen_has(&screen, "Quick view"));
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.panels[0].mode, Mode::Brief);
-    // + marks by mask, F5 says it is read-only, Alt+F1 lists the volume.
+    // + marks by mask; F5 asks where to copy the marked file (Esc: not); Alt+F1 lists the volumes.
     fm.key(chr('+'), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.panels[0].marked, ["notes.md"]);
     fm.key(f(5), &mut disk);
-    assert!(fm.notice.as_deref().unwrap().contains("Read-only"));
+    assert!(fm.status().contains("DIALOG=TARGET"), "{}", fm.status());
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Copy notes.md to"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
     fm.key(alt_f(1), &mut disk);
     let screen = draw(&mut fm, 100, 30);
-    assert!(screen_has(&screen, "A: boot disk"));
+    assert!(screen_has(&screen, "A: boot disk MINDTEST") && screen_has(&screen, "ram: RAM disk MIND RAM FAT16: 64 KiB, 64 KiB free"), "{:#?}", screen);
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.panels[0].path, "");
     // A missing directory leaves the panel as it is, with the error shown.
@@ -253,7 +357,7 @@ fn quick_view_info_find_and_menu() {
 #[test]
 fn brief_columns() {
     let mut disk = Mem::sample();
-    for i in 0..40 { disk.files.push((format!("f{:02}.txt", i), vec![], 0, 0)); }
+    for i in 0..40 { disk.add_file(&format!("f{:02}.txt", i), &[]); }
     let mut window = vec![0u8; 4096];
     let mut fm = Fm::new(&mut window, &mut disk);
     fm.key(code(KEY_TAB), &mut disk); // the right panel is brief
@@ -278,5 +382,283 @@ fn draws_on_any_screen() {
             let _ = fm.key(key, &mut disk);
             let _ = draw(&mut fm, cols, rows);
         }
+    }
+}
+
+fn shift_f(n: u32) -> Key { Key(event(KEY_F1 + n - 1, 0, KEY_MOD_SHIFT)) }
+fn alt_f2() -> Key { alt_f(2) }
+fn typed(fm: &mut Fm, disk: &mut Mem, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
+fn clear_line(fm: &mut Fm, disk: &mut Mem) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
+
+// Runs the job until it ends or waits for an answer; returns the number of slices.
+fn run(fm: &mut Fm, disk: &mut Mem) -> usize {
+    let mut slices = 0;
+    while fm.busy() { fm.work(disk); slices += 1; assert!(slices < 10_000, "the job does not end"); }
+    slices
+}
+
+fn ram_panel(fm: &mut Fm, disk: &mut Mem) {
+    fm.key(alt_f2(), disk);
+    fm.key(code(KEY_DOWN), disk);
+    fm.key(code(KEY_ENTER), disk);
+    assert_eq!(fm.panels[1].path, "ram:");
+}
+
+#[test]
+fn copy_move_mkdir_delete() {
+    let mut disk = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    // F5 on docs: the dialog offers the other panel; the tree is copied to ram:.
+    fm.panels[0].arrange(Some("docs"));
+    fm.key(f(5), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Copy docs to") && screen_has(&screen, "ram:/"), "{:#?}", screen);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.status().contains("JOB=COPY:0/4"), "{}", fm.status());
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:docs/notes.txt").unwrap(), b"notes");
+    assert_eq!(disk.file("ram:docs/old/notes.md").unwrap(), b"old");
+    assert_eq!(fm.notice.as_deref(), Some("Copied 4 of 4, 8 bytes"));
+    assert_eq!(fm.panels[1].current().unwrap().name, "docs", "the cursor is on the copy");
+    assert!(fm.status().ends_with("JOB=NONE"));
+    assert!(disk.flushes >= 2);
+    // Again: the target exists; Skip leaves the files as they are.
+    disk.files.iter().find(|f| f.0 == "ram:docs/notes.txt").unwrap().1.borrow_mut().extend_from_slice(b"!");
+    disk.space.set(disk.space.get() - 1);
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.status().contains("DIALOG=OVERWRITE"));
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "1 of the targets exist already."), "{:#?}", screen);
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:docs/notes.txt").unwrap(), b"notes!");
+    assert!(fm.notice.as_deref().unwrap().ends_with("2 skipped"), "{:?}", fm.notice);
+    // Overwrite replaces them.
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:docs/notes.txt").unwrap(), b"notes");
+    // Not onto itself, not into itself.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("docs"));
+    fm.key(f(5), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "ram:/");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.notice.as_deref(), Some("Cannot copy ram:/docs onto itself"));
+    fm.key(f(5), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "ram:/docs/old");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.notice.as_deref(), Some("Cannot put ram:/docs inside itself"));
+    // F6 in place: a new name on the same volume is one rename.
+    fm.key(f(6), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "papers");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.status().contains("JOB=MOVE:0/1"), "{}", fm.status());
+    run(&mut fm, &mut disk);
+    assert!(disk.file("ram:papers/old/notes.md").is_some() && disk.file("ram:docs/notes.txt").is_none());
+    assert_eq!(fm.panels[1].current().unwrap().name, "papers");
+    // F7: a directory on the boot disk only in data/.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.key(f(7), &mut disk);
+    typed(&mut fm, &mut disk, "system");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram: and data/ are writable)"));
+    fm.key(f(7), &mut disk);
+    typed(&mut fm, &mut disk, "data/inbox");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(disk.is_dir("data/inbox"));
+    assert_eq!(fm.panels[0].current().unwrap().name, "data");
+    // F6 across volumes: copied, then the source removed.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.key(f(6), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "A:/data");
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("data/papers/old/notes.md").unwrap(), b"old");
+    assert!(!disk.is_dir("ram:papers") && disk.list("ram:").unwrap().is_empty(), "{:?}", disk.dirs);
+    assert_eq!(disk.space.get(), RAM, "the RAM disk is empty again");
+    assert!(fm.notice.as_deref().unwrap().starts_with("Moved 8 of 8"), "{:?}", fm.notice);
+    // F8: the tree goes after a confirmation; Cancel keeps it.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk); // into data
+    fm.panels[0].arrange(Some("papers"));
+    fm.key(f(8), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Delete 1 entry") && screen_has(&screen, "(4 files and directories in all)?"), "{:#?}", screen);
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(disk.is_dir("data/papers"));
+    fm.key(f(8), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(!disk.is_dir("data/papers") && disk.file("data/papers/notes.txt").is_none());
+    assert_eq!(fm.notice.as_deref(), Some("Deleted 4 of 4"));
+    // Marked files from the boot disk to ram:; a move from the boot disk cannot remove the sources.
+    fm.key(code(KEY_BACKSPACE), &mut disk);
+    fm.panels[0].mark_mask("*.txt", true);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains("JOB=MOVE:2/4:FAILED"), "{}", fm.status());
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Delete A:/readme.txt") && screen_has(&screen, "failed: denied") && screen_has(&screen, "Retry"), "{:#?}", screen);
+    fm.key(code(KEY_RIGHT), &mut disk); // Skip
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.job.is_none());
+    assert!(disk.file("ram:readme.txt").is_some() && disk.file("ram:Zeta.TXT").is_some() && disk.file("readme.txt").is_some());
+    assert!(fm.notice.as_deref().unwrap().ends_with("2 skipped, 2 failed"), "{:?}", fm.notice);
+    assert!(fm.panels[0].marked.is_empty());
+}
+
+#[test]
+fn failures_space_and_stopping() {
+    let mut disk = Mem::sample();
+    disk.add_file("data/big.bin", &vec![7u8; 200 * 1024]);
+    disk.dirs.push("data".into());
+    disk.add_file("data/half.bin", &vec![9u8; 100 * 1024]);
+    disk.broken.push("data/half.bin".into());
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.load(0, "data", Some("half.bin"), &mut disk);
+    // A file that cannot be read: Retry fails again, Skip goes on and removes the partial copy.
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk); // Retry
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"));
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.job.is_none());
+    assert!(disk.file("ram:half.bin").is_none(), "the partial copy is removed");
+    assert_eq!(disk.space.get(), RAM);
+    // A file larger than the RAM disk: the disk is full; Abort stops and removes the partial copy.
+    fm.panels[0].arrange(Some("big.bin"));
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(run(&mut fm, &mut disk) >= 1);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "failed: the disk is full"), "{:#?}", screen);
+    fm.key(code(KEY_LEFT), &mut disk); // Abort
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Stopped: 0 of 1"), "{:?}", fm.notice);
+    assert!(disk.file("ram:big.bin").is_none());
+    // Esc during a copy asks; Continue goes on, Stop ends it.
+    disk.space.set(1 << 30);
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    fm.work(&mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Copying") && screen_has(&screen, "32%") && screen_has(&screen, "Esc: stop"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
+    assert!(!fm.busy() && fm.status().contains(":ASKING"));
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Stop the operation?"), "{:#?}", screen);
+    fm.key(code(KEY_ENTER), &mut disk); // Continue (selected)
+    assert!(fm.busy());
+    fm.work(&mut disk);
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.key(code(KEY_LEFT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.job.is_none());
+    assert!(fm.notice.as_deref().unwrap().starts_with("Stopped:"));
+    // A copy that ends normally.
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk); // overwrite the partial copy left by Stop
+    assert_eq!(run(&mut fm, &mut disk), 4, "64 KiB a slice");
+    assert_eq!(disk.file("ram:big.bin").unwrap(), vec![7u8; 200 * 1024]);
+}
+
+#[test]
+fn built_in_editor() {
+    let mut disk = Mem::sample();
+    disk.dirs.push("ram:notes".into());
+    disk.add_file("ram:notes/todo.txt", "купить хлеб\n".as_bytes());
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    fm.load(0, "ram:notes", Some("todo.txt"), &mut disk);
+    fm.key(f(4), &mut disk);
+    assert!(fm.status().starts_with("EDITOR LINE=1 COL=1 BYTES=22 LINES=2 MODIFIED=0"), "{}", fm.status());
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen[1].starts_with("купить хлеб") && screen[0].contains("ram:notes/todo.txt"), "{:#?}", &screen[..2]);
+    fm.key(Key(event(KEY_END, 0, KEY_MOD_CTRL)), &mut disk);
+    typed(&mut fm, &mut disk, "и молоко");
+    fm.key(f(2), &mut disk);
+    assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), "купить хлеб\nи молоко".as_bytes());
+    assert!(disk.file("ram:notes/todo.txt.tmp").is_none());
+    fm.key(f(10), &mut disk);
+    assert!(fm.editor.is_none());
+    assert_eq!(fm.panels[0].current().unwrap().name, "todo.txt");
+    assert_eq!(fm.panels[0].current().unwrap().size, 37);
+    // Shift+F4: a new file; F10 asks, Save saves and closes.
+    fm.key(shift_f(4), &mut disk);
+    typed(&mut fm, &mut disk, "new.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.status().contains("BYTES=0"));
+    typed(&mut fm, &mut disk, "Hello");
+    fm.key(f(10), &mut disk);
+    assert!(fm.status().contains("DIALOG=UNSAVED"));
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.editor.is_none());
+    assert_eq!(disk.file("ram:notes/new.txt").unwrap(), b"Hello");
+    assert_eq!(fm.panels[0].current().unwrap().name, "new.txt");
+    // A boot file opens read-only.
+    fm.load(0, "", Some("readme.txt"), &mut disk);
+    fm.key(f(4), &mut disk);
+    typed(&mut fm, &mut disk, "x");
+    assert!(fm.status().contains("MODIFIED=0"));
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen[0].contains("RO"), "{}", screen[0]);
+    fm.key(f(10), &mut disk);
+    assert!(fm.editor.is_none());
+    // F4 on a directory says what it does.
+    fm.panels[0].arrange(Some("docs"));
+    fm.key(f(4), &mut disk);
+    assert!(fm.notice.as_deref().unwrap().contains("Shift+F4"));
+}
+
+#[test]
+fn draws_jobs_and_dialogs_on_any_screen() {
+    for (cols, rows) in [(20, 6), (40, 12), (80, 25), (160, 50)] {
+        let mut disk = Mem::sample();
+        disk.dirs.push("data".into());
+        disk.add_file("data/big.bin", &vec![1u8; 150 * 1024]);
+        let mut window = vec![0u8; 4096];
+        let mut fm = Fm::new(&mut window, &mut disk);
+        ram_panel(&mut fm, &mut disk);
+        fm.load(0, "data", Some("big.bin"), &mut disk);
+        for keys in [vec![f(5)], vec![f(6)], vec![f(7)], vec![shift_f(4)], vec![f(8)], vec![alt_f(1)]] {
+            for key in keys { fm.key(key, &mut disk); }
+            let _ = draw(&mut fm, cols, rows);
+            fm.key(code(KEY_ESC), &mut disk);
+        }
+        fm.key(f(5), &mut disk);
+        fm.key(code(KEY_ENTER), &mut disk);
+        fm.work(&mut disk);
+        let _ = draw(&mut fm, cols, rows);
+        fm.key(code(KEY_ESC), &mut disk);
+        let _ = draw(&mut fm, cols, rows);
+        fm.key(code(KEY_RIGHT), &mut disk);
+        fm.key(code(KEY_ENTER), &mut disk);
+        run(&mut fm, &mut disk);
+        let _ = draw(&mut fm, cols, rows);
+        fm.key(f(5), &mut disk);
+        fm.key(code(KEY_ENTER), &mut disk);
+        let _ = draw(&mut fm, cols, rows);
     }
 }

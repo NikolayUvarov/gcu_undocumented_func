@@ -198,8 +198,10 @@ impl<S: Sectors> Volume<S> {
         let mut data = [0u8; SECTOR];
         if self.disk.read(lba, &mut data) { Ok(data) } else { Err(Error::Io) }
     }
+    // Every write goes through here, so the first one after a flush marks the volume dirty.
     fn write_sector(&mut self, lba: u32, data: &[u8; SECTOR]) -> Result<()> {
         if !self.disk.writable() { return Err(Error::ReadOnly); }
+        self.changing()?;
         if self.disk.write(lba, data) { Ok(()) } else { Err(Error::Io) }
     }
 
@@ -237,7 +239,6 @@ impl<S: Sectors> Volume<S> {
     }
 
     fn set_fat(&mut self, cluster: u32, value: u32) -> Result<()> {
-        self.changing()?;
         match self.bits {
             12 => {
                 let at = cluster + cluster / 2; let mut b = [0u8; 2]; self.fat_bytes(at, &mut b)?;
@@ -660,6 +661,134 @@ impl<S: Sectors> Volume<S> {
             self.write_sector(lba, &data)?;
         }
         Ok(node)
+    }
+}
+
+/// What `check` found. Nothing is changed by a check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Report {
+    pub files: u32,
+    pub directories: u32,
+    /// Clusters reached from the directory tree, and free ones.
+    pub used: u32,
+    pub free: u32,
+    /// Clusters marked in use that no file or directory reaches, and the chains they form.
+    pub lost: u32,
+    pub lost_chains: u32,
+    /// Clusters reached by two chains.
+    pub cross_linked: u32,
+    /// Chains that run into a free, bad or invalid cluster.
+    pub bad_chains: u32,
+    /// Files whose size does not match the length of their chain.
+    pub sizes: u32,
+    /// Directory entries that are invalid (a bad short name, a directory with a size, a bad first cluster).
+    pub bad_entries: u32,
+    /// The volume is marked dirty (not flushed since a change).
+    pub dirty: bool,
+    /// The first problem, with its path.
+    pub first: String,
+}
+
+impl Report {
+    #[allow(dead_code)] // the host tests use it
+    pub fn clean(&self) -> bool { self.lost + self.cross_linked + self.bad_chains + self.sizes + self.bad_entries == 0 }
+    fn problem(&mut self, path: &str, what: &str) { if self.first.is_empty() { self.first = alloc::format!("{}: {}", if path.is_empty() { "/" } else { path }, what); } }
+}
+
+// FAT entries read two sectors at a time (a FAT12 entry may span them).
+struct FatWindow { lba: u32, data: [u8; 2 * SECTOR] }
+
+fn bad_short(short: &[u8; 11]) -> bool {
+    short[0] == b' ' || short.iter().enumerate().any(|(i, &c)| (c < 0x20 && !(i == 0 && c == 0x05)) || c == 0x7F || b"\"*+,./:;<=>?[\\]|".contains(&c))
+}
+
+impl<S: Sectors> Volume<S> {
+    fn entry_at(&mut self, window: &mut FatWindow, cluster: u32) -> Result<u32> {
+        let offset = match self.bits { 12 => cluster + cluster / 2, 16 => cluster * 2, _ => cluster * 4 };
+        let lba = self.fat_start + offset / 512;
+        if window.lba != lba {
+            window.data[..SECTOR].copy_from_slice(&self.read_sector(lba)?);
+            let next = if lba + 1 < self.fat_start + self.fat_size { self.read_sector(lba + 1)? } else { [0; SECTOR] };
+            window.data[SECTOR..].copy_from_slice(&next);
+            window.lba = lba;
+        }
+        let at = (offset % 512) as usize;
+        let b = &window.data[at..at + 4];
+        Ok(match self.bits {
+            12 => { let raw = b[0] as u32 | (b[1] as u32) << 8; if cluster & 1 == 0 { raw & 0xFFF } else { raw >> 4 } }
+            16 => b[0] as u32 | (b[1] as u32) << 8,
+            _ => u32::from_le_bytes([b[0], b[1], b[2], b[3]]) & 0x0FFF_FFFF,
+        })
+    }
+
+    // Follows a chain from `first`, marking its clusters; returns its length.
+    fn check_chain(&mut self, window: &mut FatWindow, owned: &mut [u8], first: u32, path: &str, report: &mut Report) -> Result<u32> {
+        let (eoc, bad) = (self.eoc() & !7, self.eoc() - 8);
+        let mut cluster = first;
+        let mut length = 0;
+        loop {
+            let (byte, bit) = (cluster as usize / 8, 1u8 << (cluster % 8));
+            if owned[byte] & bit != 0 { report.cross_linked += 1; report.problem(path, "cross-linked with another chain"); return Ok(length); }
+            owned[byte] |= bit;
+            report.used += 1;
+            length += 1;
+            let next = self.entry_at(window, cluster)?;
+            if next >= eoc { return Ok(length); }
+            if next == 0 || next == bad || !self.is_cluster(next) { report.bad_chains += 1; report.problem(path, "the cluster chain runs into a free or invalid cluster"); return Ok(length); }
+            cluster = next;
+        }
+    }
+
+    /// Checks the volume without changing it: walks the directory tree following every chain, then looks for clusters
+    /// in use that nothing reaches.
+    pub fn check(&mut self) -> Result<Report> {
+        let mut report = Report::default();
+        let mut window = FatWindow { lba: u32::MAX, data: [0; 2 * SECTOR] };
+        let mut owned = vec![0u8; (self.clusters as usize + 2).div_ceil(8)];
+        let per = self.cluster_bytes();
+        let clean_bit = match self.bits { 16 => Some(1u32 << 15), 32 => Some(1 << 27), _ => None };
+        if let Some(bit) = clean_bit { report.dirty = self.changed || self.entry_at(&mut window, 1)? & bit == 0; }
+        let root = self.root();
+        if root.cluster != 0 { self.check_chain(&mut window, &mut owned, root.cluster, "", &mut report)?; }
+        let mut stack: Vec<(Node, String, usize)> = vec![(root, String::new(), 0)];
+        while let Some((dir, path, depth)) = stack.pop() {
+            let entries = self.list(&dir)?;
+            for entry in entries {
+                let full = if path.is_empty() { entry.name.clone() } else { alloc::format!("{}/{}", path, entry.name) };
+                let node = entry.node;
+                if bad_short(&entry.short) { report.bad_entries += 1; report.problem(&full, "invalid short name"); }
+                if node.cluster != 0 && !self.is_cluster(node.cluster) { report.bad_entries += 1; report.problem(&full, "invalid first cluster"); continue; }
+                if node.is_dir() {
+                    report.directories += 1;
+                    if node.size != 0 { report.bad_entries += 1; report.problem(&full, "a directory with a size"); }
+                    if node.cluster == 0 { report.bad_entries += 1; report.problem(&full, "a directory without clusters"); continue; }
+                    let before = report.cross_linked + report.bad_chains;
+                    self.check_chain(&mut window, &mut owned, node.cluster, &full, &mut report)?;
+                    // A directory whose chain is damaged is not walked (it may lead anywhere).
+                    if report.cross_linked + report.bad_chains == before && depth < 64 { stack.push((node, full, depth + 1)); }
+                } else {
+                    report.files += 1;
+                    let length = if node.cluster == 0 { 0 } else { self.check_chain(&mut window, &mut owned, node.cluster, &full, &mut report)? };
+                    if length != node.size.div_ceil(per) { report.sizes += 1; report.problem(&full, "the size does not match the cluster chain"); }
+                }
+            }
+        }
+        // Clusters in use that nothing reached; a lost chain starts at one no other lost cluster points to.
+        let bad = self.eoc() - 8;
+        let mut lost = vec![0u8; owned.len()];
+        let mut pointed = vec![0u8; owned.len()];
+        for cluster in 2..self.clusters + 2 {
+            let value = self.entry_at(&mut window, cluster)?;
+            let (byte, bit) = (cluster as usize / 8, 1u8 << (cluster % 8));
+            if value == 0 { report.free += 1; continue; }
+            if value == bad || owned[byte] & bit != 0 { continue; }
+            report.lost += 1;
+            lost[byte] |= bit;
+            if self.is_cluster(value) { pointed[value as usize / 8] |= 1 << (value % 8); }
+        }
+        report.lost_chains = (2..self.clusters + 2).filter(|&c| { let (byte, bit) = (c as usize / 8, 1u8 << (c % 8)); lost[byte] & bit != 0 && pointed[byte] & bit == 0 }).count() as u32;
+        if report.lost > 0 { report.problem("", "clusters in use that no file reaches"); }
+        Ok(report)
     }
 }
 

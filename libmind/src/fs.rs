@@ -144,6 +144,11 @@ impl Dir {
     }
     /// Writes what is cached for this volume to the disk.
     pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
+    /// Checks this directory's volume without changing it; `visit` sees the report (idl/vfs.wit `report`).
+    pub fn check<T>(&self, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> {
+        let c = client()?;
+        Ok(visit(&call(vfs::check(endpoint(), c.shared.buffer(), self.handle))?))
+    }
 }
 
 impl Drop for Dir { fn drop(&mut self) { if self.owned { close(self.handle); } } }
@@ -232,3 +237,6 @@ pub fn metadata(path: &str) -> Result<Metadata> {
 
 /// The volume `name` (`""` or `"ram"`).
 pub fn volume(name: &str) -> Result<VolumeInfo> { Dir::root(name)?.volume() }
+
+/// Checks volume `name` (`""` or `"ram"`) without changing it.
+pub fn check<T>(name: &str, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> { Dir::root(name)?.check(visit) }

@@ -22,6 +22,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Drivers with MMIO and DMA capabilities work (AHCI, xHCI) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
 | Endpoint badges are set once, kept by children, reported by `CAP_INFO` and delivered with each message | `isolation` suite, case `k` |
 | The FAT writer keeps FAT12/16/32 volumes consistent: long and Cyrillic names, files across clusters, truncation, moves, removal, growing directories, formatting; a random sequence matches a model | `tests/fat_host.rs` (`fsck.fat -n`, mtools) |
+| The read-only check finds what `fsck.fat` finds — a cut chain, a cross link, a lost cluster, a wrong size, a bad short name — and passes clean volumes; any change marks the volume dirty until a flush | `tests/fat_host.rs`; QEMU `disk` suite |
 | Files written through `vfs_server` reach the disk and survive a reboot; the RAM disk does not; boot files and the disk outside `data/` cannot be written by the user, and not at all by applications; `..` is refused | `vfs` suite, `tools` suite (files), `isolation` case `k` |
 | Block writes need the write badge and a writable medium; ATA, AHCI and USB write, flush and read back, the raw image holds the sectors and its file system stays consistent | `tests/block_host.rs`; `block` suite (`tests/block_app.rs` as `vfs_server`, host check of the image, `fsck.fat -n`) |
 | Audio gateway (AC97 DMA, IRQ over IPC) and text to speech | `audio`, `tts` suites |

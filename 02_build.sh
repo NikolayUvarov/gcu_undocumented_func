@@ -77,6 +77,8 @@ USER_CRATES=(
     "monitor:hw:hw.elf"
     "fm:fm:fm.elf"
     "edit:edit:edit.elf"
+    "disk:df:df.elf"
+    "disk:fsck:fsck.elf"
     "beep:beep:beep.elf"
 )
 

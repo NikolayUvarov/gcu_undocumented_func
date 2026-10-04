@@ -9,7 +9,7 @@ extern crate alloc;
 #[path = "../vfs_server/src/fat.rs"]
 mod fat;
 
-use fat::{Error, Node, Sectors, Volume, SECTOR};
+use fat::{Error, Node, Report, Sectors, Volume, SECTOR};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -267,6 +267,108 @@ fn random_operations_match_a_model() {
         }
         let listed: usize = dirs.iter().map(|d| v.list(&nodes[d]).unwrap().iter().filter(|e| !e.node.is_dir()).count()).sum();
         assert_eq!(listed, model.len(), "FAT{}", bits);
+        let report = v.check().unwrap();
+        assert!(report.clean() && !report.dirty, "FAT{}: {:?}", bits, report);
+        assert_eq!((report.files as usize, report.directories), (model.len(), 3));
+        assert_eq!(report.free, v.free_clusters().unwrap());
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+}
+
+// Sets a FAT entry in every copy of the FAT of a bare (unpartitioned) image.
+fn patch_fat(data: &mut [u8], bits: u32, cluster: u32, value: u32) {
+    let u16_at = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]) as usize;
+    let (reserved, fats) = (u16_at(14), data[16] as usize);
+    let fat_size = if u16_at(22) != 0 { u16_at(22) } else { u32::from_le_bytes(data[36..40].try_into().unwrap()) as usize };
+    for copy in 0..fats {
+        let base = (reserved + copy * fat_size) * 512;
+        match bits {
+            12 => {
+                let at = base + (cluster + cluster / 2) as usize;
+                if cluster & 1 == 0 { data[at] = value as u8; data[at + 1] = (data[at + 1] & 0xF0) | ((value >> 8) as u8 & 0x0F); }
+                else { data[at] = (data[at] & 0x0F) | (value << 4) as u8; data[at + 1] = (value >> 4) as u8; }
+            }
+            16 => data[base + cluster as usize * 2..][..2].copy_from_slice(&(value as u16).to_le_bytes()),
+            _ => data[base + cluster as usize * 4..][..4].copy_from_slice(&value.to_le_bytes()),
+        }
+    }
+}
+
+// fsck.fat -n finds errors (exit code 1) in the image.
+fn fsck_fails(path: &Path, data: &[u8]) -> bool {
+    std::fs::write(path, data).unwrap();
+    !Command::new("fsck.fat").args(["-n", path.to_str().unwrap()]).output().unwrap().status.success()
+}
+
+fn check_of(data: &[u8]) -> Report {
+    let mut v = Volume::mount(Image { data: data.to_vec(), writable: false, flushes: 0 }).ok().unwrap();
+    v.check().unwrap()
+}
+
+#[test]
+fn check_finds_what_fsck_finds() {
+    if !tools() { return; }
+    for (bits, mib) in [(12u32, 2u64), (16, 16), (32, 40)] {
+        let path = temp(&format!("check{}", bits));
+        let mut v = Volume::mount(mkfs(&path, bits, mib)).ok().unwrap();
+        let root = v.root();
+        let per = v.cluster_bytes() as usize;
+        let dir = v.create(&root, "каталог", true, STAMP).unwrap();
+        let mut a = v.create(&root, "a.bin", false, STAMP).unwrap();
+        let mut b = v.create(&root, "b.bin", false, STAMP).unwrap();
+        let mut c = v.create(&dir, "c.txt", false, STAMP).unwrap();
+        v.write(&mut a, 0, &content(1, per * 2 + 5), STAMP).unwrap();
+        v.write(&mut b, 0, &content(2, per + 1), STAMP).unwrap();
+        v.write(&mut c, 0, b"text", STAMP).unwrap();
+        save(&mut v, &path);
+        let report = v.check().unwrap();
+        assert!(report.clean() && !report.dirty, "FAT{}: {:?}", bits, report);
+        assert_eq!((report.files, report.directories, report.lost), (3, 1, 0));
+        let total = v.total_bytes() as u32 / per as u32;
+        assert_eq!(report.used + report.free, total, "FAT{}: {:?}", bits, report);
+        let clean = v.disk.data.clone();
+        let (a, b) = (v.lookup(&root, "a.bin").unwrap(), v.lookup(&root, "b.bin").unwrap());
+        let a_second = v.fat(a.cluster).unwrap();
+        let b_last = v.fat(b.cluster).unwrap();
+        // A chain cut short: the rest of it is lost, the size no longer fits.
+        let mut data = clean.clone();
+        patch_fat(&mut data, bits, a_second, 0);
+        let report = check_of(&data);
+        assert_eq!((report.bad_chains, report.lost, report.lost_chains, report.sizes), (1, 1, 1, 1), "FAT{}: {:?}", bits, report);
+        assert!(report.first.starts_with("a.bin: "), "{}", report.first);
+        assert!(fsck_fails(&path, &data), "FAT{}: fsck.fat finds the cut chain", bits);
+        // Two chains that join: b's end leads into a.
+        let mut data = clean.clone();
+        patch_fat(&mut data, bits, b_last, a.cluster);
+        let report = check_of(&data);
+        assert!(report.cross_linked == 1 && report.first.starts_with("b.bin: "), "FAT{}: {:?}", bits, report);
+        assert!(fsck_fails(&path, &data), "FAT{}: fsck.fat finds the cross link", bits);
+        // A cluster in use that nothing reaches.
+        let mut data = clean.clone();
+        let free = (2..total + 2).rev().find(|&cl| v.fat(cl).unwrap() == 0).unwrap();
+        patch_fat(&mut data, bits, free, 0x0FFF_FFFF & match bits { 12 => 0xFFF, 16 => 0xFFFF, _ => 0x0FFF_FFFF });
+        let report = check_of(&data);
+        assert_eq!((report.lost, report.lost_chains, report.bad_chains, report.cross_linked), (1, 1, 0, 0), "FAT{}: {:?}", bits, report);
+        assert!(fsck_fails(&path, &data), "FAT{}: fsck.fat finds the lost cluster", bits);
+        // A file larger than its chain.
+        let mut data = clean.clone();
+        let at = b.entry.unwrap();
+        let offset = at.lba as usize * 512 + at.offset as usize + 28;
+        data[offset..offset + 4].copy_from_slice(&(per as u32 * 5).to_le_bytes());
+        let report = check_of(&data);
+        assert_eq!((report.sizes, report.bad_chains, report.lost), (1, 0, 0), "FAT{}: {:?}", bits, report);
+        assert!(fsck_fails(&path, &data), "FAT{}: fsck.fat finds the size", bits);
+        // A short name with a character FAT does not allow.
+        let mut data = clean.clone();
+        data[at.lba as usize * 512 + at.offset as usize + 1] = b'*';
+        let report = check_of(&data);
+        assert_eq!(report.bad_entries, 1, "FAT{}: {:?}", bits, report);
+        // A volume that was not flushed after a change is dirty (not an error by itself).
+        let mut v = Volume::mount(Image { data: clean.clone(), writable: true, flushes: 0 }).ok().unwrap();
+        let root = v.root();
+        v.create(&root, "new.txt", false, STAMP).unwrap();
+        let report = v.check().unwrap();
+        assert_eq!((report.dirty, report.clean()), (bits != 12, true), "FAT{}: {:?}", bits, report);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

@@ -1,0 +1,30 @@
+# 048 — `fm` write operations, `df`, `fsck` — done
+
+**Type:** feature · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** 043, 046, 047 · **Roadmap:** track G, tools plan §4.1, §4.7
+
+## Problem
+
+The file manager cannot copy, move, delete or create; there is no free-space report or consistency check.
+
+## Plan
+
+- `fm`: F4 edit (starts `edit` with a handle to the file), F5 copy, F6 move/rename, F7 mkdir, F8 delete, selection (Ins, `+`/`-` masks), progress with cancel, retry/skip/abort, confirmations, copy between volumes.
+- `df`: volumes, type, cluster size, size, free.
+- `fsck`: read-only FAT check — lost clusters, cross-linked chains, size mismatches, bad directory entries.
+
+## Acceptance criteria
+
+- QEMU: copy a directory tree from the boot disk to `ram:`, rename, delete; `df` changes accordingly; `fsck` reports a clean volume and finds a deliberately broken chain on a test image.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) §4.1, §4.7.
+
+## Resolution
+
+- FAT check: `Volume::check` in `vfs_server/src/fat.rs` walks the directory tree following every chain (two FAT sectors at a time, a bitmap of reached clusters) and reports files, directories, used and free clusters, lost clusters and their chains, cross-linked clusters, chains that run into a free/bad/invalid cluster, size mismatches, invalid entries (short names with forbidden characters, a directory with a size, a bad first cluster), the dirty flag and the first problem with its path; nothing is written. Served as `check` in `idl/vfs.wit` 2.1 to any client; `mind::fs::check`.
+- Any write now marks the volume dirty until a flush (before, only FAT changes did).
+- `disk/`: console programs `df` (label, FAT type, cluster, size, used, free in KiB) and `fsck [A:|ram:]`.
+- `fm`: panels over `A:` and `ram:` (paths `ram:docs`; Alt+F1/F2 choose the volume; the information panel shows label and free space); F5 copy and F6 move/rename (a target directory or a new name, typed as `A:/…`, `ram:/…` or relative), F7 make a directory (with parents), F8 delete — marked entries or the one under the cursor, whole trees, across volumes (a move between volumes copies, then removes the sources whose copy succeeded). Jobs are planned up front and run a slice (64 KiB) at a time between keys: a progress window (current file and total), Esc asks to stop, a failed step asks Retry / Skip / Abort (a partly written copy is removed), existing targets are overwritten or skipped after one question, copying onto or into itself is refused. F4 opens the file in the built-in editor (`edit`'s library: same keys, saves through `name.tmp`), Shift+F4 a new file; boot files open read-only. fm asks for `REQUEST_FILE` like the editor.
+- Deviations: fm writes with the shell's VFS client (issue 051 narrows it); F4 is the built-in editor rather than starting `edit` (a separate screen program would not get the focus from fm); copies get new modification times (VFS has no call to set them).
+- Tests: `tests/fat_host.rs` (`check` on FAT12/16/32 against `fsck.fat -n`: a cut chain, a cross link, a lost cluster, a wrong size, a bad short name, the dirty flag; clean after random operations); `tests/fm_host.rs` (paths with volumes, copy/move/mkdir/delete with conflicts, failures, a full disk, stopping, the built-in editor, drawing on every grid); QEMU suite `disk` (raw FAT disk with a chain the harness broke: fm copies `data/tree` to `ram:`, renames it, copies it back, deletes it, makes a directory with a Cyrillic name and edits a copied file in place; `df` before and after; `fsck` reports the broken chain on `A:` and a clean `ram:`; on the host `fsck.fat -n` agrees, and with the chain restored it is clean and mtools reads what fm wrote).

@@ -271,6 +271,13 @@ impl Server {
                 })();
                 vfs::reply_volume(bytes, result.as_ref().map(|r| vfs::Volume { name: r.0, label: &r.1, fat_bits: r.2, bytes: r.3, free: r.4, cluster: r.5, writable: r.6 }).map_err(|e| *e))
             }
+            Request::Check { handle, .. } => {
+                // A check reads the whole FAT and directory tree; any client may ask (it changes nothing).
+                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.check().map_err(error));
+                vfs::reply_check(bytes, result.as_ref().map(|r| vfs::Report { files: r.files, directories: r.directories, used: r.used, free: r.free, lost: r.lost,
+                    lost_chains: r.lost_chains, cross_linked: r.cross_linked, bad_chains: r.bad_chains, sizes: r.sizes, bad_entries: r.bad_entries, dirty: r.dirty,
+                    first: &r.first }).map_err(|e| *e))
+            }
             Request::Flush { handle } => {
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
                 vfs::reply_flush(result)

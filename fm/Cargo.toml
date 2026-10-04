@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
+edit = { path = "../edit" }
 
 [profile.release]
 panic = "abort"
