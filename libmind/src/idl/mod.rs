@@ -2,6 +2,7 @@
 //! Interfaces generated from idl/*.wit (MIND IDL v0.2).
 pub mod wire;
 pub mod loader;
+pub mod log;
 pub mod rtc;
 pub mod sysinfo;
 pub mod vfs;

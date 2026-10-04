@@ -59,6 +59,7 @@ USER_CRATES=(
     "ata:ata:ata.elf"
     "ahci:ahci:ahci.elf"
     "usb_storage:usb_storage:usb_storage.elf"
+    "logd:logd:logd.elf"
     "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
     "loader:loader:loader.elf"
@@ -79,6 +80,7 @@ USER_CRATES=(
     "edit:edit:edit.elf"
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
+    "dmesg:dmesg:dmesg.elf"
     "beep:beep:beep.elf"
 )
 

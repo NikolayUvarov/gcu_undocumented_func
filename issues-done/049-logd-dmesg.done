@@ -1,0 +1,30 @@
+# 049 — `logd` and `dmesg` — done
+
+**Type:** feature · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** 038 · **Roadmap:** track G, tools plan F10 · **Constitution:** MC-10.2, MC-10.6
+
+## Problem
+
+Messages of `init` and the services sit in per-task 4 KiB queues and are lost when read or overwritten; there is no system log with time and source.
+
+## Plan
+
+- Boot service `logd` serving `idl/log.wit`: a 64 KiB ring of records (monotonic time, source PID and name stamped from the IPC sender, level, text up to 200 bytes); counted gaps when the ring overwrites unread records.
+- `init` and the services write to it (`mind::log`); `dmesg` shows it with source/level filters and follow mode.
+
+## Acceptance criteria
+
+- QEMU: boot messages of `init` and `vfs_server` appear in `dmesg` with their PIDs; a forged source name in a message is not shown as the source.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F10.
+
+## Resolution
+
+- `logd/`: a boot service, started first by `init`, serving `idl/log.wit` (`write`, `read`, `state`). `ring.rs` (host-testable): 256 records in fixed 256-byte slots (64 KiB), sequence numbers (a reader sees gaps), a count of records dropped to make room, text clipped to 200 bytes on a character boundary, levels 0–3, and at most 64 records a second per sender — the rest are refused and counted, and a note says how many before the sender's next record (MC-10.2). The source is stamped from the IPC sender's PID and the task name from the kernel's task records (the observe privilege, now given to `sysmon` and `logd`): a message cannot name its source (MC-10.6). Reading needs `LOG_BADGE_READ`, which only the shell's client carries.
+- `mind::log`: `write(level, text)`, `read`, `state`, `use_endpoint`, `keep_output_local`; every `println!` line of a process that holds a client in the new `SLOT_LOG` (12; `SLOT_DYNAMIC` is now 13) also goes to `logd`, so all existing service messages arrive without changes. Lines printed before there is a client are kept (2 KiB) and sent by `use_endpoint`: `init`'s first lines. The 4 KiB buffer lent with each write is created before `main` (`mind::entry!` calls `log::prepare`), so services do not allocate while they run (the `keys` suite's kernel-heap check found the lazy allocation).
+- `init`: `logd` first in `BOOT_SERVICES`; every service gets a `logd` client, the shell's with the read badge. Plain client endpoints are now copies of the keeper narrowed at spawn instead of minted first, and `init` writes through the `logd` keeper: `init` no longer runs out of capability slots when it starts the shell (it would have with the extra slot and clients).
+- `loader.wit` 1.1: `grant` also takes slot 12; the shell lends its log client for `REQUEST_LOG`; shell command `logger <text>`.
+- `dmesg/`: console program `dmesg [-f] [-l level] [-s name|pid] [-n count]` — time, source as stamped, level, text; gaps and dropped records shown; follow mode.
+- Deviations: kernel faults are not copied into the log (they stay in `faults` and `sysmon`); a record's time is when `logd` received it (for `init`'s early lines, when they were sent).
+- Tests: `tests/logd_host.rs` (order and wrap-around, clipping, rate limit with the note); QEMU `services` suite: `dmesg` shows `init`'s lines (including the one printed before `logd` ran), `vfs_server`'s mounts, `loader` and `logd` with their real PIDs; `logger` with a text claiming `vfs_server(8)` is shown with the shell as its source and is not in `dmesg -s vfs_server`; `-s <pid>`, `-l warn`, `-n`, a usage error, and `dmesg -f` in the background picking up a new line.

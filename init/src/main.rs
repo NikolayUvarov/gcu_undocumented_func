@@ -70,7 +70,9 @@ impl Init {
         Ok(keeper)
     }
     fn server(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, ALL) }
-    fn client(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, CLIENT) }
+    // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
+    // slot of its own for it (only badged clients are minted first).
+    fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
 
     fn dma(&mut self, index: usize, bytes: usize) -> Result<usize> {
         if let Some(slot) = self.dma[index] { return Ok(slot); }
@@ -124,13 +126,13 @@ impl Init {
                     if self.running(service_index(driver)) { let keeper = self.keeper(driver)?; grants.add(slot, minted.badged(keeper, CLIENT, BLOCK_BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { let keeper = self.keeper("ramdisk")?; grants.add(SLOT_RAMDISK, minted.badged(keeper, CLIENT, BLOCK_BADGE_WRITE)?, CLIENT); }
-                grants.add(SLOT_VFS_RTC, self.client(&mut minted, "rtc")?, CLIENT);
+                self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
-                grants.add(2, self.client(&mut minted, "rtc")?, CLIENT); grants.add(3, self.client(&mut minted, "vfs_server")?, CLIENT);
-                grants.add(4, self.client(&mut minted, "audio_gw")?, CLIENT); grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
-                grants.add(6, self.client(&mut minted, "tts")?, CLIENT);
+                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
+                self.lend(&mut grants, 6, "tts")?;
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
@@ -143,23 +145,28 @@ impl Init {
                     }
                 }
             }
-            "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); grants.add(SLOT_AUDIO, self.client(&mut minted, "audio_gw")?, CLIENT); }
-            // System information: the observe privilege (read-only statistics, MC-10.2) goes to sysmon only.
+            "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
+            // The observe privilege (read-only statistics, MC-10.2) goes to sysmon and to logd, which names the sender
+            // of a record from the kernel's task records (MC-10.6).
+            "logd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "logd")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "sysmon" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "sysmon")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the COM1 ports.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
-                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { grants.add(slot, self.client(&mut minted, service)?, CLIENT); }
+                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 let keeper = self.keeper("vfs_server")?;
                 grants.add(SLOT_VFS, minted.badged(keeper, CLIENT, VFS_BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
-                grants.add(SLOT_SYSINFO, self.client(&mut minted, "sysmon")?, CLIENT);
+                self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
             }
             _ => return Err(Error::NotFound),
         }
+        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
+        if name == "shell" { let keeper = self.keeper("logd")?; grants.add(SLOT_LOG, minted.badged(keeper, CLIENT, LOG_BADGE_READ)?, CLIENT); }
+        else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each.
         let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], flags, quota)?;
@@ -174,9 +181,14 @@ fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES] };
-    // Boot order is the BOOT_SERVICES order: drivers before vfs_server, loader before the shell.
+    // Boot order is the BOOT_SERVICES order: logd first, drivers before vfs_server, loader before the shell.
     for index in 1..BOOT_IMAGES {
         match init.start(index) {
+            // From now on init's own lines (and those printed so far) go to the system log too.
+            Ok(_) if BOOT_SERVICES[index] == "logd" => {
+                // The keeper may send: init needs no client of its own.
+                if let Ok(keeper) = init.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
+            }
             Ok(_) => {}
             Err(Error::NotFound) => mind::println!("[INIT] {} NOT STARTED: NO DEVICE", BOOT_SERVICES[index]),
             Err(error) => mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error),

@@ -8,7 +8,7 @@ use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -56,7 +56,7 @@ pub fn begin<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, name: &'_ st
     Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
 }
 
-/// Gives the new program a copy of `cap` in its slot `slot` (7..11).
+/// Gives the new program a copy of `cap` in its slot `slot` (7..12; 12, the system log, since 1.1).
 pub fn grant(endpoint: ipc::Endpoint, session: u32, slot: u8, cap: usize) -> Result<core::result::Result<(), Error>> {
     let words = [2 | MAJOR << 8 | ((session) as usize) << 16 | ((slot) as usize) << 48, 0];
     let reply = wire::call(endpoint, words, Some((cap, false)))?;

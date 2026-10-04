@@ -20,7 +20,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 30] = ["boot", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "rm", "run", "stat", "stop", "sync", "write"];
+const COMMANDS: [&str; 31] = ["boot", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "rm", "run", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
 
 struct Shell {
@@ -110,8 +110,8 @@ impl Shell {
 
     // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
-    // client for `REQUEST_SYSINFO`, its own VFS client (writes on `ram:` and in `data/`) for `REQUEST_FILE`. Nothing is
-    // granted by program name.
+    // client for `REQUEST_SYSINFO`, its own VFS client (writes on `ram:` and in `data/`) for `REQUEST_FILE`, its log
+    // client (reads the system log) for `REQUEST_LOG`. Nothing is granted by program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
@@ -128,7 +128,7 @@ impl Shell {
         let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
-        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS)] {
+        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG)] {
             if !asked { continue; }
             if let Err(error) | Ok(Err(error)) = lend(slot, cap) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }
@@ -199,6 +199,11 @@ impl Shell {
             else { files::change(&mut self.term, if is(b"mkdir") { "MKDIR" } else if is(b"rm") { "RM" } else { "MV" }, args) }
         } else if is(b"sync") {
             files::sync(&mut self.term);
+        } else if is(b"logger") {
+            // A line in the system log; logd records the shell as its source whatever the text says.
+            let Ok(text) = core::str::from_utf8(args) else { return self.report("NOT UTF-8") };
+            if text.is_empty() { return self.report("EXPECTED A TEXT"); }
+            match mind::log::write(mind::log::INFO, text) { Ok(()) => { let _ = writeln!(self.term, "LOGGED"); } Err(_) => self.report("NO SYSTEM LOG") }
         } else if is(b"pmap") || is(b"caps") || is(b"stat") {
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
             if is(b"pmap") { observe::pmap(&mut self.term, pid) } else if is(b"caps") { observe::caps(&mut self.term, pid) } else { observe::task_details(&mut self.term, pid) }
@@ -227,7 +232,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {

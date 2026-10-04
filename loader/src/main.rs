@@ -131,7 +131,7 @@ impl Launcher {
 
     fn grant(&mut self, owner: u64, id: u32, slot: u8) -> Result<(), loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
-        if !(7..=11).contains(&slot) { return Err(loader::Error::Invalid); }
+        if !(7..=12).contains(&slot) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();

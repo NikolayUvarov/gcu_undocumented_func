@@ -6,8 +6,11 @@ pub fn exit() -> ! {
     loop { core::hint::spin_loop(); }
 }
 
-/// Writes bytes to the process log.
-pub fn log(bytes: &[u8]) { for chunk in bytes.chunks(4096) { call(SYSCALL_LOG, chunk.as_ptr() as usize, chunk.len()); } }
+/// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`).
+pub fn log(bytes: &[u8]) {
+    for chunk in bytes.chunks(4096) { call(SYSCALL_LOG, chunk.as_ptr() as usize, chunk.len()); }
+    crate::log::capture(bytes);
+}
 
 /// Sink for `print!`/`println!`.
 pub struct Log;

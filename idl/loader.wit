@@ -1,6 +1,6 @@
 /// Program loader: starts applications from the boot disk. A launch is a session: the caller names the program, lends
 /// the capabilities it decides to give (MC-3.11: the program only requests them, see `inspect`), then commits.
-package mind:loader@1.0.0;
+package mind:loader@1.1.0;
 
 interface loader {
     /// Why a request failed.
@@ -11,7 +11,7 @@ interface loader {
 
     /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session.
     begin: func(buffer: borrow<memory>, name: string<64>, args: string<1024>) -> result<u32, error>;
-    /// Gives the new program a copy of `cap` in its slot `slot` (7..11).
+    /// Gives the new program a copy of `cap` in its slot `slot` (7..12; 12, the system log, since 1.1).
     grant: func(session: u32, slot: u8, cap: borrow<endpoint>) -> result<_, error>;
     /// Starts the program (with a screen unless it asked to be a console program); returns its PID.
     commit: func(session: u32) -> result<u64, error>;

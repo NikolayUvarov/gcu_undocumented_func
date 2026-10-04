@@ -10,10 +10,11 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
    - the root quota: 23 tasks, 63 endpoints.
    Nothing else in the system holds the platform privilege unless `init` grants it (it does not).
 3. Endpoints have no numbers in the ABI. For each service `init` creates an endpoint with `ENDPOINT_CREATE` and keeps only a keeper capability (`CAP_KEEP | CAP_WRITE | CAP_GRANT`): it can mint a receive child for the server and write/grant children for clients but cannot receive itself, so a send to a service with no running server still fails with `ERR_PEER`. A restarted server receives a new child of the same endpoint.
-4. `init` starts the other boot images in `BOOT_SERVICES` order. For each it mints the needed capabilities, moves them into the service through the `SPAWN` grant list (`GRANT_MOVE`), except DMA regions and its own endpoint, which it copies and keeps.
+4. `init` starts the other boot images in `BOOT_SERVICES` order, `logd` first. For each it mints the needed capabilities and moves them into the service through the `SPAWN` grant list (`GRANT_MOVE`); plain client endpoints (no badge), DMA regions and its own endpoint it copies from what it keeps, narrowed to the rights the service gets, so it needs no slot of its own for them. Every service except `logd` gets a `logd` client in slot 12; `init` itself writes to `logd` through its keeper once `logd` runs (its earlier lines are kept and sent then).
 
 | Service | Receives from `init` |
 |---|---|
+| `logd` | server endpoint, observe privilege (to name the sender of a record from the kernel's task records) |
 | `rtc` | server endpoint, ports 0x70–0x71 |
 | `ps2_kbd` | ports 0x60 and 0x64, IRQ 1, input privilege |
 | `compositor` | framebuffer memory, display privilege |
@@ -25,10 +26,10 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
 | `tts` | server endpoint, client endpoint of `audio_gw` |
-| `sysmon` | server endpoint, observe privilege (read-only statistics; nobody else gets it) |
-| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10); process-control and input privileges; ports 0x3F8–0x3FF |
+| `sysmon` | server endpoint, observe privilege (read-only statistics; only `sysmon` and `logd` get it) |
+| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12); process-control and input privileges; ports 0x3F8–0x3FF |
 
-5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–11 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it, and its own VFS client (slot 7, the user's badge) to one that asks for a file (`REQUEST_FILE`, the editor); a program that asks for the console starts without a screen.
+5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–12 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it, its own VFS client (slot 7, the user's badge) to one that asks for a file (`REQUEST_FILE`, the editor), and its read-badged `logd` client (slot 12) to one that asks for the log (`REQUEST_LOG`, `dmesg`); a program that asks for the console starts without a screen.
 
 ## Where initial distribution ends
 

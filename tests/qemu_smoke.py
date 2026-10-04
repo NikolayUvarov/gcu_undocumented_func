@@ -22,7 +22,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage drivers exist only when the controller is present.
-SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps)(\s+)(\d{1,18})\b", re.I)
@@ -1353,7 +1353,41 @@ def services_suite(vm):
     assert pid not in task_rows(vm)
     require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs", flush=True)
+    dmesg_check(vm)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs, the system log", flush=True)
+
+
+def dmesg_check(vm):
+    """logd (idl/log.wit) and dmesg: boot lines of init and the services with the sources logd stamped; a line that
+    names another source keeps its real one; filters; reading needs the shell's client."""
+    pids = vm.services()
+    output = vm.command("dmesg", raw=True)
+    require(output, f"logd({pids['logd']}) [LOGD] READY: 256 RECORDS OF 200 BYTES")
+    require(output, f"init({pids['init']}) [INIT] STARTED logd PID={pids['logd']}")  # printed before logd ran: kept, then sent
+    require(output, f"init({pids['init']}) [INIT] STARTED vfs_server PID={pids['vfs_server']}")
+    require(output, f"vfs_server({pids['vfs_server']}) [VFS] MOUNTED FAT")
+    require(output, f"loader({pids['loader']}) [LOADER] READY")
+    assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
+    # The text may claim any source; logd records the sender.
+    require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
+    require(vm.command("dmesg -n 1", raw=True), f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    only = vm.command("dmesg -s vfs_server", raw=True)
+    assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
+    assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
+    assert "[INIT]" not in vm.command("dmesg -l warn", raw=True)
+    require(vm.command("dmesg -x"), "dmesg: usage: dmesg [-f] [-l level] [-s name|pid] [-n count]")
+    # Follow mode in the background: a new line reaches it.
+    follower = int(re.search(r"PID=(\d+) NAME=dmesg BACKGROUND", vm.command("run dmesg -f -n 0 &"))[1])
+    time.sleep(.5)
+    require(vm.command("logger FOLLOWED LINE"), "LOGGED")
+    output = ""
+    for _ in range(20):
+        output += vm.command(f"logs {follower}")
+        if "FOLLOWED LINE" in output:
+            break
+        time.sleep(.2)
+    require(output, f"shell({pids['shell']}) FOLLOWED LINE")
+    require(vm.command(f"kill {follower}"), "KILLED")
 
 
 BLOCK_IMAGE_MB, BLOCK_FS_MB = 64, 60

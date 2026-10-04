@@ -20,6 +20,7 @@ pub mod idl;
 pub mod input;
 pub mod ipc;
 pub mod keys;
+pub mod log;
 pub mod mem;
 pub mod platform;
 pub mod process;
@@ -74,6 +75,7 @@ macro_rules! entry {
         #[link_section = ".text._start"]
         pub extern "sysv64" fn _start(info: &'static $crate::abi::BootInfo, mailbox: *mut $crate::abi::SyscallMailbox) -> ! {
             unsafe { $crate::sys::init(mailbox) };
+            $crate::log::prepare();
             let main: fn(&'static $crate::abi::BootInfo) = $main;
             main(info);
             $crate::process::exit()
