@@ -46,7 +46,11 @@ impl Grants {
 }
 
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself).
-struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES] }
+struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES], restarts: [[u64; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [bool; BOOT_IMAGES] }
+
+// Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
+const RESTART_BUDGET: usize = 3;
+const RESTART_WINDOW_MS: u64 = 60_000;
 
 impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
@@ -149,8 +153,36 @@ impl Init {
         let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], flags, quota)?;
         self.pids[index] = pid;
+        // init is the lifecycle owner of every service and receives its exit notice (MC-6.8).
+        if mind::process::watch(pid, Endpoint::SERVICE).is_err() { mind::println!("[INIT] {} NOT WATCHED", name); }
         mind::println!("[INIT] STARTED {} PID={}", name, pid);
         Ok(pid)
+    }
+}
+
+impl Init {
+    // A watched service ended: restart it within the budget, otherwise quarantine it until the operator runs it.
+    fn ended(&mut self, exit: mind::ipc::Exit) {
+        if exit.lost != 0 { mind::println!("[INIT] {} EXIT NOTICES LOST", exit.lost); }
+        let Some(index) = (1..BOOT_IMAGES).find(|&i| self.pids[i] == exit.pid) else { return };
+        let name = BOOT_SERVICES[index];
+        match exit.reason & 0xFF {
+            EXIT_NORMAL => mind::println!("[INIT] {} PID={} EXITED", name, exit.pid),
+            EXIT_KILLED => mind::println!("[INIT] {} PID={} KILLED", name, exit.pid),
+            _ => mind::println!("[INIT] {} PID={} FAULT VECTOR {}", name, exit.pid, exit.reason >> 8),
+        }
+        let now = mind::time::uptime_ms() as u64;
+        let recent = &mut self.restarts[index];
+        if recent.iter().filter(|&&at| at != 0 && now - at < RESTART_WINDOW_MS).count() >= RESTART_BUDGET {
+            self.quarantined[index] = true;
+            mind::println!("[INIT] {} QUARANTINED: {} RESTARTS IN {} S", name, RESTART_BUDGET, RESTART_WINDOW_MS / 1000);
+            return;
+        }
+        let oldest = (0..RESTART_BUDGET).min_by_key(|&i| recent[i]).unwrap(); recent[oldest] = now.max(1);
+        match self.start(index) {
+            Ok(pid) => mind::println!("[INIT] {} RESTARTED PID={}", name, pid),
+            Err(error) => mind::println!("[INIT] {} RESTART FAILED: {:?}", name, error),
+        }
     }
 }
 
@@ -158,7 +190,7 @@ fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == 
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES] };
+    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES], restarts: [[0; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [false; BOOT_IMAGES] };
     // Boot order is the BOOT_SERVICES order: drivers before vfs_server, loader before the shell.
     for index in 1..BOOT_IMAGES {
         match init.start(index) {
@@ -168,12 +200,15 @@ fn main(_info: &'static BootInfo) {
         }
     }
     mind::println!("[INIT] READY");
-    // Requests from the shell: start a boot service by name (msg[2..4]).
+    // Exit notices of the services, and requests from the shell: start a boot service by name (msg[2..4]).
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
+        if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
         let (packed, len) = mind::process::unpack_name(request.data);
         let index = BOOT_SERVICES.iter().position(|s| s.as_bytes().eq_ignore_ascii_case(&packed[..len]));
+        // An explicit RUN is the operator's decision: it lifts a quarantine and resets the restart budget.
+        if let Some(index) = index.filter(|&i| !init.running(i)) { init.quarantined[index] = false; init.restarts[index] = [0; RESTART_BUDGET]; }
         let code = match index.map(|index| init.start(index)) {
             None => ERR_NOT_FOUND,
             Some(Ok(pid)) => pid as usize,

@@ -17,11 +17,16 @@ impl Message {
 
 /// Received message or reply.
 #[derive(Clone, Copy, Debug)]
-pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize> }
+pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub exit: Option<Exit> }
+
+/// Exit notice of a watched task (`process::watch`): its PID, why it ended and how many notices the kernel had to drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exit { pub pid: u64, pub reason: usize, pub lost: usize }
 
 fn received(raw: crate::sys::Raw) -> Received {
     let irq = (raw.msg[1] & MSG_FLAG_IRQ != 0).then_some(raw.msg[2]);
-    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq }
+    let exit = (raw.msg[1] & MSG_FLAG_EXIT != 0).then_some(Exit { pid: raw.msg[2] as u64, reason: raw.msg[3] & 0xFFFF_FFFF, lost: raw.msg[3] >> 32 });
+    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq, exit }
 }
 
 /// IPC endpoint capability in a process slot.

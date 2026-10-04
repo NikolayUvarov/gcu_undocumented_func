@@ -68,6 +68,13 @@ pub const SYSCALL_CAP_REVOKE: usize = 46;
 // The block leaves the caller's address space; the object lives while a capability or mapping refers to it. Copying a
 // writable memory capability needs CAP_GRANT, so an object can only be moved (MOVE: one owner) or minted read-only.
 pub const SYSCALL_MEM_DETACH: usize = 47;
+// TASK_WATCH: arg1 = PID of a task the caller spawned, arg2 = endpoint handle with the read right. When the task ends,
+// a receive on that endpoint gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason | lost notices << 32] (sender PID 0).
+pub const SYSCALL_TASK_WATCH: usize = 48;
+pub const EXIT_NORMAL: usize = 0;
+pub const EXIT_KILLED: usize = 1;
+pub const EXIT_FAULT: usize = 2; // | vector << 8
+pub const EXIT_NOTICES_MAX: usize = 16; // undelivered exit notices kept by the kernel; further ones are counted as lost
 pub const DETACHED_MAX_BYTES: usize = 16 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 
 // CAP_INFO reply: result=capability kind, arg2=port base or memory rights, msg[2]=size/port count/endpoint rights.
@@ -155,6 +162,7 @@ pub const ENDPOINT_QUEUE: usize = 8;
 // At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
+pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH)
 
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
 // Separate quota for mapped foreign memory (frame, IPC buffers).

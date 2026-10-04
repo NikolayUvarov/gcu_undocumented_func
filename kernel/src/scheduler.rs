@@ -60,6 +60,7 @@ struct Task {
     reply_to: Option<(usize, u64, u64)>, // slot, PID and call number of the client awaiting a reply
     call_seq: u64, // number of this task's current call; a reply must name it
     deadline: u64, // uptime ms at which a blocked IPC fails with ERR_TIMEOUT (0: none)
+    watch: Option<usize>, // endpoint of the lifecycle owner that gets this task's exit notice
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
 }
 struct Scheduler {
@@ -71,6 +72,8 @@ struct Scheduler {
     exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
     dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
+    exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
+    exits_lost: usize,
     ghosts: Vec<Node>, // removed capabilities that still have descendants (copies, mints or mappings) to revoke
     devices: Vec<pci::Device>, // PCI enumeration: discovery is a kernel mechanism, the choice of drivers is init's
     dma: Vec<Region>, // DMA regions handed out to init; they outlive driver restarts
@@ -104,7 +107,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], orphans: Vec::new(), ghosts: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -164,8 +167,16 @@ impl Scheduler {
     fn mailbox(&self, slot: usize) -> *mut SyscallMailbox { unsafe { self.tasks[slot].as_ref().unwrap().abi.ptr().add(4096).cast() } }
 
     // Common exit path (exit, kill, exception): wakes clients waiting for a reply from the task.
-    fn terminate(&mut self, slot: usize, notify: bool) {
+    fn terminate(&mut self, slot: usize, notify: bool, reason: usize) {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None;
+        // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
+        if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
+        if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
+        // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
+        for other in 1..SLOTS {
+            let Some(State::BlockedSend(ep)) = self.tasks[other].as_ref().map(|t| t.state) else { continue };
+            if !self.receivable(ep) { let sender = self.tasks[other].as_mut().unwrap(); sender.pending_cap = None; sender.state = State::Ready; unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(other)).result), ERR_PEER); } }
+        }
         for other in 1..SLOTS { if self.tasks[other].as_ref().is_some_and(|t| t.state == State::BlockedReply(slot)) { self.fail_reply(other); } }
         if self.foreground == slot {
             // Output the focus owner has not read yet is kept until the next focused task exits.
@@ -283,6 +294,7 @@ impl Scheduler {
         for task in self.tasks.iter().flatten() { for cap in task.cspace.iter().flatten().chain(task.pending_cap.as_ref().map(|p| &p.cap)) { if let Capability::Endpoint(id, _) = cap { used[*id] = true; } } }
         for ep in self.irq_bind.iter().flatten() { used[*ep] = true; }
         for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
+        self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
         self.endpoints = used;
     }
 
@@ -338,7 +350,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -442,6 +454,16 @@ impl Scheduler {
         let sender = self.tasks[from].as_mut().unwrap();
         if call { sender.state = State::BlockedReply(to); } else { (*from_mb).result = 0; sender.state = State::Ready; }
     }
+    // Exit notice for a lifecycle owner: delivered to a waiting receiver at once, otherwise kept (bounded).
+    fn post_exit(&mut self, ep: usize, pid: u64, reason: usize) {
+        if let Some(receiver) = self.blocked(State::BlockedRecv(ep)) { unsafe { self.notify_exit(receiver, pid, reason); } return; }
+        if self.exits.len() < EXIT_NOTICES_MAX { self.exits.push((ep, pid, reason)); } else { self.exits_lost += 1; }
+    }
+    unsafe fn notify_exit(&mut self, to: usize, pid: u64, reason: usize) {
+        let mb = self.mailbox(to); let lost = core::mem::take(&mut self.exits_lost);
+        (*mb).msg = [0, MSG_FLAG_EXIT, pid as usize, reason | lost << 32]; (*mb).arg1 = 0; (*mb).result = 0;
+        self.tasks[to].as_mut().unwrap().state = State::Ready;
+    }
     // IRQ notification from the kernel: sender PID 0, no capability.
     unsafe fn notify_irq(&mut self, to: usize, irq: usize) {
         let mb = self.mailbox(to);
@@ -484,6 +506,7 @@ impl Scheduler {
         let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         if let Some(irq) = (0..16).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
+        if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg1);
@@ -577,7 +600,7 @@ impl Scheduler {
                 Ok(count)
             }
             SYSCALL_TASK_KILL => {
-                let target = self.find(request.arg1 as u64).ok_or(ERR_NOT_FOUND)?; self.terminate(target, false);
+                let target = self.find(request.arg1 as u64).ok_or(ERR_NOT_FOUND)?; self.terminate(target, false, EXIT_KILLED);
                 let other = self.tasks[target].as_ref().unwrap().cpu;
                 if other != cpu::id() && self.current[other] == target { cpu::wake(other); } // stops it before the next tick
                 Ok(0)
@@ -663,7 +686,7 @@ impl Scheduler {
                 task.state = if task.input.is_empty() { State::Sleeping(now.wrapping_add(duration)) } else { State::Ready };
                 task.dirty = true; return self.select(sp, cpu);
             }
-            SYSCALL_EXIT => { self.terminate(slot, true); return self.select(sp, cpu); }
+            SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match ((FIRST_ENDPOINT..ENDPOINTS).find(|&e| !self.endpoints[e]), Self::free_slot(&task.cspace)) {
                 _ if self.used_endpoints(slot) >= task.quota_endpoints => Err(ERR_LIMIT),
                 (Some(ep), Some(_)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); let node = self.root(); Ok(Self::insert(task, Capability::Endpoint(ep, ENDPOINT_ALL), node).unwrap()) }
@@ -703,6 +726,12 @@ impl Scheduler {
                     self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
+            SYSCALL_TASK_WATCH => match (self.find(request.arg1 as u64), self.cap(slot, request.arg2)) {
+                // Only the lifecycle owner (the spawner) chooses where the exit notice goes.
+                (Some(target), Some(Capability::Endpoint(ep, rights))) if rights & CAP_READ != 0 && self.tasks[target].as_ref().unwrap().parent == Some((slot, task.pid)) => { self.tasks[target].as_mut().unwrap().watch = Some(ep); Ok(0) }
+                (None, _) => Err(ERR_NOT_FOUND),
+                _ => Err(ERR_RIGHTS),
+            },
             SYSCALL_MEM_DETACH => match task.heap.shareable(request.arg1, 0) {
                 None => Err(ERR_INVALID),
                 Some(_) if Self::free_slot(&task.cspace).is_none() => Err(ERR_NO_SLOT),
@@ -879,7 +908,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 let mut address = 0u64; if vector == 14 { asm!("mov {}, cr2", out(reg) address); }
                 let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
                 s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector, error: registers[16], rip: registers[17], address });
-                s.fault_cursor += 1; s.terminate(slot, true); return s.select(sp, cpu);
+                s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (vector as usize) << 8); return s.select(sp, cpu);
             }
             if slot == 0 { return s.select(sp, cpu); }
             if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }

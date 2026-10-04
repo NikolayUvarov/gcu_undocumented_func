@@ -1,6 +1,6 @@
 # 032 — Minimal supervision (roadmap C6)
 
-**Type:** architecture · **Priority:** P1 · **Status:** open · **Roadmap:** step 3, C6 · **Constitution:** MC-6.2, MC-6.4, MC-6.5, MC-6.8, MC-6.9, MC-6.12
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C6 · **Constitution:** MC-6.2, MC-6.4, MC-6.5, MC-6.8, MC-6.9, MC-6.12
 
 ## Problem
 
@@ -24,4 +24,19 @@ Nobody learns that a service died: `init` restarts one only when the operator ty
 
 ## Related
 
-[027](../issues-done/027-no-ambient-endpoint-names.done), [030](../issues-done/030-ipc-bounds-and-cancellation.done), [ROADMAP](../ROADMAP.md) C6.
+[027](027-no-ambient-endpoint-names.done), [030](030-ipc-bounds-and-cancellation.done), [ROADMAP](../ROADMAP.md) C6.
+
+## Resolution
+
+Kernel: `TASK_WATCH` (48) lets the spawner name an endpoint it can receive on. `terminate` takes a reason (`EXIT_NORMAL`, `EXIT_KILLED`, `EXIT_FAULT | vector << 8`) and posts the notice: it goes straight to a receiver waiting on that endpoint, otherwise into a queue of `EXIT_NOTICES_MAX` (16). Overflow is counted and reported in the next notice; notices for endpoints nobody holds are dropped in `reap`. When a task ends, every sender queued on an endpoint that no live task can receive from any more fails with `ERR_PEER`. If `init` (the only task without a parent) ends, the kernel prints `INIT EXITED: SYSTEM HALTED` and halts all CPUs. libmind: `Received.exit`, `process::watch`.
+
+`init` watches each service it starts and logs how it ended. It restarts the service unless 3 restarts already happened within 60 s; in that case it quarantines the service. An explicit `RUN` resets the budget. Clients keep their endpoint because `init` keeps the keeper (027).
+
+Tests:
+- services suite: kills `rtc` (restart reaches a client started before), kills it 3 more times (quarantined, stays down), `RUN rtc &` (client served again), kills `init` (halt).
+- isolation case `f`: a child queued in a send to its parent's endpoint gets `ERR_PEER` when the parent exits.
+- Harness: a stale-prompt race after `fg 0` is fixed.
+
+All 13 QEMU suites, the USB smoke, host and IDL tests pass.
+
+Not done (recorded in the profile): a supervisor separate from the bootstrap authority, DMA quiescing before a driver restart (MC-6.3), idempotency rules (MC-6.6), lifecycle owners for applications beyond loader's accounting.

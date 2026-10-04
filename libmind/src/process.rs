@@ -89,3 +89,6 @@ pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quot
 }
 
 pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 }
+
+/// Sends the exit notice of `pid` (a task this process spawned) to `endpoint`, which this process can receive on.
+pub fn watch(pid: u64, endpoint: crate::ipc::Endpoint) -> Result<()> { crate::sys::check(crate::sys::call(SYSCALL_TASK_WATCH, pid as usize, endpoint.0)).map(drop) }

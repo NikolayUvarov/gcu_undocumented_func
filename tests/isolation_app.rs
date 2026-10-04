@@ -29,6 +29,13 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
         if cs & 3 != 3 || flags & 0x3000 != 0 {
             asm!("ud2", options(noreturn));
         }
+        // Child of case 'f': it waits in a send to its parent's endpoint; when the parent dies the send must fail with
+        // ERR_PEER (MC-6.4) instead of waiting for a future instance. It exits quietly or faults.
+        if call(mb, abi::SYSCALL_CAP_INFO, abi::SLOT_INIT, 0) == abi::CAP_KIND_ENDPOINT {
+            let raw = mb; (*raw).msg = [0, 0, 1, 2];
+            if call(raw, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0) != abi::ERR_PEER { asm!("ud2", options(noreturn)); }
+            return;
+        }
         print(mb, b"RING3 IOPL0 READY\r\n");
         let mode = loop {
             let key = call(mb, 2, 0, 0) as u8;
@@ -248,6 +255,16 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     asm!("ud2", options(noreturn));
                 }
                 print(mb, b"CAPABILITY CHECKS OK\r\n");
+                return;
+            }
+            b'f' => {
+                // Start a copy of this program through loader with our endpoint in its INIT slot, let it queue a send,
+                // then exit without receiving.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let raw = mb; (*raw).msg = [endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, usize::from_le_bytes(*b"app2\0\0\0\0"), 0];
+                if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0) != 0 || (*raw).msg[2] >= abi::ERR_FIRST { asm!("ud2", options(noreturn)); }
+                call(mb, abi::SYSCALL_WAIT, 500, 0);
+                print(mb, b"PARENT EXITS\r\n");
                 return;
             }
             _ => {

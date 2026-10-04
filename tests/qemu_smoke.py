@@ -388,6 +388,16 @@ def isolation_suite(vm):
     output = vm.expect(f"PID={len(cases) + 3} EXITED. SHELL RESUMED.")
     require(output, "CAPABILITY CHECKS OK")
     time.sleep(.1); vm.collect(); vm.output = ""
+    # A send queued for a server that dies fails with ERR_PEER instead of waiting for a new instance.
+    parent = len(cases) + 4
+    vm.send("run app2\n")
+    vm.expect("RING3 IOPL0 READY")
+    vm.send("f\n")
+    output = vm.expect(f"PID={parent} EXITED. SHELL RESUMED.")
+    require(output, "PARENT EXITS")
+    time.sleep(.5); vm.collect(); vm.output = ""
+    assert parent + 1 not in task_rows(vm), "the child must not wait for a future instance"
+    assert f"FAULT PID={parent + 1} " not in vm.command("faults")
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
@@ -708,7 +718,7 @@ def services_suite(vm):
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
-    vm.send("fg 0\n"); vm.expect("ERROR:")
+    vm.send("fg 0\n"); vm.expect("ERROR: EXPECTED ONE POSITIVE PID\nMIND> ")  # the whole reply, prompt included
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)
@@ -748,23 +758,43 @@ def services_suite(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
-    # No endpoint numbers: a restarted service gets a new receiver of the endpoint init keeps, so a client granted
-    # earlier reaches it again; while it is dead, calls fail instead of hanging.
-    require(vm.command(f"kill {vm.services()['rtc']}", raw=True), "KILLED PID=")
+    # Supervision: init restarts a killed service from the endpoint it keeps, so a client started before the failure
+    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it.
     require(vm.command("run hello &"), "PID=6 NAME=hello BACKGROUND")
-    time.sleep(1)
-    assert "[CLOCK] " not in vm.command("logs 6"), "a dead RTC service must not answer"
+
+    def clock_resumes():
+        vm.command("logs 6")
+        output = ""
+        for _ in range(30):
+            output += vm.command("logs 6")
+            if "[CLOCK] " in output:
+                return
+            time.sleep(.2)
+        raise AssertionError("client did not reach the restarted rtc: " + output)
+
+    def kill_rtc():
+        pid = vm.services()["rtc"]
+        require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+        for _ in range(30):
+            if vm.services().get("rtc", pid) != pid:
+                return pid
+            time.sleep(.1)
+        return pid
+
+    first = kill_rtc()
+    require(vm.service_logs("init", f"rtc PID={first} KILLED"), "RESTARTED PID=")
+    clock_resumes()
+    kill_rtc(); kill_rtc(); kill_rtc()
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S")
+    assert "rtc" not in vm.services(), "a quarantined service stays down"
     require(vm.command("run rtc &"), "NAME=rtc")
-    output = ""
-    for _ in range(20):
-        output += vm.command("logs 6")
-        if "[CLOCK] " in output:
-            break
-        time.sleep(.2)
-    require(output, "[CLOCK] ")
+    clock_resumes()
     vm.command("kill 6")
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim", flush=True)
+    # Final recovery boundary: without init the system stops instead of running unsupervised.
+    vm.send(f"kill {vm.services()['init']}\n", raw=True)
+    vm.expect("INIT EXITED: SYSTEM HALTED")
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, halt without init, reclaim", flush=True)
 
 
 def audio_suite(vm, wav):
