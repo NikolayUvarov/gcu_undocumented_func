@@ -89,3 +89,28 @@ pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quot
 }
 
 pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 }
+
+/// What a program may ask its launcher for (`request!`); the launcher decides, the request grants nothing (MC-3.11).
+pub const REQUEST_CONSOLE: u32 = 1; // no screen: output goes to the shell's console
+pub const REQUEST_SYSINFO: u32 = 2; // a sysmon client in SLOT_SYSINFO
+pub const REQUEST_FILE: u32 = 4; // a handle to the file or directory named in the arguments
+pub const REQUEST_LIFECYCLE: u32 = 8; // service lifecycle control in SLOT_LIFECYCLE
+pub const REQUEST_LOG: u32 = 16; // the system log
+pub const REQUEST_MAGIC: &[u8; 8] = b"MINDREQ1";
+
+/// Contents of the `.mind_request` section: magic, flags, reserved.
+pub const fn request_note(flags: u32) -> [u8; 16] {
+    let f = flags.to_le_bytes();
+    [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', f[0], f[1], f[2], f[3], 0, 0, 0, 0]
+}
+
+/// Declares what the program asks its launcher for, e.g. `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO);`. The
+/// program's linker script keeps the `.mind_request` section (`KEEP`).
+#[macro_export]
+macro_rules! request {
+    ($flags:expr) => {
+        #[used]
+        #[link_section = ".mind_request"]
+        static MIND_REQUEST: [u8; 16] = { use $crate::process::*; $crate::process::request_note($flags) };
+    };
+}

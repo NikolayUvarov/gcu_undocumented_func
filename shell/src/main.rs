@@ -10,6 +10,7 @@ use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_event, Ports};
+use mind::idl::{loader, wire};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
 use mind::ipc::{Endpoint, Message};
@@ -18,11 +19,13 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 24] = ["boot", "caps", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logs", "physmap", "pmap", "ps", "run", "stat", "stop", "uptime"];
+const COMMANDS: [&str; 23] = ["boot", "caps", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logs", "physmap", "pmap", "ps", "run", "stat", "stop"];
 const NAMES: usize = 64;
 
 struct Shell {
     term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
+    console: Option<u64>, // console program running in the shell
+    shared: Option<wire::Shared>, // buffer lent to the loader (idl/loader.wit)
     names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
 }
 
@@ -104,30 +107,65 @@ impl Shell {
         let _ = writeln!(self.term, "\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.");
     }
 
-    // Boot services are (re)started by init, applications by the loader from disk (with arguments, if any).
-    fn start(name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
+    // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
+    // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
+    // client for `REQUEST_SYSINFO`. Nothing is granted by program name.
+    fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
             let words = mind::process::pack_name(name).ok_or(Error::Invalid)?;
             return Endpoint::INIT.call(&Message::new(words[0], words[1]), 0).and_then(|reply| mind::sys::check(reply.data[0])).map(|pid| pid as u64);
         }
         let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
-        if args.is_empty() { return mind::process::spawn(name, None); }
-        mind::process::spawn_with_args(name, core::str::from_utf8(args).map_err(|_| Error::Invalid)?)
+        let args = core::str::from_utf8(args).map_err(|_| Error::Invalid)?;
+        let failed = |error: loader::Error| match error {
+            loader::Error::NotFound => Error::NotFound, loader::Error::Invalid => Error::Invalid, loader::Error::NoMemory => Error::NoMemory,
+            loader::Error::Rights => Error::Rights, loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY),
+        };
+        let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
+        let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
+        let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
+        let granted = if needs.sysinfo { loader::grant(Endpoint::LOADER, session, SLOT_SYSINFO as u8, SLOT_SYSINFO).map(|r| r.map_err(failed)) } else { Ok(Ok(())) };
+        if let Err(error) | Ok(Err(error)) = granted { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        loader::commit(Endpoint::LOADER, session)?.map_err(failed)
+    }
+
+    // After a start: a program with a screen takes the focus (its output since start is kept); a console program runs
+    // in the shell, which shows its output and waits for it.
+    // A program that has already exited is named as the loader names tasks; a console program's output is kept.
+    fn started(&mut self, pid: u64, name: &[u8], background: bool) {
+        let (list, count) = tasks();
+        let task = list[..count].iter().find(|t| t.pid == pid);
+        let file = name.rsplit(|&b| b == b'/').next().unwrap_or(name);
+        let stem = if file.len() > 4 && file[file.len() - 4..].eq_ignore_ascii_case(b".elf") { &file[..file.len() - 4] } else { file };
+        let _ = write!(self.term, "STARTED PID={} NAME=", pid);
+        match task { Some(t) => { let _ = write!(self.term, "{}", label(&t.name)); } None => for &b in stem { self.term.print_char(b.to_ascii_lowercase()); } }
+        let _ = writeln!(self.term, " {}", if background { "BACKGROUND" } else { "FOREGROUND" });
+        if background { return; }
+        match task {
+            Some(t) if t.screen != 0 => { let _ = self.focus(pid, true); }
+            Some(t) if t.service != 0 => {}
+            _ => self.console = Some(pid),
+        }
     }
 
     fn run_program(&mut self, name: &[u8], args: &[u8], background: bool) {
         let service = BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(name));
-        let pid = match Self::start(name, args, service) {
-            Ok(pid) => pid,
-            Err(error) => return self.report(error_text(error, service)),
-        };
-        let (list, count) = tasks();
-        let task = list[..count].iter().find(|t| t.pid == pid);
-        let task_name = task.map_or("?", |t| label(&t.name));
-        let _ = writeln!(self.term, "STARTED PID={} NAME={} {}", pid, task_name, if background { "BACKGROUND" } else { "FOREGROUND" });
-        // Only programs with a screen can take the focus; their output since start is kept.
-        if !background && task.is_some_and(|t| t.screen != 0) { let _ = self.focus(pid, true); }
+        match self.start(name, args, service) {
+            Ok(pid) => self.started(pid, name, background),
+            Err(error) => self.report(error_text(error, service)),
+        }
+    }
+
+    // Output of the console program running in the shell; when it has exited, its last output and the prompt.
+    fn pump_console(&mut self, pid: u64) {
+        let mut buffer = [0u8; 1024];
+        while let Ok(len @ 1..) = control::console(pid, &mut buffer) { for &byte in &buffer[..len] { self.term.print_char(byte); } }
+        if mind::process::alive(pid) { return; }
+        while let Ok(len @ 1..) = control::console(pid, &mut buffer) { for &byte in &buffer[..len] { self.term.print_char(byte); } }
+        self.console = None;
+        if self.term.position().col != 0 { self.term.print_char(b'\n'); }
+        self.prompt();
     }
 
     fn command(&mut self, line: &[u8]) {
@@ -173,16 +211,14 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints", b"uptime"].iter().any(|c| is(c)) {
+        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- uptime: uptime, load averages and CPU load (sysmon)\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
             observe::cpus(&mut self.term);
-        } else if is(b"uptime") {
-            observe::uptime(&mut self.term);
         } else if is(b"free") {
             observe::free(&mut self.term);
         } else if is(b"physmap") {
@@ -224,13 +260,8 @@ impl Shell {
             let _ = writeln!(self.term, "HEAP: USED={} FREE={} TEST FREED={}", used, free, freed);
         } else if cmd.len() <= NAME_MAX && cmd.is_ascii() && !BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
             // Any other word runs the program of that name in the foreground: `say hello`, `listen 3`.
-            match Self::start(cmd, args, false) {
-                Ok(pid) => {
-                    let (list, count) = tasks();
-                    let task = list[..count].iter().find(|t| t.pid == pid);
-                    let _ = writeln!(self.term, "STARTED PID={} NAME={} FOREGROUND", pid, task.map_or("?", |t| label(&t.name)));
-                    if task.is_some_and(|t| t.screen != 0) { let _ = self.focus(pid, true); }
-                }
+            match self.start(cmd, args, false) {
+                Ok(pid) => self.started(pid, cmd, false),
                 Err(Error::NotFound) => self.report("UNKNOWN COMMAND"),
                 Err(error) => self.report(error_text(error, false)),
             }
@@ -321,6 +352,11 @@ impl Shell {
 
     // A key typed while the shell has the focus.
     fn key(&mut self, key: Key) {
+        // While a console program runs, Esc or Ctrl+C stops it; other keys are not for the shell.
+        if let Some(pid) = self.console {
+            if key.is_escape() || key.is_ctrl('c') { if control::kill(pid).is_ok() { let _ = write!(self.term, "^C"); } }
+            return;
+        }
         if key.shift() && matches!(key.code(), Code::PageUp | Code::PageDown) { self.term.scroll(key.code() == Code::PageUp); return; }
         self.term.unscroll();
         if key.is_ctrl('l') { self.term.clear(); let _ = write!(self.term, "MIND> "); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
@@ -335,7 +371,7 @@ impl Shell {
                 self.line.clear();
                 self.term.print_char(b'\n');
                 self.command(&copy[..len]);
-                if self.focused.is_none() { self.prompt(); }
+                if self.focused.is_none() && self.console.is_none() { self.prompt(); }
             }
             Edit::Cancel => { if !self.line.is_empty() { self.line.clear(); self.history.reset(); self.redraw_input(true); } }
             Edit::Changed => {
@@ -379,6 +415,7 @@ fn main(info: &'static BootInfo) {
     let term = Console::new(mind::gfx::Screen::new(info), Ports(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
     let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
+                            console: None, shared: wire::Shared::new(8192).ok(),
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0 };
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
@@ -390,6 +427,7 @@ fn main(info: &'static BootInfo) {
     let mut events = Events::new();
     loop {
         if let Some(pid) = shell.focused { shell.mirror(pid); }
+        if let Some(pid) = shell.console { shell.pump_console(pid); }
         while let Some(notice) = control::notice() {
             let (pid, what) = match notice { Notice::Exited(pid) => { shell.mirror(pid); (pid, "EXITED") } Notice::Background(pid) => (pid, "BACKGROUND") };
             shell.focused = None;
@@ -407,7 +445,7 @@ fn main(info: &'static BootInfo) {
         events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus.
         while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } }
-        let cursor = shell.focused.is_none().then(|| shell.cursor());
+        let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         shell.term.render(cursor);
         mind::time::sleep(10);
     }

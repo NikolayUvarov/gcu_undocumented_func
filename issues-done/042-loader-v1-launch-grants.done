@@ -1,0 +1,31 @@
+# 042 — Loader v1: launch with granted capabilities, console programs — done
+
+**Type:** architecture · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 038 · **Roadmap:** track G, tools plan F7 · **Constitution:** MC-3.3, MC-3.7, MC-3.11
+
+## Problem
+
+`loader` gives every application the same fixed grant set and always a screen. A tool cannot receive what it needs (a sysinfo client, a file handle), and granting by program name would break MC-3.7.
+
+## Plan
+
+- `idl/loader.wit`: `begin(request) -> session` (name and arguments in the buffer), `grant(session, slot, cap: borrow<endpoint>)` repeated, `commit(session, flags) -> pid`, `abort(session)`, `inspect(name)` → the program's request. Old `LOADER_RUN`/`LOADER_LIST` remain for compatibility until C8.
+- The loader copies only capabilities the caller passed, into slots 7–9 (application-defined); standard slots 1–6 are unchanged.
+- Request: ELF note `.note.mind.request` (`mind::request!` macro) with requested capabilities (`sysinfo`, `file`, `dir`, `lifecycle`, `log`) and `console` (no screen). It grants nothing.
+- Shell as the user's agent: `top`, `memmap`, `load`, `hw` get a sysinfo client; `view`/`edit <file>` get a handle to that file; `fm` gets directory handles; console programs keep the shell in the foreground and their output is drawn in the shell.
+
+## Acceptance criteria
+
+- QEMU: a program started without a grant cannot reach `sysmon` (`ERR_INVALID` on its slot), the same program started by the shell can; a console program prints into the shell.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F7.
+
+## Resolution
+
+- `idl/loader.wit` 1.0: `begin(name, args) → session`, `grant(session, slot, cap)` (one capability per message, slots 7–11), `commit(session) → pid`, `abort(session)`, `inspect(name) → needs`. The loader keeps up to four sessions; it mints each lent capability into its own slot and passes the copies at `SPAWN`, so it gives only what the caller lent (MC-3.11). `LOADER_RUN`/`LOADER_LIST` remain until C8.
+- Request: `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO)` puts a `.mind_request` section (magic `MINDREQ1`, flags) into the ELF; every `linker.ld` keeps it. The loader reads it from the section headers; it grants nothing. Flags: console, sysinfo, file, lifecycle, log (the last three for 046/049/050).
+- Shell as the user's agent: `inspect`, `begin`, lends its `sysmon` client (slot 10) when asked, `commit`. Nothing is granted by name. A program that asks for the console starts without a screen: in the foreground the shell shows its output and waits (Esc/Ctrl+C stops it); the kernel keeps the unread output of the last screenless program that exited, so `run uptime &` then `logs <id>` works. A program that exits before the shell reads the task list is named as the loader names it.
+- `uptime` moved from the shell to a console program (`uptime/`).
+- The plan's `.note.mind.request` became an ordinary section; `commit` takes no flags (the program's request decides screen or console); `view`/`edit` file handles and `fm` directory handles wait for VFS v2 (046).
+- Tests: `services` (uptime as a console program with the sysmon grant, in the background with `logs` after exit), `busy` (uptime's CPU load), `isolation` (an application started without a grant gets `ERR_INVALID` on slots 10 and 11); all QEMU suites pass.

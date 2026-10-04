@@ -131,6 +131,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_STAT, abi::STAT_TASKS, 0, abi::ERR_RIGHTS), // observation needs the observe privilege (MC-10.2)
                     (abi::SYSCALL_TASK_LIST, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_IPC_CALL, abi::SLOT_SYSINFO, 0, abi::ERR_INVALID), // sysmon only for programs that request it (loader v1)
+                    (abi::SYSCALL_IPC_CALL, abi::SLOT_LIFECYCLE, 0, abi::ERR_INVALID),
                 ];
                 for (number, a, b, expected) in checks {
                     if call(mb, number, a, b) != expected {

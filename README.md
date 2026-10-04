@@ -45,7 +45,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `ahci` | service endpoint, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
 | `usb_storage` | service endpoint, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
 | `vfs_server` | service endpoint, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
-| `loader` | service endpoint, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
+| `loader` | service endpoint, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities; in a launch session (`idl/loader.wit`) also with the capabilities the launcher lends (slots 7–11) |
 | `audio_gw` | service endpoint, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
 | `tts` | service endpoint, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `sysmon` | service endpoint, observe privilege | system information (`idl/sysinfo.wit`): the kernel's `STAT` records, load samples every 100 ms (300 kept) and every second (600 kept), load averages; at most 20 requests at once and 40 per second per client |
@@ -82,7 +82,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | Module | Contents |
 |---|---|
 | `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
-| `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `spawn_image`/`loader_done` for `loader` |
+| `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `request!` (what the program asks its launcher for: `REQUEST_CONSOLE`, `REQUEST_SYSINFO`, …); `spawn_image`/`loader_done` for `loader` |
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_key`, `wait_or_exit` (Esc exits) → `Key` (`code()`: character, Enter, Esc, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12; `char()`, `text()`, `shift()`/`ctrl()`/`alt()`) |
 | `tui::viewer` | file viewer core shared by `view` and the file manager: a `Source` read through a window cache, text with or without wrapping and line numbers, hex dump, search ignoring case, go to |
 | `tui` | text UI on the 8×16 font: `Grid` of cells (text with clipping, frames with titles, fills, bars in 1/8 cells, braille time-series graphs), `Terminal` (the grid on the program's screen, redraws only changed cells, cursor), themes `CLASSIC` (Norton Commander colours) and `DARK`, widgets (`ListState`, `InputLine` with UTF-8 editing, `History`, `MenuBar`, `fkey_bar`, dialogs, `progress`) |
@@ -340,6 +340,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `view <file>` — text and hex viewer: UTF-8 text (Cyrillic), ↑/↓/PgUp/PgDn/Space/Home/End, F2 wrap on/off (←/→ shift long lines), F4 hex/text, F5 go to a line, `0x` offset or `N%`, F7 search ignoring case (Shift+F7 next), F1 keys, Esc/F3/F10 exit. The file is read on demand through a 64 KiB window, so large files open at once.
 * `RUN keys` — show the key events a program receives: key code, modifiers, character (Esc exits).
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
+* Console programs (`uptime`): a program that asks for the console in its ELF has no screen; in the foreground the shell stays in front, shows its output and waits for it (Esc or Ctrl+C stops it). `LOGS` also reads the output of the last such program that exited, so `run uptime &` then `logs <id>` works.
 * `RUN <name> [arguments] &` — launch a new background instance and retain the shell. Arguments reach the program through `mind::process::args()`.
 * `<name> [arguments]` — any word that is not a shell command runs the program of that name in the foreground (`say hello`, `listen 2`).
 * `RUN <name> [arguments]` (without `&`) runs in the foreground. Repeating the command creates independent instances with different PIDs. Up to eight application tasks can coexist besides the services.
@@ -348,7 +349,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs, per-CPU timer counters, busy and idle time (TSC), context switches and interrupts.
-* `UPTIME` — uptime, load averages over 1/5/15 minutes, current CPU load and task count, from `sysmon`.
+* `uptime` — a console program: uptime, load averages over 1/5/15 minutes, current CPU load and task count, from `sysmon`.
 * `FREE` — kernel memory by use: arena used/free and the largest free block, task images, stacks, screens, private heaps, kernel pages, page tables, memory objects, DMA, mapped memory.
 * `PHYSMAP` — the physical memory map: UEFI ranges and the platform layout (kernel, arena, boot images, framebuffer, device BARs).
 * `PMAP <id>` — the address space of a task: code and data segments, stack with guard pages, screen, info page, mailbox, heap blocks and shared mappings with their rights.
@@ -509,7 +510,9 @@ This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for progr
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` and `sysmon` (`idl/sysinfo.wit`) are on MIND IDL; the other services still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc`, `sysmon` (`idl/sysinfo.wit`) and the loader's launch sessions (`idl/loader.wit`) are on MIND IDL; the other services still use the numeric conventions of `common/abi.rs` (roadmap C8).
+
+A program states what it needs with `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO)`: a `.mind_request` section in its ELF that grants nothing (MC-3.11). The shell, as the user's agent, reads it with the loader's `inspect`, opens a launch session (`begin`), lends what it holds and is willing to give (`grant`: today the `sysmon` client in slot 10) and starts the program (`commit`); `REQUEST_CONSOLE` starts it without a screen. Nothing is granted by program name.
 
 ### Runtime checks
 

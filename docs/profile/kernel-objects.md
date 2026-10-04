@@ -12,7 +12,7 @@
 | DMA region | 8 MiB in total, 64 KiB aligned; kept for the platform's lifetime | `PLATFORM_CAP(PLATFORM_DMA)` (init) | Kernel heap |
 | IRQ binding | One endpoint per line 1–15 (not 2) | `IRQ_BIND` | Fixed table |
 | Input queue | 64 key events per task (32-bit words decoded in ring 3), oldest dropped | `INPUT_EVENT` | Per task |
-| Log and console queues | 4096 bytes each per task, oldest dropped | `LOG` | Per task |
+| Log and console queues | 4096 bytes each per task, oldest dropped; the unread console output of the last focused or screenless task that exited is kept until the next such exit | `LOG` | Per task |
 | Fault records | 16, ring buffer | User exceptions | Global |
 | Notices for the focus owner | 8, further ones dropped | Focused task exits, attention key | Global |
 

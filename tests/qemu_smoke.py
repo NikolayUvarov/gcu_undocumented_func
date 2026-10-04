@@ -557,7 +557,7 @@ def busy_suite(vm):
     assert int(second[2][-1]) > int(first[2][-1]), (first, second)
     # sysmon's samples see the busy CPU: one of the CPUs at full load.
     time.sleep(1.5)
-    cpu = int(re.search(r"CPU (\d+)%", vm.command("uptime"))[1])
+    cpu = int(re.search(r"cpu (\d+)%", vm.command("uptime"))[1])
     assert cpu >= 100 // vm.cpus // 2, cpu
     # TSC accounting (STAT): a task that never yields gets most of its CPU.
     run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
@@ -977,11 +977,6 @@ def services_suite(vm):
     require(vm.command("devices"), "00:01.1 010180 IDE controller")
     endpoints = vm.command("endpoints")
     assert len(re.findall(r"^EP=\d+ CREATOR=1 SERVER=\d+", endpoints, re.M)) >= 6, endpoints
-    # sysmon (idl/sysinfo.wit) through the shell's client: uptime, load averages, current CPU load and task count.
-    time.sleep(1.2)
-    uptime = vm.command("uptime")
-    match = re.search(r"UP \d+:\d\d:\d\d LOAD \d+\.\d\d \d+\.\d\d \d+\.\d\d CPU (\d+)% TASKS (\d+)", uptime)
-    assert match and int(match[2]) == tasks and 0 <= int(match[1]) <= 100, (uptime, tasks)
     require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
     # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
     import datetime
@@ -1067,8 +1062,22 @@ def services_suite(vm):
         time.sleep(.2)
     require(output, "[CLOCK] ")
     vm.command("kill 6")
+    # Loader v1 (idl/loader.wit): uptime asks in its ELF for the console and sysmon (idl/sysinfo.wit); the shell grants the
+    # client endpoint in a launch session and shows the output of the console program (sysmon's last sample, taken
+    # every 100 ms, may already count it as a task).
+    time.sleep(1.2)
+    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    uptime = vm.command("uptime")
+    require(uptime, "NAME=uptime FOREGROUND")
+    match = re.search(r"^up \d+:\d\d:\d\d, load \d+\.\d\d \d+\.\d\d \d+\.\d\d, cpu (\d+)%, (\d+) tasks$", uptime, re.M)
+    assert match and int(match[2]) in (tasks, tasks + 1) and 0 <= int(match[1]) <= 100, (uptime, tasks)
+    # In the background: the output of the exited program stays readable.
+    pid = int(re.search(r"PID=(\d+) NAME=uptime BACKGROUND", vm.command("run uptime &"))[1])
+    time.sleep(.5)
+    assert pid not in task_rows(vm)
+    require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs", flush=True)
 
 
 def audio_suite(vm, wav):

@@ -69,6 +69,7 @@ USER_CRATES=(
     "files:files:files.elf"
     "keys:keys:keys.elf"
     "view:view:view.elf"
+    "uptime:uptime:uptime.elf"
     "beep:beep:beep.elf"
 )
 

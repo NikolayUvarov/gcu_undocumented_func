@@ -75,7 +75,8 @@ A change that alters the meaning or layout of an existing function increments th
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.1.0 (`date` added) |
 | [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` | 1.0.0 |
+| [`idl/loader.wit`](../../idl/loader.wit) | `loader` (launch sessions) | 1.0.0 |
 
 `tests/idl/sample.wit` exercises every v0.2 type; its bindings (`tests/idl/sample.rs`) run in `tests/idl_host.rs` against a loopback of client and server, with malformed payloads.
 
-The other services (VFS, block, audio, loader, TTS, init) still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8.
+The other services (VFS, block, audio, TTS, init) and the loader's `LOADER_RUN`/`LOADER_LIST` still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8.
