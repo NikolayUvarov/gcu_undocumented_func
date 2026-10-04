@@ -123,11 +123,12 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
         scheduler::spawn_init().expect("init spawn");
+        // Printed before any task can run, so the kernel's line never interleaves with the shell's output on COM1.
+        serial_print("MIND CORE KERNEL: INIT STARTED\n");
         interrupts::init();
         clock::calibrate();
         cpu::start(info);
     }
-    serial_print("MIND CORE KERNEL: INIT STARTED\n");
     // The BSP idle loop reclaims exited tasks and otherwise sleeps until the next interrupt.
     loop {
         scheduler::reap();

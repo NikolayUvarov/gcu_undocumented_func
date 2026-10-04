@@ -17,7 +17,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 14] = ["boot", "clear", "clock", "cpus", "faults", "fg", "heap", "help", "kill", "list", "logs", "ps", "run", "stop"];
+const COMMANDS: [&str; 15] = ["boot", "clear", "clock", "cpus", "date", "faults", "fg", "heap", "help", "kill", "list", "logs", "ps", "run", "stop"];
 const NAMES: usize = 64;
 
 struct Shell {
@@ -169,10 +169,10 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock"].iter().any(|c| is(c)) {
+        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -194,6 +194,12 @@ impl Shell {
         } else if is(b"stop") {
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");
             control::halt();
+        } else if is(b"date") {
+            // Calendar time from the rtc service (idl/rtc.wit 1.1), without a time zone.
+            match (mind::rtc::date(), mind::rtc::seconds_since_midnight()) {
+                (Some((y, m, d)), Some(s)) => { let _ = writeln!(self.term, "DATE: {:04}-{:02}-{:02} {:02}:{:02}:{:02} (RTC, NO TIME ZONE)", y, m, d, s / 3600, s / 60 % 60, s % 60); }
+                _ => self.report("RTC NOT AVAILABLE"),
+            }
         } else if is(b"clock") {
             let (ns, resolution, hz) = mind::time::clock_info();
             let _ = writeln!(self.term, "CLOCK: MONOTONIC NS={} RESOLUTION NS={} TSC HZ={} UPTIME MS={}", ns, resolution, hz, mind::time::uptime_ms());

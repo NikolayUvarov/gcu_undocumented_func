@@ -765,6 +765,8 @@ def dzen_suite(vm):
     # The VM starts at 19:35:05: TR yellow, center cyan; clockwise free
     # corners BR dark, BL/TL white. There is >90 s before the next state.
     baseline = heap_used(vm)
+    # The VM's RTC was set to 2026-09-19T19:35:05.
+    require(vm.command("date"), "DATE: 2026-09-19 19:35:")
     require(vm.command("list"), "dzen-clock")
     require(vm.command("run dzen-clock &"), "PID=1 NAME=dzen-clock BACKGROUND")
     require(vm.command("run dzen-clock &"), "PID=2 NAME=dzen-clock BACKGROUND")
@@ -948,6 +950,11 @@ def services_suite(vm):
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
+    # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
+    import datetime
+    today = datetime.date.today()
+    date = vm.command("date")
+    assert any(f"DATE: {d.isoformat()} " in date for d in (today, today - datetime.timedelta(days=1), today + datetime.timedelta(days=1))), date
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
     vm.send("fg 0\n"); vm.expect("ERROR:")
     # Services do not occupy a screen and are not restarted.

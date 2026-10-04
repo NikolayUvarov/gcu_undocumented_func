@@ -18,7 +18,6 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [038](038-mind-idl-v0.2.md) | MIND IDL v0.2: records, strings, lists | architecture | P0 | — | C5 follow-up (tools F6) |
 | [039](039-observation-abi.md) | OBSERVE privilege, `STAT`, firmware memory map | architecture | P0 | — | G (tools F5) |
 | [040](040-sysmon.md) | `sysmon` service | feature | P0 | 038, 039 | G (tools F9) |
 | [041](041-top-memmap-load-hw.md) | `top`, `memmap`, `load`, `hw` | feature | P0 | 034, 040, 042 | G |
@@ -70,5 +69,6 @@
 | [034](../issues-done/034-tui-library.done) | Text UI library `mind::tui` | done (2026-10-04) |
 | [036](../issues-done/036-shell-line-editing.done) | Shell: line editing, history, Cyrillic | done (2026-10-04) |
 | [037](../issues-done/037-viewer.done) | Viewer `view` | done (2026-10-04) |
+| [038](../issues-done/038-mind-idl-v0.2.done) | MIND IDL v0.2: records, strings, lists | done (2026-10-04) |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

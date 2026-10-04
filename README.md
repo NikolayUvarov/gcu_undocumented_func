@@ -38,7 +38,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | Service | Capabilities (granted by init) | Role |
 |---|---|---|
 | `init` | own endpoint, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
-| `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight) |
+| `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight, days since 2000-01-01) |
 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → key events (modifiers, F-keys, navigation keys, US/Russian layout) for the focused task |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer |
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
@@ -347,6 +347,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs and per-CPU timer counters.
 * `CLOCK` — show the monotonic clock (ns), its resolution and the calibrated TSC frequency.
+* `DATE` — show the calendar date and time from the RTC (no time zone).
 * `FAULTS` — show the last 16 application exceptions: PID, CPU, exception vector/error code, instruction and fault addresses.
 * `HEAP` — allocate and format a test string, release it, and report total runtime heap usage, free bytes, and whether the test allocation was freed. The measurement is serialized with program allocations so concurrent heap activity cannot produce a false leak report.
 * `HELP` — list the available commands.
@@ -498,7 +499,7 @@ This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for progr
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` is the first service on MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` is the first service on MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
 
 ### Runtime checks
 
@@ -511,6 +512,8 @@ rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /
 rustc --edition=2021 --test tests/keys_host.rs -o /tmp/mind-core-keys-tests && /tmp/mind-core-keys-tests
 rustc --edition=2021 --test tests/tui_host.rs -o /tmp/mind-core-tui-tests && /tmp/mind-core-tui-tests
 rustc --edition=2021 --test tests/viewer_host.rs -o /tmp/mind-core-viewer-tests && /tmp/mind-core-viewer-tests
+rustc --edition=2021 --test tests/idl_host.rs -o /tmp/mind-core-idl-tests && /tmp/mind-core-idl-tests   # generated bindings over a loopback
+rustc --edition=2021 --test tests/rtc_host.rs -o /tmp/mind-core-rtc-tests && /tmp/mind-core-rtc-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
