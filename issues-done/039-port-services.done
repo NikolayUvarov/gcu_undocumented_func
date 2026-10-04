@@ -18,7 +18,7 @@ Only `rtc` uses MIND IDL; the other services use numeric conventions and share h
 
 ## Related
 
-[ROADMAP](../ROADMAP.md) C8; [044](044-idl-v02-records-strings.done), [048](../issues/048-write-path-ramdisk-vfs2.md).
+[ROADMAP](../ROADMAP.md) C8; [044](044-idl-v02-records-strings.done), [048](048-write-path-ramdisk-vfs2.done).
 
 ## Progress
 

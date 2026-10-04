@@ -17,9 +17,9 @@ An application normally uses only `libmind` and the service clients; the raw ABI
 - Every task has a **mailbox** page (`SyscallMailbox` in `common/abi.rs`): `syscall_num`, `arg1`, `arg2`, `result`, `msg[4]`. The kernel enters the program at `_start(info, mailbox)` (System V calling convention: `rdi` = the read-only **info page** with `BootInfo` and the program arguments at `ARGS_OFFSET`, `rsi` = the mailbox; the info page is the page just below the mailbox).
 - A call: write `syscall_num`, `arg1`, `arg2`, `msg`, execute `int 0x80`, read `result` (and, for some calls, `arg1`, `arg2`, `msg`).
 - **Errors** are `result` values `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`, `ERR_BUSY`, `ERR_LIMIT`, `ERR_TIMEOUT`; everything from `ERR_FIRST` up is an error). `ALLOC` returns 0 on failure.
-- **Capabilities** are named by handles `slot | generation << 8`. Slots 1–9 are fixed by convention (generation 0); the kernel hands out slots from 10 (`SLOT_DYNAMIC`). A stale handle is rejected. There are no global names: a task can use only what it was granted (Constitution MC-3.3).
+- **Capabilities** are named by handles `slot | generation << 8`. Slots 1–15 are fixed by convention (generation 0; 10–12 carry the capabilities a launcher grants on request, 13–15 are reserved); the kernel hands out slots from 16 (`SLOT_DYNAMIC`). A stale handle is rejected. There are no global names: a task can use only what it was granted (Constitution MC-3.3).
 - The framebuffer is described in `BootInfo`: `stride` pixels per line, 4 bytes per pixel, `pixel_format` (`PIXEL_RGB`, `PIXEL_BGR`, `PIXEL_BITMASK` with `pixel_masks`). A task's screen always holds `0x00RRGGBB`; only the compositor writes the framebuffer and converts (`pixel_to_device`).
-- Application slots, filled by the loader: `SLOT_INIT` 1, `SLOT_RTC` 2, `SLOT_VFS` 3, `SLOT_AUDIO` 4, `SLOT_LOADER` 5, `SLOT_TTS` 6.
+- Application slots, filled by the loader: `SLOT_INIT` 1, `SLOT_RTC` 2, `SLOT_VFS` 3, `SLOT_AUDIO` 4, `SLOT_LOADER` 5, `SLOT_TTS` 6. A launcher fills more through a launch session (`idl/loader.wit` 1.1) when the program asks for them with `mind::request!` and the launcher agrees: `SLOT_FILE` 7 (a VFS client for `REQUEST_FILE` / `REQUEST_FILES`), `SLOT_SYSINFO` 10 (`sysmon`), `SLOT_LIFECYCLE` 11 (`init`'s lifecycle requests), `SLOT_LOG` 12 (reading the system log); `SLOT_INIT` 1 may carry an endpoint for a ping/pong pair.
 
 ## System calls
 
@@ -92,6 +92,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 17 | `PORT_IN` | `arg1` = port range handle, `arg2` = port, `msg[1]` = width 1/2/4 → value |
 | 18 | `PORT_OUT` | as `PORT_IN`, `msg[0]` = value |
 | 27 | `PORT_IN_BLOCK` | `arg1` = handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (≤ 2048) → words read |
+| 53 | `PORT_OUT_BLOCK` | as `PORT_IN_BLOCK`; the words are written from the buffer → words written |
 | 19 | `IRQ_WAIT` | `arg1` = IRQ handle; blocks until the line fires |
 | 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
@@ -118,7 +119,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 35 | `TASK_KILL` | `arg1` = PID [process control] |
 | 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
 | 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
-| 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy [process control] |
+| 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
 | 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs [process control] |
 
@@ -131,15 +132,20 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | `sys` | `syscall`, `Error`, `Result`, `check` |
 | `ipc` | `Endpoint` (send, call, recv with timeouts), `Message`, `Received`, `mint`, `mint_badged`, `revoke`, `reply`, `save_reply` |
 | `mem` | `Pages` (own heap block: share, detach), `Mapping`, `sealed` |
-| `process` | `exit`, `spawn`, `spawn_with_args`, `args`, `watch`, `alive` |
+| `process` | `exit`, `spawn` (a launch session with one grant), `spawn_with_args`, `args`, `watch`, `alive`; `request!` and `REQUEST_*`: what a program asks its launcher for |
 | `time` | `sleep`, `uptime_ms`, `monotonic_ns` |
 | `input` | `KeyEvent`, `read_event`, `wait_event` |
+| `keys` | `Key`, `Code`, `Event`: key words for programs; PS/2 scan-code decoder with US/Russian layouts (`Ps2`), VT100/xterm and UTF-8 decoder for the serial line (`Vt`) |
+| `tui` | text UI on the 8×16 font: cell grid with diffs, frames, lists, tables, menus, dialogs, input lines, graphs |
 | `gfx` | `Screen`: pixels, text, rectangles on the task's screen |
-| `fs`, `audio`, `tts`, `rtc` | clients of the VFS, audio, speech and clock services |
-| `block` | block device client and the common driver loop |
+| `fs`, `audio`, `tts`, `rtc` | clients of the VFS (`File`; `Dir` with `list`, `rename`, `remove`, `volume`, `check`, `scope`; `list`), audio, speech and clock services |
+| `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |
+| `stat` | `STAT` records as typed slices (`read`, `one`) and their names |
+| `block`, `block_protocol` | block device client; the common driver loop with the write badge checks (`Driver`, `read`, `write`, `flush`) |
 | `control` | process control and statistics (`stat`, `records`, `sched_set`) |
 | `dev`, `platform` | ports, IRQ, MMIO, DMA, device state for drivers and init |
-| `util`, `font` | fixed-capacity text buffers (`FixedBuf`), the 8×8 font |
+| `util`, `font`, `font16` | fixed-capacity text buffers (`FixedBuf`), the 8×8 font, MIND Mono 16 (8×16 with Cyrillic and box drawing) |
+| `heap` (feature `alloc`) | the program heap behind `alloc` (`Vec`, `String`, `Box`): size classes in arenas taken with `ALLOC`, large blocks directly |
 | `idl` | generated MIND IDL bindings (`idl::vfs`, `idl::audio`, ...) and their codec |
 
 ## Stability

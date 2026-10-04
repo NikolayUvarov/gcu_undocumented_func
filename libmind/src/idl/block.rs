@@ -9,7 +9,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:block";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Number of sectors; error not-found without a drive.
@@ -21,7 +21,7 @@ pub fn sectors(endpoint: Endpoint) -> Result<u64> {
     Ok(wire::field(&reply, 1, 0, 64) as u64)
 }
 
-/// Device kind (BLOCK_KIND_*), to tell drives apart.
+/// Device kind (BLOCK_KIND_*, `mind::block::KIND_RAM` for the RAM disk), to tell drives apart.
 pub fn kind(endpoint: Endpoint) -> Result<u8> {
     let words = [2 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -48,6 +48,34 @@ pub fn read(endpoint: Endpoint, count: u16, lba: u64) -> Result<u16> {
     Ok(wire::field(&reply, 0, 16, 16) as u16)
 }
 
+/// Whether this client may write: the medium is not write-protected and the client's capability carries the write
+/// badge (`mind::block::BADGE_WRITE`; init gives it to vfs_server only, Appendix B.6) (1.1).
+pub fn writable(endpoint: Endpoint) -> Result<bool> {
+    let words = [5 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    let _ = wire::check_reply(&reply, [0x10000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 1) != 0)
+}
+
+/// Writes `count` sectors to `lba` from `data`, sealed read-only memory (SHARE_RO: nobody can change it while the
+/// driver writes it) of at least `count` sectors; returns the sectors written. Errors: rights (no write badge, or the
+/// medium is write-protected), invalid (the memory is not sealed or too small, past the end, an empty request) (1.1).
+pub fn write(endpoint: Endpoint, data: usize, count: u16, lba: u64) -> Result<u16> {
+    let words = [6 | MAJOR << 8 | ((count) as usize) << 16, ((lba) as usize) << 0];
+    let reply = wire::call(endpoint, words, Some((data, true)))?;
+    wire::check_error(&reply)?;
+    let _ = wire::check_reply(&reply, [0xffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 16) as u16)
+}
+
+/// Empties the drive's write cache; error rights without the write badge (1.1).
+pub fn flush(endpoint: Endpoint) -> Result<()> {
+    let words = [7 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_error(&reply)?;
+    wire::check_reply(&reply, [0, 0], false).map(drop)
+}
+
 /// A request to the `block` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -55,6 +83,9 @@ pub enum Request {
     Kind,
     Attach { buffer: usize },
     Read { count: u16, lba: u64 },
+    Writable,
+    Write { data: usize, count: u16, lba: u64 },
+    Flush,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -80,6 +111,18 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffff0000, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::Read { count: wire::field(&words, 0, 16, 16) as u16, lba: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
         }
+        5 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Writable, Call::words(request, cap)))
+        }
+        6 => {
+            wire::body(request, cap, [0xffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
+            Ok((Request::Write { data: cap, count: wire::field(&words, 0, 16, 16) as u16, lba: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
+        }
+        7 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Flush, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -98,4 +141,15 @@ pub fn reply_attach(call: Call, value: Result<()>) -> Result<()> {
 pub fn reply_read(call: Call, value: Result<u16>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_writable(call: Call, value: bool) -> Result<()> {
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_write(call: Call, value: Result<u16>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_flush(call: Call, value: Result<()>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [0, 0])
 }

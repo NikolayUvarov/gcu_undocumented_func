@@ -1,6 +1,7 @@
 //! MIND IDL v0.2 buffer encoding: little-endian, byte-packed, in declaration order. A string is a u16 byte length and
 //! UTF-8 bytes, a list a u16 count and its items. Every type has a static maximum size (`Wire::MAX`); decoding checks
-//! every length against the declared bound, booleans and UTF-8, and that the whole payload is consumed.
+//! every length against the declared bound, booleans and UTF-8, and that the whole payload is consumed. `bytes<N>` is
+//! encoded as `list<u8, N>` and decoded in place; an enum is one byte, its case number.
 //! No system calls here, so it is tested on the host (tests/runtime.rs).
 
 /// A value with a bounded wire representation.
@@ -63,7 +64,7 @@ impl<const N: usize> Text<N> {
     pub fn as_str(&self) -> &str { core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("") }
 }
 impl<const N: usize> core::fmt::Debug for Text<N> { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { write!(f, "{:?}", self.as_str()) } }
-impl<const N: usize> core::fmt::Display for Text<N> { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { f.write_str(self.as_str()) } }
+impl<const N: usize> core::fmt::Display for Text<N> { fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { f.pad(self.as_str()) } }
 impl<const N: usize> Wire for Text<N> {
     const MAX: usize = 2 + N;
     fn encode(&self, out: &mut Writer) -> Option<()> { self.len.encode(out)?; out.bytes(&self.bytes[..self.len as usize]) }
@@ -109,6 +110,17 @@ pub fn encode_slice<T: Wire, const N: usize>(items: &[T], out: &mut Writer) -> O
     (items.len() as u16).encode(out)?;
     for item in items { item.encode(out)?; }
     Some(())
+}
+/// Encodes bytes as `bytes<N>`, which is the encoding of `list<u8, N>` (None past N bytes or past the buffer).
+pub fn encode_bytes<const N: usize>(bytes: &[u8], out: &mut Writer) -> Option<()> {
+    if bytes.len() > N { return None; }
+    (bytes.len() as u16).encode(out)?; out.bytes(bytes)
+}
+/// Decodes `bytes<N>` without copying: the bytes stay in the reader's buffer.
+pub fn decode_bytes<'a, const N: usize>(input: &mut Reader<'a>) -> Option<&'a [u8]> {
+    let len = u16::decode(input)? as usize;
+    if len > N { return None; }
+    input.bytes(len)
 }
 /// Encodes text as `string<N>` (None past N bytes or past the buffer).
 pub fn encode_str<const N: usize>(text: &str, out: &mut Writer) -> Option<()> {

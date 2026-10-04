@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""MIND IDL v0 generator: layout, limits, schema errors and freshness of the generated bindings."""
+"""MIND IDL generator: layout, limits, schema errors, the extensions (enums, bytes, capability results) and freshness
+of the generated bindings."""
 import shutil
 import subprocess
 import sys
@@ -86,6 +87,13 @@ class Layout(unittest.TestCase):
         with self.assertRaises(mind_idl.IdlError):
             parse("record r { a: u8 }\n")
 
+    def test_generated_sample_is_fresh(self):
+        # tests/idl/sample.rs (the host loopback test, tests/idl_host.rs) is generated from tests/idl/sample.wit.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "sample.rs"
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "mind_idl.py"), "--one", "tests/idl/sample.wit", str(target)], cwd=ROOT, check=True)
+            self.assertEqual(target.read_text(), (ROOT / "tests" / "idl" / "sample.rs").read_text(), "run: scripts/mind_idl.py --one tests/idl/sample.wit tests/idl/sample.rs")
+
     def test_every_feature_compiles(self):
         # Generated code for all supported types, capabilities and results builds inside a copy of libmind.
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +104,7 @@ class Layout(unittest.TestCase):
             for wit in (ROOT / "idl").glob("*.wit"):
                 shutil.copy(wit, Path(tmp) / "idl")
             (Path(tmp) / "idl" / "selftest.wit").write_text(SELFTEST)
+            shutil.copy(ROOT / "tests" / "idl" / "sample.wit", Path(tmp) / "idl")  # the extensions
             subprocess.run([sys.executable, str(ROOT / "scripts" / "mind_idl.py"), "--root", tmp], check=True, capture_output=True)
             build = subprocess.run(["cargo", "build", "--release", "--target", "x86_64-unknown-none"], cwd=Path(tmp) / "libmind", capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr[-3000:])
@@ -104,6 +113,61 @@ class Layout(unittest.TestCase):
     def test_generated_bindings_are_fresh(self):
         result = subprocess.run([sys.executable, str(ROOT / "scripts" / "mind_idl.py"), "--check"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class Extensions(unittest.TestCase):
+    """Enums, bytes and capability results: a minor extension of v0.2 (existing interfaces generate unchanged)."""
+
+    def test_enums(self):
+        interface = parse("enum color { red, green, blue }\nrecord r { c: color }\nf: func(c: color, x: u8) -> result<color, color>;\ng: func(x: r) -> list<color, 3>;\n")
+        f, g = interface.functions
+        self.assertFalse(f.buffered)
+        placed = {p.name: (p.word, p.shift) for p in f.params}
+        self.assertEqual(placed, {"c": (0, 16), "x": (0, 24)})  # an enum is an 8-bit field
+        self.assertEqual(f.result, (("enum", "color"), False, False, "color"))
+        self.assertTrue(g.buffered)
+        self.assertEqual((g.request_max, g.reply_max), (1, 2 + 3))
+        multi = parse("enum e {\n    a,\n    b\n}\nf: func(x: e);\n")
+        self.assertEqual(multi.records["e"].cases, ["a", "b"])
+        for body in ("enum e { }\nf: func();\n",                       # no cases
+                     "enum e { a, a }\nf: func();\n",                  # duplicate
+                     "enum e { A }\nf: func();\n",                     # bad case name
+                     "enum e { a }\nenum e { b }\nf: func();\n",      # declared twice
+                     "f: func() -> result<u8, nothing>;\n",            # the error is error-code or an enum
+                     "record endpoint { a: u8 }\nf: func();\n",        # collides with the generated code
+                     "enum e { a }\nf: func(request: e);\n"):
+            with self.subTest(body=body), self.assertRaises(mind_idl.IdlError):
+                parse(body)
+
+    def test_error_enum_renames_the_system_error(self):
+        text = mind_idl.generate(parse("enum error { a }\nf: func() -> result<u8, error>;\ng: func() -> result<u8, error-code>;\n"), "t.wit")
+        self.assertIn("use crate::sys::{Error as SysError, Result};", text)
+        self.assertIn("-> Result<core::result::Result<u8, Error>>", text)
+        self.assertIn("pub fn reply_g(call: Call, value: Result<u8>)", text)
+
+    def test_bytes(self):
+        f = parse("f: func(a: u32, data: bytes<100>) -> result<bytes<200>, error-code>;\n").functions[0]
+        self.assertTrue(f.buffered)
+        self.assertEqual((f.request_max, f.reply_max), (4 + 2 + 100, 2 + 200))
+        for body in ("f: func(a: bytes<0>);\n", "f: func(a: bytes<65536>);\n", "record r { b: bytes<4> }\nf: func(x: r);\n",
+                     "f: func(a: list<bytes<4>, 2>);\n", "f: func(buffer: bytes<4>);\n"):
+            with self.subTest(body=body), self.assertRaises(mind_idl.IdlError):
+                parse(body)
+        text = mind_idl.generate(parse("f: func(data: bytes<8>) -> bytes<8>;\n"), "t.wit")
+        self.assertIn("pub fn f(endpoint: Endpoint, data: &[u8], out: &mut [u8]) -> Result<usize>", text)
+        self.assertIn("pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_MAX])", text)
+
+    def test_capability_results(self):
+        f = parse("enum e { a }\nf: func(id: u32) -> result<borrow<endpoint>, e>;\n").functions[1 - 1]
+        self.assertFalse(f.buffered)
+        self.assertIsNone(f.result_field)
+        text = mind_idl.generate(parse("f: func(id: u32) -> own<endpoint>;\n"), "t.wit")
+        self.assertIn("pub fn f(endpoint: Endpoint, id: u32, receive: usize) -> Result<()>", text)
+        self.assertIn("wire::finish_cap(call, value, true)", text)
+        for body in ("f: func(s: string<4>) -> result<borrow<endpoint>, error-code>;\n",  # a buffer call has no other capability
+                     "f: func() -> option<own<endpoint>>;\n"):
+            with self.subTest(body=body), self.assertRaises(mind_idl.IdlError):
+                parse(body)
 
 
 if __name__ == "__main__":

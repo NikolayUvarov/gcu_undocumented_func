@@ -81,9 +81,7 @@ fn main(info: &'static BootInfo) {
     fill_rect(info, 0, 0, info.width, info.height, BACKGROUND);
 
     loop {
-        // The existing input syscall returns either a PS/2 scancode or a UART byte.
-        let key = mind::input::read_key().unwrap_or(0);
-        if key == 0x01 || key == 0x1B {
+        if mind::input::read_key().is_some_and(mind::input::is_escape) {
             os_print(b"[APP2] ESC PRESSED. RETURNING TO KERNEL.\r\n");
             return;
         }

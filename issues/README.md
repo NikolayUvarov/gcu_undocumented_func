@@ -15,21 +15,11 @@ Tasks that need a person (repository settings, legal decisions, coordination of 
 
 ## Open tasks
 
-Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues. The tools branch has done 040–048 under its own numbers; [051](051-merge-main-into-tools.md) merges it and retires the rows below.
+Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [051](051-merge-main-into-tools.md) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | tools / infra | P0 | — | track G |
-| [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
-| [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
-| [042](042-tui-library.md) | TUI library `mind::tui` | tools | P1 | 040, 041 | track G, T0 |
-| [043](043-keyboard-decoding-and-line-editing.md) | Keyboard decoding, layouts, VT100 input, shell line editing | tools | P1 | — | track G, T0 |
-| [045](045-sysmon-and-monitors.md) | `sysmon` and `top`, `memmap`, `load`, `hw` | tools | P2 | 042 | track G, T1 |
-| [046](046-loader-sessions.md) | Loader v1: launch sessions with granted capabilities | tools | P2 | — | track G, T1 |
-| [047](047-viewer-and-fm-readonly.md) | Viewer `view`, file manager `fm` read-only | tools | P2 | 042, 043 | track G, T1 |
-| [048](048-write-path-ramdisk-vfs2.md) | Block write, `ramdisk`, VFS v2 with directory handles | tools | P2 | — | track G, T2 |
-| [049](049-editor-and-fm-write.md) | Editor `edit`, `fm` write operations, `df`, `fsck` | tools | P2 | 046, 048 | track G, T2 |
-| [050](050-logd-dmesg-svc.md) | `logd`, `dmesg`, `svc` | tools | P3 | — | track G, T3 |
+| [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge | kernel | P3 | — | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
 
@@ -74,6 +64,40 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [037](../issues-done/037-task-limit.done) | Task limit 32, 127 endpoints | done (2026-10-04) |
 | [038](../issues-done/038-scheduling-budgets.done) | Scheduling budgets and bands (C7) | done (2026-10-04) |
 | [039](../issues-done/039-port-services.done) | Port the services to MIND IDL and the C4 memory modes (C8) | done (2026-10-04) |
+| [040](../issues-done/040-program-heap.done) | Program heap `mind::alloc` | superseded by 052 (2026-10-04) |
+| [041](../issues-done/041-font-8x16.done) | 8×16 font with Cyrillic and box drawing | superseded by 053 (2026-10-04) |
+| [042](../issues-done/042-tui-library.done) | TUI library `mind::tui` | superseded by 054 (2026-10-04) |
+| [043](../issues-done/043-keyboard-decoding-and-line-editing.done) | Keyboard decoding, layouts, VT100 input, shell line editing | superseded by 055, 056 (2026-10-04) |
 | [044](../issues-done/044-idl-v02-records-strings.done) | MIND IDL v0.2: records, strings, lists in buffers; `loader.wit` | done (2026-10-04) |
+| [045](../issues-done/045-sysmon-and-monitors.done) | `sysmon` and `top`, `memmap`, `load`, `hw` | superseded by 060, 061 (2026-10-04) |
+| [046](../issues-done/046-loader-sessions.done) | Loader v1: launch sessions with granted capabilities | superseded by 062 (2026-10-04) |
+| [047](../issues-done/047-viewer-and-fm-readonly.done) | Viewer `view`, file manager `fm` read-only | superseded by 057, 063 (2026-10-04) |
+| [048](../issues-done/048-write-path-ramdisk-vfs2.done) | Block write, `ramdisk`, VFS v2 with directory handles | superseded by 064–066 (2026-10-04) |
+| [049](../issues-done/049-editor-and-fm-write.done) | Editor `edit`, `fm` write operations, `df`, `fsck` | superseded by 067, 068 (2026-10-04) |
+| [050](../issues-done/050-logd-dmesg-svc.done) | `logd`, `dmesg`, `svc` | superseded by 069, 070 (2026-10-04) |
+| [051](../issues-done/051-merge-main-into-tools.done) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | done (2026-10-04) |
+| [052](../issues-done/052-program-heap.done) | Program heap `mind::alloc` | done (2026-10-04) |
+| [053](../issues-done/053-font-8x16.done) | 8×16 font with Cyrillic and box drawing | done (2026-10-04) |
+| [054](../issues-done/054-tui-library.done) | Text UI library `mind::tui` | done (2026-10-04) |
+| [055](../issues-done/055-key-events.done) | Key events: E0 keys, modifiers, layouts, VT100 | done (2026-10-04); on the event words of 034 after the merge |
+| [056](../issues-done/056-shell-line-editing.done) | Shell: line editing, history, Cyrillic | done (2026-10-04) |
+| [057](../issues-done/057-viewer.done) | Viewer `view` | done (2026-10-04) |
+| [058](../issues-done/058-mind-idl-v0.2.done) | MIND IDL v0.2: records, strings, lists | done (2026-10-04); after the merge 044 is the base, enums, `bytes<N>` and capability results are its minor extension |
+| [059](../issues-done/059-observation-abi.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04); after the merge the `STAT` of 035 is used, lost fields in 075 |
+| [060](../issues-done/060-sysmon.done) | `sysmon` service | done (2026-10-04) |
+| [061](../issues-done/061-top-memmap-load-hw.done) | `top`, `memmap`, `load`, `hw` | `monitor/`: `top`, `memmap`, `load`, `hw` on sysmon; `Key::latin` |
+| [062](../issues-done/062-loader-v1-launch-grants.done) | Loader v1: launch with granted capabilities | launch sessions (`idl/loader.wit` 1.1), `mind::request!`, console programs, `uptime` program |
+| [063](../issues-done/063-file-manager-read-only.done) | File manager `fm`, read-only | `fm`: two panels, viewer, quick view, info, find, run; VFS LIST with attributes and times |
+| [064](../issues-done/064-endpoint-badges-block-write.done) | Endpoint badges and block write | BLOCK_WRITE/FLUSH for the write badge (`idl/block.wit` 1.1 after the merge, badges of 036); ATA/AHCI/USB write; `block` suite |
+| [065](../issues-done/065-ramdisk.done) | `ramdisk` block service | 8 MiB RAM disk service, formatted FAT16 and mounted as ram: |
+| [066](../issues-done/066-vfs-v2-fat-write.done) | `vfs_server` v2: directory handles, FAT write | vfs.wit 2.x with handles and zones; FAT12/16/32 writer with long names; write-back cache; shell file commands |
+| [067](../issues-done/067-editor.done) | Editor `edit` | edit: piece table with undo, search/replace, menu and dialogs; saves via name.tmp; REQUEST_FILE lends the user's VFS client |
+| [068](../issues-done/068-fm-write-df-fsck.done) | `fm` write operations, `df`, `fsck` | fm: copy/move/mkdir/delete jobs on A: and ram:, built-in editor; df; fsck (vfs.wit 2.1 check) |
+| [069](../issues-done/069-logd-dmesg.done) | `logd` and `dmesg` | logd: ring with stamped sources, rate limit, read badge; println lines of services go there; dmesg; logger |
+| [070](../issues-done/070-svc-lifecycle.done) | `svc` and lifecycle control | lifecycle requests served by init (`idl/init.wit` 1.1 after the merge); svc; top stops and restarts |
+| [071](../issues-done/071-scoped-file-grants.done) | Scoped file grants for launched programs | vfs.wit scope: the editor's client is confined to its file's directory and revoked on exit; REQUEST_FILES for fm |
+| [072](../issues-done/072-fixed-grant-slots.done) | Fixed capability slots for launcher grants (`SLOT_DYNAMIC` 16) | done (2026-10-04) |
+| [073](../issues-done/073-port-out-block.done) | `PORT_OUT_BLOCK`: block writes of 16-bit words to a port | done (2026-10-04) |
+| [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
 
-Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
+Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

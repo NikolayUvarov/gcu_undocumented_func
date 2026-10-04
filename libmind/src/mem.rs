@@ -33,6 +33,18 @@ pub fn sealed(handle: usize) -> bool {
 
 impl Drop for Pages { fn drop(&mut self) { call(SYSCALL_FREE, self.address, 0); } }
 
+/// A sealed read-only copy of `data` (SHARE_RO): a memory object with no writable capability or mapping left, so a
+/// receiver can rely on its contents. Returns the handle of its only (read-only) capability, to be moved to the
+/// receiver; the memory is freed when the receiver drops it.
+pub fn sealed_copy(data: &[u8]) -> Result<usize> {
+    let mut pages = Pages::new(data.len().max(1)).ok_or(Error::NoMemory)?;
+    pages.as_mut_slice()[..data.len()].copy_from_slice(data);
+    let object = pages.detach()?;
+    let child = crate::ipc::mint(object, CAP_READ, 0, 0);
+    let _ = crate::ipc::drop_cap(object);
+    child
+}
+
 /// Mapping of another process's memory via a capability; unmapped in Drop.
 pub struct Mapping { address: usize, length: usize }
 

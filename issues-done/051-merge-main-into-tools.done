@@ -1,0 +1,59 @@
+# 051 — Merge `main` into the tools branch and reconcile duplicates — done
+
+**Type:** infra · **Owner:** tools track (branch `claude/wizardly-franklin-kec1a9`) · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G; C5, C8
+
+## Problem
+
+The tools branch forked from `main` at `ae50623` (MIND IDL v0, C5). Since then both lines implemented some of the same things independently, and both numbered their issues from 032:
+
+| Topic | `main` (kernel track) | tools branch |
+|---|---|---|
+| MIND IDL v0.2 | 044: records, strings, lists in buffers; all services ported (039) | 038: records, enums, strings, bytes, lists, `result<T, E>` |
+| Observation | 035: OBSERVE privilege, `STAT` (51) | 039: OBSERVE privilege, `STAT` |
+| Input | 034: key event words, `READ_INPUT` (50) | 035: key events, layouts, VT100 |
+| Endpoint badges | 036 | 044 (with block write) |
+| Supervision, budgets, task limit, panic report, GOP format | 032, 033, 037, 038, 018, 009 | — |
+| Services on IDL, memory modes | 039 (`block`, `vfs`, `audio`, `tts`, `init`, `loader` `.wit`) | — |
+| Licence, CI, pinned toolchain | `LICENSE-*`, `THIRD_PARTY.md`, `.github/workflows/ci.yml`, `rust-toolchain.toml`, committed `Cargo.lock` (011) | — |
+| Heap, font, TUI, shell editing, viewer, sysmon, monitors, loader v1, fm, block write, RAM disk, VFS v2 | — | 032–046 |
+
+Both sides changed `kernel/src/scheduler.rs`, `common/abi.rs`, `scripts/mind_idl.py`, `libmind/src/idl/*`, `loader/`, `shell/`, `tests/qemu_smoke.py`. Issue numbers 032–046 exist on both sides with different content, which breaks rule 4 of [issues/README.md](../issues/README.md) (numbers are never reused).
+
+## Plan
+
+1. In the tools branch: `git fetch origin && git merge origin/main` (a merge commit; no rebase or force-push of either branch).
+2. **Kernel, ABI, IDL wire format: `main` wins.** `kernel/`, `common/abi.rs`, the IDL v0.2 wire format and generator, `STAT`, input events and badges are taken from `main`; they are covered by the C8 port and CI. Features only the tools branch has are re-applied on top as additive changes:
+   - IDL enums and `bytes`: added to `main`'s generator and codec as a minor extension (existing `.wit` files and bindings must not change; `tests/idl_test.py` gains cases);
+   - block write and flush: new functions at the end of `idl/block.wit` (minor version 1.1), data as sealed read-only memory as planned;
+   - VFS v2: `idl/vfs.wit` 2.0 (major version: directory handles change the meaning of `open`/`list`), with `mind::fs` updated;
+   - loader v1: replaces the legacy endpoint adapter in `loader/` and `idl/loader.wit` (major version if a function changes);
+   - tools' kernel changes that `main` lacks are proposed as kernel-track issues, not merged silently (ABI changes are made only in kernel issues).
+3. **Tools: the tools branch wins** for `libmind` modules it added (`heap`, `keys`, `tui`, `font16`, ...), the programs (`view`, `fm`, `sysmon`, `monitor`, `ramdisk`, ...), `fonts/` and `docs/tools/`. They are ported to `main`'s ABI where it differs.
+4. **Issue numbers:** `main`'s numbers stay. The tools branch's records 032–046 are renamed 052–066 in order (032 → 052, ..., 046 → 066) and its open 047–050 become 067–070; each moved file keeps its title and gets a line `Formerly tools-branch NNN.` Links are updated. `main`'s open tools specifications 040–043 and 045–050 move to `issues-done/` as **superseded**, each naming the tools record that replaced it.
+5. **Licences:** new third-party material from the tools branch is listed in `THIRD_PARTY.md` (the font `fonts/mind-mono-16.bdf` is a subset of Terminus Font 4.49.1, © 2020 Dimitar Toshkov Zhekov, SIL OFL 1.1; its Reserved Font Name "Terminus Font" is respected by the name "MIND Mono"; the OFL text goes to `LICENSES/` and into the boot image like the other licences if the font is embedded in a program); new crates get `license = "MIT OR Apache-2.0"`; new lock files are committed.
+6. Tests: the union of both sides' QEMU suites and host tests passes locally and in CI (all jobs of `.github/workflows/ci.yml`); new host tests are added to the CI `build` job.
+7. Fast-forward `main` to the merge result (`git push origin HEAD:main` once `origin/main` is an ancestor), so both tracks continue from one trunk.
+
+## Acceptance criteria
+
+- `main` contains both lines of work; CI is green on it.
+- One implementation each of IDL v0.2, `STAT`, input events and endpoint badges remains.
+- `issues/` and `issues-done/` have no duplicate numbers; the tables in `issues/README.md` match the files.
+- `THIRD_PARTY.md` covers every file not written for this project.
+
+## Resolution
+
+Merge commit `7e18f6d` (parents: the tools branch at `453d5d7` and the kernel track at `20c414d`, which contains `origin/main` `d085bf2`); `main` is fast-forwarded to the commit that closes this issue.
+
+- **Kernel, ABI, IDL wire format, `STAT`, input events, badges:** `main`'s. One implementation of each remains; the tools' own `STAT` and key-event ABI are gone, and the monitors read `main`'s records. Fields they lost are [075](../issues/075-stat-fields-for-the-monitors.md).
+- **Additive changes on top:** IDL enums, `bytes<N>`, enum errors and capability results as a minor extension of the generator and codec (`scripts/mind_idl.py`, `libmind/src/idl/{codec,wire}.rs`; `tests/idl/sample.wit`, `tests/idl_test.py`, `tests/idl_host.rs`; the existing bindings are unchanged); `idl/block.wit` 1.1 (`writable`, `write` with sealed read-only data, `flush`, write badge); `idl/vfs.wit` 2.2; `idl/init.wit` 1.1 (lifecycle requests, replacing the tools' `lifecycle.wit`); `idl/loader.wit` 1.1 (launch sessions; the legacy start-with-endpoint adapter is gone, `tests/isolation_app.rs` spawns through sessions); `idl/rtc.wit` 1.1, `idl/sysinfo.wit`, `idl/log.wit`.
+- **Kernel-track issues for what the tools needed:** [072](072-fixed-grant-slots.done) (fixed grant slots, `SLOT_DYNAMIC` 16), [073](073-port-out-block.done) (`PORT_OUT_BLOCK`), [074](074-exited-console-output.done) (output of an exited console program).
+- **Tools:** the tools branch's `libmind` modules (`heap`, `keys`, `tui`, `font16`, `log`, `stat`, `block_protocol`), programs and services, `fonts/` and `docs/tools/`, ported to `main`'s ABI.
+- **Issue numbers:** tools records 032–051 are [052–071](../issues/README.md), each with "Formerly tools-branch NNN."; `main`'s open tools specs 040–043 and 045–050 are superseded records naming their replacements. No number is used twice.
+- **Licences:** `THIRD_PARTY.md` lists MIND Mono 16 (subset of Terminus Font 4.49.1, © 2020 Dimitar Toshkov Zhekov, SIL OFL 1.1, reserved name respected); `LICENSES/OFL-1.1.txt` goes into the boot image (`02_build.sh`, `scripts/make_usb_image.py`); the new crates are `MIT OR Apache-2.0` and their `Cargo.lock` files are committed.
+- **Tests:** locally all 21 QEMU suites on 4 CPUs, `smp,isolation,heap,services` on one CPU, the USB image, every host test, `idl_test.py` and `font_test.py` pass. CI run 6 on `7e18f6d` is green in all eight jobs; the `build` job now runs the tools' host tests and the font check, and the QEMU matrix has the `keys,shell,tools` and `vfs,edit,disk,block` suites (with `dosfstools`, `mtools` and the `block_app` fixture).
+- **Docs:** `README.md`, `docs/api`, `docs/idl` (the extension and the interface versions), `docs/profile`, `ROADMAP` (EN and RU) and `docs/tools` (EN and RU, issue numbers +20) describe the merged system.
+
+## Related
+
+[011](011-reproducible-toolchain.done) (CI), [039](039-port-services.done), [044](044-idl-v02-records-strings.done), [docs/api](../docs/api/README.md), [CONTRIBUTING.md](../CONTRIBUTING.md).

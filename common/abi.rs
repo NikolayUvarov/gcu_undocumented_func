@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 12;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 15;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "sysmon.elf", "shell.elf"];
 pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
@@ -61,6 +61,8 @@ pub const SYSCALL_IRQ_BIND: usize = 24;
 pub const SYSCALL_IRQ_ACK: usize = 25;
 pub const SYSCALL_MEM_PHYS: usize = 26;
 pub const SYSCALL_PORT_IN_BLOCK: usize = 27;
+// PORT_OUT_BLOCK: as PORT_IN_BLOCK, 16-bit words from the process buffer to the port (ATA sector writes).
+pub const SYSCALL_PORT_OUT_BLOCK: usize = 53;
 pub const SYSCALL_TASK_ALIVE: usize = 28;
 pub const SYSCALL_CAP_INFO: usize = 29;
 pub const SYSCALL_IPC_SAVE_REPLY: usize = 31;
@@ -159,15 +161,26 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started.
+// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started; then the RAM disk and an
+// rtc client (calendar time for directory entries).
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
+pub const SLOT_RAMDISK: usize = 5;
+pub const SLOT_VFS_RTC: usize = 6;
 // Shell: application slots plus process control, the input privilege and the COM1 port range.
 pub const SLOT_CONTROL: usize = 7;
 pub const SLOT_INPUT: usize = 8;
 pub const SLOT_SERIAL: usize = 9;
+// Capabilities a launcher grants an application that asks for them (loader launch sessions): its own VFS client for
+// files the user may change (7: applications hold no process control), system information from sysmon (10),
+// lifecycle control, a client of init (11), and the system log, logd (12; services hold their log client there too).
+// Slots 13..15 are reserved for further grants.
+pub const SLOT_FILE: usize = 7;
+pub const SLOT_SYSINFO: usize = 10;
+pub const SLOT_LIFECYCLE: usize = 11;
+pub const SLOT_LOG: usize = 12;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 10;
+pub const SLOT_DYNAMIC: usize = 16;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots.
@@ -265,6 +278,7 @@ pub const fn event_mods(event: usize) -> u8 { (event >> 24) as u8 }
 pub const fn event_pressed(event: usize) -> bool { event >> 32 & 1 != 0 }
 pub const fn event_char(event: usize) -> u32 { (event >> 40) as u32 }
 // CONSOLE_READ / TASK_LOGS: arg1 = PID, msg[0] = buffer address, msg[1] = length; drains and returns the byte count.
+// After the last focused or screenless (console) program exited, both drain its unread console output.
 // CPU_INFO: arg1 = CPU index; result = APIC id, arg2 = online, msg[2] = timer ticks. KERNEL_HEAP: result = used,
 // arg2 = free, msg[2] = 1 if a test allocation was fully released.
 // Block device protocol: idl/block.wit (bindings in mind::idl::block).

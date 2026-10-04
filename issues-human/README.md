@@ -25,14 +25,7 @@ The repository keeps its name (`gcu_undocumented_func`); the `repository` field 
 
 - [ ] Decide the line, for example `Copyright (c) 2026 <your name> and the MIND Core contributors`, and tell an agent (or edit `LICENSE-MIT` yourself). Apache-2.0 needs no change.
 
-## 4. Hand issue 051 to the tools session
-
-The tools branch (`claude/wizardly-franklin-kec1a9`) has diverged from `main` and duplicates MIND IDL v0.2, `STAT`, input events and endpoint badges; issue numbers 032–050 collide.
-
-- [ ] Tell the session that develops the tools to read and do [issues/051](../issues/051-merge-main-into-tools.md) (merge `main` into its branch, reconcile duplicates, renumber its issues, then fast-forward `main`).
-- [ ] Until it is done, do not start new kernel or ABI work in the tools session.
-
-## 5. Optional: protect `main`
+## 4. Optional: protect `main`
 
 CI (`.github/workflows/ci.yml`) runs on every push. To stop a red build from reaching `main`:
 

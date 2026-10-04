@@ -1,94 +1,400 @@
 #![no_std]
 #![no_main]
-// vfs_server: an isolated process that receives sectors from block drivers over IPC, parses FAT
-// and hands clients descriptors bound to their PID. Data goes through the client's buffer.
+// vfs_server v2 (idl/vfs.wit): FAT volumes from the block drivers — the boot disk and the RAM disk `ram` — read and
+// written through handles. A handle belongs to the client that opened it (PID and badge) and carries a zone: what it
+// may change. A client's badge decides the zone of a root: applications get read-only roots; the user's badge (the
+// shell's client) writes anywhere on `ram` and in the boot disk's `data` directory only, so boot files are never
+// writable. A handle opened from another never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle).
+extern crate alloc;
 mod disk;
 mod fat;
 
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+use disk::Disk;
+use fat::{Node, Volume};
 use mind::abi::*;
+use mind::fs::{BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
-use mind::idl::wire::{self, Call};
-use mind::idl::vfs;
-use mind::ipc::Endpoint;
-use mind::sys::Error;
+use mind::idl::vfs::{self, Error, Request};
+use mind::idl::wire::Call;
+use mind::idl::{rtc, wire};
+use mind::ipc::{self, Endpoint};
 
-const RECEIVED_CAP: usize = 9;
-const MAX_OPEN: usize = 32;
+const RECEIVED: usize = 9;
+const HANDLES: usize = 96;
 
-#[derive(Clone, Copy)]
-struct Open { owner: u64, file: fat::Node, cursor: Option<(usize, u32)> } // cursor: (cluster index in the chain, cluster)
+/// What a handle may change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Zone { ReadOnly, Writable, BootRoot }
 
-struct Server { volume: Option<fat::Volume>, open: [Option<Open>; MAX_OPEN] }
+impl Zone {
+    // The zone of `name` below a directory of this zone: below the boot root only `data` is writable.
+    fn below(self, name: &str) -> Zone {
+        match self { Zone::BootRoot => if fat::same_name(name, "data") { Zone::Writable } else { Zone::ReadOnly }, zone => zone }
+    }
+}
+
+struct Handle { owner: u64, badge: u16, volume: usize, node: Node, name: String, zone: Zone }
+
+struct Mounted { name: &'static str, volume: Volume<Disk> }
+
+// A client confined to one directory (`scope`): the capability vfs_server minted with the scope's badge stays here, so
+// ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user.
+struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize }
+
+struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16 }
+
+const SCOPES: usize = 8;
+const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
+// Badges of scoped clients start here (below: applications 0, the user 1).
+const SCOPE_BADGE_FIRST: u16 = 0x100;
+
+fn error(e: fat::Error) -> Error {
+    match e {
+        fat::Error::NotFound => Error::NotFound, fat::Error::Exists => Error::Exists, fat::Error::NotEmpty => Error::NotEmpty, fat::Error::Invalid => Error::Invalid,
+        fat::Error::NoSpace => Error::NoSpace, fat::Error::ReadOnly => Error::ReadOnly, fat::Error::Io => Error::Io, fat::Error::Name => Error::Name,
+        fat::Error::NotDirectory => Error::NotDirectory, fat::Error::IsDirectory => Error::IsDirectory,
+    }
+}
+
+// The checked parts of a relative path: no `.` or `..`, nothing empty but separators.
+fn parts(path: &str) -> Result<Vec<&str>, Error> {
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.iter().any(|p| *p == "." || *p == "..") { return Err(Error::Invalid); }
+    Ok(parts)
+}
+
+// Calendar time for new and changed entries, from the RTC (none: 2000-01-01).
+fn now() -> u32 {
+    let rtc = Endpoint(SLOT_VFS_RTC);
+    let days = rtc::date(rtc).ok().flatten().unwrap_or(0);
+    let seconds = rtc::now(rtc).ok().flatten().unwrap_or(0);
+    fat::stamp(days, seconds)
+}
 
 impl Server {
-    // Descriptors of dead clients are freed when the table is full.
-    fn allocate(&mut self, open: Open) -> Option<usize> {
-        if self.open.iter().all(Option::is_some) {
-            for slot in self.open.iter_mut() { if slot.is_some_and(|o| !mind::process::alive(o.owner)) { *slot = None; } }
-        }
-        let fd = self.open.iter().position(Option::is_none)?;
-        self.open[fd] = Some(open);
-        Some(fd)
+    fn get(&self, id: u32, sender: u64, badge: u16) -> Result<&Handle, Error> {
+        match self.handles.get(id as usize) { Some(Some(h)) if h.owner == sender && h.badge == badge => Ok(h), _ => Err(Error::Invalid) }
     }
 
-    fn handle(&mut self, request: vfs::Request, sender: u64, call: Call) -> mind::sys::Result<()> {
-        let Some(volume) = self.volume.as_mut() else { return wire::reply_error(call, Error::NotFound) };
-        let owned = |open: &Option<Open>| open.filter(|o| o.owner == sender);
+    fn add(&mut self, handle: Handle) -> Result<u32, Error> {
+        if !self.handles.iter().any(Option::is_none) {
+            // Handles of dead clients are freed when the table is full.
+            for slot in self.handles.iter_mut() { if slot.as_ref().is_some_and(|h| !mind::process::alive(h.owner)) { *slot = None; } }
+        }
+        let id = self.handles.iter().position(Option::is_none).ok_or(Error::Handles)?;
+        self.handles[id] = Some(handle);
+        Ok(id as u32)
+    }
+
+    // From directory node `node` (zone `zone`) along `parts`; `create` makes missing directories where allowed.
+    fn walk(&mut self, volume: usize, mut node: Node, mut zone: Zone, parts: &[&str], create: bool) -> Result<(Node, Zone), Error> {
+        for part in parts {
+            let next = zone.below(part);
+            let v = &mut self.volumes[volume].volume;
+            node = match v.find(&node, part) {
+                Ok(entry) if entry.node.is_dir() => entry.node,
+                Ok(_) => return Err(Error::NotDirectory),
+                Err(fat::Error::NotFound) if create => {
+                    if next != Zone::Writable { return Err(if v.writable() { Error::Denied } else { Error::ReadOnly }); }
+                    v.create(&node, part, true, now()).map_err(error)?
+                }
+                Err(e) => return Err(error(e)),
+            };
+            zone = next;
+        }
+        Ok((node, zone))
+    }
+
+    // The directory of `path` below handle `dir` and the last name of the path.
+    fn parent<'p>(&mut self, dir: u32, sender: u64, badge: u16, path: &'p str) -> Result<(usize, Node, Zone, &'p str), Error> {
+        let parts = parts(path)?;
+        let (&name, folders) = parts.split_last().ok_or(Error::Invalid)?;
+        let h = self.get(dir, sender, badge)?;
+        let (volume, node, zone) = (h.volume, h.node, h.zone);
+        if !node.is_dir() { return Err(Error::NotDirectory); }
+        let (node, zone) = self.walk(volume, node, zone, folders, false)?;
+        Ok((volume, node, zone, name))
+    }
+
+    // After a change to a file, other handles of the same entry see its new size and clusters.
+    fn refresh(&mut self, volume: usize, node: Node) {
+        for h in self.handles.iter_mut().flatten() { if h.volume == volume && node.entry.is_some() && h.node.entry == node.entry { h.node = node; } }
+    }
+
+    fn scope_of(&self, badge: u16) -> Option<usize> {
+        if badge < SCOPE_BADGE_FIRST { return None; }
+        self.scopes.iter().position(|s| s.as_ref().is_some_and(|s| s.badge == badge))
+    }
+
+    fn end_scope(&mut self, index: usize) {
+        if let Some(scope) = self.scopes[index].take() {
+            let _ = ipc::revoke(scope.cap);
+            let _ = ipc::drop_cap(scope.cap);
+            mind::println!("[VFS] SCOPE {:#x} ENDED", scope.badge);
+        }
+    }
+
+    // Scopes whose task has ended, or that nobody took up, are revoked.
+    fn sweep_scopes(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        for index in 0..self.scopes.len() {
+            let over = self.scopes[index].as_ref().is_some_and(|s| match s.user { Some(pid) => !mind::process::alive(pid), None => now.saturating_sub(s.made_ms) > SCOPE_UNUSED_MS });
+            if over { self.end_scope(index); }
+        }
+    }
+
+    fn writable(&self, zone: Zone, volume: usize) -> Result<(), Error> {
+        if !self.volumes[volume].volume.writable() { return Err(Error::ReadOnly); }
+        if zone != Zone::Writable { return Err(Error::Denied); }
+        Ok(())
+    }
+
+    fn serve(&mut self, request: Request, call: Call, sender: u64, badge: u16) -> mind::Result<()> {
+        let user = badge == BADGE_USER;
         match request {
-            vfs::Request::Open { path } => {
-                let node = match volume.resolve(path.as_str().as_bytes()) { Some(node) if !node.is_dir => node, Some(_) => return vfs::reply_open(call, Err(Error::Invalid)), None => return vfs::reply_open(call, Err(Error::NotFound)) };
-                let result = self.allocate(Open { owner: sender, file: node, cursor: None }).ok_or(Error::NoSlot).map(|fd| vfs::File { fd: fd as u32, size: node.size as u64 });
-                vfs::reply_open(call, result.as_ref().map_err(|e| *e))
+            Request::Root { name } => {
+                let name = name.as_str();
+                let result = (|| {
+                    // A scoped client's root of its volume is the scope's directory; other roots are refused.
+                    if badge >= SCOPE_BADGE_FIRST {
+                        let index = self.scope_of(badge).ok_or(Error::Denied)?;
+                        let scope = self.scopes[index].as_mut().unwrap();
+                        match scope.user { None => scope.user = Some(sender), Some(pid) if pid != sender => return Err(Error::Denied), _ => {} }
+                        let (volume, node, zone, dir_name) = (scope.volume, scope.node, scope.zone, scope.name.clone());
+                        if !self.volumes[volume].name.eq_ignore_ascii_case(name) { return Err(Error::Denied); }
+                        return self.add(Handle { owner: sender, badge, volume, node, name: dir_name, zone });
+                    }
+                    let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(name)).ok_or(Error::NotFound)?;
+                    let zone = if !user { Zone::ReadOnly } else if self.volumes[volume].name.is_empty() { Zone::BootRoot } else { Zone::Writable };
+                    let node = self.volumes[volume].volume.root();
+                    self.add(Handle { owner: sender, badge, volume, node, name: String::new(), zone })
+                })();
+                vfs::reply_root(call, result)
             }
-            vfs::Request::Read { fd, offset, length } => {
-                let Some(mut open) = self.open.get(fd as usize).and_then(owned) else { return vfs::reply_read(call, Err(Error::Invalid)) };
-                let mut data = [0u8; 4096];
-                let want = (length as usize).min(data.len());
-                let got = volume.read(&open.file, offset as usize, &mut data[..want], &mut open.cursor);
-                self.open[fd as usize] = Some(open);
-                vfs::reply_read(call, Ok(&data[..got]))
+            Request::OpenDir { dir, path, create } => {
+                let result = (|| {
+                    let parts = parts(path.as_str())?;
+                    let h = self.get(dir, sender, badge)?;
+                    let (volume, node, zone, name) = (h.volume, h.node, h.zone, h.name.clone());
+                    if !node.is_dir() { return Err(Error::NotDirectory); }
+                    let (node, zone) = self.walk(volume, node, zone, &parts, create)?;
+                    let name = parts.last().map_or(name, |p| String::from(*p));
+                    self.add(Handle { owner: sender, badge, volume, node, name, zone })
+                })();
+                vfs::reply_open_dir(call, result)
             }
-            vfs::Request::Size { fd } => vfs::reply_size(call, self.open.get(fd as usize).and_then(owned).map(|o| o.file.size as u64).ok_or(Error::Invalid)),
-            vfs::Request::Close { fd } => {
-                let result = self.open.get(fd as usize).and_then(owned).map(|_| ()).ok_or(Error::Invalid);
-                if result.is_ok() { self.open[fd as usize] = None; }
-                vfs::reply_close(call, result)
+            Request::Open { dir, path, mode } => {
+                let result = (|| {
+                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
+                    let zone = zone.below(name);
+                    let write = mode & (MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) != 0;
+                    if write { self.writable(zone, volume)?; }
+                    let v = &mut self.volumes[volume].volume;
+                    let mut node = match v.find(&parent, name) {
+                        Ok(_) if mode & MODE_NEW != 0 => return Err(Error::Exists),
+                        Ok(entry) => entry.node,
+                        Err(fat::Error::NotFound) if mode & MODE_CREATE != 0 => v.create(&parent, name, false, now()).map_err(error)?,
+                        Err(e) => return Err(error(e)),
+                    };
+                    if node.is_dir() { return Err(Error::IsDirectory); }
+                    if mode & MODE_TRUNCATE != 0 && node.size != 0 { v.truncate(&mut node, 0, now()).map_err(error)?; }
+                    let zone = if mode & MODE_WRITE != 0 { zone } else { Zone::ReadOnly };
+                    let id = self.add(Handle { owner: sender, badge, volume, node, name: String::from(name), zone })?;
+                    self.refresh(volume, node);
+                    Ok(id)
+                })();
+                vfs::reply_open(call, result)
             }
-            vfs::Request::List { path, start } => {
-                let Some(dir) = volume.resolve(path.as_str().as_bytes()) else { return vfs::reply_list(call, Err(Error::NotFound)) };
-                if !dir.is_dir { return vfs::reply_list(call, Err(Error::Invalid)); }
-                let mut page = vfs::Page::default(); let mut index = 0u32;
-                volume.walk(&dir, |entry| {
-                    if index < start { index += 1; return true; }
-                    let name = Text::new(core::str::from_utf8(entry.name).unwrap_or("?")).unwrap_or_default();
-                    if !page.entries.push(vfs::Entry { name, size: entry.node.size, directory: entry.node.is_dir }) { page.next = index; return false; }
-                    index += 1; true
+            Request::Read { file, offset, length } => {
+                let mut data = Vec::new();
+                let result = (|| {
+                    let h = self.get(file, sender, badge)?;
+                    let (volume, node) = (h.volume, h.node);
+                    data.resize((length as usize).min(mind::fs::CHUNK), 0);
+                    let n = self.volumes[volume].volume.read(&node, offset, &mut data).map_err(error)?;
+                    data.truncate(n);
+                    Ok(())
+                })();
+                vfs::reply_read(call, result.map(|_| &data[..]))
+            }
+            Request::Write { file, offset, data } => {
+                let result = (|| {
+                    let h = self.get(file, sender, badge)?;
+                    let (volume, mut node, zone) = (h.volume, h.node, h.zone);
+                    self.writable(zone, volume)?;
+                    let n = self.volumes[volume].volume.write(&mut node, offset, data, now()).map_err(error)?;
+                    self.refresh(volume, node);
+                    Ok(n as u32)
+                })();
+                vfs::reply_write(call, result)
+            }
+            Request::Truncate { file, size } => {
+                let result = (|| {
+                    let h = self.get(file, sender, badge)?;
+                    let (volume, mut node, zone) = (h.volume, h.node, h.zone);
+                    self.writable(zone, volume)?;
+                    self.volumes[volume].volume.truncate(&mut node, size, now()).map_err(error)?;
+                    self.refresh(volume, node);
+                    Ok(())
+                })();
+                vfs::reply_truncate(call, result)
+            }
+            Request::Stat { handle } => {
+                let result = self.get(handle, sender, badge).map(|h| entry(&h.name, &h.node));
+                vfs::reply_stat(call, result.as_ref().map_err(|e| *e))
+            }
+            Request::List { dir, start } => {
+                let result = (|| {
+                    let h = self.get(dir, sender, badge)?;
+                    let (volume, node) = (h.volume, h.node);
+                    if !node.is_dir() { return Err(Error::NotDirectory); }
+                    self.volumes[volume].volume.list(&node).map_err(error)
+                })();
+                // At most 16 entries from `start` (vfs.wit `list<entry, 16>`).
+                let items: Result<Vec<vfs::Entry>, Error> = result.map(|all| all.iter().skip(start as usize).take(16).map(|e| entry(&e.name, &e.node)).collect());
+                vfs::reply_list(call, items.as_deref().map_err(|e| *e))
+            }
+            Request::Remove { dir, path } => {
+                let result = (|| {
+                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
+                    self.writable(zone.below(name), volume)?;
+                    let v = &mut self.volumes[volume].volume;
+                    let entry = v.find(&parent, name).map_err(error)?;
+                    v.remove(&parent, name).map_err(error)?;
+                    // A scope of the removed directory ends.
+                    for index in 0..self.scopes.len() {
+                        if self.scopes[index].as_ref().is_some_and(|s| s.volume == volume && entry.node.cluster >= 2 && s.node.cluster == entry.node.cluster) { self.end_scope(index); }
+                    }
+                    // Handles of the removed entry are closed: its clusters may be reused.
+                    for slot in self.handles.iter_mut() {
+                        if slot.as_ref().is_some_and(|h| h.volume == volume && (h.node.entry == entry.node.entry || (entry.node.cluster >= 2 && h.node.cluster == entry.node.cluster))) { *slot = None; }
+                    }
+                    Ok(())
+                })();
+                vfs::reply_remove(call, result)
+            }
+            Request::Rename { dir, from, target, to } => {
+                let result = (|| {
+                    let (volume, source, source_zone, name) = self.parent(dir, sender, badge, from.as_str())?;
+                    let (target_volume, destination, target_zone, new_name) = self.parent(target, sender, badge, to.as_str())?;
+                    if volume != target_volume { return Err(Error::Invalid); }
+                    self.writable(source_zone.below(name), volume)?;
+                    self.writable(target_zone.below(new_name), volume)?;
+                    let v = &mut self.volumes[volume].volume;
+                    let old = v.find(&source, name).map_err(error)?.node;
+                    let moved = v.rename(&source, name, &destination, new_name).map_err(error)?;
+                    for h in self.handles.iter_mut().flatten() { if h.volume == volume && old.entry.is_some() && h.node.entry == old.entry { h.node = moved; h.name = String::from(new_name); } }
+                    Ok(())
+                })();
+                vfs::reply_rename(call, result)
+            }
+            Request::Volume { handle } => {
+                let result = (|| {
+                    let h = self.get(handle, sender, badge)?;
+                    let (volume, zone) = (h.volume, h.zone);
+                    let m = &mut self.volumes[volume];
+                    let free = m.volume.free_clusters().map_err(error)? as u64 * m.volume.cluster_bytes() as u64;
+                    Ok((m.name, m.volume.label(), m.volume.bits(), m.volume.total_bytes(), free, m.volume.cluster_bytes(), m.volume.writable() && zone != Zone::ReadOnly))
+                })();
+                let volume = result.map(|r| vfs::Volume { name: text(r.0), label: text(&r.1), fat_bits: r.2, bytes: r.3, free: r.4, cluster: r.5, writable: r.6 });
+                vfs::reply_volume(call, volume.as_ref().map_err(|e| *e))
+            }
+            Request::Check { handle } => {
+                // A check reads the whole FAT and directory tree; any client may ask (it changes nothing).
+                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.check().map_err(error));
+                let report = result.map(|r| vfs::Report { files: r.files, directories: r.directories, used: r.used, free: r.free, lost: r.lost,
+                    lost_chains: r.lost_chains, cross_linked: r.cross_linked, bad_chains: r.bad_chains, sizes: r.sizes, bad_entries: r.bad_entries, dirty: r.dirty,
+                    first: text(&r.first) });
+                vfs::reply_check(call, report.as_ref().map_err(|e| *e))
+            }
+            Request::Scope { dir, writable } => {
+                let result = (|| {
+                    let h = self.get(dir, sender, badge)?;
+                    if !h.node.is_dir() { return Err(Error::NotDirectory); }
+                    // Never more than the caller's handle: writable only where the handle is.
+                    let zone = if writable && h.zone == Zone::Writable { Zone::Writable } else { Zone::ReadOnly };
+                    let (volume, node, name) = (h.volume, h.node, h.name.clone());
+                    self.sweep_scopes();
+                    let index = self.scopes.iter().position(Option::is_none).ok_or(Error::Handles)?;
+                    let badge = loop {
+                        let next = self.next_badge;
+                        self.next_badge = if next == u16::MAX { SCOPE_BADGE_FIRST } else { next + 1 };
+                        if self.scope_of(next).is_none() { break next; }
+                    };
+                    let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Handles)?;
+                    mind::println!("[VFS] SCOPE {:#x} FOR {}:/{} ({})", badge, self.volumes[volume].name, name, if zone == Zone::Writable { "WRITABLE" } else { "READ-ONLY" });
+                    self.scopes[index] = Some(Scope { badge, volume, node, name, zone, user: None, made_ms: mind::time::uptime_ms() as u64, cap });
+                    Ok(cap)
+                })();
+                vfs::reply_scope(call, result)
+            }
+            Request::Flush { handle } => {
+                let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
+                vfs::reply_flush(call, result)
+            }
+            Request::Close { handle } => {
+                // Closing a file opened for writing flushes its volume.
+                let result = self.get(handle, sender, badge).map(|h| (h.volume, h.zone == Zone::Writable && !h.node.is_dir()));
+                let result = result.and_then(|(volume, wrote)| {
+                    self.handles[handle as usize] = None;
+                    if wrote { self.volumes[volume].volume.flush().map_err(error) } else { Ok(()) }
                 });
-                vfs::reply_list(call, Ok(&page))
+                vfs::reply_close(call, result)
             }
         }
     }
 }
 
+// Text of at most N bytes of UTF-8 (a longer one is cut at a character).
+fn text<const N: usize>(text: &str) -> Text<N> { let mut end = text.len().min(N); while !text.is_char_boundary(end) { end -= 1; } Text::new(&text[..end]).unwrap_or_default() }
+
+fn entry(name: &str, node: &Node) -> vfs::Entry {
+    let a = node.attributes;
+    let attributes = node.is_dir() as u8 * ENTRY_DIR | if a & fat::ATTR_HIDDEN != 0 { ENTRY_HIDDEN } else { 0 } | if a & fat::ATTR_SYSTEM != 0 { ENTRY_SYSTEM } else { 0 }
+        | if a & fat::ATTR_READ_ONLY != 0 { ENTRY_READ_ONLY } else { 0 } | if a & fat::ATTR_ARCHIVE != 0 { ENTRY_ARCHIVE } else { 0 };
+    vfs::Entry { name: text(name), size: node.size, modified: node.modified, attributes, directory: node.is_dir() }
+}
+
+fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", mind::block::KIND_RAM => "RAM", _ => "?" } }
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    // The first drive with a FAT volume (order: ata, ahci, usb_storage) becomes the root.
-    let volume = (SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES)
-        .filter(|&slot| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT)
-        .filter_map(|slot| mind::block::Device::open(Endpoint(slot)).ok())
-        .filter_map(disk::Disk::new)
-        .find_map(fat::Volume::mount);
-    match &volume {
-        Some(v) => mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}", v.bits(), match v.kind() { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", _ => "?" }, v.start()),
-        None => mind::println!("[VFS] NO FAT VOLUME ON ANY BLOCK DEVICE; REQUESTS WILL FAIL"),
-    }
-    let mut server = Server { volume, open: [None; MAX_OPEN] };
-    loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
-        // idl/vfs.wit; descriptors belong to the sender's PID.
-        match vfs::decode(&request, RECEIVED_CAP) {
-            Ok((decoded, call)) => { let _ = server.handle(decoded, request.sender, call); }
-            Err(reason) => if request.is_call { let _ = wire::reject(reason); },
+    let mut volumes = Vec::new();
+    // The boot disk: the first drive with a FAT volume (order: ata, ahci, usb_storage).
+    for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
+        if mind::dev::cap_info(slot).0 != CAP_KIND_ENDPOINT { continue; }
+        let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new) else { continue };
+        if let Ok(volume) = Volume::mount(disk) {
+            mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}{}", volume.bits(), device_name(volume.disk.kind()), volume.start(),
+                           if volume.writable() { " (DEVICE WRITABLE)" } else { " (READ-ONLY DEVICE)" });
+            volumes.push(Mounted { name: "", volume });
+            break;
         }
+    }
+    if volumes.is_empty() { mind::println!("[VFS] NO FAT VOLUME ON ANY BLOCK DEVICE"); }
+    // The RAM disk: formatted when blank (its contents never outlive the boot).
+    if mind::dev::cap_info(SLOT_RAMDISK).0 == CAP_KIND_ENDPOINT {
+        if let Some(mut disk) = mind::block::Device::open(Endpoint(SLOT_RAMDISK)).ok().and_then(Disk::new) {
+            let mut probe = [0u8; fat::SECTOR];
+            let blank = fat::Sectors::read(&mut disk, 0, &mut probe) && probe[510..512] != [0x55, 0xAA];
+            if blank && fat::format(&mut disk, "MIND RAM", now()).is_err() { mind::println!("[VFS] CANNOT FORMAT THE RAM DISK"); }
+            match Volume::mount(disk) {
+                Ok(volume) => { mind::println!("[VFS] MOUNTED FAT{} FROM RAM AS RAM: ({} KB)", volume.bits(), volume.total_bytes() / 1024); volumes.push(Mounted { name: "ram", volume }); }
+                Err(_) => mind::println!("[VFS] NO FAT VOLUME ON THE RAM DISK"),
+            }
+        }
+    }
+    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST };
+    // The private copy of each request (MC-2.11); the data of a write is decoded in place from it.
+    let mut scratch: Box<[u8; vfs::REQUEST_MAX]> = alloc::vec![0u8; vfs::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
+    loop {
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        let _ = match vfs::decode(&request, RECEIVED, &mut scratch) {
+            Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),
+            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
+        };
     }
 }

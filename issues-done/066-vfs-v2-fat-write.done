@@ -1,0 +1,40 @@
+# 066 — `vfs_server` v2: `vfs.wit`, directory handles, FAT write — done
+
+**Type:** architecture · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 058, 064 · **Roadmap:** C8 (VFS port), tools plan F8 · **Constitution:** MC-2.3, MC-3.3, MC-3.4, Article 4, Appendix B.6, MC-12.3
+
+Formerly tools-branch 046.
+
+## Problem
+
+VFS is read-only, addressed by global paths over a numeric protocol; Cyrillic long names show as `?`; there are no times or attributes; one volume.
+
+## Plan
+
+- `idl/vfs.wit`: `open_dir`, `open`, `read`, `write`, `truncate`, `close`, `stat`, `list`, `create`, `mkdir`, `remove`, `rename`, `volume`, `flush`. Handles are session numbers bound to the client's PID and to the endpoint badge they were opened through.
+- **Directory handles:** every path is relative to a directory handle; `..` above it is refused; a handle opened read-only cannot produce a writable child (MC-3.4). Root handles are given by badge: `init` mints a read-only root badge for applications and a read-write badge limited to `/data` and `ram:` for the shell; boot files (`EFI/`, `*.elf` in the root) are never writable.
+- **FAT write:** cluster allocation and release for FAT12/16/32, every FAT copy, FSInfo, long names (UTF-16 ↔ UTF-8, checksum, unique `~N` alias), times from the RTC date, directory growth, the fixed root of FAT12/16, the dirty bit in FAT[1]; order data → FAT → directory entry; write-back cache flushed on `flush`, `close` and shutdown.
+- Several volumes: the boot disk (`/`) and `ram:` (065).
+- `mind::fs` v2 (`Dir`, `File::create`, `write`, `rename`, `remove`, `metadata`); old calls kept as wrappers.
+- Power-loss outcome at each step written in the profile (no atomicity beyond FAT).
+
+## Acceptance criteria
+
+- Host property tests of the FAT writer against `fsck.fat -n` and mtools on generated images (FAT12/16/32).
+- QEMU: create, write, rename, remove, mkdir on `ram:` and on a raw FAT disk; reread after reboot; `fsck.fat -n` clean; negative tests for `..`, read-only handles and boot files.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F8; [docs/idl](../docs/idl/README.md).
+
+## Resolution
+
+- `idl/vfs.wit` 2.0 replaces the numeric VFS protocol: `root`, `open-dir`, `open` (write, create, truncate, new), `read`, `write`, `truncate`, `stat`, `list`, `remove`, `rename`, `volume`, `flush`, `close`. Handles belong to the client's PID and badge; paths are relative to a directory handle and `..` is refused.
+- Zones: a root handle's zone comes from the client's badge — read-only for applications (the loader's client), `VFS_BADGE_USER` (the shell's client from `init`) writes anywhere on `ram:` and below `data/` of the boot disk; a handle opened from another never has a wider zone (MC-3.4); boot files and the rest of the boot disk are never writable.
+- FAT writer (`vfs_server/src/fat.rs`, generic over `Sectors`): FAT12/16/32, every FAT copy, long names UTF-16 ↔ UTF-8 with checksums and unique `~N` aliases (plain lower-case 8.3 names stored short with the NT case flags), times from the RTC (`rtc.wit` 1.1), growing directories, the fixed root of FAT12/16, `.`/`..`, moves (not into a directory's own subtree, `..` updated), removal of files and empty directories, truncation, the dirty bit in FAT[1] from the first change until a flush, `format`. Long names are now read in UTF-16 too (Cyrillic shows instead of `?`).
+- Write-back cache of 64 sectors with read-ahead; flush in LBA order, then the drive's cache. Flushed on `flush`, on closing a file opened for writing, by the shell's file commands, `sync` and `stop`.
+- Several volumes: the boot disk (`""`) and `ram:` (065).
+- `mind::fs` v2: `Dir`, `File::create`/`open_mode`/`write`/`write_at`/`truncate`/`flush`/`metadata`, `fs::mkdir`/`remove`/`rename`/`metadata`/`volume`, `ram:` paths; `File::open`, `read_at`, `list` keep their form, so `loader`, `files`, `view`, `say` and `fm` work unchanged.
+- Shell: `ls`, `cat`, `write`, `mkdir`, `rm`, `mv`, `sync`.
+- Power-loss outcome in docs/profile/threat-model.md (no journal; what a loss during a flush can leave).
+- Deviations: FSInfo's free count is set to unknown on the first change instead of being kept; giving a tool a handle for one file (edit) instead of the user's client comes with 067/048.
+- Tests: `tests/fat_host.rs` (scenarios on FAT12/16/32 images from `mkfs.fat` checked with `fsck.fat -n` and mtools, files made by mtools read back, `format`, a random operation sequence against a model); QEMU `vfs` suite (raw FAT disk: the shell writes in `data/`, `sync`, the host runs `fsck.fat -n` and `mtype`, a reboot reads the files back, `ram:` is empty again); `tools` suite (files on `ram:` with Cyrillic, refusals for boot files, the disk outside `data/`, `..`); `isolation` case `k` (an application's client may open `ram:` but not create a file: denied).

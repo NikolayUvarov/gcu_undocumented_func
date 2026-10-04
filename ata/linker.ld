@@ -10,6 +10,7 @@ SECTIONS {
     .text : { *(.text._start) *(.text .text.*) } :text
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) } :rodata
+    .mind_request : { KEEP(*(.mind_request)) } :rodata
     .dynsym : { *(.dynsym) } :rodata
     .gnu.hash : { *(.gnu.hash) } :rodata
     .hash : { *(.hash) } :rodata

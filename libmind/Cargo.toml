@@ -8,4 +8,8 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 [lib]
 name = "mind"
 
+[features]
+# Program heap (`GlobalAlloc`), see src/heap.rs. Services leave it off and keep static memory.
+alloc = []
+
 [dependencies]

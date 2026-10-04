@@ -9,7 +9,7 @@ use crate::sys::{Error, Result};
 
 pub const STATUS_OK: usize = 0;
 pub const STATUS_NONE: usize = 1; // option result: none
-pub const STATUS_ERROR: usize = 2; // result<_, error-code>: the error code is in word 1
+pub const STATUS_ERROR: usize = 2; // result<_, error-code> or result<_, enum>: the error code or case is in word 1
 pub const STATUS_INVALID: usize = 0x80; // the request failed the receiver's schema check
 pub const STATUS_VERSION: usize = 0x81; // the receiver serves another major version
 
@@ -65,6 +65,42 @@ pub fn reply(words: [usize; 2]) -> Result<()> { ipc::reply(&Message::new(words[0
 /// Answers a request that failed `decode`.
 pub fn reject(reason: Reject) -> Result<()> { reply([if reason == Reject::Version { STATUS_VERSION } else { STATUS_INVALID }, 0]) }
 
+/// A case of an enumerated error; a system error code instead (the server could not encode its reply) is that error.
+pub fn enum_code(code: usize) -> Result<usize> {
+    if code >= crate::abi::ERR_FIRST { return Err(crate::sys::check(code).err().unwrap_or(Error::Invalid)); }
+    Ok(code)
+}
+
+/// Errors of `result<T, E>` with an enum E: Some(case) for an error reply, None for any other status.
+pub fn enum_error(reply: &[usize; 2]) -> Result<Option<usize>> {
+    if reply[0] & 0xFF != STATUS_ERROR { return Ok(None); }
+    if reply[0] >> 8 != 0 { return Err(Error::Invalid); }
+    enum_code(reply[1]).map(Some)
+}
+
+/// A word call whose result is a capability: it lands in the caller's fixed slot `receive`. Returns the reply words
+/// and whether a capability arrived.
+pub fn call_receiving(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>, receive: usize) -> Result<([usize; 2], bool)> {
+    let message = match cap {
+        None => Message::new(words[0], words[1]),
+        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, u8::MAX),
+        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, u8::MAX),
+    };
+    endpoint.call(&message, receive).map(|reply| (reply.data, reply.cap_received))
+}
+
+/// Checks the reply of a capability result: None when the capability arrived with an empty ok reply, Some(code) for an
+/// error reply. A capability that came with anything but success is dropped.
+pub fn check_cap_reply(reply: &[usize; 2], received: bool, receive: usize) -> Result<Option<usize>> {
+    let outcome = match reply[0] & 0xFF {
+        STATUS_OK if reply[0] == 0 && reply[1] == 0 && received => Ok(None),
+        STATUS_ERROR if reply[0] >> 8 == 0 => Ok(Some(reply[1])),
+        _ => Err(Error::Invalid),
+    };
+    if received && !matches!(outcome, Ok(None)) { let _ = ipc::drop_cap(receive); }
+    outcome
+}
+
 /// Errors of `result<T, error-code>`: the code (a system error code) is in word 1.
 pub fn check_error(reply: &[usize; 2]) -> Result<()> {
     if reply[0] & 0xFF == STATUS_ERROR { return Err(crate::sys::check(reply[1]).err().unwrap_or(Error::Invalid)); }
@@ -100,9 +136,17 @@ impl Call {
 }
 
 /// Sends the reply words to the caller of `call` (the last caller, or the saved one of a deferred call).
-pub fn finish(call: Call, words: [usize; 2]) -> Result<()> {
+pub fn finish(call: Call, words: [usize; 2]) -> Result<()> { finish_message(call, Message::new(words[0], words[1])) }
+
+/// Answers a capability result with the capability `handle` (copied, or moved when `moved`).
+pub fn finish_cap(call: Call, handle: usize, moved: bool) -> Result<()> {
+    let message = if moved { Message::new(STATUS_OK, 0).with_cap_moved(handle, u8::MAX) } else { Message::new(STATUS_OK, 0).with_cap(handle, u8::MAX) };
+    finish_message(call, message)
+}
+
+fn finish_message(call: Call, message: Message) -> Result<()> {
     let saved = call.reply; drop(call);
-    if saved == 0 { reply(words) } else { ipc::reply_saved(saved, &Message::new(words[0], words[1])) }
+    if saved == 0 { ipc::reply(&message) } else { ipc::reply_saved(saved, &message) }
 }
 impl Drop for Call {
     fn drop(&mut self) { drop(self.mapping.take()); if self.received { let _ = ipc::drop_cap(self.cap); } }
@@ -132,3 +176,5 @@ pub fn reply_buffer(mut call: Call, encode: impl FnOnce(&mut super::codec::Write
 pub fn reply_none(call: Call) -> Result<()> { finish(call, [STATUS_NONE, 0]) }
 /// Answers a fallible function with its error.
 pub fn reply_error(call: Call, error: Error) -> Result<()> { finish(call, [STATUS_ERROR, error.code()]) }
+/// Answers a function with an enumerated error with the case `code`.
+pub fn reply_code(call: Call, code: usize) -> Result<()> { finish(call, [STATUS_ERROR, code]) }

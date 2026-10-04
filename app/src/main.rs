@@ -6,7 +6,8 @@ use mind::font::FONT;
 
 fn os_print(msg: &[u8]) { mind::process::log(msg) }
 fn get_os_ticks() -> usize { mind::time::rdtsc() as usize }
-fn get_os_key() -> u8 { mind::input::read_key().unwrap_or(0) }
+// The character of a key event (0x1B for Esc), or 0.
+fn get_os_key() -> u8 { mind::input::read_key().and_then(|k| k.char()).filter(|c| c.is_ascii()).map_or(0, |c| c as u8) }
 
 static mut MAIN_SP: u64 = 0;
 static mut THREAD_SP: u64 = 0;
@@ -84,14 +85,14 @@ fn main(info: &'static BootInfo) {
             if os_key < 0x80 { 
                 last_seen_key = os_key;
                 match os_key {
-                    0x39 | 0x20 => color_theme = 0x00FF0000, 
-                    0x1C | 0x0D => color_theme = 0x000000FF, 
-                    0x22 | 0x67 => color_theme = 0x0000FF00, 
+                    b' ' => color_theme = 0x00FF0000,
+                    b'b' => color_theme = 0x000000FF,
+                    b'g' => color_theme = 0x0000FF00,
                     _ => {}
                 }
-                
-                // EXIT ON ESC (0x01 = PS/2 keyboard, 0x1B = MSYS2 COM port)
-                if os_key == 0x01 || os_key == 0x1B {
+
+                // Esc from the PS/2 keyboard or the UART
+                if os_key == 0x1B {
                     os_print(b"[SYSTEM] ESC PRESSED. EXITING APP...\r\n");
                     break; 
                 }

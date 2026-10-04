@@ -1,8 +1,28 @@
-/// init: starts a boot service by name (the operator's RUN <service> &).
-package mind:init@1.0.0;
+/// init: starts boot services by name (the operator's RUN <service> &) and, since 1.1, serves their lifecycle: which
+/// services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
+/// SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
+/// the shell cannot be stopped.
+package mind:init@1.1.0;
 
 interface init {
+    /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
+    /// device is missing, or the start failed.
+    enum error { not-found, running, stopped, denied, no-device, failed }
+
+    /// A boot service: its PID (0 if it does not run), how often init started it, whether it runs or is quarantined
+    /// (it failed too often; `run` lifts that), what it holds.
+    record service { name: string<16>, pid: u64, starts: u32, running: bool, quarantined: bool, holds: string<48> }
+
     /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
     /// (already running), not-found (no such service or no device), rights (cannot be started after boot).
     run: func(name: string<16>) -> result<u64, error-code>;
+    /// The boot services in boot order (1.1).
+    list: func() -> result<list<service, 24>, error>;
+    /// Stops a running service; init does not restart it until it is started again, and its clients' calls fail with
+    /// ERR_PEER meanwhile (1.1).
+    stop: func(name: string<16>) -> result<_, error>;
+    /// Stops and starts a service; clients granted earlier reach the new instance. Returns its PID (1.1).
+    restart: func(name: string<16>) -> result<u64, error>;
+    /// Stops an application (a task that is not a boot service) (1.1).
+    stop-task: func(pid: u64) -> result<_, error>;
 }

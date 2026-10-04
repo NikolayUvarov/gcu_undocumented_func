@@ -35,6 +35,14 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | `STAT` agrees with `ps` (task count) and `heap` (arena used); the shell's address-space map has its known regions; every CPU accounts busy and idle time; an application without the observe privilege is refused | `services` suite; `isolation` case `k` |
 | A client of a quarantined service is not left waiting in a send (init keeps no receive right) | `services` suite |
 | Drivers with MMIO and DMA capabilities work (AHCI, xHCI) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
+| Endpoint badges are set once, kept by children, reported by `CAP_INFO` and delivered with each message | `isolation` suite, case `k` |
+| The FAT writer keeps FAT12/16/32 volumes consistent: long and Cyrillic names, files across clusters, truncation, moves, removal, growing directories, formatting; a random sequence matches a model | `tests/fat_host.rs` (`fsck.fat -n`, mtools) |
+| The read-only check finds what `fsck.fat` finds — a cut chain, a cross link, a lost cluster, a wrong size, a bad short name — and passes clean volumes; any change marks the volume dirty until a flush | `tests/fat_host.rs`; QEMU `disk` suite |
+| Log records carry the source `logd` stamped (a line naming another source keeps its real one); the ring numbers records, drops the oldest with a count, clips text on character boundaries and limits each sender | `tests/logd_host.rs`; QEMU `services` suite (`dmesg`, `logger`) |
+| `init` lists, stops, starts and restarts services and stops applications on request; it refuses `init` and the shell; a client granted before a restart reaches the new instance | QEMU `services` suite (`svc`, `top`'s k); `tests/monitor_host.rs` |
+| A program started for one file reaches only that file's directory, writes only where the user may, and loses the client after it exits | QEMU `edit` suite (refused paths outside `data/`, read-only boot directory, `[VFS] SCOPE … ENDED`) |
+| Files written through `vfs_server` reach the disk and survive a reboot; the RAM disk does not; boot files and the disk outside `data/` cannot be written by the user, and not at all by applications; `..` is refused | `vfs` suite, `tools` suite (files), `isolation` case `k` |
+| Block writes need the write badge and a writable medium; ATA, AHCI and USB write, flush and read back, the raw image holds the sectors and its file system stays consistent | `tests/block_host.rs`; `block` suite (`tests/block_app.rs` as `vfs_server`, host check of the image, `fsck.fat -n`) |
 | Audio gateway (AC97 DMA, IRQ over IPC) and text to speech | `audio`, `tts` suites |
 | ELF images: fresh `.bss`, relocations, malformed images rejected; user page tables | Host tests `tests/runtime.rs` |
 

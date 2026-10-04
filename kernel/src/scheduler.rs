@@ -82,7 +82,7 @@ struct Scheduler {
     foreground: usize, // focused task: its screen is shown and it receives input
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
-    exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
+    exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
@@ -220,6 +220,11 @@ impl Scheduler {
             let owner = if self.live(self.focus_owner) { self.focus_owner } else { 0 };
             self.focus(owner);
             if notify { self.push_notice(pid as usize | NOTICE_EXITED); }
+        }
+        else if self.tasks[slot].as_ref().is_some_and(|t| t.screen.is_none() && !t.service && !t.console.is_empty()) {
+            // A console program (no screen) that exits: its launcher reads the last output after the exit.
+            let console = core::mem::replace(&mut self.tasks[slot].as_mut().unwrap().console, Queue::new());
+            self.exited_console = Some((pid, console));
         }
         if self.focus_owner == slot { self.focus_owner = 0; if self.foreground == slot { self.focus(0); } }
     }
@@ -663,7 +668,9 @@ impl Scheduler {
                 let console = request.syscall_num == SYSCALL_CONSOLE_READ;
                 let queue = match self.find(request.arg1 as u64) {
                     Some(target) => { let t = self.tasks[target].as_mut().unwrap(); if console { &mut t.console } else { &mut t.log } }
-                    None => match self.exited_console.as_mut() { Some((pid, queue)) if console && *pid == request.arg1 as u64 => queue, _ => return Err(ERR_NOT_FOUND) },
+                    // The last focused or screenless program that exited: its unread output (for TASK_LOGS too, so a
+                    // background console program's output can be read after it ended).
+                    None => match self.exited_console.as_mut() { Some((pid, queue)) if *pid == request.arg1 as u64 => queue, _ => return Err(ERR_NOT_FOUND) },
                 };
                 let mut buffer = [0u8; 4096]; let mut len = 0;
                 while len < capacity { let Some(byte) = queue.pop() else { break }; buffer[len] = byte; len += 1; }
@@ -855,6 +862,15 @@ impl Scheduler {
                 let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.writable(page * 4096).is_some());
                 if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
                     for i in 0..words { let target = task.space.writable(buffer + i * 2).unwrap(); core::ptr::write_volatile(target as *mut u16, port_in(request.arg2 as u16, 2) as u16); }
+                    Ok(words)
+                }
+            }
+            SYSCALL_PORT_OUT_BLOCK => {
+                // Writes 16-bit words (ATA sector) from the process buffer, without a syscall per word.
+                let (buffer, words) = (request.msg[2], request.msg[3]);
+                let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.readable(page * 4096).is_some());
+                if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
+                    for i in 0..words { let source = task.space.readable(buffer + i * 2).unwrap(); port_out(request.arg2 as u16, 2, core::ptr::read_volatile(source as *const u16) as usize); }
                     Ok(words)
                 }
             }

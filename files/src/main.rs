@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 // VFS demo: lists the disk root and reads a file via vfs_server.
+extern crate alloc;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::fs::{self, File};
@@ -8,22 +11,28 @@ use mind::gfx::Screen;
 use mind::util::FixedBuf;
 
 const BACKGROUND: u32 = 0x00101820; const TEXT: u32 = 0x00E0E0E0; const ACCENT: u32 = 0x0080D0FF;
+// Drawn with the 8x16 font (MIND Mono 16); the services suite compares it with the font's bitmaps.
+const TITLE: &str = "Files — демо VFS-сервера ╞═╡ Esc: выход";
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen = Screen::new(info);
-    if let Some(s) = screen { s.clear(BACKGROUND); s.text(24, 24, b"FILES - VFS SERVER DEMO (ESC: EXIT)", 2, ACCENT, None); }
+    if let Some(s) = screen { s.clear(BACKGROUND); s.text16(24, 24, TITLE, ACCENT, Some(BACKGROUND)); }
     let mut y = 64;
     let mut line = |text: &[u8]| { mind::process::log(text); mind::process::log(b"\n"); if let Some(s) = screen { s.text(24, y, text, 1, TEXT, None); y += 12; } };
 
     let mut out = FixedBuf::<96>::new();
-    let listed = fs::list("", |entry| {
+    // The listing is collected on the program heap (mind::alloc) and sorted: directories first, then by name.
+    let mut entries: Vec<(String, u32, bool)> = Vec::new();
+    let listed = fs::list("", |entry| entries.push((String::from(core::str::from_utf8(entry.name).unwrap_or("?")), entry.size, entry.is_dir)));
+    entries.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    for (name, size, is_dir) in &entries {
         out.clear();
-        let _ = write!(out, "[FILES] {} {}{}", core::str::from_utf8(entry.name).unwrap_or("?"), entry.size, if entry.is_dir { " <DIR>" } else { "" });
+        let _ = write!(out, "[FILES] {} {}{}", name, size, if *is_dir { " <DIR>" } else { "" });
         line(out.as_bytes());
-    });
+    }
     match listed {
-        Ok(count) => { out.clear(); let _ = write!(out, "[FILES] {} ENTRIES IN /", count); line(out.as_bytes()); }
+        Ok(count) => { out.clear(); let _ = write!(out, "[FILES] {} ENTRIES IN / (SORTED, HEAP ARENAS={})", count, mind::heap_stats().arenas); line(out.as_bytes()); }
         Err(error) => { out.clear(); let _ = write!(out, "[FILES] LIST FAILED: {:?}", error); line(out.as_bytes()); }
     }
 

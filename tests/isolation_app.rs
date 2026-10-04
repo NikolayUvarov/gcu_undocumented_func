@@ -30,10 +30,21 @@ unsafe fn sleep(mb: *mut SyscallMailbox, ms: usize) {
     }
 }
 const SECONDS: usize = 1000 << abi::IPC_TIMEOUT_SHIFT;
-// Starts a copy of this program through loader with `endpoint` (write/grant) in its INIT slot.
+// Starts a copy of this program through loader with `endpoint` (write/grant) in its INIT slot: a launch session of
+// idl/loader.wit 1.1, encoded by hand (begin(name, args) in a buffer, grant(session, slot, cap), commit(session)).
 unsafe fn spawn_child(mb: *mut SyscallMailbox, endpoint: usize) {
-    if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0, [endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, usize::from_le_bytes(*b"app2\0\0\0\0"), 0]) != 0
-        || (*mb).msg[2] >= abi::ERR_FIRST { fail(); }
+    let page = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+    core::ptr::write_volatile(page as *mut [u8; 8], [4, 0, b'a', b'p', b'p', b'2', 0, 0]);
+    let shared = call(mb, abi::SYSCALL_MEM_SHARE, page, 0);
+    let begun = ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0, [shared, 0, 3 | 1 << 8 | 8 << 16, 0]) == 0 && (*mb).msg[2] == 4 << 16;
+    call(mb, abi::SYSCALL_CAP_REVOKE, shared, 0); call(mb, abi::SYSCALL_CAP_DROP, shared, 0);
+    let session = core::ptr::read_volatile(page as *const u32) as usize;
+    call(mb, abi::SYSCALL_FREE, page, 0);
+    if !begun { fail(); }
+    let rights = (abi::CAP_WRITE | abi::CAP_GRANT) as usize;
+    if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0, [endpoint, rights, 4 | 1 << 8 | session << 16 | abi::SLOT_INIT << 48, 0]) != 0
+        || (*mb).msg[2] != 0 { fail(); }
+    if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0, [0, 0, 5 | 1 << 8 | session << 16, 0]) != 0 || (*mb).msg[2] & 0xFF != 0 { fail(); }
 }
 // A child's first call: its reply carries the mode (and maybe a capability, received in slot 2).
 unsafe fn child(mb: *mut SyscallMailbox) {
@@ -182,11 +193,11 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'k' => {
-                // Input arrives as event words: the UART newline typed after the key is an undecoded press carrying
-                // its byte; READ_KEY and READ_INPUT drain the same queue.
+                // Input arrives as event words: the UART newline typed after the key is a press carrying its byte,
+                // decoded as Enter by the shell; READ_KEY and READ_INPUT drain the same queue.
                 let mut event = 0;
                 for _ in 0..20 { event = call(mb, abi::SYSCALL_READ_INPUT, 0, 0); if event != 0 { break; } call(mb, abi::SYSCALL_WAIT, 10, 0); }
-                if !matches!(abi::event_byte(event), b'\n' | b'\r') || !abi::event_pressed(event) || abi::event_key(event) != 0 || call(mb, abi::SYSCALL_READ_KEY, 0, 0) != 0 { fail(); }
+                if !matches!(abi::event_byte(event), b'\n' | b'\r') || !abi::event_pressed(event) || !matches!(abi::event_key(event), 0 | abi::KEY_ENTER) || call(mb, abi::SYSCALL_READ_KEY, 0, 0) != 0 { fail(); }
                 // A regular application cannot use others' privileges without capabilities.
                 let image = _start as *const () as usize;
                 let checks = [
@@ -194,6 +205,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_COMPOSITOR_PULL, 9, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_PORT_IN, abi::SLOT_RTC, 0x70, abi::ERR_RIGHTS),
                     (abi::SYSCALL_PORT_IN, 31, 0x60, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_PORT_OUT_BLOCK, abi::SLOT_RTC, 0x1F0, abi::ERR_RIGHTS), // no port range, no buffer
                     (abi::SYSCALL_IRQ_WAIT, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_MAP, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_PHYS, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
@@ -207,6 +219,9 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_TASK_KILL, 1, 0, abi::ERR_RIGHTS), // process control is the shell's
                     (abi::SYSCALL_FOCUS, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_TASK_LIST, 0, 0, abi::ERR_RIGHTS), // observation needs the observe privilege (MC-10.2)
+                    (abi::SYSCALL_IPC_CALL, abi::SLOT_SYSINFO, 0, abi::ERR_INVALID), // sysmon only for programs that request it (loader sessions)
+                    (abi::SYSCALL_IPC_CALL, abi::SLOT_LIFECYCLE, 0, abi::ERR_INVALID),
                     (abi::SYSCALL_STAT, abi::STAT_TASKS, 0, abi::ERR_RIGHTS), // statistics need the observe privilege
                     (abi::SYSCALL_DEVICE_STATE, 0, abi::DEVICE_STOP, abi::ERR_RIGHTS), // stopping a device needs one of its BARs
                     (abi::SYSCALL_TASK_WATCH, 1, abi::SLOT_RTC, abi::ERR_RIGHTS), // only a lifecycle owner watches, on its own endpoint
@@ -230,6 +245,20 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     fail();
                 }
                 call(mb, abi::SYSCALL_CAP_DROP, buffer, 0); call(mb, abi::SYSCALL_FREE, page, 0);
+                // VFS v2 (idl/vfs.wit, encoded by hand): an application's client reads only. It opens the RAM disk's
+                // root, but creating a file there is denied (status 2, error case 4: denied).
+                let page = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let shared = call(mb, abi::SYSCALL_MEM_SHARE, page, 0);
+                let put = |at: usize, bytes: &[u8]| for (i, &c) in bytes.iter().enumerate() { core::ptr::write_volatile((page as *mut u8).add(at + i), c); };
+                put(0, &[3, 0]); put(2, b"ram"); // root(name: string<16>)
+                (*mb).msg = [shared, 0, 1 | 2 << 8 | 5 << 16, 0];
+                let opened = call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_VFS, 0) == 0 && (*mb).msg[2] == 4 << 16;
+                let root = core::ptr::read_volatile(page as *const [u8; 4]);
+                put(0, &root); put(4, &[5, 0]); put(6, b"x.txt"); put(11, &[1 | 2]); // open(dir, path, mode: write | create)
+                (*mb).msg = [shared, 0, 3 | 2 << 8 | 12 << 16, 0];
+                let denied = call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_VFS, 0) == 0 && (*mb).msg[2] & 0xFF == 2 && (*mb).msg[3] == 4;
+                if !opened || !denied { fail(); }
+                call(mb, abi::SYSCALL_CAP_DROP, shared, 0); call(mb, abi::SYSCALL_FREE, page, 0);
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
                 let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg = [offset, length, 0, 0]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
                 let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };

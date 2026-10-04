@@ -59,13 +59,29 @@ USER_CRATES=(
     "ata:ata:ata.elf"
     "ahci:ahci:ahci.elf"
     "usb_storage:usb_storage:usb_storage.elf"
+    "logd:logd:logd.elf"
+    "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
+    "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"
     "files:files:files.elf"
+    "keys:keys:keys.elf"
+    "view:view:view.elf"
+    "uptime:uptime:uptime.elf"
+    "monitor:top:top.elf"
+    "monitor:memmap:memmap.elf"
+    "monitor:load:load.elf"
+    "monitor:hw:hw.elf"
+    "fm:fm:fm.elf"
+    "edit:edit:edit.elf"
+    "disk:df:df.elf"
+    "disk:fsck:fsck.elf"
+    "dmesg:dmesg:dmesg.elf"
+    "svc:svc:svc.elf"
     "beep:beep:beep.elf"
 )
 
@@ -94,7 +110,8 @@ for entry in "${USER_CRATES[@]}"; do
     cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
-# Licences travel with the image: tts.elf embeds third-party dictionaries (THIRD_PARTY.md).
+# Licences travel with the image: tts.elf embeds third-party dictionaries, the text programs the MIND Mono font
+# (THIRD_PARTY.md).
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 

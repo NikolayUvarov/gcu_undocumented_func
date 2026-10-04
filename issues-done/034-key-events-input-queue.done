@@ -19,7 +19,7 @@ A task's input queue holds bytes: raw PS/2 make codes and raw UART bytes share o
 
 ## Related
 
-[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F4; [043](../issues/043-keyboard-decoding-and-line-editing.md).
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F4; [043](043-keyboard-decoding-and-line-editing.done).
 
 ## Resolution
 

@@ -18,7 +18,7 @@ A server cannot tell which right a client was given: VFS cannot separate read-on
 
 ## Related
 
-[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F8; [048](../issues/048-write-path-ramdisk-vfs2.md).
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F8; [048](048-write-path-ramdisk-vfs2.done).
 
 ## Resolution
 

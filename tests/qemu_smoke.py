@@ -6,12 +6,14 @@ from WSL. Run after 02_build.sh; pass --qemu and --firmware as needed. Temporary
 FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
+import codecs
 import math
 import os
 from pathlib import Path
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
@@ -20,10 +22,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage drivers exist only when the controller is present.
-SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
-PID_IN = re.compile(r"\b(fg|kill|logs|budget)(\s+)(\d{1,18})\b", re.I)
+PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
 
@@ -36,18 +38,21 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, prompt=True, display=()):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, display=()):
+        # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
+        # `snapshot` writes reach the image.
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
-        storage = (["-drive", f"format=raw,file={filename},if=none,id=usbdisk",
+        source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
+        storage = (["-drive", f"{source},if=none,id=usbdisk",
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
-                   if usb else ["-drive", f"format=raw,file=fat:{filename},if=none,id=sata",
+                   if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
-                   if ahci else ["-drive", f"format=raw,file=fat:{filename}"])
+                   if ahci else ["-drive", source])
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
-             "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
+             *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *display,
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -82,8 +87,11 @@ class VM:
         return output
 
     def _read(self):
+        # The UART carries UTF-8 (Cyrillic in program output).
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         while data := self.process.stdout.read(1):
-            self.queue.put(data.decode("ascii", errors="replace"))
+            if text := decoder.decode(data):
+                self.queue.put(text)
 
     def collect(self):
         while True:
@@ -115,6 +123,12 @@ class VM:
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
         for byte in text.encode("ascii"):
+            self.process.stdin.write(bytes([byte]))
+            self.process.stdin.flush()
+            time.sleep(.01)
+
+    def send_bytes(self, data):
+        for byte in data:
             self.process.stdin.write(bytes([byte]))
             self.process.stdin.flush()
             time.sleep(.01)
@@ -171,14 +185,82 @@ class VM:
         self.collect()
 
 
+def font16():
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import font_gen
+    return font_gen.parse_bdf(font_gen.SUBSET.read_text(encoding="utf-8"))[1]
+
+
+def glyph_lookup():
+    """Bitmap -> character; glyphs drawn alike (Latin o and Cyrillic о) map to the lowest code point."""
+    lookup = {}
+    for code, (_, rows) in sorted(font16().items(), reverse=True):
+        lookup[tuple(rows)] = chr(code)
+    return lookup
+
+
+def canon(text):
+    """`text` as `screen_text` reads it back (look-alike letters folded)."""
+    glyphs, lookup = font16(), glyph_lookup()
+    return "".join(lookup[tuple(glyphs[ord(ch)][1])] if ord(ch) in glyphs else "?" for ch in text)
+
+
+def screen_text(vm):
+    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs."""
+    lookup = glyph_lookup()
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    width, height = map(int, size.split())
+    lines = []
+    for cy in range(height // 16):
+        line = []
+        for cx in range(width // 8):
+            rows = [[pixels[((cy * 16 + r) * width + cx * 8 + c) * 3:((cy * 16 + r) * width + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+            colours = {p for row in rows for p in row}
+            found = " " if len(colours) == 1 else "?"
+            for fg in colours if len(colours) == 2 else ():
+                bits = tuple(sum(0x80 >> c for c in range(8) if row[c] == fg) for row in rows)
+                ch = lookup.get(bits)
+                if ch is not None:
+                    found = ch
+                    break
+            line.append(found)
+        lines.append("".join(line))
+    return lines
+
+
+def check_text16(vm, x, y, text, color, background):
+    """The screen shows `text` in the 8x16 font at (x, y), pixel for pixel."""
+    glyphs = font16()
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    width = int(size.split()[0])
+    fg, bg = color.to_bytes(3, "big"), background.to_bytes(3, "big")
+    for index, ch in enumerate(text):
+        rows = glyphs.get(ord(ch), glyphs[0xFFFD])[1]
+        for row in range(16):
+            for col in range(8):
+                at = ((y + row) * width + x + index * 8 + col) * 3
+                want = fg if rows[row] & (0x80 >> col) else bg
+                assert pixels[at:at + 3] == want, (ch, index, row, col, pixels[at:at + 3], want)
+
+
 def require(text, fragment):
     assert fragment in text, (fragment, text)
 
 
 def heap_used(vm):
-    output = vm.command("heap")
-    require(output, "TEST FREED=true")
-    return int(re.search(r"HEAP: USED=(\d+)", output).group(1))
+    # IDL clients allocate a buffer per call (log lines of the services, for instance), so a reading can catch one in
+    # flight: the value counts once two readings in a row agree.
+    previous = None
+    for _ in range(20):
+        output = vm.command("heap")
+        require(output, "TEST FREED=true")
+        used = int(re.search(r"HEAP: USED=(\d+)", output).group(1))
+        if used == previous:
+            return used
+        previous = used
+        time.sleep(.1)
+    return previous
 
 
 def task_rows(vm):
@@ -310,6 +392,440 @@ def normal_suite(vm):
     print("PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, 4 CPUs", flush=True)
 
 
+def keys_suite(vm):
+    """Key events: the same events from the UART (VT100 sequences, UTF-8) and from PS/2, layouts, Esc."""
+    baseline = heap_used(vm)
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    uart = [(b"\x1b[A", "code=Up mods=-"), (b"\x1b[1;2C", "code=Right mods=S"), (b"\x1bOP", "code=F(1) mods=-"),
+            (b"\x1b[15~", "code=F(5) mods=-"), (b"\x1b[24~", "code=F(12) mods=-"), (b"\x1b[3;5~", "code=Delete mods=C"),
+            (b"\x1b[5~", "code=PageUp mods=-"), (b"\x1b[H", "code=Home mods=-"), (b"\x7f", "code=Backspace mods=- char=U+0008"),
+            (b"\x03", "code=Char mods=C char=c"), ("Ж".encode(), "code=Char mods=- char=Ж U+0416"), (b"q", "code=Char mods=- char=q U+0071"),
+            (b"\r\n", "code=Enter mods=- char=U+000A")]
+    for data, line in uart:
+        vm.send_bytes(data)
+        vm.expect(line)
+    # One CRLF is one Enter: the next event is the next key, not a second Enter.
+    vm.send_bytes(b"x")
+    assert "code=Enter" not in vm.expect("char=x U+0078")
+    ps2 = [("up", "code=Up mods=-"), ("shift-right", "code=Right mods=S"), ("f1", "code=F(1) mods=-"), ("f10", "code=F(10) mods=-"),
+           ("delete", "code=Delete mods=-"), ("home", "code=Home mods=-"), ("pgdn", "code=PageDown mods=-"), ("insert", "code=Insert mods=-"),
+           ("ctrl-c", "code=Char mods=C char=c"), ("alt-x", "code=Char mods=A char=x"), ("shift-a", "code=Char mods=S char=A"),
+           ("backspace", "code=Backspace mods=-"), ("tab", "code=Tab mods=-")]
+    # Russian layout: Ctrl+Shift pressed and released alone switches it; letters by position; Alt+Shift switches back.
+    ps2 += [("ctrl-shift", None), ("q", "char=й U+0439"), ("shift-q", "char=Й U+0419"), ("grave_accent", "char=ё U+0451"),
+            ("ctrl-c", "code=Char mods=C char=c"), ("alt-shift", None), ("q", "char=q U+0071")]
+    # The program's output arrives while the harness is in the QEMU monitor: check the whole log, in order.
+    start = len(vm.log)
+    for key, _ in ps2:
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.05)
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    got = re.findall(r"\[KEYS\] (code=[^\r\n]*)", vm.log[start:])
+    expected = [line for _, line in ps2 if line]
+    at = 0
+    for line in expected:
+        while at < len(got) and line not in got[at]:
+            at += 1
+        assert at < len(got), (line, got)
+        at += 1
+    vm.output = ""
+    # The text UI (mind::tui) on the real screen: frame, title, the latest event, the key bar.
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[0].startswith("╔") and canon(" keys — коды клавиш ") in screen[0], screen[0]
+    assert any("code=Char mods=- char=q U+0071" in row for row in screen), screen
+    assert screen[-1].startswith(canon(" Esc — выход")), screen[-1]
+    # Esc from the UART after the sequence timeout ends the program.
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN"), "[KBD] LAYOUT RU")
+    assert task_rows(vm) == {}
+    assert heap_used(vm) == baseline
+    print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc", flush=True)
+
+
+def shell_suite(vm):
+    """The shell's line editor, history, completion, Cyrillic and scrollback, from the UART and from PS/2."""
+    def keys(data, fragment):
+        # Redraws of the edited line also print the prompt: wait for the command's output followed by a prompt.
+        vm.send_bytes(data)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            vm.collect()
+            seen = to_ordinal(ANSI.sub("", vm.output).replace("\r", ""))
+            at = seen.find(fragment)
+            if at >= 0 and seen.rfind("MIND> ") > at:
+                vm.output = ""
+                return seen
+            time.sleep(.01)
+        raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
+    # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
+    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK:")
+    # Delete: "cpusX", Left, Delete -> "cpus".
+    keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
+    vm.command("clock")
+    # History: Up twice is "cpus".
+    keys(b"\x1b[A\x1b[A\r", "CPU=0 APIC=")
+    # Esc clears a typed line.
+    vm.send_bytes(b"garbage\x1b")
+    time.sleep(.2)
+    keys(b"heap\r", "HEAP: USED=")
+    # Tab completion of a program name after RUN, and of a command.
+    keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
+    keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
+    # Several matches are listed under the line.
+    vm.send_bytes(b"c\t")
+    listing = vm.expect("cpus")
+    for word in ("clear", "clock"):
+        require(listing, word)
+    vm.send_bytes(b"\x1b")
+    time.sleep(.2)
+    # Cyrillic typed at the terminal is shown in the shell and reaches the command parser.
+    keys("привет мир\r".encode(), "ERROR: UNKNOWN COMMAND")
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(row.startswith(canon("MIND> привет мир")) for row in screen), screen
+    # PS/2: Up recalls the last command, Enter runs it.
+    vm.hmp("sendkey up")
+    vm.hmp("sendkey ret")
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
+    vm.output = ""
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back.
+    for _ in range(6):
+        vm.command("help")
+    assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
+    for _ in range(12):
+        vm.hmp("sendkey shift-pgup")
+    screen = screen_text(vm)
+    assert any(canon("MIND CORE v1.6") in row for row in screen), screen
+    vm.hmp("sendkey shift-pgdn")
+    vm.serial()
+    print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
+
+
+NOTES = "".join(f"Строка {i}: съешь же ещё этих мягких французских булок, да выпей чаю. Line {i}.\n" for i in range(1, 301))
+
+
+def tools_suite(vm):
+    """Text tools on the 8x16 text UI: the viewer."""
+    baseline = heap_used(vm)
+    vm.send("view docs/notes.txt\n")
+    require(vm.expect("[VIEW] TOP 0x0"), f"[VIEW] OPEN docs/notes.txt {len(NOTES.encode())} BYTES")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert canon("notes.txt") in screen[0] and canon("Стр 1 ") in screen[0], screen[0]
+    assert screen[1].startswith(canon("Строка 1: съешь же ещё этих мягких")), screen[1]
+    assert canon("10Quit") in screen[-1], screen[-1]
+    rows = len(screen) - 2
+    # Page down moves by a page less one line; the status follows.
+    vm.send_bytes(b"\x1b[6~")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    lines_per_row = 1 if len(NOTES.splitlines()[0]) <= len(screen[0]) else 2
+    assert canon(f"Стр {(rows - 1) // lines_per_row + 1} ") in screen[0], screen[0]
+    # F7 search (case-insensitive), the match is highlighted on the top line.
+    vm.send_bytes(b"\x1b[18~")
+    time.sleep(.3)
+    vm.send_bytes("СТРОКА 200:".encode() + b"\r")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith(canon("Строка 200:")), screen[1]
+    assert canon("Стр 200 ") in screen[0], screen[0]
+    # End shows the last line at the bottom of the page.
+    vm.send_bytes(b"\x1b[F")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(row.startswith(canon("Строка 300:")) or canon("Line 300.") in row for row in screen[-3:-1]), screen[-3:]
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[VIEW] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # Hex mode on a binary.
+    vm.send("view kernel.elf\n")
+    vm.expect("[VIEW] TOP 0x0")
+    vm.send_bytes(b"\x1bOS")
+    vm.expect("[VIEW] TOP 0x0")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith("00000000: 7F 45 4C 46 02 01 01"), screen[1]
+    assert "HEX" in screen[0], screen[0]
+    vm.send_bytes(b"\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("view nothing.txt"), "PID=")
+    assert heap_used(vm) == baseline
+    print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+    monitors_check(vm)
+
+
+def table_row(screen, pattern):
+    return next((row for row in screen if re.search(pattern, row)), None)
+
+
+def status_line(vm, text, timeout=8, raw=False, whole=False):
+    # The line from `text` on (expect() may return before the line ends), or the `whole` line; `raw` keeps real PIDs.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        vm.collect()
+        clean = ANSI.sub("", vm.output).replace("\r", "")
+        clean = clean if raw else to_ordinal(clean)
+        at = clean.find(text)
+        if at >= 0 and "\n" in clean[at:]:
+            vm.output = ""
+            return clean[clean.rfind("\n", 0, at) + 1 if whole else at:clean.index("\n", at)]
+        time.sleep(.01)
+    raise AssertionError(f"Timeout waiting for the line {text!r}: {vm.output[-3000:]}")
+
+
+def tool_status(vm, text):
+    # The state line a monitor logs after a key: x is bound in none of them. (The line after the Enter that leaving
+    # the QEMU monitor sends may be dropped by serial().)
+    vm.send("x")
+    return status_line(vm, text)
+
+
+def monitors_check(vm):
+    """top, memmap, load and hw on sysmon's data. Each logs its state after every key; leaving the QEMU monitor after
+    a screenshot sends Enter to the program in front."""
+    baseline = heap_used(vm)
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    tasks = BASE + 2  # the services, clock and the monitor
+    # top: the task table agrees with ps; details, sorting, filter and tree.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: the details window of the selected task
+    assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
+    assert canon("load average") in screen[0], screen[0]
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"/64\.0M used"), screen
+    assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
+    assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter closes it
+    assert table_row(screen, canon("Capabilities")) and table_row(screen, canon("Address space:")), screen
+    tool_status(vm, "DETAILS=0")
+    vm.send("N")
+    vm.expect("[TOP] SORT=PID")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    header = next(i for i, row in enumerate(screen) if "PPID" in row)
+    assert re.match(r"^ +1 +0 init ", screen[header + 1]), screen[header + 1]
+    assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=PID"))
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
+    vm.send("S")
+    assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
+    vm.send("t")
+    vm.expect("TREE=1")
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # memmap: physical map, kernel arena, the known layout of clock's address space, quotas.
+    vm.send("memmap\n")
+    vm.expect("[MEMMAP] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    tool_status(vm, "[MEMMAP] VIEW=PHYSICAL")
+    assert table_row(screen, canon("Physical address space")) and table_row(screen, canon("free RAM")), screen
+    assert table_row(screen, r"0x[0-9a-f]{12} 0x[0-9a-f]{12} +64\.0M  kernel arena"), screen
+    usable = re.search(r"RAM (\d+(?:\.\d)?)M usable", "\n".join(screen))
+    assert usable and 128 < float(usable[1]) < 512, screen  # the VM has 512 MiB
+    vm.send("2")
+    vm.expect("VIEW=ARENA")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/32")), screen
+    vm.send("3")
+    vm.expect("VIEW=PROCESS")
+    for _ in range(30):
+        vm.send_bytes(b"\x1b[B")
+        if f"PID={clock + BASE} " in status_line(vm, "VIEW=PROCESS", raw=True):
+            break
+    else:
+        raise AssertionError("clock not in memmap's task list")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
+    # main's VMAP records: the image's segments, no guard page (issue 075).
+    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001001000 +64\.0K +rw- +stack",
+                 r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
+        assert table_row(screen, line), (line, screen)
+    vm.send("4")
+    vm.expect("VIEW=QUOTAS")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, r" loader +2/8 "), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[MEMMAP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # load: a graph per CPU and per counter; total CPU; the 10-minute window.
+    vm.send("load\n")
+    vm.expect("[LOAD] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial()
+    assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 32"]:
+        assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
+    vm.send("c")
+    vm.expect("TOTAL=1")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, re.escape(canon(f"CPU total ({vm.cpus})"))), screen
+    vm.send("2")
+    vm.expect("WINDOW=10MIN")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert canon("10 min, 1 s samples") in screen[0], screen[0]
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[LOAD] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # hw: CPUID, clocks, the framebuffer, PCI devices and interrupt lines with their holders.
+    vm.send("hw\n")
+    vm.expect("[HW] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    tool_status(vm, "[HW] TOP=0")
+    for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
+                 "Interrupt lines", "kernel arena 64.0M"):
+        assert table_row(screen, re.escape(canon(text))), (text, screen)
+    # main's STAT: devices by index (no PCI location) and the first holder of a capability, init (issue 075).
+    assert table_row(screen, r"^ +\d+ +010180 +IDE controller"), screen
+    assert table_row(screen, r"IRQ 1 .* init \(PID 1\)"), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command(f"kill {clock}"), "KILLED")
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    assert heap_used(vm) == baseline
+    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders)", flush=True)
+    fm_check(vm)
+
+
+def fm_check(vm):
+    """The file manager: browse into EFI/BOOT and back, view a file, start a program from the panel."""
+    baseline = heap_used(vm)
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    vm.send("fm\n")
+    vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: into docs
+    assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
+    assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
+    assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
+    assert "CURRENT=.." in tool_status(vm, "[FM] LEFT=/docs FULL")
+    # F3 views notes.txt in the built-in viewer; Esc comes back.
+    keys(b"\x1b[B", "CURRENT=notes.txt")
+    keys(b"\x1bOR", "VIEW=1")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith(canon("Строка 1: съешь")), screen[1]
+    keys(b"\x1b", "VIEW=0")
+    # ".." goes up with the cursor on the directory left; EFI/BOOT and back.
+    keys(b"\x1b[H\r", "LEFT=/ FULL")
+    assert "CURRENT=docs" in tool_status(vm, "[FM] LEFT=/ FULL")
+    keys(b"\x1b[B", "CURRENT=EFI")
+    keys(b"\r", "LEFT=/EFI FULL")
+    keys(b"\x1b[B", "CURRENT=BOOT")
+    keys(b"\r", "LEFT=/EFI/BOOT FULL")
+    tool_status(vm, "LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter on "..": back to EFI
+    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
+    assert "CURRENT=BOOT" in tool_status(vm, "[FM] LEFT=/EFI FULL")
+    keys(b"\x7f", "LEFT=/ FULL")
+    # A program started from the panel runs in the background.
+    for _ in range(60):
+        if "CURRENT=clock.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
+            break
+    else:
+        raise AssertionError("clock.elf not reached")
+    keys(b"\r", "CURRENT=clock.elf")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    started = table_row(screen, canon("Started clock.elf as PID"))
+    assert started, screen
+    pid = int(re.search(r"PID (\d+)", started)[1])
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert pid - BASE in task_rows(vm), task_rows(vm)
+    time.sleep(1.2)
+    require(vm.command(f"logs {pid - BASE}"), "[CLOCK] ")
+    require(vm.command(f"kill {pid - BASE}"), "KILLED")
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    assert heap_used(vm) == baseline
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel", flush=True)
+    vfs_check(vm)
+
+
+def vfs_check(vm):
+    """Files through the shell (VFS v2, idl/vfs.wit): the RAM disk, Cyrillic names and text, directories, and what the
+    user's badge may not change."""
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    require(vm.command("ls ram:"), "0 ENTRIES")
+    require(utf8("write ram:заметки.txt Привет, мир"), "WROTE 21 BYTES")
+    require(utf8("cat ram:заметки.txt"), "Привет, мир")
+    require(vm.command("mkdir ram:docs/old"), "OK")
+    require(utf8("mv ram:заметки.txt ram:docs/old/note.txt"), "OK")
+    listing = vm.command("ls ram:docs/old")
+    require(listing, "note.txt")
+    require(listing, "1 FILES, 21 BYTES")
+    require(vm.command("rm ram:docs"), "ERROR: RM: DIRECTORY NOT EMPTY")
+    require(vm.command("rm ram:docs/old/note.txt"), "OK")
+    require(vm.command("rm ram:docs/old"), "OK")
+    # Boot files and the rest of the boot disk stay read-only; paths cannot climb out; data/ is writable.
+    require(vm.command("write kernel.elf x"), "ERROR: WRITE: DENIED")
+    require(vm.command("write EFI/BOOT/x.txt x"), "ERROR: WRITE: DENIED")
+    require(vm.command("mkdir system"), "ERROR: MKDIR: DENIED")
+    require(vm.command("cat ram:../kernel.elf"), "ERROR: CAT: INVALID PATH")
+    require(vm.command("rm kernel.elf"), "ERROR: RM: DENIED")
+    require(vm.command("mkdir data"), "OK")
+    require(vm.command("write data/n.txt hello"), "WROTE 6 BYTES")
+    require(vm.command("cat data/n.txt"), "hello")
+    require(vm.command("ls data"), "n.txt")
+    print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
+
+
 def busy_suite(vm):
     baseline = heap_used(vm)
     require(vm.command("run app2 &"), "PID=1 NAME=app2 BACKGROUND")
@@ -320,6 +836,30 @@ def busy_suite(vm):
     assert int(second[1][-2]) > int(first[1][-2]), (first, second)
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
     assert int(second[2][-1]) > int(first[2][-1]), (first, second)
+    # sysmon's samples see the busy CPU: one of the CPUs at full load.
+    time.sleep(1.5)
+    cpu = int(re.search(r"cpu (\d+)%", vm.command("uptime"))[1])
+    assert cpu >= 100 // vm.cpus // 2, cpu
+    # top sees the busy loop at about 100 % of its CPU.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(2.2)
+    screen = screen_text(vm)
+    vm.serial()
+    row = next((r for r in screen if re.search(r" app2 ", r)), None)
+    assert row and float(row.split()[5]) >= 80, (row, screen)
+    if "DETAILS=0" not in tool_status(vm, "[TOP] SORT"):  # opened by the Enter after the screenshot
+        vm.send_bytes(b"\x1b")
+        vm.expect("DETAILS=0")
+    vm.send("q")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # TSC accounting (STAT): a task that never yields gets most of its CPU.
+    run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
+    before, started = run(), time.monotonic()
+    time.sleep(1)
+    after, elapsed = run(), time.monotonic() - started
+    assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
     require(vm.command("logs 1"), "BUSY FIXTURE")
     # Scheduling budget (C7): 20 ms per 100 ms keeps the busy loop near 20 % of its CPU (enforced at the 10 ms tick).
     require(vm.command("budget 1 20 100"), "BUDGET PID=1 20 MS PER 100 MS")
@@ -336,7 +876,7 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; CPU budget per period", flush=True)
+    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
 
 
 def smp_suite(vm):
@@ -442,7 +982,7 @@ def isolation_suite(vm):
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; fault containment and reclaim", flush=True)
+    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim", flush=True)
 
 
 def memory_suite(vm):
@@ -577,6 +1117,8 @@ def dzen_suite(vm):
     # The VM starts at 19:35:05: TR yellow, center cyan; clockwise free
     # corners BR dark, BL/TL white. There is >90 s before the next state.
     baseline = heap_used(vm)
+    # The VM's RTC was set to 2026-09-19T19:35:05.
+    require(vm.command("date"), "DATE: 2026-09-19 19:35:")
     require(vm.command("list"), "dzen-clock")
     require(vm.command("run dzen-clock &"), "PID=1 NAME=dzen-clock BACKGROUND")
     require(vm.command("run dzen-clock &"), "PID=2 NAME=dzen-clock BACKGROUND")
@@ -727,6 +1269,9 @@ def files_check(vm, pid):
         time.sleep(.2)
     require(output, "[FILES] kernel.elf ")
     require(output, "<DIR>")
+    require(output, "(SORTED, HEAP ARENAS=1)")  # Vec/String on the program heap (mind::alloc)
+    names = re.findall(r"^\[FILES\] (\S+) \d+$", output, re.M)
+    assert names == sorted(names), names
     size = (ROOT / "usb_root/kernel.elf").stat().st_size
     require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
     efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
@@ -759,13 +1304,36 @@ def ahci_suite(vm):
 
 def services_suite(vm):
     output = vm.command("ps")
-    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts"):
+    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
     clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
+    # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
+    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    free = vm.command("free")
+    assert f"TASKS={tasks} " in free, (tasks, free)
+    arena, used, free_bytes = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+)", free).groups())
+    assert arena == 64 << 20 and 0 < used < arena and used + free_bytes <= arena, free
+    cpus = vm.command("cpus")
+    assert len(re.findall(r"BUSY_MS=\d+ IDLE_MS=\d+ SWITCHES=\d+", cpus)) == vm.cpus, cpus
+    physmap = vm.command("physmap")
+    for kind in ("free RAM", "kernel arena", "framebuffer", "boot image", "AP trampoline"):
+        require(physmap, kind)
+    free_ram = int(re.search(r"FREE_RAM=(\d+)K", physmap)[1])
+    assert 128 * 1024 < free_ram < 512 * 1024, free_ram  # the VM has 512 MiB
+    require(vm.command("irqs"), f"IRQ=1 COUNT=")
+    assert re.search(r"^\d+ 010180 IDE controller IRQ=", vm.command("devices"), re.M)
+    endpoints = vm.command("endpoints")
+    assert len(re.findall(r"^EP=\d+ CREATOR=1 RECEIVERS=1 ", endpoints, re.M)) >= 6, endpoints
+    require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
+    # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
+    import datetime
+    today = datetime.date.today()
+    date = vm.command("date")
+    assert any(f"DATE: {d.isoformat()} " in date for d in (today, today - datetime.timedelta(days=1), today + datetime.timedelta(days=1))), date
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
     vm.send("fg 0\n"); vm.expect("ERROR: EXPECTED ONE POSITIVE PID\nMIND> ")  # the whole reply, prompt included
     # End of the initial distribution: init gives up the platform privilege before READY.
@@ -803,6 +1371,12 @@ def services_suite(vm):
     require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM ATA"), "[VFS] MOUNTED FAT16 FROM ATA")
     require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
     files_check(vm, 3)
+    # Cyrillic, an em dash and box drawing in the 8x16 font (MIND Mono 16), checked pixel for pixel.
+    vm.send("fg 3\n")
+    vm.expect("FOREGROUND PID=3")
+    time.sleep(.2)
+    check_text16(vm, 24, 24, "Files — демо VFS-сервера ╞═╡ Esc: выход", 0x80D0FF, 0x101820)
+    vm.serial(); vm.background(3)
     require(vm.command("kill 3"), "KILLED PID=3")
     # loader: programs are read from disk, not the kernel table — new files launch too.
     listing = vm.command("list")
@@ -810,6 +1384,23 @@ def services_suite(vm):
         require(listing, f"  {name} ")
     assert "kernel " not in listing
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
+    # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
+    pmap = vm.command("pmap 4")
+    require(pmap, "0x0000008000000000 ")
+    assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
+    for line in ("0x0000008001001000     65536 rw- stack",
+                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+        require(pmap, line)
+    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    details = vm.command("stat 4")
+    require(details, "NAME=hello")
+    require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
+    require(details, "CAPS=5/63")
+    # The standard client endpoints in slots 2..6, write and grant only; no privilege.
+    caps = vm.command("caps 4")
+    for slot in (2, 3, 4, 5, 6):
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ RIGHTS=-wg-", caps), (slot, caps)
+    assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)
     require(vm.command("logs 4"), "[CLOCK] ")
@@ -858,11 +1449,501 @@ def services_suite(vm):
     require(vm.command("run rtc &"), "NAME=rtc")
     clock_resumes()
     vm.command("kill 6")
+    # Loader v1 (idl/loader.wit): uptime asks in its ELF for the console and sysmon (idl/sysinfo.wit); the shell grants the
+    # client endpoint in a launch session and shows the output of the console program (sysmon's last sample, taken
+    # every 100 ms, may already count it as a task).
+    time.sleep(1.2)
+    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    uptime = vm.command("uptime")
+    require(uptime, "NAME=uptime FOREGROUND")
+    match = re.search(r"^up \d+:\d\d:\d\d, load \d+\.\d\d \d+\.\d\d \d+\.\d\d, cpu (\d+)%, (\d+) tasks$", uptime, re.M)
+    assert match and int(match[2]) in (tasks, tasks + 1) and 0 <= int(match[1]) <= 100, (uptime, tasks)
+    # In the background: the output of the exited program stays readable.
+    pid = int(re.search(r"PID=(\d+) NAME=uptime BACKGROUND", vm.command("run uptime &"))[1])
+    time.sleep(.5)
+    assert pid not in task_rows(vm)
+    require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
+    dmesg_check(vm)
+    lifecycle_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, halt without init, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), halt without init, reclaim", flush=True)
+
+
+def lifecycle_check(vm):
+    """init's lifecycle requests (idl/init.wit 1.1): svc lists, restarts, stops and starts services, refuses init and
+    the shell; clients reach a restarted service; top stops an application after asking."""
+    import datetime
+    pids = vm.services()
+    listing = vm.command("svc", raw=True)
+    require(listing, "SERVICE         PID  STARTS  STATE    HOLDS")
+    assert re.search(r"^init\s+1\s+1\s+running\s+restart and process control$", listing, re.M), listing
+    assert re.search(fr"^logd\s+{pids['logd']}\s+1\s+running\s+observe privilege$", listing, re.M), listing
+    assert re.search(r"^ahci\s+0\s+0\s+stopped\s+AHCI registers", listing, re.M), listing
+    # A restarted rtc: a new PID, one more start, and the shell's client reaches it.
+    starts = int(re.search(r"^rtc\s+\d+\s+(\d+)", listing, re.M)[1])
+    # (the harness shows new PIDs as ordinals: add BASE for the real one)
+    new = int(re.search(r"rtc restarted: PID (\d+)", vm.command("svc restart rtc"))[1]) + BASE
+    assert new != pids["rtc"] and new == vm.services()["rtc"], (new, pids)
+    assert re.search(fr"^rtc\s+{new}\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
+    today = datetime.date.today()
+    date = vm.command("date")
+    assert any(f"DATE: {d.isoformat()} " in date for d in (today, today - datetime.timedelta(days=1), today + datetime.timedelta(days=1))), date
+    # Stop and start; what may not be stopped; a missing device; usage.
+    require(vm.command("svc stop shell"), "svc: stop shell: init and the shell cannot be stopped")
+    require(vm.command("svc stop init"), "svc: stop init: init and the shell cannot be stopped")
+    require(vm.command("svc stop tts"), "tts stopped")
+    assert "tts" not in vm.services()
+    require(vm.command("svc stop tts"), "svc: stop tts: it does not run")
+    require(vm.command("svc start tts"), "tts started: PID")
+    require(vm.command("svc start tts"), "svc: start tts: it runs already")
+    require(vm.command("svc start ahci"), "svc: start ahci: no such service, or its device is missing")
+    require(vm.command("svc restart nothing"), "svc: restart nothing: no such service or task")
+    require(vm.command("svc stop 1"), "svc: stop 1: init and the shell cannot be stopped")
+    require(vm.command("svc frobnicate"), "usage: svc")
+    # An application stopped by PID, and one stopped from top (k, then Stop).
+    first = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) + BASE
+    require(vm.command(f"svc stop {first}", raw=True), f"{first} stopped")
+    assert first - BASE not in task_rows(vm)
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) + BASE
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    vm.send("N")
+    vm.expect("[TOP] SORT=PID")
+    vm.send_bytes(b"\x1b[F")  # End: top itself, the newest task
+    status_line(vm, "SORT=PID", raw=True)
+    vm.send_bytes(b"\x1b[A")
+    assert f"SELECTED={clock} " in status_line(vm, "SORT=PID", raw=True)
+    vm.send("k")
+    assert "CONFIRM=STOP" in status_line(vm, "SORT=PID", raw=True)
+    vm.send_bytes(b"\x1b[D")
+    status_line(vm, "CONFIRM=STOP", raw=True)
+    vm.send_bytes(b"\r")
+    assert "CONFIRM=NONE" in status_line(vm, "SORT=PID", raw=True)
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert not re.search(fr"^{clock} clock ", vm.command("ps", raw=True), re.M)
+    require(vm.command("dmesg -s init"), f"[INIT] STOPPED rtc PID={pids['rtc'] - BASE}")
+
+
+def dmesg_check(vm):
+    """logd (idl/log.wit) and dmesg: boot lines of init and the services with the sources logd stamped; a line that
+    names another source keeps its real one; filters; reading needs the shell's client."""
+    pids = vm.services()
+    output = vm.command("dmesg", raw=True)
+    require(output, f"logd({pids['logd']}) [LOGD] READY: 256 RECORDS OF 200 BYTES")
+    require(output, f"init({pids['init']}) [INIT] STARTED logd PID={pids['logd']}")  # printed before logd ran: kept, then sent
+    require(output, f"init({pids['init']}) [INIT] STARTED vfs_server PID={pids['vfs_server']}")
+    require(output, f"vfs_server({pids['vfs_server']}) [VFS] MOUNTED FAT")
+    require(output, f"loader({pids['loader']}) [LOADER] READY")
+    assert re.search(r"^\[\s*\d+\.\d{3}\] ", output, re.M), output
+    # The text may claim any source; logd records the sender.
+    require(vm.command(f"logger vfs_server({pids['vfs_server']}) [VFS] FORGED LINE"), "LOGGED")
+    require(vm.command("dmesg -n 1", raw=True), f"shell({pids['shell']}) vfs_server({pids['vfs_server']}) [VFS] FORGED LINE")
+    only = vm.command("dmesg -s vfs_server", raw=True)
+    assert "FORGED" not in only and "[VFS] MOUNTED" in only and "[INIT]" not in only, only
+    assert "[LOADER]" in vm.command(f"dmesg -s {pids['loader']}", raw=True)
+    assert "[INIT]" not in vm.command("dmesg -l warn", raw=True)
+    require(vm.command("dmesg -x"), "dmesg: usage: dmesg [-f] [-l level] [-s name|pid] [-n count]")
+    # Follow mode in the background: a new line reaches it.
+    follower = int(re.search(r"PID=(\d+) NAME=dmesg BACKGROUND", vm.command("run dmesg -f -n 0 &"))[1])
+    time.sleep(.5)
+    require(vm.command("logger FOLLOWED LINE"), "LOGGED")
+    output = ""
+    for _ in range(20):
+        output += vm.command(f"logs {follower}")
+        if "FOLLOWED LINE" in output:
+            break
+        time.sleep(.2)
+    require(output, f"shell({pids['shell']}) FOLLOWED LINE")
+    require(vm.command(f"kill {follower}"), "KILLED")
+
+
+BLOCK_IMAGE_MB, BLOCK_FS_MB = 64, 60
+
+
+def block_pattern(kind, sector):
+    # tests/block_app.rs: pattern(kind, s)
+    data = bytearray((j ^ sector * 31 ^ kind * 77) & 0xFF for j in range(512))
+    header = b"MIND BLOCK WRITE TEST KIND=" + bytes([ord("0") + kind, ord(" "), ord("0") + sector])
+    data[:len(header)] = header
+    return bytes(data)
+
+
+MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+
+
+def raw_fat_image(temp, replace=None):
+    """A raw disk image: an MBR with one EFI system partition (what OVMF boots from a fixed disk) holding a FAT16 file
+    system of BLOCK_FS_MB with the built OS; `replace` maps file names to other files. Returns (image, start, sectors)."""
+    image = temp / "disk.img"
+    start, fs_sectors = 2048, (BLOCK_FS_MB << 20) // 512
+    with image.open("wb") as f:
+        f.truncate(BLOCK_IMAGE_MB << 20)
+        mbr = bytearray(512)
+        mbr[446:462] = struct.pack("<B3sB3sII", 0x80, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff", start, fs_sectors)
+        mbr[510:512] = b"\x55\xaa"
+        f.write(mbr)
+    subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
+    files = temp / "files"
+    (files / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
+        shutil.copyfile(ROOT / "usb_root" / name, files / name)
+    for name, source in (replace or {}).items():
+        shutil.copyfile(source, files / name)
+    subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
+    return image, start, fs_sectors
+
+
+def fsck_volume(image, start, fs_sectors):
+    volume = image.parent / "volume.img"
+    with image.open("rb") as f:
+        f.seek(start * 512)
+        volume.write_bytes(f.read(fs_sectors * 512))
+    check = subprocess.run(["fsck.fat", "-n", str(volume)], capture_output=True, text=True)
+    assert check.returncode == 0 and "Dirty bit" not in check.stdout + check.stderr, check.stdout + check.stderr
+    volume.unlink()
+
+
+def raw_tools():
+    return all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mtype", "mdel", "fsck.fat"))
+
+
+def vfs_suite(args):
+    """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
+    (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
+    if not raw_tools():
+        print("SKIP: vfs suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / "usb_root") as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp))
+        part = f"{image}@@{start * 512}"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            mounted = vm.service_logs("vfs_server", "AS RAM:")  # reading drains the log: both lines at once
+            require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048 (DEVICE WRITABLE)")
+            require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
+            for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
+                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
+                require(vm.command(command), answer)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-vfs-1-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        mtype = lambda name: subprocess.run(["mtype", "-i", part, f"::/{name}"], env=MTOOLS_ENV, capture_output=True).stdout
+        assert mtype("data/notes.txt") == b"line one\n", mtype("data/notes.txt")
+        assert mtype("data/b.txt") == b"alpha\n"
+        assert b"sub" not in subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True).stdout
+        # After a reboot: the disk keeps its files, the RAM disk starts empty.
+        subprocess.run(["mdel", "-i", part, "::/NvVars"], env=MTOOLS_ENV, capture_output=True)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            require(vm.command("cat data/notes.txt"), "line one")
+            require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 15 BYTES")
+            require(vm.command("ls ram:"), "0 ENTRIES")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-vfs-2-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+    print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it", flush=True)
+
+
+def edit_check(vm):
+    """The editor on the raw disk: new files on ram: and in data/ typed in Latin and Cyrillic, saved with F2 and from
+    the unsaved-changes dialog, read back; a CRLF file; a boot file opens read-only and is saved elsewhere."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    def start(path):
+        vm.send_bytes(f"edit {path}\n".encode())
+        return status_line(vm, "[EDIT] READY")
+    def leave(data, text):
+        vm.send_bytes(data)
+        require(vm.expect("EXITED. SHELL RESUMED."), text)
+        time.sleep(.1); vm.collect(); vm.output = ""
+    f2, shift_f2, f10, ctrl_end = b"\x1bOQ", b"\x1b[12;2~", b"\x1b[21~", b"\x1b[1;5F"
+    # A new file on the RAM disk.
+    line = start("ram:hello.txt")
+    assert "LINE=1 COL=1 BYTES=0 LINES=1 MODIFIED=0 DIALOG=NONE MENU=0 RO=0" in line, line
+    keys("Hello, ".encode(), "BYTES=7 ")
+    keys("мир".encode(), "BYTES=13 ")
+    keys(b"\r", "LINE=2 COL=1 BYTES=14 ")
+    keys("строка 2".encode(), "LINE=2 COL=9 BYTES=28 LINES=2 MODIFIED=1")
+    # The keys (F1) open over the text; the Enter that leaving the QEMU monitor sends closes them.
+    keys(b"\x1bOP", "DIALOG=HELP")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    keys(b"\x1b[15~", "DIALOG=NONE")  # F5 is bound to nothing: a fresh state line (serial() may drop the last one)
+    assert canon("ram:hello.txt") in screen[0] and canon("Ln 2 Col 9") in screen[0] and canon("INS") in screen[0], screen[0]
+    assert screen[1].startswith(canon("Hello, мир")) and screen[2].startswith(canon("строка 2")), screen[1:3]
+    assert canon("2Save") in screen[-1] and canon("10Quit") in screen[-1], screen[-1]
+    assert any(canon("Ctrl+U or Alt+Backspace: undo") in row for row in screen), screen
+    keys(f2, "[EDIT] SAVED 28 BYTES TO ram:hello.txt")
+    leave(f10, "[EDIT] DONE")
+    output = utf8("cat ram:hello.txt")
+    require(output, "Hello, мир")
+    require(output, "строка 2")
+    # Reopened: a change, then F10 and Save in the dialog.
+    assert "BYTES=28 LINES=2 MODIFIED=0" in start("ram:hello.txt")
+    keys(ctrl_end, "LINE=2 COL=9 ")
+    keys(b"!", "BYTES=29 ")
+    keys(f10, "DIALOG=UNSAVED")
+    leave(b"\r", "[EDIT] SAVED 29 BYTES TO ram:hello.txt")
+    require(utf8("cat ram:hello.txt"), "строка 2!")
+    # A new file in data/ of the boot disk.
+    assert "BYTES=0 " in start("data/edit.txt")
+    keys(b"Line one", "BYTES=8 ")
+    keys(b"\r", "BYTES=9 ")
+    keys("Вторая строка".encode(), "BYTES=34 ")
+    keys(b"\r", "LINE=3 COL=1 BYTES=35 ")
+    keys(f2, "[EDIT] SAVED 35 BYTES TO data/edit.txt")
+    # The editor's client is confined to data/: other places are refused (issue 071).
+    for outside in (b"ram:x.txt", b"kernel.elf", b"EFI/x.txt"):
+        keys(shift_f2, "DIALOG=SAVEAS")
+        keys(b"\x7f" * 16, "DIALOG=SAVEAS")
+        keys(outside, "DIALOG=SAVEAS")
+        keys(b"\r", "[EDIT] NOT SAVED denied: the editor may change only its file's directory")
+    leave(f10, "[EDIT] DONE")
+    # A file with CR LF line endings keeps them; a new line gets one too.
+    assert "BYTES=15 LINES=3 MODIFIED=0" in start("data/crlf.txt")
+    keys(ctrl_end, "LINE=3 COL=1 ")
+    keys("три".encode(), "BYTES=21 ")
+    keys(b"\r", "LINE=4 COL=1 BYTES=23 ")
+    keys(b"4", "BYTES=24 ")
+    keys(f2, "[EDIT] SAVED 24 BYTES TO data/crlf.txt")
+    leave(f10, "[EDIT] DONE")
+    # A boot file opens read-only (its directory is read-only to the editor): typing changes nothing, and a copy
+    # cannot go elsewhere.
+    assert "BYTES=33 LINES=2 MODIFIED=0 DIALOG=NONE MENU=0 RO=1" in start("readme.txt")
+    keys(b"x", "BYTES=33 LINES=2 MODIFIED=0")
+    keys(shift_f2, "DIALOG=SAVEAS")
+    keys(b"\x7f" * 10, "DIALOG=SAVEAS")
+    keys(b"ram:copy.txt", "DIALOG=SAVEAS")
+    keys(b"\r", "[EDIT] NOT SAVED denied")
+    leave(f10, "[EDIT] DONE")
+    require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
+    require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    # vfs_server made a scope for each start and ended those whose editor had exited.
+    scopes = vm.command("dmesg -s vfs_server")
+    for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
+        require(scopes, made)
+    require(scopes, "ENDED")
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory", flush=True)
+
+
+def edit_suite(args):
+    """The editor on a raw FAT disk; the host then checks the image with fsck.fat and reads the files with mtools."""
+    if not raw_tools():
+        print("SKIP: edit suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / "usb_root") as temp:
+        readme, crlf = Path(temp) / "readme.txt", Path(temp) / "crlf.txt"
+        readme.write_bytes("Только для чтения\n".encode())
+        crlf.write_bytes("один\r\ntwo\r\n".encode())
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"readme.txt": readme})
+        part = f"{image}@@{start * 512}"
+        mtools = lambda *command: subprocess.run(list(command), env=MTOOLS_ENV, check=True, capture_output=True).stdout
+        mtools("mmd", "-i", part, "::/data")
+        mtools("mcopy", "-i", part, str(crlf), "::/data/crlf.txt")
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            edit_check(vm)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-edit-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        assert mtools("mtype", "-i", part, "::/data/edit.txt") == "Line one\nВторая строка\n".encode()
+        assert mtools("mtype", "-i", part, "::/data/crlf.txt") == "один\r\ntwo\r\nтри\r\n4".encode()
+        assert mtools("mtype", "-i", part, "::/readme.txt") == readme.read_bytes()
+        names = mtools("mdir", "-b", "-i", part, "::/data").decode().split()
+        assert sorted(n.rsplit("/", 1)[-1] for n in names) == ["crlf.txt", "edit.txt"], names
+    print("PASS: edit image: fsck.fat clean; mtools reads the saved files byte for byte; no temporary files left", flush=True)
+
+
+def fat16_chain_link(image, start, name):
+    """The FAT16 volume at sector `start` of `image`: (offsets of the FAT entry of the second cluster of root file
+    `name` (8.3, upper case) in every FAT copy, its value)."""
+    with image.open("rb") as f:
+        f.seek(start * 512)
+        boot = f.read(512)
+        reserved, fats, root_entries, fat_size = struct.unpack_from("<H", boot, 14)[0], boot[16], struct.unpack_from("<H", boot, 17)[0], struct.unpack_from("<H", boot, 22)[0]
+        f.seek((start + reserved + fats * fat_size) * 512)
+        root = f.read(root_entries * 32)
+        short = name.split(".")[0].ljust(8).encode() + name.split(".")[1].ljust(3).encode()
+        first = next(struct.unpack_from("<H", root, i + 26)[0] for i in range(0, len(root), 32) if root[i:i + 11] == short)
+        fat_at = lambda copy, cluster: (start + reserved + copy * fat_size) * 512 + cluster * 2
+        f.seek(fat_at(0, first))
+        second = struct.unpack("<H", f.read(2))[0]
+        f.seek(fat_at(0, second))
+        value = struct.unpack("<H", f.read(2))[0]
+    return [fat_at(copy, second) for copy in range(fats)], value
+
+
+def patch_words(image, offsets, value):
+    with image.open("r+b") as f:
+        for offset in offsets:
+            f.seek(offset)
+            f.write(struct.pack("<H", value))
+
+
+def disk_check(vm):
+    """fm writes (copy a tree from the boot disk to ram:, rename, copy back to data/, delete, mkdir, edit in place),
+    df before and after, fsck on a volume with a broken chain and on a clean one."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    def leave(text):
+        vm.send_bytes(b"\x1b[21~")
+        require(vm.expect("EXITED. SHELL RESUMED."), text)
+        time.sleep(.1); vm.collect(); vm.output = ""
+    def ram_free():
+        line = next(l for l in vm.command("df").splitlines() if l.startswith("ram:"))
+        return int(line.split()[-2])
+    f5, f6, f7, f8, alt_f2, end = b"\x1b[15~", b"\x1b[17~", b"\x1b[18~", b"\x1b[19~", b"\x1b[12;3~", b"\x1b[F"
+    listing = vm.command("df")
+    require(listing, "VOLUME  LABEL        TYPE   CLUSTER    SIZE KB    USED KB    FREE KB  USE")
+    assert re.search(r"A:\s+MINDTEST\s+FAT16\s+\d+\s+\d+", listing), listing
+    assert re.search(r"ram:\s+MIND RAM\s+FAT16\s+\d+\s+8\d{3}\s+0\s+8\d{3}\s+0%", listing), listing
+    before = ram_free()
+    # Session 1: data/tree copied to ram: with F5.
+    vm.send("fm data\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/data FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=..")
+    keys(alt_f2, "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/ram: BRIEF")
+    keys(b"\x1b[B", "CURRENT=tree ")
+    keys(f5, "DIALOG=TARGET")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "RIGHT=/ram: BRIEF")
+    leave("[FM] DONE")
+    require(vm.command("ls ram:tree"), "2 ENTRIES, 1 FILES, 6 BYTES")
+    require(vm.command("ls ram:tree/sub"), "1 ENTRIES, 1 FILES, 9 BYTES")
+    copied = ram_free()
+    assert copied < before, (before, copied)
+    # Session 2: rename on ram:, copy back to data/, delete from ram:, a new directory, an edit in place.
+    vm.send("fm data\n")
+    status_line(vm, "[FM] READY")
+    keys(alt_f2, "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/ram: BRIEF")
+    keys(b"\t", "ACTIVE=R CURRENT=tree ")
+    keys(f6, "DIALOG=TARGET")
+    keys(b"\x7f" * 24, "DIALOG=TARGET")
+    keys(b"ram:/moved", "DIALOG=TARGET")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "CURRENT=moved ")
+    keys(f5, "DIALOG=TARGET")  # to the other panel: A:/data
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "ACTIVE=R")
+    keys(f8, "DIALOG=DELETE")
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "DIALOG=NONE MENU=0 VIEW=0 JOB=NONE", whole=True), "RIGHT=/ram: BRIEF")
+    keys(f7, "DIALOG=MKDIR")
+    keys("готово".encode(), "DIALOG=MKDIR")
+    keys(b"\r", "CURRENT=готово ")
+    keys(b"\t", "ACTIVE=L CURRENT=moved ")  # the copy put the cursor on it
+    keys(b"\r", "LEFT=/data/moved FULL")
+    keys(end, "CURRENT=a.txt ")
+    keys(b"\x1bOS", "EDITOR LINE=1 COL=1 BYTES=6 LINES=2 MODIFIED=0")
+    keys(b"\x1b[1;5F", "EDITOR LINE=2 COL=1 ")
+    keys("ещё".encode(), "BYTES=12 ")
+    keys(b"\x1bOQ", "MODIFIED=0")
+    keys(b"\x1b[21~", "LEFT=/data/moved FULL")
+    leave("[FM] DONE")
+    require(vm.command("ls ram:"), "1 ENTRIES, 0 FILES, 0 BYTES")
+    require(vm.command("ls data/moved"), "2 ENTRIES, 1 FILES, 12 BYTES")
+    vm.send_bytes(b"cat data/moved/sub/b.txt\n")
+    require(vm.expect("MIND> "), "бета")
+    after = ram_free()
+    assert copied < after <= before, (before, copied, after)  # only the new directory's cluster (512 bytes) is used
+    # fsck: the boot disk has a broken chain (broken.txt), the RAM disk is clean; nothing is changed.
+    output = vm.command("fsck")
+    require(output, "ERRORS: lost clusters")
+    require(output, "broken chains 1, size mismatches 1")
+    require(output, "first: broken.txt: the cluster chain runs into a free or invalid cluster")
+    assert re.search(r"ram: MIND RAM FAT16: 0 files, 1 directories; 1 clusters used, \d+ free\s+clean", output), output
+    require(output, "fsck: 1 volume with errors (nothing was changed)")
+    require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
+    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+
+
+def disk_suite(args):
+    """fm's write operations, df and fsck on a raw FAT disk with a deliberately broken chain."""
+    if not raw_tools():
+        print("SKIP: disk suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / "usb_root") as temp:
+        temp = Path(temp)
+        (temp / "a.txt").write_text("alpha\n")
+        (temp / "b.txt").write_bytes("бета\n".encode())
+        (temp / "broken.txt").write_bytes(bytes(range(256)) * 64)  # 16 KiB: several clusters
+        image, start, fs_sectors = raw_fat_image(temp, {"broken.txt": temp / "broken.txt"})
+        part = f"{image}@@{start * 512}"
+        mtools = lambda *command: subprocess.run(list(command), env=MTOOLS_ENV, check=True, capture_output=True).stdout
+        for directory in ("data", "data/tree", "data/tree/sub"):
+            mtools("mmd", "-i", part, f"::/{directory}")
+        mtools("mcopy", "-i", part, str(temp / "a.txt"), "::/data/tree/a.txt")
+        mtools("mcopy", "-i", part, str(temp / "b.txt"), "::/data/tree/sub/b.txt")
+        # The second cluster of broken.txt is marked bad: the chain is broken and vfs_server never reuses the cluster.
+        offsets, value = fat16_chain_link(image, start, "BROKEN.TXT")
+        patch_words(image, offsets, 0xFFF7)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            disk_check(vm)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-disk-{args.cpus}cpu.log").write_text(vm.log)
+        # fsck.fat agrees that the chain is broken; restored, the volume is clean.
+        broken = image.parent / "broken.img"
+        with image.open("rb") as f:
+            f.seek(start * 512)
+            broken.write_bytes(f.read(fs_sectors * 512))
+        assert subprocess.run(["fsck.fat", "-n", str(broken)], capture_output=True).returncode != 0
+        broken.unlink()
+        patch_words(image, offsets, value)
+        fsck_volume(image, start, fs_sectors)
+        assert mtools("mtype", "-i", part, "::/data/moved/a.txt") == "alpha\nещё".encode()
+        assert mtools("mtype", "-i", part, "::/data/moved/sub/b.txt") == "бета\n".encode()
+        assert mtools("mtype", "-i", part, "::/broken.txt") == (temp / "broken.txt").read_bytes()
+    print("PASS: disk image: with the chain restored, fsck.fat is clean; the files fm copied and edited read back with mtools", flush=True)
+
+
+def block_suite(args, block_elf):
+    """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
+    stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
+    gives it, flushes and reads them back; the image is then checked on the host."""
+    if not raw_tools():
+        print("SKIP: block suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / "usb_root") as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"vfs_server.elf": block_elf})
+        env = MTOOLS_ENV
+        sectors = (BLOCK_IMAGE_MB << 20) // 512
+        for kind, name, options in [(1, "ATA", {}), (2, "AHCI", {"ahci": True}), (3, "USB", {"usb": True})]:
+            # OVMF keeps its variables (boot entries of the previous controller) in NvVars on the disk.
+            subprocess.run(["mdel", "-i", f"{image}@@{start * 512}", "::/NvVars"], env=env, capture_output=True)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, **options)
+            try:
+                output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
+                line = next((l for l in output.splitlines() if f"KIND={kind} " in l), None)
+                assert line and "BADGE=1 " in line and "WRITABLE" in line and f"SECTORS={sectors} " in line, output
+                assert "ATTACH=OK WRITE=OK UNSEALED=REFUSED FLUSH=OK READBACK=OK" in line, line
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-block-{name.lower()}-{args.cpus}cpu.log").write_text(vm.log)
+            with image.open("rb") as f:
+                f.seek((sectors - 8 * kind) * 512)
+                written = f.read(8 * 512)
+            assert written == b"".join(block_pattern(kind, s) for s in range(8)), f"{name}: the image does not hold the written sectors"
+        fsck_volume(image, start, fs_sectors)
+    print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
 def audio_suite(vm, wav):
@@ -1051,18 +2132,33 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
+    parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
         suites.append("heap")
+    if args.block_elf:
+        suites.append("block")
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
+        if suite == "block":
+            block_suite(args, args.block_elf)
+            continue
+        if suite == "vfs":
+            vfs_suite(args)
+            continue
+        if suite == "edit":
+            edit_suite(args)
+            continue
+        if suite == "disk":
+            disk_suite(args)
+            continue
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)
             (disk / "EFI/BOOT").mkdir(parents=True)
@@ -1073,6 +2169,9 @@ def main():
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
                 shutil.copyfile(disk / "app.elf", disk / "extra/demo.elf")
+            if suite == "tools":
+                (disk / "docs").mkdir()
+                (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":
@@ -1100,7 +2199,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

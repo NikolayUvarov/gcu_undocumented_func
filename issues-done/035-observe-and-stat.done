@@ -21,7 +21,7 @@ Monitoring tools (`top`, `memmap`, `load`) need statistics the kernel keeps only
 
 ## Related
 
-[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F5; [045](../issues/045-sysmon-and-monitors.md).
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F5; [045](045-sysmon-and-monitors.done).
 
 ## Resolution
 

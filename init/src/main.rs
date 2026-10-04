@@ -2,7 +2,9 @@
 #![no_main]
 // init: holds the bootstrap authority (platform privilege) and is the only place with service policy:
 // which boot services start, in which order, and exactly which capabilities each one receives. After boot it keeps
-// each service's capabilities for restarts and gives up the platform privilege (MC-3.12).
+// each service's capabilities for restarts and gives up the platform privilege (MC-3.12). As the lifecycle owner it
+// restarts failed services within a budget and serves idl/init.wit: start, list, stop and restart services, stop an
+// application.
 use mind::abi::*;
 use mind::dev::cap_info;
 use mind::idl::{init as idl_init, wire};
@@ -13,6 +15,12 @@ use mind::sys::{Error, Result};
 
 const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
+const INIT_PID: u64 = 1; // the kernel's first task
+// What each boot service holds, for `svc` (the grants below, in short).
+const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
+    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
+    "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "an audio client", "observe privilege", "screen; process control; input; COM1"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -29,9 +37,9 @@ impl Minted {
         self.slots[self.count] = slot; self.count += 1;
         Ok(slot)
     }
-    // A child of a service endpoint's keeper: all rights for the server, write/grant for a client.
-    fn endpoint(&mut self, keeper: usize, rights: u8) -> Result<usize> {
-        let slot = ipc::mint(keeper, rights, 0, 0)?;
+    // A client endpoint with a badge the server checks (the write right of a block device, the user's files, reading the log).
+    fn badged(&mut self, keeper: usize, rights: u8, badge: u16) -> Result<usize> {
+        let slot = ipc::mint_badged(keeper, rights, badge)?;
         self.slots[self.count] = slot; self.count += 1;
         Ok(slot)
     }
@@ -52,8 +60,10 @@ impl Grants {
 #[derive(Clone, Copy)]
 struct Plan { grants: Grants, flags: usize, quota: Quota }
 
-// Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself).
-struct Init { plans: [Option<Plan>; BOOT_IMAGES], pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], devices: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES], restarts: [[u64; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [bool; BOOT_IMAGES] }
+// Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
+// how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
+// missing at boot.
+struct Init { plans: [Option<Plan>; BOOT_IMAGES], pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], devices: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES], restarts: [[u64; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [bool; BOOT_IMAGES], starts: [u32; BOOT_IMAGES], stopped: [bool; BOOT_IMAGES], missing: [bool; BOOT_IMAGES] }
 
 // Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
 const RESTART_BUDGET: usize = 3;
@@ -77,7 +87,10 @@ impl Init {
     // The server's receive capability is minted fresh for each instance and moved into it (see `spawn`): init keeps
     // only the keeper, so a dead or quarantined server's clients get ERR_PEER and nothing queues for the next one.
     fn server(&mut self, _minted: &mut Minted, name: &str) -> Result<usize> { self.keeper(name) }
-    fn client(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, CLIENT) }
+    // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
+    // slot of its own for it (only badged clients are minted and kept).
+    fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    fn badged(&mut self, minted: &mut Minted, name: &str, badge: u16) -> Result<usize> { let keeper = self.keeper(name)?; minted.badged(keeper, CLIENT, badge) }
 
     // Before a driver is restarted (MC-6.3): its device stops DMA, then the DMA region is cleared, so the new instance
     // starts from a quiet device and no residue of the old one.
@@ -134,19 +147,22 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
+            "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, "ramdisk")?, ALL),
             "vfs_server" => {
-                // VFS sees only block devices whose drivers are actually running.
+                // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
                 for driver in ["ata", "ahci", "usb_storage"] {
-                    if self.running(service_index(driver)) { grants.add(slot, self.client(&mut minted, driver)?, CLIENT); slot += 1; }
+                    if self.running(service_index(driver)) { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
+                if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
+                self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
-                grants.add(2, self.client(&mut minted, "rtc")?, CLIENT); grants.add(3, self.client(&mut minted, "vfs_server")?, CLIENT);
-                grants.add(4, self.client(&mut minted, "audio_gw")?, CLIENT); grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
-                grants.add(6, self.client(&mut minted, "tts")?, CLIENT);
+                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
+                self.lend(&mut grants, 6, "tts")?;
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
@@ -160,17 +176,27 @@ impl Init {
                     }
                 }
             }
-            "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); grants.add(SLOT_AUDIO, self.client(&mut minted, "audio_gw")?, CLIENT); }
+            "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
+            // The observe privilege (read-only statistics, MC-10.2) goes to sysmon and to logd, which names the sender
+            // of a record from the kernel's task records (MC-10.6).
+            "logd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "logd")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
+            "sysmon" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "sysmon")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the COM1 ports.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
-                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_VFS, "vfs_server"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { grants.add(slot, self.client(&mut minted, service)?, CLIENT); }
+                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
+                // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
+                self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
             }
             _ => return Err(Error::NotFound),
         }
+        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
+        if name == "shell" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
+        else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each.
         let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
         let plan = Plan { grants, flags, quota };
@@ -191,6 +217,8 @@ impl Init {
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], plan.flags, plan.quota)
             .inspect_err(|_| { if let Some(slot) = receiver { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
+        self.starts[index] += 1;
+        self.stopped[index] = false;
         // init is the lifecycle owner of every service and receives its exit notice (MC-6.8).
         if mind::process::watch(pid, Endpoint::SERVICE).is_err() { mind::println!("[INIT] {} NOT WATCHED", name); }
         mind::println!("[INIT] STARTED {} PID={}", name, pid);
@@ -204,6 +232,8 @@ impl Init {
         if exit.lost != 0 { mind::println!("[INIT] {} EXIT NOTICES LOST", exit.lost); }
         let Some(index) = (1..BOOT_IMAGES).find(|&i| self.pids[i] == exit.pid) else { return };
         let name = BOOT_SERVICES[index];
+        // Stopped on request (idl/init.wit `stop`): it stays stopped until it is started again.
+        if self.stopped[index] { mind::println!("[INIT] {} PID={} STOPPED", name, exit.pid); return; }
         match exit.reason & 0xFF {
             EXIT_NORMAL => mind::println!("[INIT] {} PID={} EXITED", name, exit.pid),
             EXIT_KILLED => mind::println!("[INIT] {} PID={} KILLED", name, exit.pid),
@@ -225,36 +255,112 @@ impl Init {
     }
 }
 
+// Lifecycle requests (idl/init.wit 1.1). Stopping uses the process control privilege init keeps after boot; init and
+// the shell are never stopped.
+impl Init {
+    fn index(name: &str) -> Option<usize> { BOOT_SERVICES.iter().position(|s| s.eq_ignore_ascii_case(name)) }
+
+    // `run`: an explicit start is the operator's decision: it lifts a quarantine and resets the restart budget. A service
+    // whose device was missing at boot has nothing to start (init no longer looks for devices).
+    fn run(&mut self, index: usize) -> Result<u64> {
+        if self.missing[index] && self.plans[index].is_none() { return Err(Error::NotFound); }
+        if !self.running(index) { self.quarantined[index] = false; self.restarts[index] = [0; RESTART_BUDGET]; if self.pids[index] != 0 { self.quiesce(index); } }
+        self.start(index)
+    }
+
+    fn start_service(&mut self, index: usize) -> core::result::Result<u64, idl_init::Error> {
+        if index == 0 || self.running(index) { return Err(idl_init::Error::Running); }
+        match self.run(index) {
+            Ok(pid) => Ok(pid),
+            Err(Error::NotFound) => Err(idl_init::Error::NoDevice),
+            Err(error) => { mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error); Err(idl_init::Error::Failed) }
+        }
+    }
+
+    fn stop_service(&mut self, index: usize) -> core::result::Result<(), idl_init::Error> {
+        if index == 0 || BOOT_SERVICES[index] == "shell" { return Err(idl_init::Error::Denied); }
+        if !self.running(index) { return Err(idl_init::Error::Stopped); }
+        let pid = self.pids[index];
+        self.stopped[index] = true;
+        if mind::control::kill(pid).is_err() { self.stopped[index] = false; return Err(idl_init::Error::Failed); }
+        for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
+        // Its device stops DMA until the next start (MC-6.3).
+        self.quiesce(index);
+        mind::println!("[INIT] STOPPED {} PID={}", BOOT_SERVICES[index], pid);
+        Ok(())
+    }
+
+    fn list(&self) -> [idl_init::Service; BOOT_IMAGES] {
+        core::array::from_fn(|i| idl_init::Service {
+            name: wire_text(BOOT_SERVICES[i]), pid: if i == 0 { INIT_PID } else if self.running(i) { self.pids[i] } else { 0 },
+            starts: if i == 0 { 1 } else { self.starts[i] }, running: i == 0 || self.running(i), quarantined: self.quarantined[i], holds: wire_text(HOLDS[i]),
+        })
+    }
+
+    fn serve(&mut self, request: idl_init::Request, call: wire::Call) -> Result<()> {
+        use idl_init::{Error as E, Request};
+        match request {
+            Request::Run { name } => {
+                let result = match Self::index(name.as_str()) { None | Some(0) => Err(Error::NotFound), Some(index) => self.run(index) };
+                idl_init::reply_run(call, result)
+            }
+            Request::List => idl_init::reply_list(call, Ok(&self.list()[..])),
+            Request::Stop { name } => { let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| self.stop_service(i)); idl_init::reply_stop(call, result) }
+            Request::Restart { name } => {
+                let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
+                    if i == 0 || BOOT_SERVICES[i] == "shell" { return Err(E::Denied); }
+                    if self.running(i) { self.stop_service(i)?; }
+                    self.start_service(i)
+                });
+                idl_init::reply_restart(call, result)
+            }
+            Request::StopTask { pid } => {
+                let service = pid == INIT_PID || (1..BOOT_IMAGES).any(|i| self.pids[i] == pid && self.running(i));
+                let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
+                idl_init::reply_stop_task(call, result)
+            }
+        }
+    }
+}
+
+fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
+    let mut end = text.len().min(N);
+    while !text.is_char_boundary(end) { end -= 1; }
+    mind::idl::codec::Text::new(&text[..end]).unwrap_or_default()
+}
+
 fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == name).unwrap_or(0) }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut init = Init { plans: [None; BOOT_IMAGES], pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], devices: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES], restarts: [[0; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [false; BOOT_IMAGES] };
-    // Boot order is the BOOT_SERVICES order: drivers before vfs_server, loader before the shell.
+    let mut init = Init { plans: [None; BOOT_IMAGES], pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], devices: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES], restarts: [[0; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [false; BOOT_IMAGES], starts: [0; BOOT_IMAGES], stopped: [false; BOOT_IMAGES], missing: [false; BOOT_IMAGES] };
+    // Boot order is the BOOT_SERVICES order: logd first, drivers before vfs_server, loader before the shell.
     for index in 1..BOOT_IMAGES {
         match init.start(index) {
+            // From now on init's own lines (and those printed so far) go to the system log too.
+            Ok(_) if BOOT_SERVICES[index] == "logd" => {
+                // The keeper may send: init needs no client of its own.
+                if let Ok(keeper) = init.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
+            }
             Ok(_) => {}
-            Err(Error::NotFound) => mind::println!("[INIT] {} NOT STARTED: NO DEVICE", BOOT_SERVICES[index]),
+            Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", BOOT_SERVICES[index]); }
             Err(error) => mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error),
         }
     }
+    // Process control, to stop services and applications on request (init is their lifecycle owner).
+    if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
     match platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_RESTART, 0) {
         Ok(_) => { let _ = ipc::drop_cap(SLOT_DEV0); mind::println!("[INIT] PLATFORM PRIVILEGE DROPPED"); }
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
     }
     mind::println!("[INIT] READY");
-    // Exit notices of the services, and requests from the shell: start a boot service by name (msg[2..4]).
+    // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
+    // init's endpoint to.
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
-        // idl/init.wit
-        let (name, call) = match idl_init::decode(&request, RECEIVED) { Ok((idl_init::Request::Run { name }, call)) => (name, call), Err(reason) => { let _ = wire::reject(reason); continue; } };
-        let index = BOOT_SERVICES.iter().position(|s| s.as_bytes().eq_ignore_ascii_case(name.as_str().as_bytes()));
-        // An explicit RUN is the operator's decision: it lifts a quarantine and resets the restart budget.
-        if let Some(index) = index.filter(|&i| !init.running(i)) { init.quarantined[index] = false; init.restarts[index] = [0; RESTART_BUDGET]; if init.pids[index] != 0 { init.quiesce(index); } }
-        let result = match index.map(|index| init.start(index)) { None => Err(Error::NotFound), Some(result) => result };
-        let _ = idl_init::reply_run(call, result);
+        let _ = match idl_init::decode(&request, RECEIVED) { Ok((request, call)) => init.serve(request, call), Err(reason) => wire::reject(reason) };
     }
 }

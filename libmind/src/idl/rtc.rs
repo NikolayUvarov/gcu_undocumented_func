@@ -9,7 +9,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:rtc";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Seconds since midnight; none if the RTC cannot be read.
@@ -20,10 +20,19 @@ pub fn now(endpoint: Endpoint) -> Result<Option<u32>> {
     Ok(if none { None } else { Some(wire::field(&reply, 0, 16, 32) as u32) })
 }
 
+/// Days since 2000-01-01 (the date of `now`); none if the RTC cannot be read (1.1).
+pub fn date(endpoint: Endpoint) -> Result<Option<u32>> {
+    let words = [2 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    let none = wire::check_reply(&reply, [0xffffffff0000, 0x0], true)?;
+    Ok(if none { None } else { Some(wire::field(&reply, 0, 16, 32) as u32) })
+}
+
 /// A request to the `rtc` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Now,
+    Date,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -37,11 +46,19 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Now, Call::words(request, cap)))
         }
+        2 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Date, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
 
 pub fn reply_now(call: Call, value: Option<u32>) -> Result<()> {
+    let Some(value) = value else { return wire::reply_none(call) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_date(call: Call, value: Option<u32>) -> Result<()> {
     let Some(value) = value else { return wire::reply_none(call) };
     wire::finish(call, [((value) as usize) << 16, 0])
 }

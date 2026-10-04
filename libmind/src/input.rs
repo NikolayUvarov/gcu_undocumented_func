@@ -1,17 +1,33 @@
+//! Keyboard input of the focused program: event words (`common/abi.rs`: legacy byte, key, modifiers, pressed,
+//! character) from the PS/2 driver and the UART, decoded in ring 3 (`mind::keys`). `read_key` gives key presses,
+//! `read_event` every event.
 use crate::abi::*;
 use crate::sys::call;
 
-/// Next key code for the active program (PS/2 scancode or UART byte).
-pub fn read_key() -> Option<u8> { match call(SYSCALL_READ_KEY, 0, 0) as u8 { 0 => None, key => Some(key) } }
+pub use crate::keys::{Code, Key};
 
-/// Esc on both input paths: scancode 0x01 and byte 0x1B.
-pub fn is_escape(key: u8) -> bool { key == 0x01 || key == 0x1B }
+/// Next key press of the calling (focused) task; releases and events without a decoded key are skipped.
+pub fn read_key() -> Option<Key> {
+    loop {
+        match call(SYSCALL_READ_INPUT, 0, 0) { 0 => return None, word => if let Some(key) = Key::from_event(word) { return Some(key); } }
+    }
+}
+
+/// Esc on either input path.
+pub fn is_escape(key: Key) -> bool { key.is_escape() }
+
+/// Waits up to `ms` for a key (input wakes the program early).
+pub fn wait_key(ms: usize) -> Option<Key> {
+    if let Some(key) = read_key() { return Some(key); }
+    crate::time::sleep(ms);
+    read_key()
+}
 
 /// Drains pending input, exits the process on Esc, then sleeps `ms`. Returns the last key.
-pub fn wait_or_exit(ms: usize) -> Option<u8> {
+pub fn wait_or_exit(ms: usize) -> Option<Key> {
     let mut last = None;
     while let Some(key) = read_key() {
-        if is_escape(key) { crate::process::exit(); }
+        if key.is_escape() { crate::process::exit(); }
         last = Some(key);
     }
     crate::time::sleep(ms);

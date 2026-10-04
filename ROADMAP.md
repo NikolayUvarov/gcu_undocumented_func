@@ -102,7 +102,7 @@ graph LR
 | **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II | NIC driver from track A; import into track B |
 | **E. Marain** | RFC M0–M7 | M0 specification and M1 front end / M2 reference evaluator on a host bench; M3 Wasm component + runtime limits; M4 actors and protocols; M5 state/update; M6 cognitive-plane pilot and comparison with Rust bindings | **M0–M2: now** (host only) | M3–M4: IDL from C5; M5: track B; M6: tracks A/B services |
 | **F. Safety plane** | VI | Control actors, authorized change of limits, justified deadlines, degradation when the cognitive plane fails; no JIT | After II and C7 budgets | Needed drivers (A), durability (B) |
-| **G. User services** | VII | Compositor on display fences, audio, TTS, input methods, UI and localization (English and Russian) | After C8 port | Only the interfaces they use |
+| **G. User services** | VII | Compositor on display fences, audio, TTS, input methods, UI and localization (English and Russian); system tools — file manager, editor, `top`, memory map, load monitor ([plan](docs/tools/README.md)) | After C8 port; the system tools of the plan are done (issues 052–071, merged with `main` in 051); open: the `STAT` fields the monitors lost (075) | Only the interfaces they use |
 | **Assurance** | continuous | Models of revoke / MOVE / checkpoint / fencing (e.g. TLA+); fuzzing of syscalls and IDL decoders; fault injection; recovery drills; evidence tied to configuration | **Now** | — |
 
 Distribution (replication, fencing at the resource, remote capabilities through a gateway — Article 7) is part of stage V and starts after tracks B and D provide durable state and a transport.
@@ -115,9 +115,9 @@ Before the stage II gate, only work that does not depend on the kernel ABI is sa
 2. **Assurance models**: specify and model-check capability revocation, MOVE commit and endpoint generations before implementing C1–C4; the review ranks this P1.
 3. **Marain M0–M2** on a host bench, including the comparison baseline "same scenario in Rust with generated bindings" that the review recommends.
 4. **Reproducible toolchain** (track C, first part): pinned toolchain, lockfile, build provenance.
-5. **User-service features that do not touch IPC** (TTS voice quality, fonts, UI text). Anything that adds new IPC protocols should wait for C4/C5 to avoid a second port.
+5. **User-service features that do not touch IPC** (TTS voice quality, fonts, UI text). Anything that adds new IPC protocols should wait for C4/C5 to avoid a second port. For the system tools this is phase T0 of [docs/tools](docs/tools/README.md): program heap, 8×16 font, text UI library, key-event decoders, editor core.
 
-Current open issues map onto this: [009](issues/009-gop-pixel-format.md) — stage I, [011](issues/011-reproducible-toolchain.md) — track C, [018](issues/018-kernel-panic-diagnostics.md) — assurance.
+Current open issues map onto this: [009](issues-done/009-gop-pixel-format.done) — stage I, [011](issues-done/011-reproducible-toolchain.done) — track C, [018](issues-done/018-kernel-panic-diagnostics.done) — assurance.
 
 Kernel work (steps 2–3) should be done by one owner or in close coordination: K1, C1–C4 and C6 all change `kernel/src/scheduler.rs`, `common/abi.rs` and `libmind/src/{ipc,sys}.rs`.
 
