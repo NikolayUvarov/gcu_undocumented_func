@@ -240,9 +240,16 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 
 Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab completion of program names (loader `LIST`) and paths; lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
 
-### 4.9 `wm` — text window manager (planned, issue 088)
+### 4.9 `wm` — window manager (planned, issues 088 and 157)
 
-An application, not a service: windows with frames and titles on its own screen; move and resize with the keyboard and, with the PS/2 mouse (issue 156), by dragging; windows snap to the screen's edges (halves) and corners (quarters). It runs programs in windows: a program started by `wm` gets a text surface (a cell grid `wm` lends) and an input endpoint instead of a screen, and `mind::tui` draws into the surface unchanged, so `fm`, the monitors, `view` and `edit` run in windows; `clock` gets a text mode. `wm` lends a program only what it holds itself and the program asks for (MC-3.11). Full-screen consoles switched with Alt+F1…F4 are issue 155.
+An application, not a service.
+- **Windows:** on the cell grid of its own screen, with text frames and titles. They are moved and resized with the keyboard and, with the PS/2 mouse (issue 156), by dragging. Windows snap to the screen's edges (halves) and corners (quarters).
+- **Content:** text (`mind::tui` draws into a cell surface) or pixels (`gfx::Screen` draws into a pixel surface), so `fm`, the monitors, `view`, `edit` and `clock` run in windows unchanged.
+- **Windows outlive the manager.** A program in a window owns its surface and input endpoint and registers them with the window broker `windows` (issue 157), a small service that keeps the windows and their layout.
+- **Two ways out.** *Detach* (also what a crash does): `wm` ends and its programs keep running hidden; the next `wm`, or a graphical manager later on the same protocol, shows them where they were. *Close all*: the programs get a close event.
+- **Authority:** `wm` lends a program only what it holds itself and the program asks for (MC-3.11).
+- Full-screen consoles switched with Alt+F1…F4 are issue 155.
+
 
 ## 5. Phases
 
