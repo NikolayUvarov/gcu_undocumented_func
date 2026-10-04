@@ -16,6 +16,19 @@ impl Pages {
     pub fn as_mut_slice(&mut self) -> &mut [u8] { unsafe { core::slice::from_raw_parts_mut(self.address as *mut u8, self.length) } }
     /// Capability for this block, to pass to another process over IPC.
     pub fn share(&self) -> Result<usize> { check(call(SYSCALL_MEM_SHARE, self.address, 0)) }
+    /// Turns the block into a memory object with a single owner (MEM_DETACH): the pages leave this address space and the
+    /// returned capability can only be moved or minted read-only. On error the block is freed.
+    pub fn detach(self) -> Result<usize> {
+        let result = check(call(SYSCALL_MEM_DETACH, self.address, 0));
+        if result.is_ok() { core::mem::forget(self); }
+        result
+    }
+}
+
+/// Whether nobody can write the memory `handle` names (no writable capability, mapping or DMA region): SHARE_RO.
+pub fn sealed(handle: usize) -> bool {
+    let raw = syscall(SYSCALL_CAP_INFO, handle, 0, [0; 4]);
+    raw.result == CAP_KIND_MEMORY && raw.msg[3] == 1
 }
 
 impl Drop for Pages { fn drop(&mut self) { call(SYSCALL_FREE, self.address, 0); } }

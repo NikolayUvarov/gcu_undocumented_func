@@ -200,6 +200,12 @@ impl Scheduler {
     fn referenced(&self, physical: usize, size: usize) -> bool {
         self.tasks.iter().flatten().any(|t| t.cspace.iter().flatten().chain(t.pending_cap.as_ref().map(|p| &p.cap)).any(|c| c.overlaps(physical, size)) || t.heap.maps_foreign(physical, size))
     }
+    // No writable capability, writable mapping or DMA region overlaps the range (sealed: SHARE_RO holds).
+    fn sealed(&self, physical: usize, size: usize) -> bool {
+        let writes = |c: &Capability| match *c { Capability::Memory(p, s, r) => r & CAP_WRITE != 0 && p < physical + size && physical < p + s, Capability::Dma(..) => c.overlaps(physical, size), _ => false };
+        !self.dma.iter().any(|r| (r.ptr() as usize) < physical + size && physical < r.ptr() as usize + r.len())
+            && !self.tasks.iter().flatten().any(|t| t.cspace.iter().flatten().chain(t.pending_cap.as_ref().map(|p| &p.cap)).any(writes) || t.heap.writes(physical, size))
+    }
     fn retire(&mut self, region: Region) { if self.referenced(region.ptr() as usize, region.len()) { self.orphans.push(region); } }
 
     // Frees exited tasks only after their CPU has switched to a different CR3.
@@ -291,6 +297,7 @@ impl Scheduler {
         if handle == 0 { return None; }
         let index = self.index(slot, handle)?;
         let cap = match self.cap(slot, handle)? { Capability::Endpoint(id, rights) => Capability::Endpoint(id, rights & mask as u8), Capability::Reply(..) => return None, other => other };
+        if Self::move_only(cap) && mask & CAP_TRANSFER_MOVE == 0 { return None; } // a writable object without grant has one owner
         let source = self.tasks[slot].as_ref().unwrap().nodes[index];
         if mask & CAP_TRANSFER_MOVE != 0 { Some(Pending { cap, node: source, moved_from: Some(index) }) } else { let id = self.fresh(); Some(Pending { cap, node: Node { id, parent: source.id }, moved_from: None }) }
     }
@@ -329,6 +336,9 @@ impl Scheduler {
         }
         (removed, wait)
     }
+    // A named capability that may only be moved but is being copied.
+    fn copy_refused(&self, slot: usize, handle: usize, mask: usize) -> bool { handle != 0 && mask & CAP_TRANSFER_MOVE == 0 && self.cap(slot, handle).is_some_and(Self::move_only) }
+    fn move_only(cap: Capability) -> bool { matches!(cap, Capability::Memory(_, _, r) if r & CAP_WRITE != 0 && r & CAP_GRANT == 0) }
     // Child with narrower authority (CAP_MINT): endpoint rights, port or page-aligned memory sub-range.
     fn mint(cap: Capability, mask: usize, offset: usize, length: usize) -> Option<Capability> {
         let range = |base: usize, size: usize, align: usize| -> Option<(usize, usize)> {
@@ -338,7 +348,11 @@ impl Scheduler {
         match cap {
             Capability::Endpoint(id, rights) => Some(Capability::Endpoint(id, (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8)),
             Capability::IoPorts(base, count) => range(base as usize, count as usize, 1).map(|(b, c)| Capability::IoPorts(b as u16, c as u16)),
-            Capability::Memory(base, size, rights) => range(base, size, 4096).map(|(b, s)| Capability::Memory(b, s, rights & mask as u8)),
+            Capability::Memory(base, size, rights) => {
+                // Without grant only a read-only child: the writable owner stays unique.
+                let allowed = if rights & CAP_GRANT == 0 { rights & !CAP_WRITE } else { rights };
+                range(base, size, 4096).map(|(b, s)| Capability::Memory(b, s, allowed & mask as u8))
+            }
             Capability::Dma(base, size) => range(base, size, 4096).map(|(b, s)| Capability::Dma(b, s)),
             Capability::Mmio(base, size) => range(base, size, 4096).map(|(b, s)| Capability::Mmio(b, s)),
             Capability::Reply(..) => None,
@@ -389,6 +403,7 @@ impl Scheduler {
         if rights & CAP_WRITE == 0 { return Err(ERR_RIGHTS); }
         let receiver = self.blocked(State::BlockedRecv(ep));
         if receiver.is_none() && !self.receivable(ep) { return Err(ERR_PEER); }
+        if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
         self.send_seq += 1; let seq = self.send_seq;
         let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.send_seq = seq;
@@ -417,6 +432,7 @@ impl Scheduler {
         };
         let Some((caller, pid)) = target else { return Err(ERR_INVALID); };
         if !self.tasks[caller].as_ref().is_some_and(|t| t.pid == pid && t.state == State::BlockedReply(slot)) { return Err(ERR_PEER); }
+        if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
         let cap = self.transfer(slot, request.msg[0], request.msg[1]); let mb = self.mailbox(caller);
         (*mb).msg[2] = request.msg[2]; (*mb).msg[3] = request.msg[3]; (*mb).arg1 = self.tasks[slot].as_ref().unwrap().pid as usize;
         let receive = (*mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
@@ -616,6 +632,16 @@ impl Scheduler {
                     self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
+            SYSCALL_MEM_DETACH => match task.heap.shareable(request.arg1, 0) {
+                None => Err(ERR_INVALID),
+                Some(_) if Self::free_slot(&task.cspace).is_none() => Err(ERR_NO_SLOT),
+                Some((physical, size)) if self.referenced(physical, size) => Err(ERR_BUSY), // already shared: not a single owner
+                Some((_, size)) if self.orphans.iter().map(|r| r.len()).sum::<usize>() + size > DETACHED_MAX_BYTES => Err(ERR_NO_MEMORY),
+                Some((physical, size)) => {
+                    let region = task.heap.detach(&mut task.space, request.arg1).unwrap(); self.orphans.push(region);
+                    let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size, CAP_READ | CAP_WRITE), node).unwrap())
+                }
+            },
             SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::free_slot(&task.cspace)) {
                 (Some((physical, size)), Some(_)) => { let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size, MEMORY_ALL), node).unwrap()) }
                 (None, _) => Err(ERR_INVALID),
@@ -703,6 +729,8 @@ impl Scheduler {
                     Some(Capability::Control) => (CAP_KIND_CONTROL, 0, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
+                let sealed = match self.cap(slot, request.arg1) { Some(Capability::Memory(physical, size, _)) => self.sealed(physical, size), _ => false };
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[3]), sealed as usize);
                 Ok(kind)
             }
             SYSCALL_TASK_ALIVE => Ok(self.find(request.arg1 as u64).is_some() as usize),

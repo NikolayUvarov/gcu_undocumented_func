@@ -360,7 +360,9 @@ def isolation_suite(vm):
              # AMD forbids SYSENTER in long mode (#UD); Intel checks CS=0 (#GP).
              ("y", 6, 0), ("e", "(?:6|13)", 0), ("h", 13, 0x102),
              # Read-only memory mint written to; a revoked lease read afterwards.
-             ("m", 14, 7), ("v", 14, 4)]
+             ("m", 14, 7), ("v", 14, 4),
+             # Address of a detached block.
+             ("d", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")

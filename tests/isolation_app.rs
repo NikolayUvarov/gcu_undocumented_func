@@ -41,6 +41,12 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             b'r' => {
                 let _ = core::ptr::read_volatile(0x100000 as *const u64);
             }
+            b'd' => {
+                // A detached block leaves the address space.
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                if call(mb, abi::SYSCALL_MEM_DETACH, block, 0) & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC { asm!("ud2", options(noreturn)); }
+                let _ = core::ptr::read_volatile(block as *const u64);
+            }
             b'm' | b'v' => {
                 // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
                 let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
@@ -148,6 +154,27 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     asm!("ud2", options(noreturn));
                 }
                 call(mb, abi::SYSCALL_CAP_DROP, half, 0); call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, pages, 0);
+                // Memory objects: a shared block cannot be detached; an object is move-only, mints read-only children
+                // and is sealed once its writable capability is gone.
+                let sealed = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_MEMORY && (*mb).msg[3] == 1 };
+                let info = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0); (*mb).arg2 };
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                core::ptr::write_volatile(block as *mut u64, 0x5EA1);
+                let shared = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
+                if call(mb, abi::SYSCALL_MEM_DETACH, block, 0) != abi::ERR_BUSY || sealed(shared) { asm!("ud2", options(noreturn)); }
+                call(mb, abi::SYSCALL_CAP_DROP, shared, 0);
+                let object = call(mb, abi::SYSCALL_MEM_DETACH, block, 0);
+                let reader = mint(object, (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT) as usize, 0, 0);
+                let raw = mb; (*raw).msg[0] = object; (*raw).msg[1] = 0;
+                if info(object) != (abi::CAP_READ | abi::CAP_WRITE) as usize || info(reader) != abi::CAP_READ as usize
+                    || call(mb, abi::SYSCALL_FREE, block, 0) != abi::ERR_INVALID || sealed(reader)
+                    || call(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_RTC, 0) != abi::ERR_RIGHTS { // copying the owner is refused
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, object, 0);
+                let view = call(mb, abi::SYSCALL_MEM_MAP, reader, 0);
+                if !sealed(reader) || core::ptr::read_volatile(view as *const u64) != 0x5EA1 { asm!("ud2", options(noreturn)); }
+                call(mb, abi::SYSCALL_FREE, view, 0); call(mb, abi::SYSCALL_CAP_DROP, reader, 0);
                 // Endpoint quota delegated by loader: four endpoints, the fifth is refused; dropping them frees the quota later.
                 let mut endpoints = [0usize; 4];
                 for handle in endpoints.iter_mut() {

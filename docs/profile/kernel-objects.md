@@ -8,6 +8,7 @@
 | Endpoint | 63, created on demand and recycled when no capability refers to them; no endpoint has a number visible to tasks | `ENDPOINT_CREATE` (init's own: the kernel at boot) | The creator's endpoint quota (endpoints it created and still exist plus quotas delegated to its live children) |
 | Private heap block | 32 blocks and 16 MiB per task | `ALLOC` | Kernel heap |
 | Shared mapping | 48 MiB per task | `MEM_MAP` | Mapping quota per task; the memory belongs to its owner and is retained while referenced |
+| Memory object | All objects and freed-but-referenced blocks: 16 MiB in total | `MEM_DETACH` | Kernel heap; not charged to an owner |
 | DMA region | 8 MiB in total, 64 KiB aligned; kept for the platform's lifetime | `PLATFORM_CAP(PLATFORM_DMA)` (init) | Kernel heap |
 | IRQ binding | One endpoint per line 1–15 (not 2) | `IRQ_BIND` | Fixed table |
 | Input queue | 128 bytes per task, oldest dropped | `INPUT_EVENT` | Per task |

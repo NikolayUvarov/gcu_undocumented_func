@@ -64,9 +64,15 @@ pub const SYSCALL_CLOCK: usize = 44;
 // from all tasks; the capability itself stays (MC-3.4-3.6).
 pub const SYSCALL_CAP_MINT: usize = 45;
 pub const SYSCALL_CAP_REVOKE: usize = 46;
+// MEM_DETACH: arg1 = start of a heap block no one else refers to -> handle of a memory object (read/write, no grant).
+// The block leaves the caller's address space; the object lives while a capability or mapping refers to it. Copying a
+// writable memory capability needs CAP_GRANT, so an object can only be moved (MOVE: one owner) or minted read-only.
+pub const SYSCALL_MEM_DETACH: usize = 47;
+pub const DETACHED_MAX_BYTES: usize = 16 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 
 // CAP_INFO reply: result=capability kind, arg2=port base or memory rights, msg[2]=size/port count/endpoint rights.
-// Memory rights: CAP_READ maps, CAP_WRITE maps writable, CAP_GRANT (MEM_SHARE gives all three). A mapping is removed
+// Memory rights: CAP_READ maps, CAP_WRITE maps writable, CAP_GRANT (MEM_SHARE gives all three). For memory msg[3] = 1
+// if the range is sealed: no writable capability, writable mapping or DMA region overlaps it anywhere (SHARE_RO). A mapping is removed
 // when the capability it was made from is revoked; CAP_REVOKE returns after every CPU has stopped using it.
 pub const CAP_KIND_NONE: usize = 0;
 pub const CAP_KIND_ENDPOINT: usize = 1;

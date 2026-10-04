@@ -8,6 +8,7 @@ struct Block {
     memory: Option<Region>, // None: foreign physical memory (shared mapping)
     size: usize,
     node: u64, // derivation node of the capability a foreign mapping was made from
+    writable: bool,
 }
 
 pub struct Heap {
@@ -41,7 +42,7 @@ impl Heap {
         let address = self.find_hole(size)?;
         let memory = Region::new(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
-        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0 });
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true });
         self.bytes += size;
         Some(address)
     }
@@ -54,7 +55,7 @@ impl Heap {
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, writable, false).ok()?; }
-        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node });
+        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device });
         self.shared += size;
         Some(address)
     }
@@ -81,6 +82,20 @@ impl Heap {
             self.shared -= block.size; self.blocks[index] = None; any = true;
         }
         any
+    }
+
+    // Whether any writable mapping (own block or foreign) overlaps the physical range.
+    pub fn writes(&self, physical: usize, size: usize) -> bool {
+        self.blocks.iter().flatten().any(|b| b.writable && b.physical < physical + size && physical < b.physical + b.size)
+    }
+
+    // Takes an own block out of the address space and hands its memory to the caller (MEM_DETACH).
+    pub fn detach(&mut self, space: &mut Space, address: usize) -> Option<Region> {
+        let index = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address && b.memory.is_some()))?;
+        let block = self.blocks[index].take().unwrap();
+        space.unmap(block.address, block.size);
+        self.bytes -= block.size;
+        block.memory
     }
 
     // Hands back owned regions when the task is destroyed so the kernel can decide whether they can be freed.
