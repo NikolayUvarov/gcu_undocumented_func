@@ -1,10 +1,10 @@
-# 075 — `STAT` fields the monitors had on the tools branch
+# 075 — `STAT` fields the monitors had on the tools branch — done
 
-**Type:** kernel · **Owner:** kernel track (`kernel/src/scheduler/stat.rs`, `kernel/src/pci.rs`, `kernel/src/paging.rs`, `common/abi.rs`, the shell's `stat` commands) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
+**Type:** kernel · **Owner:** kernel track (`kernel/src/scheduler/stat.rs`, `kernel/src/pci.rs`, `kernel/src/paging.rs`, `common/abi.rs`, the shell's `stat` commands) · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
 
 ## Problem
 
-The merge of the tools branch ([051](../issues-done/051-merge-main-into-tools.done)) moved `sysmon`, `top`, `memmap`, `hw` and the shell's observation commands onto `main`'s `STAT` records (issue [035](../issues-done/035-observe-and-stat.done)). The tools branch's own `STAT` (record [059](../issues-done/059-observation-abi.done)) reported more, and the tools show less now:
+The merge of the tools branch ([051](051-merge-main-into-tools.done)) moved `sysmon`, `top`, `memmap`, `hw` and the shell's observation commands onto `main`'s `STAT` records (issue [035](035-observe-and-stat.done)). The tools branch's own `STAT` (record [059](059-observation-abi.done)) reported more, and the tools show less now:
 
 - `StatMemory`: the largest free block of the kernel arena (fragmentation: whether a large image still fits), page tables, mapped foreign memory, and the kernel's table limits (the monitors now carry `TASKS_LIMIT` 32 and `ENDPOINTS_LIMIT` 127 as constants);
 - `StatTask`: kernel memory per task (context, mailbox, info and exit pages, page tables) and whether the task has the focus (`sysmon` asks `TASK_LIST` for it);
@@ -34,7 +34,7 @@ The merge of the tools branch ([051](../issues-done/051-merge-main-into-tools.do
    - `StatDevice` + `location` (bus << 8 | device << 3 | function), `io_bars` (bit *i*: BAR *i* is an I/O port range); `holder` by the rule above.
 2. `kernel/src/scheduler/stat.rs` fills them; `kernel/src/pci.rs` exposes the location, `kernel/src/paging.rs` the page-table count.
 3. `libmind::stat` names the new kinds; the shell's `stat <class>`, `free`, `irqs`, `devices`, `endpoints`, `caps` and `stat <pid>` print the new fields.
-4. The consumers in the tools (`idl/sysinfo.wit`, `sysmon`, the monitors) follow in [076](076-monitors-show-restored-stat-fields.md). `sysmon` already passes `holder` through, so `hw` shows the driver again with this issue alone.
+4. The consumers in the tools (`idl/sysinfo.wit`, `sysmon`, the monitors) follow in [076](../issues/076-monitors-show-restored-stat-fields.md). `sysmon` already passes `holder` through, so `hw` shows the driver again with this issue alone.
 
 ## Acceptance criteria
 
@@ -42,6 +42,18 @@ The merge of the tools branch ([051](../issues-done/051-merge-main-into-tools.do
 - QEMU `tools` suite: `hw` names `ps2_kbd` as the holder of IRQ 1 again.
 - All QEMU suites, the one-CPU subset and the host tests pass; CI is green.
 
+## Resolution
+
+Commit `9f44475` (on `main` since then), `STAT_VERSION` 2:
+- `common/abi.rs`: `StatMemory` + `largest_free`, `page_tables`, `shared`, `tasks_limit`, `endpoints_limit`; `StatTask` + `focus` (former reserved byte), `kernel_bytes`; `PHYS_KERNEL`; `REGION_GUARD`; `StatCap.endpoint` (former reserved field); `StatEndpoint` + `server`, `holders`, `irq`; `StatIrq.holders` (former reserved field); `StatDevice` + `location`, `io_bars`.
+- `kernel/src/scheduler/stat.rs`: the fields; the largest free block by at most 15 trial allocations when `msg[1]` = 1; the guard page below the stack in `VMAP`; the holder rule (newest derived copy). `kernel/src/pci.rs` (`Device::location`), `kernel/src/paging.rs` (`Space::table_count`), `kernel/linker.ld` (`__kernel_end`).
+- `libmind/src/stat.rs` names "kernel image" and "guard"; the shell's `free`, `irqs`, `devices`, `endpoints`, `caps`, `stat <pid>` and `stat <class>` print the new fields.
+- `tests/qemu_smoke.py`: the `services` suite checks the largest free block, page tables, limits, kernel memory and focus, the kernel image, the guard page, `00:01.1`, `ps2_kbd` as holder of IRQ 1 with two holders, each service as server of its endpoint, endpoint indexes in `caps`; the `tools` suite expects `ps2_kbd` in `hw` again.
+- Docs: `docs/profile/kernel-objects.md` (Statistics), `docs/api/README.md` (`STAT`).
+- Tests: all 21 QEMU suites on 4 CPUs, `smp,isolation,heap,services` on one CPU, the USB image and the host tests pass locally; CI run 11 is green.
+
+The monitors show the fields in [076](../issues/076-monitors-show-restored-stat-fields.md).
+
 ## Related
 
-[051](../issues-done/051-merge-main-into-tools.done), [076](076-monitors-show-restored-stat-fields.md), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
+[051](051-merge-main-into-tools.done), [076](../issues/076-monitors-show-restored-stat-fields.md), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
