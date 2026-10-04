@@ -16,6 +16,11 @@ pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 #[derive(Clone, Copy)]
 pub struct Device { pub class: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
 
+impl Device {
+    /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
+    pub fn location(&self) -> u32 { (self.bus as u32) << 8 | (self.device as u32) << 3 | self.function as u32 }
+}
+
 // BAR size is determined by writing all ones with decoding disabled; the command register is restored afterwards.
 unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     let mut result = [Bar::default(); 6];

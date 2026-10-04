@@ -714,9 +714,9 @@ def monitors_check(vm):
     for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
                  "Interrupt lines", "kernel arena 64.0M"):
         assert table_row(screen, re.escape(canon(text))), (text, screen)
-    # main's STAT: devices by index (no PCI location) and the first holder of a capability, init (issue 075).
+    # Devices by index until sysinfo carries the PCI location (issue 076); the holder is the driver (issue 075).
     assert table_row(screen, r"^ +\d+ +010180 +IDE controller"), screen
-    assert table_row(screen, r"IRQ 1 .* init \(PID 1\)"), screen
+    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\)"), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -1314,20 +1314,29 @@ def services_suite(vm):
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
     tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
-    assert f"TASKS={tasks} " in free, (tasks, free)
-    arena, used, free_bytes = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+)", free).groups())
+    assert f"TASKS={tasks}/32 " in free and re.search(r"ENDPOINTS=\d+/127 ", free), (tasks, free)
+    arena, used, free_bytes, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+) LARGEST=(\d+)", free).groups())
     assert arena == 64 << 20 and 0 < used < arena and used + free_bytes <= arena, free
+    # Issue 075: the largest free block (found by trial allocations) fits in the free memory; page tables are counted.
+    assert 4096 <= largest <= free_bytes and int(re.search(r"PAGE_TABLES=(\d+)", free)[1]) > 0, free
     cpus = vm.command("cpus")
     assert len(re.findall(r"BUSY_MS=\d+ IDLE_MS=\d+ SWITCHES=\d+", cpus)) == vm.cpus, cpus
     physmap = vm.command("physmap")
-    for kind in ("free RAM", "kernel arena", "framebuffer", "boot image", "AP trampoline"):
+    for kind in ("free RAM", "kernel arena", "kernel image", "framebuffer", "boot image", "AP trampoline"):
         require(physmap, kind)
     free_ram = int(re.search(r"FREE_RAM=(\d+)K", physmap)[1])
     assert 128 * 1024 < free_ram < 512 * 1024, free_ram  # the VM has 512 MiB
-    require(vm.command("irqs"), f"IRQ=1 COUNT=")
-    assert re.search(r"^\d+ 010180 IDE controller IRQ=", vm.command("devices"), re.M)
-    endpoints = vm.command("endpoints")
+    # Issue 075: the holder of a line or device is the driver that uses it, not init, which keeps a copy for restarts.
+    pids = vm.services()
+    irqs = vm.command("irqs", raw=True)
+    assert re.search(fr"^IRQ=1 COUNT=\d+ HOLDER={pids['ps2_kbd']} HOLDERS=2 ", irqs, re.M), irqs
+    assert re.search(r"^\d+ 00:01\.1 010180 IDE controller IRQ=", vm.command("devices"), re.M)
+    endpoints = vm.command("endpoints", raw=True)
     assert len(re.findall(r"^EP=\d+ CREATOR=1 RECEIVERS=1 ", endpoints, re.M)) >= 6, endpoints
+    for name in ("rtc", "vfs_server", "loader", "sysmon", "logd"):
+        assert re.search(fr" SERVER={pids[name]} HOLDERS=\d+ IRQ=0$", endpoints, re.M), (name, endpoints)
+    caps = vm.command(f"stat caps {pids['shell']}", raw=True)
+    assert re.search(r"^SLOT=3 GEN=0 KIND=1 RIGHTS=\d+ SIZE=0 BADGE=\d+ EP=[1-9]\d* ", caps, re.M), caps  # the VFS client
     require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
     # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
     import datetime
@@ -1340,12 +1349,14 @@ def services_suite(vm):
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
     # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
     tasks = vm.command("stat tasks", raw=True)
-    assert int(re.search(r"STAT TASKS VERSION=1 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    # Issue 075: every task's kernel memory (context, mailbox, info and exit pages, page tables); the shell has the focus.
+    assert all(int(k) >= 4 * 4096 for k in re.findall(r" KERNEL=(\d+)", tasks)) and re.search(r"^\d+ PARENT=\d+ shell .* FOCUS$", tasks, re.M), tasks
     stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])
     heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
     assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
     layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
-    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-"):
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-", "0x8001000000 4096 GUARD ---"):
         require(layout, region)
     cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
@@ -1399,7 +1410,7 @@ def services_suite(vm):
     # The standard client endpoints in slots 2..6, write and grant only; no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):
-        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ RIGHTS=-wg-", caps), (slot, caps)
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg-", caps), (slot, caps)  # EP: issue 075
     assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)

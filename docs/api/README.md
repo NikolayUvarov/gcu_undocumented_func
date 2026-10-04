@@ -111,7 +111,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS → records written (`StatHeader`, then records) [observe or process control] |
+| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS (1 for MEMORY: also find the largest free block) → records written (`StatHeader` with `STAT_VERSION`, then records; a reader accepts records larger than it knows) [observe or process control] |
 | 34 | `TASK_LIST` | `arg1` = `TaskInfo` array, `arg2` = capacity → count [observe or process control] |
 | 40 | `FAULTS` | `arg1` = `FaultInfo` array, `arg2` = capacity → count [observe or process control] |
 | 41 | `CPU_INFO` | `arg1` = CPU index → APIC id; `arg2` = online, `msg[2]` = ticks [observe or process control] |
