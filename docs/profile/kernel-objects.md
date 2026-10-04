@@ -32,7 +32,7 @@ Every task has a task quota and an endpoint quota, delegated by its spawner at `
 
 ## Statistics
 
-`STAT` copies bounded snapshots under the scheduler lock: at most 32 tasks, 4 CPUs (up to 8), 127 endpoints, 15 IRQ lines, the enumerated PCI functions, 64 capability slots per task, and the firmware memory map (up to 16 pages of entries). A `VMAP` walk visits only present page tables (at most 128 per task). The kernel counts:
+`STAT` copies bounded snapshots under the scheduler lock: at most 32 tasks, 4 CPUs (up to 8), 127 endpoints, 15 IRQ lines, the enumerated PCI functions, 64 capability slots per task, and the firmware memory map (up to 16 pages of entries). A `VMAP` walk visits only present page tables (at most 128 per task) and adds the guard page below the stack. On request (`STAT_MEMORY` with argument 1) the largest free block of the arena is found by at most 15 trial allocations of halving size, each freed at once. A holder of a capability in the records (an IRQ line, a device, an endpoint's server) is the task with the most recently derived copy, so a driver rather than `init`, which keeps the copies it granted. Records grow only at the end (`STAT_VERSION` 2 since issue 075). The kernel counts:
 - per task: run time (TSC, at every switch), runs, ticks, system calls, IPC sends and receives;
 - per CPU: busy and idle time, interrupts, switches;
 - per endpoint: messages, `ERR_BUSY` refusals, timeouts;

@@ -302,7 +302,7 @@ pub const SYSCALL_SCHED_SET: usize = 52;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
 pub const BAND_KEEP: usize = 0xFF;
-pub const STAT_VERSION: u32 = 1;
+pub const STAT_VERSION: u32 = 2; // 2: the fields of issue 075 appended
 pub const STAT_TASKS: usize = 1;
 pub const STAT_CPUS: usize = 2;
 pub const STAT_MEMORY: usize = 3;
@@ -321,25 +321,35 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub run_ns: u64, pub runs: u64, pub ticks: u64, pub calls: u64, pub sends: u64, pub receives: u64, pub started_ns: u64,
     pub heap_bytes: u64, pub heap_blocks: u32, pub caps: u32, pub shared_bytes: u64, pub retained_bytes: u64,
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
-    pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub reserved: u16,
+    pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
+    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables
 }
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64 }
-// Kernel arena (bytes) by category, and the global limits.
+// Kernel arena (bytes) by category, and the global limits. `largest_free` is searched for (trial allocations) only when
+// msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatMemory {
     pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64,
     pub heaps: u64, pub objects: u64, pub dma: u64, pub dma_limit: u64, pub objects_limit: u64, pub tasks: u64, pub endpoints: u64,
+    pub largest_free: u64, pub page_tables: u64, pub shared: u64, pub tasks_limit: u32, pub endpoints_limit: u32,
 }
 // Physical layout: firmware memory map entries (kind = UEFI memory type) and the platform layout (kind >= PHYS_PLATFORM).
 pub const PHYS_PLATFORM: u32 = 0x100; pub const PHYS_ARENA: u32 = 0x100; pub const PHYS_FRAMEBUFFER: u32 = 0x101;
-pub const PHYS_BOOT_IMAGE: u32 = 0x102; pub const PHYS_AP_TRAMPOLINE: u32 = 0x103; pub const PHYS_PCI_BAR: u32 = 0x104;
+pub const PHYS_BOOT_IMAGE: u32 = 0x102; pub const PHYS_AP_TRAMPOLINE: u32 = 0x103; pub const PHYS_PCI_BAR: u32 = 0x104; pub const PHYS_KERNEL: u32 = 0x105;
+// DMA regions are not listed: they are mapped into a driver, and physical addresses of task memory are never exported.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatPhys { pub kind: u32, pub index: u32, pub start: u64, pub pages: u64 }
 // Address-space regions of a task (VMAP).
 pub const REGION_IMAGE: u32 = 1; pub const REGION_STACK: u32 = 2; pub const REGION_SCREEN: u32 = 3; pub const REGION_INFO: u32 = 4;
 pub const REGION_MAILBOX: u32 = 5; pub const REGION_EXIT: u32 = 6; pub const REGION_HEAP: u32 = 7; pub const REGION_SHARED: u32 = 8; pub const REGION_DEVICE: u32 = 9;
+pub const REGION_GUARD: u32 = 10; // unmapped on purpose (below the stack); no rights
 pub const REGION_READ: u32 = 1; pub const REGION_WRITE: u32 = 2; pub const REGION_EXECUTE: u32 = 4;
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatRegion { pub start: u64, pub size: u64, pub kind: u32, pub flags: u32 }
-#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCap { pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub size: u64, pub badge: u32, pub reserved: u32, pub node: u64, pub parent: u64 }
-#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatEndpoint { pub index: u32, pub receivers: u32, pub waiting_senders: u32, pub waiting_receivers: u32, pub creator: u64, pub messages: u64, pub busy: u64, pub timeouts: u64 }
-#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub reserved: u32, pub holder: u64, pub count: u64 }
-#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatDevice { pub class: u32, pub irq: u32, pub bar_sizes: [u64; 6], pub holder: u64 }
+// `endpoint`: the endpoint index of an endpoint capability (a label, as in StatEndpoint), 0 for other kinds.
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCap { pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub size: u64, pub badge: u32, pub endpoint: u32, pub node: u64, pub parent: u64 }
+// A holder (`server`, `holder`) is the task with the most recently derived copy of the capability: a driver rather than
+// init, which keeps the copies it granted; `holders` counts the tasks holding one. `irq`: the line bound, 0 if none.
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatEndpoint { pub index: u32, pub receivers: u32, pub waiting_senders: u32, pub waiting_receivers: u32, pub creator: u64, pub messages: u64, pub busy: u64, pub timeouts: u64,
+    pub server: u64, pub holders: u32, pub irq: u32 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub holders: u32, pub holder: u64, pub count: u64 }
+// `location`: bus << 8 | device << 3 | function; `io_bars`: bit i set if BAR i is an I/O port range.
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatDevice { pub class: u32, pub irq: u32, pub bar_sizes: [u64; 6], pub holder: u64, pub location: u32, pub io_bars: u32 }

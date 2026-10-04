@@ -182,6 +182,8 @@ impl Space {
         self.count += 1;
         Ok(pointer)
     }
+    /// Page tables owned by this space (each one page of the kernel arena).
+    pub fn table_count(&self) -> usize { self.count }
     pub fn root(&self) -> usize {
         self.tables[0].as_ref().unwrap().ptr() as usize
     }

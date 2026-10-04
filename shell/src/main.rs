@@ -93,22 +93,24 @@ impl Shell {
         let (name, pid) = (words.next().unwrap_or(""), words.next().and_then(|w| w.parse::<usize>().ok()).unwrap_or(0));
         let class = match name { "tasks" => STAT_TASKS, "cpus" => STAT_CPUS, "memory" => STAT_MEMORY, "physmap" => STAT_PHYSMAP, "vmap" => STAT_VMAP, "caps" => STAT_CAPS, "endpoints" => STAT_ENDPOINTS, "irqs" => STAT_IRQS, "devices" => STAT_DEVICES, _ => { self.report("STAT <CLASS> [PID]: SEE HELP"); return; } };
         let Some(mut page) = Pages::new(4 * 4096) else { self.report("OUT OF MEMORY"); return };
+        // `stat memory` also asks for the largest free block (argument 1).
+        let pid = if class == STAT_MEMORY { 1 } else { pid };
         let header = match control::stat(class, pid, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
         let buffer = page.as_slice(); let t = &mut self.term;
         let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={}", Upper(name), header.version, header.count, header.total);
         match class {
-            STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps); },
+            STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={} KERNEL={}{}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps, r.kernel_bytes, if r.focus != 0 { " FOCUS" } else { "" }); },
             STAT_CPUS => for (i, r) in control::records::<StatCpu>(buffer, header).enumerate() { let _ = writeln!(t, "CPU {} APIC={} ONLINE={} BUSY_MS={} IDLE_MS={} INTERRUPTS={} SWITCHES={} PID={}", i, r.apic_id, r.online, r.busy_ns / 1_000_000, r.idle_ns / 1_000_000, r.interrupts, r.switches, r.current_pid); },
-            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} IMAGES={} STACKS={} TASK_PAGES={} SCREENS={} HEAPS={} OBJECTS={} DMA={} TASKS={} ENDPOINTS={}", r.arena, r.used, r.free, r.images, r.stacks, r.task_pages, r.screens, r.heaps, r.objects, r.dma, r.tasks, r.endpoints); },
+            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} LARGEST={} IMAGES={} STACKS={} TASK_PAGES={} PAGE_TABLES={} SCREENS={} HEAPS={} SHARED={} OBJECTS={} DMA={} TASKS={}/{} ENDPOINTS={}/{}", r.arena, r.used, r.free, r.largest_free, r.images, r.stacks, r.task_pages, r.page_tables, r.screens, r.heaps, r.shared, r.objects, r.dma, r.tasks, r.tasks_limit, r.endpoints, r.endpoints_limit); },
             STAT_PHYSMAP => for r in control::records::<StatPhys>(buffer, header).filter(|r| r.kind >= PHYS_PLATFORM) { let _ = writeln!(t, "KIND={:#x} INDEX={} START={:#x} PAGES={}", r.kind, r.index, r.start, r.pages); },
             STAT_VMAP => for r in control::records::<StatRegion>(buffer, header) {
-                let kind = ["?", "IMAGE", "STACK", "SCREEN", "INFO", "MAILBOX", "EXIT", "HEAP", "SHARED", "DEVICE"].get(r.kind as usize).copied().unwrap_or("?");
+                let kind = ["?", "IMAGE", "STACK", "SCREEN", "INFO", "MAILBOX", "EXIT", "HEAP", "SHARED", "DEVICE", "GUARD"].get(r.kind as usize).copied().unwrap_or("?");
                 let _ = writeln!(t, "{:#x} {} {} {}{}{}", r.start, r.size, kind, if r.flags & REGION_READ != 0 { 'R' } else { '-' }, if r.flags & REGION_WRITE != 0 { 'W' } else { '-' }, if r.flags & REGION_EXECUTE != 0 { 'X' } else { '-' });
             },
-            STAT_CAPS => for r in control::records::<StatCap>(buffer, header) { let _ = writeln!(t, "SLOT={} GEN={} KIND={} RIGHTS={} SIZE={} BADGE={} NODE={} PARENT={}", r.slot, r.generation, r.kind, r.rights, r.size, r.badge, r.node, r.parent); },
-            STAT_ENDPOINTS => for r in control::records::<StatEndpoint>(buffer, header) { let _ = writeln!(t, "EP {} RECEIVERS={} SENDERS={} WAITING={} CREATOR={} MESSAGES={} BUSY={} TIMEOUTS={}", r.index, r.receivers, r.waiting_senders, r.waiting_receivers, r.creator, r.messages, r.busy, r.timeouts); },
-            STAT_IRQS => for r in control::records::<StatIrq>(buffer, header) { let _ = writeln!(t, "IRQ {} ENDPOINT={} MASKED={} HOLDER={} COUNT={}", r.line, r.endpoint, r.masked, r.holder, r.count); },
-            _ => for r in control::records::<StatDevice>(buffer, header) { let _ = writeln!(t, "DEVICE CLASS={:06x} IRQ={} HOLDER={} BARS={:?}", r.class, r.irq, r.holder, r.bar_sizes); },
+            STAT_CAPS => for r in control::records::<StatCap>(buffer, header) { let _ = writeln!(t, "SLOT={} GEN={} KIND={} RIGHTS={} SIZE={} BADGE={} EP={} NODE={} PARENT={}", r.slot, r.generation, r.kind, r.rights, r.size, r.badge, r.endpoint, r.node, r.parent); },
+            STAT_ENDPOINTS => for r in control::records::<StatEndpoint>(buffer, header) { let _ = writeln!(t, "EP {} RECEIVERS={} SENDERS={} WAITING={} CREATOR={} SERVER={} HOLDERS={} IRQ={} MESSAGES={} BUSY={} TIMEOUTS={}", r.index, r.receivers, r.waiting_senders, r.waiting_receivers, r.creator, r.server, r.holders, r.irq, r.messages, r.busy, r.timeouts); },
+            STAT_IRQS => for r in control::records::<StatIrq>(buffer, header) { let _ = writeln!(t, "IRQ {} ENDPOINT={} MASKED={} HOLDER={} HOLDERS={} COUNT={}", r.line, r.endpoint, r.masked, r.holder, r.holders, r.count); },
+            _ => for r in control::records::<StatDevice>(buffer, header) { let _ = writeln!(t, "DEVICE {:02x}:{:02x}.{} CLASS={:06x} IRQ={} HOLDER={} BARS={:?} IO_BARS={:#x}", r.location >> 8, r.location >> 3 & 31, r.location & 7, r.class, r.irq, r.holder, r.bar_sizes, r.io_bars); },
         }
     }
 

@@ -21,6 +21,20 @@ impl Out<'_> {
     }
 }
 
+// Largest block the kernel arena could still allocate (page-aligned), found by trying: the allocator keeps no list of
+// its free blocks to read. Runs under the scheduler lock, so nothing allocates meanwhile.
+fn largest_free(free: usize) -> usize {
+    let (mut low, mut high) = (0usize, free.next_multiple_of(4096) + 4096);
+    while high - low > 4096 {
+        let mid = (low + (high - low) / 2) & !4095;
+        if mid <= low { break; }
+        let layout = core::alloc::Layout::from_size_align(mid, 4096).unwrap();
+        let mut heap = crate::ALLOCATOR.lock();
+        match heap.allocate_first_fit(layout) { Ok(block) => { unsafe { heap.deallocate(block, layout); } low = mid; } Err(()) => high = mid }
+    }
+    low
+}
+
 fn wait_of(state: State, running: bool, tasks: &[Option<Task>; SLOTS]) -> (u8, u32) {
     if running { return (WAIT_RUNNING, 0); }
     match state {
@@ -47,7 +61,21 @@ impl Scheduler {
         if request.msg[0] < HEADER { return Err(ERR_INVALID); }
         let mut out = Out { space: &self.tasks[slot].as_ref().unwrap().space, base: request.arg2, capacity: request.msg[0], size, count: 0, total: 0, fault: false };
         let pid_of = |index: usize| self.tasks[index].as_ref().map_or(0, |t| t.pid);
-        let holder = |test: &dyn Fn(&Capability) -> bool| self.tasks.iter().flatten().find(|t| t.state != State::Exited && t.cspace.iter().flatten().any(test)).map_or(0, |t| t.pid);
+        // The task that uses a capability: the holder of its most recently derived copy (init keeps the copies it granted,
+        // to restart a driver; the driver's copy derives from it), and how many live tasks hold a copy.
+        let holder = |test: &dyn Fn(&Capability) -> bool| {
+            let (mut newest, mut pid, mut holders) = (0u64, 0u64, 0u32);
+            for task in self.tasks.iter().flatten().filter(|t| t.state != State::Exited) {
+                let mut held = false;
+                for (index, cap) in task.cspace.iter().enumerate() {
+                    if !cap.as_ref().is_some_and(test) { continue; }
+                    held = true;
+                    if task.nodes[index].id >= newest { newest = task.nodes[index].id; pid = task.pid; }
+                }
+                holders += held as u32;
+            }
+            (pid, holders)
+        };
         match class {
             STAT_TASKS => for (index, task) in self.tasks.iter().enumerate().skip(1) {
                 let Some(task) = task else { continue };
@@ -62,7 +90,9 @@ impl Scheduler {
                     image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64, screen_bytes: task.screen.as_ref().map_or(0, |s| s.len() as u64),
                     quota_tasks: task.quota_tasks as u16, used_tasks: if alive { self.used_tasks(index) as u16 } else { 0 },
                     quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 },
-                    band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, reserved: 0, budget_ns: task.budget_ns, period_ns: task.period_ns,
+                    band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
+                    budget_ns: task.budget_ns, period_ns: task.period_ns,
+                    kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
                 });
             },
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
@@ -72,11 +102,13 @@ impl Scheduler {
             },
             STAT_MEMORY => {
                 let (used, free) = { let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free()) };
-                let mut m = StatMemory { arena: self.boot.heap_len as u64, used: used as u64, free: free as u64, dma_limit: DMA_LIMIT as u64, objects_limit: DETACHED_MAX_BYTES as u64, ..Default::default() };
+                let mut m = StatMemory { arena: self.boot.heap_len as u64, used: used as u64, free: free as u64, dma_limit: DMA_LIMIT as u64, objects_limit: DETACHED_MAX_BYTES as u64,
+                    largest_free: if argument == 1 { largest_free(free) as u64 } else { 0 }, tasks_limit: MAX_TASKS as u32, endpoints_limit: (ENDPOINTS - FIRST_ENDPOINT) as u32, ..Default::default() };
                 for task in self.tasks.iter().flatten() {
                     m.images += task._image.len() as u64; m.stacks += task._stack.len() as u64;
                     m.task_pages += (task.context.len() + task._exit.len() + task.abi.len()) as u64;
                     m.screens += task.screen.as_ref().map_or(0, |s| s.len() as u64); m.heaps += task.heap.bytes() as u64; m.tasks += 1;
+                    m.page_tables += (task.space.table_count() * 4096) as u64; m.shared += task.heap.shared_bytes() as u64;
                 }
                 m.objects = self.orphans.iter().map(|o| o.region.len() as u64).sum();
                 m.dma = self.dma.iter().map(|r| r.len() as u64).sum();
@@ -86,6 +118,9 @@ impl Scheduler {
             STAT_PHYSMAP => {
                 for index in 0..self.boot.memory_map_len { out.push(unsafe { *self.boot.memory_map.add(index) }); }
                 let pages = |bytes: usize| bytes.div_ceil(4096) as u64;
+                extern "C" { static __kernel_end: u8; }
+                let (kernel_start, kernel_end) = (crate::_start as *const () as usize, core::ptr::addr_of!(__kernel_end) as usize);
+                out.push(StatPhys { kind: PHYS_KERNEL, index: 0, start: kernel_start as u64, pages: pages(kernel_end - kernel_start) });
                 out.push(StatPhys { kind: PHYS_ARENA, index: 0, start: self.boot.heap_ptr as u64, pages: pages(self.boot.heap_len) });
                 out.push(StatPhys { kind: PHYS_FRAMEBUFFER, index: 0, start: self.boot.fb_ptr as u64, pages: pages(frame_bytes(&self.boot)) });
                 out.push(StatPhys { kind: PHYS_AP_TRAMPOLINE, index: 0, start: self.boot.ap_trampoline as u64, pages: 1 });
@@ -108,11 +143,14 @@ impl Scheduler {
                             a if a >= paging::USER_STACK => REGION_STACK,
                             _ => REGION_IMAGE,
                         };
+                        // The page below the stack is left unmapped on purpose: an overflow faults there.
+                        if kind == REGION_STACK && start == paging::USER_STACK { out.push(StatRegion { start: (start - 4096) as u64, size: 4096, kind: REGION_GUARD, flags: 0 }); }
                         out.push(StatRegion { start: start as u64, size: size as u64, kind, flags: REGION_READ | if writable { REGION_WRITE } else { 0 } | if executable { REGION_EXECUTE } else { 0 } });
                     });
                 } else {
                     for index in 1..CAP_SLOTS {
                         let Some(cap) = task.cspace[index] else { continue };
+                        let endpoint = if let Capability::Endpoint(ep, ..) = cap { ep as u32 } else { 0 };
                         let (kind, rights, size, badge) = match cap {
                             Capability::Endpoint(_, rights, badge) => (CAP_KIND_ENDPOINT, rights as u32, 0, badge as u32),
                             Capability::Memory(_, size, rights) => (CAP_KIND_MEMORY, rights as u32, size as u64, 0),
@@ -126,7 +164,7 @@ impl Scheduler {
                             Capability::Restart => (CAP_KIND_RESTART, 0, 0, 0), Capability::Observe => (CAP_KIND_OBSERVE, 0, 0, 0),
                         };
                         let generation = if index < SLOT_DYNAMIC { 0 } else { task.generations[index] };
-                        out.push(StatCap { slot: index as u32, generation, kind: kind as u32, rights, size, badge, reserved: 0, node: task.nodes[index].id, parent: task.nodes[index].parent });
+                        out.push(StatCap { slot: index as u32, generation, kind: kind as u32, rights, size, badge, endpoint, node: task.nodes[index].id, parent: task.nodes[index].parent });
                     }
                 }
             }
@@ -139,21 +177,26 @@ impl Scheduler {
                     waiting_senders: live().filter(|t| t.state == State::BlockedSend(ep)).count() as u32,
                     waiting_receivers: live().filter(|t| t.state == State::BlockedRecv(ep)).count() as u32,
                     creator: self.endpoint_owner[ep].map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
+                    server: holder(&|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0)).0,
+                    holders: holder(&|c| matches!(c, Capability::Endpoint(id, ..) if *id == ep)).1,
+                    irq: self.irq_bind.iter().position(|bound| *bound == Some(ep)).map_or(0, |line| line as u32),
                 });
             },
             STAT_IRQS => for line in 1..16u8 {
                 if line == 2 { continue; }
-                out.push(StatIrq { line: line as u32, endpoint: self.irq_bind[line as usize].map_or(0, |e| e as u32), masked: interrupts::irq_masked(line) as u32, reserved: 0,
-                    holder: holder(&|c| *c == Capability::Interrupt(line)), count: self.accounting.irqs[line as usize] });
+                let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));
+                out.push(StatIrq { line: line as u32, endpoint: self.irq_bind[line as usize].map_or(0, |e| e as u32), masked: interrupts::irq_masked(line) as u32, holders,
+                    holder, count: self.accounting.irqs[line as usize] });
             },
             STAT_DEVICES => for device in self.devices.iter() {
-                let mut bar_sizes = [0u64; 6]; for (size, bar) in bar_sizes.iter_mut().zip(device.bars.iter()) { *size = bar.size; }
+                let (mut bar_sizes, mut io_bars) = ([0u64; 6], 0u32);
+                for (index, (size, bar)) in bar_sizes.iter_mut().zip(device.bars.iter()).enumerate() { *size = bar.size; if bar.io && bar.size != 0 { io_bars |= 1 << index; } }
                 let owns = |c: &Capability| device.bars.iter().any(|b| b.size != 0 && match *c {
                     Capability::Mmio(base, _) => !b.io && base as u64 >= b.base && (base as u64) < b.base + b.size,
                     Capability::IoPorts(base, _) => b.io && base as u64 >= b.base && (base as u64) < b.base + b.size,
                     _ => false,
                 });
-                out.push(StatDevice { class: device.class, irq: device.irq as u32, bar_sizes, holder: holder(&owns) });
+                out.push(StatDevice { class: device.class, irq: device.irq as u32, bar_sizes, holder: holder(&owns).0, location: device.location(), io_bars });
             },
             _ => unreachable!(),
         }

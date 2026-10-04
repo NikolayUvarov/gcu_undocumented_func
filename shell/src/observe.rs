@@ -7,10 +7,12 @@ use mind::stat::{self, Records};
 fn name(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches('\0') }
 
 pub fn free(out: &mut impl Write) {
-    let Ok(m) = stat::one::<StatMemory>(STAT_MEMORY) else { let _ = writeln!(out, "ERROR: STAT NOT AVAILABLE"); return };
-    let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={}", m.arena, m.used, m.free);
-    let _ = writeln!(out, "  TASKS={} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={}", m.tasks, m.images, m.stacks, m.screens, m.heaps, m.task_pages);
-    let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints);
+    // Argument 1: the kernel also searches for the largest free block.
+    let mut buffer = [0u8; 512];
+    let Some(m) = stat::read(STAT_MEMORY, 1, &mut buffer).ok().and_then(|r| r.iter::<StatMemory>().next()) else { let _ = writeln!(out, "ERROR: STAT NOT AVAILABLE"); return };
+    let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
+    let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
+    let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
 }
 
 pub fn cpus(out: &mut impl Write) {
@@ -28,13 +30,12 @@ fn task(pid: u64, buffer: &mut [u8]) -> Option<StatTask> {
 pub fn task_details(out: &mut impl Write, pid: u64) {
     let mut buffer = [0u8; 8192];
     let Some(t) = task(pid, &mut buffer) else { let _ = writeln!(out, "ERROR: NO SUCH PID"); return };
-    let (list, count) = crate::tasks();
-    let focus = list[..count].iter().any(|i| i.pid == pid && i.focus != 0);
+    let focus = t.focus != 0;
     let now = mind::time::monotonic_ns();
     let _ = writeln!(out, "TASK PID={} NAME={} STATE={} WAIT={} CPU={} PARENT={}{}{}", t.pid, name(&t.name), stat::state_name(t.wait), t.wait_on, t.cpu, t.parent,
                      if t.service != 0 { " SERVICE" } else { "" }, if focus { " FOCUS" } else { "" });
     let _ = writeln!(out, "  RUN_MS={} AGE_MS={} RUNS={} TICKS={} SYSCALLS={} SENT={} RECEIVED={}", t.run_ns / 1_000_000, now.saturating_sub(t.started_ns) / 1_000_000, t.runs, t.ticks, t.calls, t.sends, t.receives);
-    let _ = writeln!(out, "  IMAGE={} STACK={} SCREEN={} HEAP={} BLOCKS={}/{} MAPPED={} RETAINED={} CAPS={}/{}", t.image_bytes, t.stack_bytes, t.screen_bytes, t.heap_bytes, t.heap_blocks, HEAP_MAX_BLOCKS, t.shared_bytes, t.retained_bytes, t.caps, CAP_SLOTS - 1);
+    let _ = writeln!(out, "  IMAGE={} STACK={} SCREEN={} HEAP={} BLOCKS={}/{} MAPPED={} RETAINED={} KERNEL={} CAPS={}/{}", t.image_bytes, t.stack_bytes, t.screen_bytes, t.heap_bytes, t.heap_blocks, HEAP_MAX_BLOCKS, t.shared_bytes, t.retained_bytes, t.kernel_bytes, t.caps, CAP_SLOTS - 1);
     let _ = writeln!(out, "  QUOTA TASKS={}/{} ENDPOINTS={}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints);
     let _ = writeln!(out, "  BAND={} BUDGET_US={} PERIOD_US={}{}", t.band, t.budget_ns / 1000, t.period_ns / 1000, if t.throttled != 0 { " THROTTLED" } else { "" });
 }
@@ -47,7 +48,7 @@ pub fn pmap(out: &mut impl Write, pid: u64) {
     for r in records.iter::<StatRegion>() {
         let rights = [(REGION_READ, 'r'), (REGION_WRITE, 'w'), (REGION_EXECUTE, 'x')].map(|(bit, ch)| if r.flags & bit != 0 { ch } else { '-' });
         let _ = writeln!(out, "{:#018x} {:>9} {}{}{} {}", r.start, r.size, rights[0], rights[1], rights[2], stat::vm_name(r.kind));
-        mapped += r.size;
+        if r.kind != REGION_GUARD { mapped += r.size; }
         if r.kind == REGION_HEAP { heap += r.size; }
     }
     let _ = writeln!(out, "TOTAL MAPPED={} HEAP={}/{}", mapped, heap, HEAP_MAX_BYTES);
@@ -69,7 +70,7 @@ pub fn irqs(out: &mut impl Write) {
     let mut buffer = [0u8; 1024];
     let Ok(records) = stat::read(STAT_IRQS, 0, &mut buffer) else { return };
     for i in records.iter::<StatIrq>() {
-        let _ = writeln!(out, "IRQ={} COUNT={} HOLDER={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.endpoint, i.masked != 0);
+        let _ = writeln!(out, "IRQ={} COUNT={} HOLDER={} HOLDERS={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.holders, i.endpoint, i.masked != 0);
     }
 }
 
@@ -77,8 +78,8 @@ pub fn devices(out: &mut impl Write) {
     let mut buffer = [0u8; 4096];
     let Ok(records) = stat::read(STAT_DEVICES, 0, &mut buffer) else { return };
     for (index, d) in records.iter::<StatDevice>().enumerate() {
-        let _ = write!(out, "{:02} {:06X} {} IRQ={} HOLDER={} BARS=", index, d.class, stat::class_name(d.class), d.irq, d.holder);
-        for (i, &bytes) in d.bar_sizes.iter().enumerate().filter(|(_, b)| **b != 0) { let _ = write!(out, "{}:{} ", i, bytes); }
+        let _ = write!(out, "{:02} {:02x}:{:02x}.{} {:06X} {} IRQ={} HOLDER={} BARS=", index, d.location >> 8, d.location >> 3 & 31, d.location & 7, d.class, stat::class_name(d.class), d.irq, d.holder);
+        for (i, &bytes) in d.bar_sizes.iter().enumerate().filter(|(_, b)| **b != 0) { let _ = write!(out, "{}:{}{} ", i, bytes, if d.io_bars & 1 << i != 0 { "(IO)" } else { "" }); }
         let _ = writeln!(out);
     }
 }
@@ -87,7 +88,7 @@ pub fn endpoints(out: &mut impl Write) {
     let mut buffer = [0u8; 8192];
     let Ok(records) = stat::read(STAT_ENDPOINTS, 0, &mut buffer) else { return };
     for e in records.iter::<StatEndpoint>() {
-        let _ = writeln!(out, "EP={} CREATOR={} RECEIVERS={} WAITING={} RECEIVING={} MESSAGES={} BUSY={} TIMEOUTS={}", e.index, e.creator, e.receivers, e.waiting_senders, e.waiting_receivers, e.messages, e.busy, e.timeouts);
+        let _ = writeln!(out, "EP={} CREATOR={} RECEIVERS={} WAITING={} RECEIVING={} MESSAGES={} BUSY={} TIMEOUTS={} SERVER={} HOLDERS={} IRQ={}", e.index, e.creator, e.receivers, e.waiting_senders, e.waiting_receivers, e.messages, e.busy, e.timeouts, e.server, e.holders, e.irq);
     }
 }
 
@@ -99,7 +100,7 @@ pub fn caps(out: &mut impl Write, pid: u64) {
         let _ = write!(out, "SLOT={} GEN={} {} NODE={} PARENT={}", c.slot, c.generation, stat::cap_name(c.kind), c.node, c.parent);
         match c.kind as usize {
             CAP_KIND_ENDPOINT => {
-                let _ = write!(out, " RIGHTS={}{}{}{}", rights[0], rights[1], rights[2], rights[3]);
+                let _ = write!(out, " EP={} RIGHTS={}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3]);
                 if c.badge != 0 { let _ = write!(out, " BADGE={:#x}", c.badge); }
             }
             CAP_KIND_MEMORY => { let _ = write!(out, " BYTES={} RIGHTS={}{}{}", c.size, rights[0], rights[1], rights[2]); }

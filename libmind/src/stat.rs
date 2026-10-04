@@ -56,14 +56,14 @@ pub fn phys_name(kind: u32) -> &'static str {
         0 => "reserved", 1 => "loader code", 2 => "loader data", 3 => "boot code", 4 => "boot data", 5 => "runtime code", 6 => "runtime data",
         7 => "free RAM", 8 => "unusable", 9 => "ACPI reclaim", 10 => "ACPI NVS", 11 => "MMIO", 12 => "MMIO ports", 13 => "PAL code", 14 => "persistent",
         PHYS_ARENA => "kernel arena", PHYS_BOOT_IMAGE => "boot image", PHYS_FRAMEBUFFER => "framebuffer",
-        PHYS_AP_TRAMPOLINE => "AP trampoline", PHYS_PCI_BAR => "device BAR",
+        PHYS_AP_TRAMPOLINE => "AP trampoline", PHYS_PCI_BAR => "device BAR", PHYS_KERNEL => "kernel image",
         _ => "other",
     }
 }
 
 /// Name of an address-space region kind (REGION_*).
 pub fn vm_name(kind: u32) -> &'static str {
-    match kind { REGION_IMAGE => "image", REGION_STACK => "stack", REGION_SCREEN => "screen", REGION_INFO => "info", REGION_MAILBOX => "mailbox", REGION_EXIT => "exit", REGION_HEAP => "heap", REGION_SHARED => "shared", REGION_DEVICE => "device", _ => "?" }
+    match kind { REGION_IMAGE => "image", REGION_STACK => "stack", REGION_SCREEN => "screen", REGION_INFO => "info", REGION_MAILBOX => "mailbox", REGION_EXIT => "exit", REGION_HEAP => "heap", REGION_SHARED => "shared", REGION_DEVICE => "device", REGION_GUARD => "guard", _ => "?" }
 }
 
 /// Name of a capability kind.
