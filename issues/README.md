@@ -19,8 +19,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [077](077-voice-audio-front-end.md) | Voice V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` | tools | P1 | — | track G |
-| [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | 077 | track G |
+| [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | — (077 done) | track G |
 | [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
 | [081](081-caps-tool.md) | `caps`: capabilities and the derivation tree | tools | P1 | 151 | track G, T3 |
 | [084](084-reboot.md) | `reboot` | tools | P2 | 152 | track G, T3 |
@@ -116,6 +115,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
 | [075](../issues-done/075-stat-fields-for-the-monitors.done) | `STAT` fields the monitors lost in the merge (`STAT_VERSION` 2) | done (2026-10-04) |
 | [076](../issues-done/076-monitors-show-restored-stat-fields.done) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0) | done (2026-10-04) |
+| [077](../issues-done/077-voice-audio-front-end.done) | Voice V0: audio front end (`mind::voice`, `listen --vad/--wav`) | done (2026-10-04) |
 | [080](../issues-done/080-ipc-tool.done) | `ipc`: endpoints, holders, wait-for graph | done (2026-10-04) |
 | [082](../issues-done/082-find-and-grep.done) | `find` and `grep` | done (2026-10-04) |
 | [083](../issues-done/083-format.done) | `format` for the RAM disk (`vfs.wit` 2.3) | done (2026-10-04) |

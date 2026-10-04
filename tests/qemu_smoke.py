@@ -2062,7 +2062,36 @@ def audio_suite(vm, wav):
     print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
 
 
-def listen_suite(vm):
+SPEECH = ("открой файлы", "который час", "hello world")
+
+
+def speech_wav():
+    """The phrases from the host build of tts, 1 s apart in faint noise, as 48 kHz stereo like the microphone gives;
+    returns the WAV and where each phrase starts (ms)."""
+    import random
+    exe = Path(tempfile.gettempdir()) / "voice-tts-host"
+    subprocess.run(["rustc", "--edition=2021", "-O", str(ROOT / "tests/tts_host.rs"), "-o", str(exe)], check=True)
+    mono, starts = [0] * 8000, []
+    for phrase in SPEECH:
+        out = Path(tempfile.gettempdir()) / "voice-phrase.wav"
+        subprocess.run([str(exe), phrase, str(out)], check=True, capture_output=True)
+        data = out.read_bytes()[44:]
+        starts.append(len(mono) // 16)
+        mono += struct.unpack(f"<{len(data) // 2}h", data)
+        mono += [0] * 16000
+    noise = random.Random(77)
+    mono = [max(-32768, min(32767, x + noise.randint(-30, 30))) for x in mono]
+    frames, previous = [], 0
+    for x in mono:  # 16 -> 48 kHz by linear interpolation, the same in both channels
+        for value in ((2 * previous + x) // 3, (previous + 2 * x) // 3, x):
+            frames += (value, value)
+        previous = x
+    pcm = struct.pack(f"<{len(frames)}h", *frames)
+    header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 2, 48000, 48000 * 4, 4, 16)
+    return header + b"data" + struct.pack("<I", len(pcm)) + pcm, starts
+
+
+def listen_suite(vm, starts):
     # QEMU's "none" backend feeds the AC97 microphone with silence at the real rate ("wav" has no capture).
     require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
     log = ""
@@ -2090,8 +2119,45 @@ def listen_suite(vm):
     assert 50 < spoken < 1500, spoken
     require(vm.command("nosuchprogram"), "ERROR: UNKNOWN COMMAND")
     require(vm.command("run rtc x &"), "SERVICES TAKE NO ARGUMENTS")
+
+    def logs(pid, end="[LISTEN] DONE"):
+        text = ""
+        for _ in range(120):
+            text += vm.command(f"logs {pid}")
+            if end in text:
+                break
+            time.sleep(.25)
+        return text
+    # Speech detection (mind::voice): nothing in the microphone's silence; the phrases of a WAV file made by the host
+    # build of tts, each found once where it starts.
+    require(vm.command("run listen --vad 1 &"), "PID=4 NAME=listen BACKGROUND")
+    log = logs(4)
+    require(log, "[LISTEN] LISTENING FOR SPEECH 1 S")
+    require(log, "[LISTEN] 0 UTTERANCES IN 1000 MS")
+    vm.command("kill 4")
+    require(vm.command("run listen --vad --wav speech.wav &"), "PID=5 NAME=listen BACKGROUND")
+    log = logs(5)
+    require(log, "[LISTEN] FILE speech.wav: 48000 HZ, 2 CHANNELS")
+    require(log, f"[LISTEN] {len(starts)} UTTERANCES IN")
+    found = [int(ms) for ms in re.findall(r"\[LISTEN\] SPEECH AT (\d+) MS, (?:\d+) MS, LEVEL -\d+ DBFS", log)]
+    assert len(found) == len(starts) and all(-60 <= f - s <= 60 for f, s in zip(found, starts)), (found, starts)
+    vm.command("kill 5")
+    # Without --vad the file is converted to 16 kHz mono, measured and played back.
+    require(vm.command("run listen --wav speech.wav &"), "PID=6 NAME=listen BACKGROUND")
+    log = logs(6)
+    duration = re.search(r"\[LISTEN\] FILE speech.wav: 48000 HZ, 2 CHANNELS, (\d+) MS", log)[1]
+    require(log, f"[LISTEN] 16 KHZ MONO: {duration} MS, PEAK")
+    require(log, "[LISTEN] PLAYED BACK")
+    vm.command("kill 6")
+    require(vm.command("run listen --wav nosuch.wav &"), "PID=7 NAME=listen BACKGROUND")
+    require(logs(7), "[LISTEN] CANNOT READ nosuch.wav: File(NotFound)")
+    vm.command("kill 7")
+    require(vm.command("run listen --wav &"), "PID=8 NAME=listen BACKGROUND")
+    require(logs(8), "USAGE: LISTEN [SECONDS] | LISTEN --vad [SECONDS] | LISTEN [--vad] --wav FILE")
+    vm.command("kill 8")
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in), playback, program arguments, run by name", flush=True)
+    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in), playback, program arguments, run by name, "
+          f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms)", flush=True)
 
 
 def tts_suite(vm, wav, asr_model=None):
@@ -2370,6 +2436,9 @@ def main():
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
                 shutil.copyfile(disk / "app.elf", disk / "extra/demo.elf")
+            if suite == "listen":
+                speech, starts = speech_wav()
+                (disk / "speech.wav").write_bytes(speech)
             if suite == "tools":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
@@ -2399,7 +2468,7 @@ def main():
                 elif suite == "tts":
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
-                    listen_suite(vm)
+                    listen_suite(vm, starts)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
