@@ -48,7 +48,9 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
 /// Block device behind a driver's IPC endpoint (client side, idl/block.wit).
 /// A restarted driver instance has no buffer attached and answers a read with not-found (MC-6.4): the buffer is attached
 /// to the new instance and the read is repeated, which is safe because reads are idempotent (MC-6.6).
-pub struct Device { endpoint: Endpoint, buffer: Pages, sectors: u64, kind: usize }
+/// The buffer is a LEASE the client ends with `CAP_REVOKE` on re-attach and on drop; the driver writes into it while
+/// it is attached (a SHARE_RW adapter listed in docs/profile), and the client copies the data out after each reply.
+pub struct Device { endpoint: Endpoint, buffer: Pages, lease: usize, sectors: u64, kind: usize }
 
 impl Device {
     /// Waits for the driver to be ready; Err(NotFound) if there is no drive.
@@ -56,16 +58,15 @@ impl Device {
         let sectors = block::sectors(endpoint)?;
         let kind = block::kind(endpoint)? as usize;
         let buffer = Pages::new(BUFFER).ok_or(Error::NoMemory)?;
-        let device = Self { endpoint, buffer, sectors, kind };
+        let lease = buffer.share()?;
+        let device = Self { endpoint, buffer, lease, sectors, kind };
         device.attach()?;
         Ok(device)
     }
-    // Lends the transfer buffer to the current driver instance.
+    // Lends the transfer buffer to the current driver instance; an earlier instance's access ends first.
     fn attach(&self) -> Result<()> {
-        let cap = self.buffer.share()?;
-        let attached = block::attach(self.endpoint, cap);
-        let _ = ipc::drop_cap(cap); // the driver maps its own copy
-        attached
+        let _ = ipc::revoke(self.lease);
+        block::attach(self.endpoint, self.lease)
     }
     pub fn sectors(&self) -> u64 { self.sectors }
     /// Device kind (BLOCK_KIND_*), to tell drives apart.
@@ -80,3 +81,5 @@ impl Device {
         Ok(&self.buffer.as_slice()[..got as usize * BLOCK_SECTOR])
     }
 }
+
+impl Drop for Device { fn drop(&mut self) { let _ = ipc::revoke(self.lease); let _ = ipc::drop_cap(self.lease); } }

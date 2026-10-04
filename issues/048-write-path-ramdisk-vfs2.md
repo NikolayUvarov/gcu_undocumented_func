@@ -16,4 +16,4 @@ The file system is read-only; tools cannot save.
 
 ## Related
 
-[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F8; [039](039-port-services.md).
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F8; [039](../issues-done/039-port-services.done) (`vfs.wit` 1.0 to extend).

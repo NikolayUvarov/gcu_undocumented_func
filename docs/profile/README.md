@@ -34,7 +34,7 @@ Status: **met** (implemented and tested within this profile; each met row names 
 | MC-2.1 isolated state | met | Private page tables; sharing only through memory capabilities. Evidence: `isolation` suite cases r, w, t, n; host test `same_virtual_address_maps_private_frames_in_distinct_cr3s`. |
 | MC-2.3 typed, versioned interfaces | partial | MIND IDL v0.2 ([docs/idl](../idl/README.md)): typed, versioned WIT-subset interfaces with bounded records, strings and lists, capability kinds, generated bindings, schema checks on a private copy in the receiver. `rtc` and `loader` use it; the other protocols are numeric conventions in `common/abi.rs` (roadmap C8). Ordering and session contracts are not described. |
 | MC-2.5 bounded queues, back-pressure | met | IPC is a rendezvous (no kernel message queue); at most `ENDPOINT_QUEUE` (4) senders wait per endpoint, a further send fails with `ERR_BUSY`. Every send, call and receive may carry a timeout; expiry withdraws the operation without a trace, and a later reply to that call fails with `ERR_PEER`. Timeouts have 10 ms granularity. Evidence: `isolation` cases `k` (timeouts), `q` (queue bound with five senders), `j` (late reply). |
-| MC-2.6 transfer modes | partial | COPY: two data words per message. MOVE: a detached memory object (`MEM_DETACH`) has one writable owner and is transferred only with `CAP_TRANSFER_MOVE`. SHARE_RO: a read-only capability the kernel reports as sealed (no writer, no DMA). LEASE: a copy ended by `CAP_REVOKE`, which unmaps it with a completion point. Existing services still share heap blocks read-write (`MEM_SHARE`, roadmap C8). |
+| MC-2.6 transfer modes | partial | COPY: two data words per message. MOVE: a detached memory object (`MEM_DETACH`) has one writable owner and is transferred only with `CAP_TRANSFER_MOVE`. SHARE_RO: a read-only capability the kernel reports as sealed (no writer, no DMA). LEASE: a copy ended by `CAP_REVOKE`, which unmaps it with a completion point. Every service transfer uses one of these modes or a `SHARE_RW` adapter listed under [Memory transfers](#memory-transfers-appendix-b2). Without an IOMMU a DMA-capable device is not bound by any of them. |
 | MC-3.1, 3.2 explicit, unforgeable capabilities | met (kernel-allocated slots) | Capabilities live in a kernel table and are named by handles `slot \| generation << 8`. A slot the kernel hands out gets a new generation when freed, so a stale handle is rejected. Fixed slots 1–9 are named by their owner and overwritten only by the owner's own receive. Evidence: `isolation` case `k` (stale handle after slot reuse, mint and revoke). |
 | MC-3.3 no implicit authority for new domains | met | A new task gets exactly the spawner's grant list (`SPAWN`). Endpoints have no global names; a service is reachable only through a capability `init` derived for the client. Evidence: `isolation` case `k` (an application holds no privilege: input, ports, spawn, platform, control refused). |
 | MC-3.4–3.6 copy/move/attenuate/revoke | partial | Copy and move are distinct; `CAP_MINT` attenuates endpoint rights and port/memory ranges; `CAP_REVOKE` removes all descendants (including one in a blocked send) before it returns. Mappings made from a revoked capability are removed before `CAP_REVOKE` returns. |
@@ -51,3 +51,20 @@ Status: **met** (implemented and tested within this profile; each met row names 
 | MC-10.5 side channels | not claimed | No mitigation is claimed. |
 | MC-11.1 explicit ABI | partial | The ABI is a `repr(C)` mailbox and constants in `common/abi.rs`; there is no versioning. |
 | MC-11.3, 11.11 external formats in adapters | partial | FAT and USB/SCSI parsing run in ring 3 services with only their device capabilities; ELF parsing of applications runs in the kernel. |
+
+## Memory transfers (Appendix B.2)
+
+Every memory capability a service hands to another task, and its mode (MC-2.6). `MEM_SHARE` makes a capability for a block of the caller's own heap; the modes below say what the receiver gets and when its access ends.
+
+| Transfer | Mode | Receiver's access | Ends |
+|---|---|---|---|
+| MIND IDL buffer calls (`vfs`, `tts`, `loader`, `init`: `wire::call_buffer`) | LEASE, read-write | the server copies the request into private memory before decoding and writes the reply | `CAP_REVOKE` by the client before it reads the reply |
+| `audio.play` (`mind::audio`) | LEASE, read-only | `audio_gw` copies the PCM into its DMA ring | `CAP_REVOKE` after the reply |
+| `audio.record-read` | LEASE, read-write | `audio_gw` writes captured samples | `CAP_REVOKE` before the client reads them |
+| `block.attach` (`vfs_server` → `ata`, `ahci`, `usb_storage`) | **SHARE_RW** adapter | the driver writes sector data during `read` calls; `vfs_server` copies it into its private cache right after each reply and parses only that copy (the private-copy condition of MC-2.6) | `CAP_REVOKE` on re-attach to a restarted driver and when the device is closed |
+| Task screens → `compositor` (kernel, `COMPOSITOR_PULL`) | **SHARE_RW** adapter, read-only for the compositor | the owner keeps drawing while the compositor copies the pixels into its shadow buffer and the framebuffer; pixels have no structure to validate, so a torn frame is the only effect (display fences: track G) | the next focus change replaces the capability |
+| `ping` → `pong` (demo) | LEASE, read-only | `pong` reads the text | `CAP_REVOKE` after the reply |
+| `SPAWN` image (`loader`) | not transferred | the kernel copies the image during the call | the capability is dropped after `SPAWN` |
+| Driver DMA regions (`init` → drivers) | owned by the driver | `PLATFORM_CAP` DMA region, cleared by `init` before a restart | the driver's exit |
+
+`SHARE_RW` is used only by the two adapters above. Not claimed: the end of a lease bounds the receiver's access through its mappings, not what it copied while it held them.

@@ -1,4 +1,4 @@
-//! Client for the audio_gw audio gateway (idl/audio.wit): 16-bit stereo 48 kHz PCM via a lent buffer, tones,
+//! Client for the audio_gw audio gateway (idl/audio.wit): 16-bit stereo 48 kHz PCM via a buffer lent per call, tones,
 //! microphone capture.
 use crate::abi::*;
 use crate::idl::audio as idl;
@@ -20,6 +20,14 @@ fn channel() -> Result<&'static mut Channel> {
     Ok(slot.as_mut().unwrap())
 }
 
+// Lends the channel for one call (MC-2.6 LEASE): read-only for playback, writable for capture; revoked after the reply.
+fn lend<T>(channel: &Channel, writable: bool, call: impl FnOnce(usize) -> Result<T>) -> Result<T> {
+    let lent = crate::ipc::mint(channel.cap, if writable { CAP_READ | CAP_WRITE | CAP_GRANT } else { CAP_READ }, 0, 0)?;
+    let result = call(lent);
+    let _ = crate::ipc::revoke(channel.cap);
+    result
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Info { pub present: bool, pub rate: usize }
 
@@ -37,7 +45,7 @@ pub fn play(samples: &[i16]) -> Result<usize> {
     let count = samples.len().min(CHUNK / 2) & !1;
     let bytes = channel.pages.as_mut_slice();
     for (i, sample) in samples[..count].iter().enumerate() { bytes[i * 2..i * 2 + 2].copy_from_slice(&sample.to_le_bytes()); }
-    let accepted = idl::play(Endpoint::AUDIO, (count * 2) as u32, channel.cap)? as usize;
+    let accepted = lend(channel, false, |pcm| idl::play(Endpoint::AUDIO, (count * 2) as u32, pcm))? as usize;
     Ok(accepted / 2)
 }
 
@@ -74,7 +82,8 @@ impl Stream {
     pub fn flush(&mut self) -> Result<()> {
         while self.filled >= 2 {
             let channel = channel()?;
-            let accepted = idl::play(Endpoint::AUDIO, ((self.filled & !1) * 2) as u32, channel.cap)? as usize;
+            let bytes = ((self.filled & !1) * 2) as u32;
+            let accepted = lend(channel, false, |pcm| idl::play(Endpoint::AUDIO, bytes, pcm))? as usize;
             let taken = (accepted / 2).min(self.filled);
             if taken == 0 { if wait_space(CHUNK / 4096).is_err() { crate::time::sleep(20); } continue; }
             channel.pages.as_mut_slice().copy_within(taken * 2..self.filled * 2, 0);
@@ -97,7 +106,7 @@ pub fn record_read(out: &mut [i16]) -> Result<(usize, bool)> {
     let capacity = (out.len() * 2).min(CHUNK) & !4095;
     if capacity == 0 { return Ok((0, false)); }
     let before = idl::overflows(Endpoint::AUDIO)?;
-    let bytes = idl::record_read(Endpoint::AUDIO, capacity as u32, channel.cap)? as usize;
+    let bytes = lend(channel, true, |buffer| idl::record_read(Endpoint::AUDIO, capacity as u32, buffer))? as usize;
     let overflow = idl::overflows(Endpoint::AUDIO)? != before;
     let samples = (bytes / 2).min(out.len());
     let data = channel.pages.as_slice();

@@ -1,0 +1,45 @@
+# 039 — Port the services to MIND IDL and the C4 memory modes (roadmap C8)
+
+**Type:** kernel · **Owner:** kernel track (coordinates `kernel/src/scheduler.rs`, `common/abi.rs`) · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C8 · **Constitution:** MC-2.3, MC-2.6
+
+## Problem
+
+Only `rtc` uses MIND IDL; the other services use numeric conventions and share heap blocks read-write.
+
+## Plan
+
+- Interfaces in `idl/`: `block.wit`, `audio.wit`, `tts.wit`, `loader.wit`, `init.wit` (IDL v0.2 from issue 044 is done; `loader.wit` exists).
+- Transfers: the client's buffer as a lease or sealed read-only object where the server only reads; read-write sharing only where declared in the profile.
+- VFS: the read-only interface is ported now (`vfs.wit` 1.0); VFS v2 (directory handles, writing) extends it in issue 048.
+
+## Acceptance criteria
+
+- Every service decodes requests with generated bindings; no `MEM_SHARE` read-write buffer remains outside the profile's list.
+
+## Related
+
+[ROADMAP](../ROADMAP.md) C8; [044](044-idl-v02-records-strings.done), [048](../issues/048-write-path-ramdisk-vfs2.md).
+
+## Progress
+
+- 2026-10-04: `block.wit` (sectors, kind, attach, read) used by `ata`, `ahci`, `usb_storage` and the VFS block client. The buffer is lent to the driver (a copy the client can revoke). A restarted driver answers a read with not-found until the buffer is attached again. `loader.wit` came with issue 044.
+- 2026-10-04: `tts.wit` (say: text copied into the server's private memory before synthesis) and `init.wit` (run a service by name). The numeric TTS and init requests are removed.
+- 2026-10-04: `audio.wit` (device, tone, stop, play from a lent buffer, wait answered from the interrupt via `Call::defer`, capture). The public `mind::audio` API is unchanged; the numeric audio protocol is removed.
+- 2026-10-04: `vfs.wit` (open, read, size, close, list in pages of 16 entries) served by `vfs_server`; `mind::fs` keeps its API. The numeric VFS protocol is removed from `common/abi.rs`.
+
+## Resolution
+
+**Interfaces.** `rtc`, `block`, `vfs`, `loader`, `init`, `audio`, `tts` in `idl/`; every service that answers requests decodes them with generated bindings, and no numeric request protocol is left in `common/abi.rs`. The loader keeps a legacy adapter for a start with an endpoint for the child (until loader v1, issue 046).
+
+**Memory modes.** The profile lists every memory transfer with its mode (`docs/profile/README.md`, Memory transfers):
+- MIND IDL buffer calls: lease, revoked before the reply is read;
+- audio play: read-only lease per call; record-read: writable lease per call (it used to be a buffer shared once and never revoked);
+- block attach: the only service `SHARE_RW` adapter; the client now keeps the lease and revokes it on re-attach and on close (it used to drop its capability right after attaching, so it could not end the driver's access);
+- task screens: the compositor now gets them read-only (it used to get write access it never needed);
+- `ping` lends its page read-only for one call.
+
+**Tests:** all 13 QEMU suites pass (services: VFS over ATA, `ping`/`pong`; ahci: VFS over AHCI; audio, tts, listen: the leased audio channel; dzen, normal: the read-only screens), host tests and `tests/idl_test.py`.
+
+**Also fixed:** the kernel's ghost-node table grew on demand, so the first revocable subtree after boot looked like a 128-byte leak in the `normal` suite; it is now allocated once at boot (256 entries).
+
+Not done: the compositor protocol on display fences (track G); a test that the driver loses access to the block buffer after revocation.
