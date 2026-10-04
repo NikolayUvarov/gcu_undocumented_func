@@ -159,15 +159,26 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started.
+// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started; then the RAM disk and an
+// rtc client (calendar time for directory entries).
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
+pub const SLOT_RAMDISK: usize = 5;
+pub const SLOT_VFS_RTC: usize = 6;
 // Shell: application slots plus process control, the input privilege and the COM1 port range.
 pub const SLOT_CONTROL: usize = 7;
 pub const SLOT_INPUT: usize = 8;
 pub const SLOT_SERIAL: usize = 9;
+// Capabilities a launcher grants an application that asks for them (loader launch sessions): its own VFS client for
+// files the user may change (7: applications hold no process control), system information from sysmon (10),
+// lifecycle control, a client of init (11), and the system log, logd (12; services hold their log client there too).
+// Slots 13..15 are reserved for further grants.
+pub const SLOT_FILE: usize = 7;
+pub const SLOT_SYSINFO: usize = 10;
+pub const SLOT_LIFECYCLE: usize = 11;
+pub const SLOT_LOG: usize = 12;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 10;
+pub const SLOT_DYNAMIC: usize = 16;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots.

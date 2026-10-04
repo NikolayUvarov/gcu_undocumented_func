@@ -1,0 +1,24 @@
+# 072 — Fixed capability slots for launcher grants — done
+
+**Type:** kernel · **Owner:** kernel track (`common/abi.rs`) · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G; C1 · **Constitution:** MC-3.2, MC-3.3, MC-3.11
+
+## Problem
+
+Issue [051](../issues/051-merge-main-into-tools.md) merges the tools branch. Its programs receive capabilities their launcher grants on request (loader launch sessions, MC-3.11): a VFS client for files the user may change, a `sysmon` client, a client of `init` for lifecycle control and a client of the system log `logd`, which every boot service also holds. A received capability can only land in a fixed slot (below `SLOT_DYNAMIC`), and on `main` slots 1–9 are all taken by the standard grants and the shell's privileges (`SLOT_CONTROL`, `SLOT_INPUT`, `SLOT_SERIAL`). The tools branch had raised `SLOT_DYNAMIC` on its own; ABI changes are made only in kernel issues.
+
+## Plan
+
+- `SLOT_DYNAMIC` 10 → 16: slots 1–15 are fixed by convention (generation 0), the kernel hands out 16–63 (48 slots per task).
+- Name the grant slots in `common/abi.rs`: `SLOT_FILE` 7 (an application holds no process control, so slot 7 is free), `SLOT_SYSINFO` 10, `SLOT_LIFECYCLE` 11, `SLOT_LOG` 12; 13–15 reserved. For `vfs_server`: `SLOT_RAMDISK` 5 and `SLOT_VFS_RTC` 6 after the block drivers.
+- Docs: README, `docs/api`, `docs/profile/README.md`, `docs/profile/kernel-objects.md`.
+
+## Acceptance criteria
+
+- The kernel accepts receives and spawn grants into slots 1–15 and hands out 16–63 with generations; stale handles are still rejected.
+- All QEMU suites of `main` pass (the `isolation` cases on slot reuse, stale handles, `MEM_DETACH` handles use `SLOT_DYNAMIC`).
+
+## Resolution
+
+- `common/abi.rs`: `SLOT_DYNAMIC = 16`, `SLOT_FILE`, `SLOT_SYSINFO`, `SLOT_LIFECYCLE`, `SLOT_LOG`, `SLOT_RAMDISK`, `SLOT_VFS_RTC`. The kernel uses `SLOT_DYNAMIC` everywhere (free slots, handle generations, receive and grant targets, `COMPOSITOR_PULL`, `STAT_CAPS`), so no kernel code changed.
+- Docs updated as planned.
+- Tests: all QEMU suites of `main` and the host tests pass (`isolation` checks handles against `SLOT_DYNAMIC`). The grants themselves are exercised by the tools suites after the merge (051).
