@@ -36,10 +36,40 @@ done
 # In -drive a comma separates options; commas in the path are doubled.
 USB_ROOT_PATH="${RUN_SCRIPT_DIR//,/,,}/usb_root"
 
-printf 'Starting MIND CORE in QEMU: %s\n' "$QEMU_BIN"
+# Sound: audio_gw drives an AC97 controller, so without one `beep`, `say` and `listen` find no device. The host
+# backend is the first of PipeWire, PulseAudio, ALSA and SDL that this QEMU has and that starts on this host (QEMU
+# stops at once when a backend cannot reach its sound server); MIND_AUDIO=<driver> picks one, none turns the card off.
+AUDIO=()
+available="$("$QEMU_BIN" -audiodev help 2>/dev/null || true)"
+works() { # the backend starts: QEMU is still running when the timeout ends it
+    timeout 2 "$QEMU_BIN" -nodefaults -machine none -display none -monitor none -S -audiodev "$1,id=probe" >/dev/null 2>&1
+    [[ $? -eq 124 ]]
+}
+driver="${MIND_AUDIO:-}"
+if [[ -z "$driver" ]]; then
+    for candidate in pipewire pa alsa sdl; do
+        case "$candidate" in # ALSA needs a sound card on this host, SDL a desktop session
+            alsa) [[ -e /dev/snd ]] || continue ;;
+            sdl) [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || continue ;;
+        esac
+        if grep -qx "$candidate" <<<"$available" && works "$candidate"; then driver="$candidate"; break; fi
+    done
+    [[ -n "$driver" ]] || printf 'WARNING: no sound: none of pipewire, pa, alsa, sdl starts here (set MIND_AUDIO=<driver>).\n' >&2
+fi
+if [[ -n "$driver" && "$driver" != none ]]; then
+    AUDIO=(-audiodev "$driver,id=snd0" -device AC97,audiodev=snd0)
+fi
+# Network: a VirtIO card on QEMU's user networking (MIND_NET=none: no card). CPU: RDRAND for the TLS and key services
+# (MIND_CPU=<model> to change it).
+NET=()
+[[ "${MIND_NET:-user}" == none ]] || NET=(-nic "user,model=virtio-net-pci")
+
+printf 'Starting MIND CORE in QEMU: %s (audio: %s)\n' "$QEMU_BIN" "${driver:-none}"
 exec "$QEMU_BIN" \
     "${FIRMWARE[@]}" \
     -drive "format=raw,file=fat:rw:$USB_ROOT_PATH" \
     -m 512 -smp 4,sockets=1,cores=4,threads=1 \
+    -cpu "${MIND_CPU:-qemu64,+rdrand}" \
     -serial stdio -rtc base=localtime \
+    "${AUDIO[@]}" "${NET[@]}" \
     "$@"
