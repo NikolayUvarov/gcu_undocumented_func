@@ -20,4 +20,4 @@ Programs have only page blocks (`ALLOC`); text buffers and lists of the tools ne
 
 ## Resolution
 
-Superseded by the tools branch's records [052](052-program-heap.done), merged in [051](../issues/051-merge-main-into-tools.md): the program heap (`libmind/src/heap.rs`, `alloc` feature).
+Superseded by the tools branch's records [052](052-program-heap.done), merged in [051](051-merge-main-into-tools.done): the program heap (`libmind/src/heap.rs`, `alloc` feature).

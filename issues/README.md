@@ -17,7 +17,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [051](051-merge-main-into-tools.md) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | tools / infra | P0 | — | track G |
 | [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge | kernel | P3 | — | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
@@ -74,6 +73,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [048](../issues-done/048-write-path-ramdisk-vfs2.done) | Block write, `ramdisk`, VFS v2 with directory handles | superseded by 064–066 (2026-10-04) |
 | [049](../issues-done/049-editor-and-fm-write.done) | Editor `edit`, `fm` write operations, `df`, `fsck` | superseded by 067, 068 (2026-10-04) |
 | [050](../issues-done/050-logd-dmesg-svc.done) | `logd`, `dmesg`, `svc` | superseded by 069, 070 (2026-10-04) |
+| [051](../issues-done/051-merge-main-into-tools.done) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | done (2026-10-04) |
 | [052](../issues-done/052-program-heap.done) | Program heap `mind::alloc` | done (2026-10-04) |
 | [053](../issues-done/053-font-8x16.done) | 8×16 font with Cyrillic and box drawing | done (2026-10-04) |
 | [054](../issues-done/054-tui-library.done) | Text UI library `mind::tui` | done (2026-10-04) |
@@ -98,4 +98,4 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [073](../issues-done/073-port-out-block.done) | `PORT_OUT_BLOCK`: block writes of 16-bit words to a port | done (2026-10-04) |
 | [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
 
-Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](051-merge-main-into-tools.md) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
+Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

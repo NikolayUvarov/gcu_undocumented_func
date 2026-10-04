@@ -20,4 +20,4 @@ No way to edit text or manage files.
 
 ## Resolution
 
-Superseded by the tools branch's records [067](067-editor.done) and [068](068-fm-write-df-fsck.done), merged in [051](../issues/051-merge-main-into-tools.md): `edit`, `fm` writes, `df` and `fsck`.
+Superseded by the tools branch's records [067](067-editor.done) and [068](068-fm-write-df-fsck.done), merged in [051](051-merge-main-into-tools.done): `edit`, `fm` writes, `df` and `fsck`.

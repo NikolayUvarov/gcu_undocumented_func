@@ -20,4 +20,4 @@
 
 ## Resolution
 
-Superseded by the tools branch's records [053](053-font-8x16.done), merged in [051](../issues/051-merge-main-into-tools.md): MIND Mono 16, an 8×16 font with Cyrillic and box drawing (`fonts/`, `common/font16.rs`).
+Superseded by the tools branch's records [053](053-font-8x16.done), merged in [051](051-merge-main-into-tools.done): MIND Mono 16, an 8×16 font with Cyrillic and box drawing (`fonts/`, `common/font16.rs`).

@@ -4,7 +4,7 @@
 
 MIND IDL describes the interface of a service: functions, the types and size limits of their data, the capability a call may carry and the version. Interfaces are written in a subset of [WIT](https://component-model.bytecodealliance.org/design/wit.html), the baseline candidate named in Appendix B.2. `scripts/mind_idl.py` generates Rust bindings for client and server into `libmind/src/idl/`. The generated files are committed, and `tests/idl_test.py` fails if they are out of date.
 
-v0.2 covers the data representation and the acceptance of a single request: integers in two message words, and records, strings and lists in a memory buffer. Its minor extension (merged from the tools branch, issue [051](../../issues/051-merge-main-into-tools.md)) adds enums, `bytes<N>`, enum errors and capability results; it changes nothing on the wire for interfaces that do not use them. Message ordering, session state machines and composition (MC-2.10) are not part of it yet.
+v0.2 covers the data representation and the acceptance of a single request: integers in two message words, and records, strings and lists in a memory buffer. Its minor extension (merged from the tools branch, issue [051](../../issues-done/051-merge-main-into-tools.done)) adds enums, `bytes<N>`, enum errors and capability results; it changes nothing on the wire for interfaces that do not use them. Message ordering, session state machines and composition (MC-2.10) are not part of it yet.
 
 ## Syntax
 

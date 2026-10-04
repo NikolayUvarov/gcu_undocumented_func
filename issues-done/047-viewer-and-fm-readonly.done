@@ -20,4 +20,4 @@ There is no way to browse or read files except `files` and `list`.
 
 ## Resolution
 
-Superseded by the tools branch's records [057](057-viewer.done) and [063](063-file-manager-read-only.done), merged in [051](../issues/051-merge-main-into-tools.md): `view` and `fm`.
+Superseded by the tools branch's records [057](057-viewer.done) and [063](063-file-manager-read-only.done), merged in [051](051-merge-main-into-tools.done): `view` and `fm`.

@@ -22,4 +22,4 @@
 
 ## Resolution
 
-Superseded by the tools branch's records [055](055-key-events.done) and [056](056-shell-line-editing.done), merged in [051](../issues/051-merge-main-into-tools.md): the PS/2 and VT100 decoders in ring 3 (`mind::keys`, now on the event words of [034](034-key-events-input-queue.done)) and the shell's line editing.
+Superseded by the tools branch's records [055](055-key-events.done) and [056](056-shell-line-editing.done), merged in [051](051-merge-main-into-tools.done): the PS/2 and VT100 decoders in ring 3 (`mind::keys`, now on the event words of [034](034-key-events-input-queue.done)) and the shell's line editing.

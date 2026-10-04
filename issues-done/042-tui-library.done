@@ -20,4 +20,4 @@ Every tool would otherwise draw cells, frames, lists and dialogs by hand.
 
 ## Resolution
 
-Superseded by the tools branch's records [054](054-tui-library.done), merged in [051](../issues/051-merge-main-into-tools.md): `mind::tui`.
+Superseded by the tools branch's records [054](054-tui-library.done), merged in [051](051-merge-main-into-tools.done): `mind::tui`.

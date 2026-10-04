@@ -4,7 +4,7 @@
 
 ## Problem
 
-The merge of the tools branch ([051](051-merge-main-into-tools.md)) moved `sysmon`, `top`, `memmap`, `hw` and the shell's observation commands onto `main`'s `STAT` records (issue [035](../issues-done/035-observe-and-stat.done)). The tools branch's own `STAT` (record [059](../issues-done/059-observation-abi.done)) reported more, and the tools show less now:
+The merge of the tools branch ([051](../issues-done/051-merge-main-into-tools.done)) moved `sysmon`, `top`, `memmap`, `hw` and the shell's observation commands onto `main`'s `STAT` records (issue [035](../issues-done/035-observe-and-stat.done)). The tools branch's own `STAT` (record [059](../issues-done/059-observation-abi.done)) reported more, and the tools show less now:
 
 - `StatMemory`: the largest free block of the kernel arena (fragmentation: whether a large image still fits), page tables, mapped foreign memory, and the kernel's table limits (the monitors now carry `TASKS_LIMIT` 32 and `ENDPOINTS_LIMIT` 127 as constants);
 - `StatTask`: kernel memory per task (context, mailbox, info and exit pages, page tables) and whether the task has the focus (`sysmon` asks `TASK_LIST` for it);
@@ -27,4 +27,4 @@ The merge of the tools branch ([051](051-merge-main-into-tools.md)) moved `sysmo
 
 ## Related
 
-[051](051-merge-main-into-tools.md), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
+[051](../issues-done/051-merge-main-into-tools.done), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.

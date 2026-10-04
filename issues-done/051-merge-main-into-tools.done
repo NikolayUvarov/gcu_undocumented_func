@@ -1,6 +1,6 @@
-# 051 — Merge `main` into the tools branch and reconcile duplicates
+# 051 — Merge `main` into the tools branch and reconcile duplicates — done
 
-**Type:** infra · **Owner:** tools track (branch `claude/wizardly-franklin-kec1a9`) · **Priority:** P0 · **Status:** open · **Blocked by:** — · **Roadmap:** track G; C5, C8
+**Type:** infra · **Owner:** tools track (branch `claude/wizardly-franklin-kec1a9`) · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G; C5, C8
 
 ## Problem
 
@@ -17,7 +17,7 @@ The tools branch forked from `main` at `ae50623` (MIND IDL v0, C5). Since then b
 | Licence, CI, pinned toolchain | `LICENSE-*`, `THIRD_PARTY.md`, `.github/workflows/ci.yml`, `rust-toolchain.toml`, committed `Cargo.lock` (011) | — |
 | Heap, font, TUI, shell editing, viewer, sysmon, monitors, loader v1, fm, block write, RAM disk, VFS v2 | — | 032–046 |
 
-Both sides changed `kernel/src/scheduler.rs`, `common/abi.rs`, `scripts/mind_idl.py`, `libmind/src/idl/*`, `loader/`, `shell/`, `tests/qemu_smoke.py`. Issue numbers 032–046 exist on both sides with different content, which breaks rule 4 of [issues/README.md](README.md) (numbers are never reused).
+Both sides changed `kernel/src/scheduler.rs`, `common/abi.rs`, `scripts/mind_idl.py`, `libmind/src/idl/*`, `loader/`, `shell/`, `tests/qemu_smoke.py`. Issue numbers 032–046 exist on both sides with different content, which breaks rule 4 of [issues/README.md](../issues/README.md) (numbers are never reused).
 
 ## Plan
 
@@ -41,6 +41,19 @@ Both sides changed `kernel/src/scheduler.rs`, `common/abi.rs`, `scripts/mind_idl
 - `issues/` and `issues-done/` have no duplicate numbers; the tables in `issues/README.md` match the files.
 - `THIRD_PARTY.md` covers every file not written for this project.
 
+## Resolution
+
+Merge commit `7e18f6d` (parents: the tools branch at `453d5d7` and the kernel track at `20c414d`, which contains `origin/main` `d085bf2`); `main` is fast-forwarded to the commit that closes this issue.
+
+- **Kernel, ABI, IDL wire format, `STAT`, input events, badges:** `main`'s. One implementation of each remains; the tools' own `STAT` and key-event ABI are gone, and the monitors read `main`'s records. Fields they lost are [075](../issues/075-stat-fields-for-the-monitors.md).
+- **Additive changes on top:** IDL enums, `bytes<N>`, enum errors and capability results as a minor extension of the generator and codec (`scripts/mind_idl.py`, `libmind/src/idl/{codec,wire}.rs`; `tests/idl/sample.wit`, `tests/idl_test.py`, `tests/idl_host.rs`; the existing bindings are unchanged); `idl/block.wit` 1.1 (`writable`, `write` with sealed read-only data, `flush`, write badge); `idl/vfs.wit` 2.2; `idl/init.wit` 1.1 (lifecycle requests, replacing the tools' `lifecycle.wit`); `idl/loader.wit` 1.1 (launch sessions; the legacy start-with-endpoint adapter is gone, `tests/isolation_app.rs` spawns through sessions); `idl/rtc.wit` 1.1, `idl/sysinfo.wit`, `idl/log.wit`.
+- **Kernel-track issues for what the tools needed:** [072](072-fixed-grant-slots.done) (fixed grant slots, `SLOT_DYNAMIC` 16), [073](073-port-out-block.done) (`PORT_OUT_BLOCK`), [074](074-exited-console-output.done) (output of an exited console program).
+- **Tools:** the tools branch's `libmind` modules (`heap`, `keys`, `tui`, `font16`, `log`, `stat`, `block_protocol`), programs and services, `fonts/` and `docs/tools/`, ported to `main`'s ABI.
+- **Issue numbers:** tools records 032–051 are [052–071](../issues/README.md), each with "Formerly tools-branch NNN."; `main`'s open tools specs 040–043 and 045–050 are superseded records naming their replacements. No number is used twice.
+- **Licences:** `THIRD_PARTY.md` lists MIND Mono 16 (subset of Terminus Font 4.49.1, © 2020 Dimitar Toshkov Zhekov, SIL OFL 1.1, reserved name respected); `LICENSES/OFL-1.1.txt` goes into the boot image (`02_build.sh`, `scripts/make_usb_image.py`); the new crates are `MIT OR Apache-2.0` and their `Cargo.lock` files are committed.
+- **Tests:** locally all 21 QEMU suites on 4 CPUs, `smp,isolation,heap,services` on one CPU, the USB image, every host test, `idl_test.py` and `font_test.py` pass. CI run 6 on `7e18f6d` is green in all eight jobs; the `build` job now runs the tools' host tests and the font check, and the QEMU matrix has the `keys,shell,tools` and `vfs,edit,disk,block` suites (with `dosfstools`, `mtools` and the `block_app` fixture).
+- **Docs:** `README.md`, `docs/api`, `docs/idl` (the extension and the interface versions), `docs/profile`, `ROADMAP` (EN and RU) and `docs/tools` (EN and RU, issue numbers +20) describe the merged system.
+
 ## Related
 
-[011](../issues-done/011-reproducible-toolchain.done) (CI), [039](../issues-done/039-port-services.done), [044](../issues-done/044-idl-v02-records-strings.done), [docs/api](../docs/api/README.md), [CONTRIBUTING.md](../CONTRIBUTING.md).
+[011](011-reproducible-toolchain.done) (CI), [039](039-port-services.done), [044](044-idl-v02-records-strings.done), [docs/api](../docs/api/README.md), [CONTRIBUTING.md](../CONTRIBUTING.md).

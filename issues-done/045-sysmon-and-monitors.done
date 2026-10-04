@@ -21,4 +21,4 @@ There is no way to watch the system beyond `ps` and `cpus`.
 
 ## Resolution
 
-Superseded by the tools branch's records [060](060-sysmon.done) and [061](061-top-memmap-load-hw.done), merged in [051](../issues/051-merge-main-into-tools.md): `sysmon` and the monitors (`idl/sysinfo.wit` on the `STAT` of [035](035-observe-and-stat.done)).
+Superseded by the tools branch's records [060](060-sysmon.done) and [061](061-top-memmap-load-hw.done), merged in [051](051-merge-main-into-tools.done): `sysmon` and the monitors (`idl/sysinfo.wit` on the `STAT` of [035](035-observe-and-stat.done)).

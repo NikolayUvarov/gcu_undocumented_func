@@ -20,4 +20,4 @@ The file system is read-only; tools cannot save.
 
 ## Resolution
 
-Superseded by the tools branch's records [064](064-endpoint-badges-block-write.done), [065](065-ramdisk.done) and [066](066-vfs-v2-fat-write.done), merged in [051](../issues/051-merge-main-into-tools.md): block write and flush (`idl/block.wit` 1.1, data as sealed read-only memory), `ramdisk` and VFS v2 (`idl/vfs.wit` 2.2).
+Superseded by the tools branch's records [064](064-endpoint-badges-block-write.done), [065](065-ramdisk.done) and [066](066-vfs-v2-fat-write.done), merged in [051](051-merge-main-into-tools.done): block write and flush (`idl/block.wit` 1.1, data as sealed read-only memory), `ramdisk` and VFS v2 (`idl/vfs.wit` 2.2).

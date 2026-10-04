@@ -20,4 +20,4 @@ Every application gets the same capability set; tools need more (a file handle, 
 
 ## Resolution
 
-Superseded by the tools branch's records [062](062-loader-v1-launch-grants.done), merged in [051](../issues/051-merge-main-into-tools.md): launch sessions in `idl/loader.wit` 1.1 (the legacy start-with-endpoint adapter is gone).
+Superseded by the tools branch's records [062](062-loader-v1-launch-grants.done), merged in [051](051-merge-main-into-tools.done): launch sessions in `idl/loader.wit` 1.1 (the legacy start-with-endpoint adapter is gone).

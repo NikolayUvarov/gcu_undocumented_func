@@ -4,7 +4,7 @@
 
 ## Problem
 
-Issue [051](../issues/051-merge-main-into-tools.md) merges the tools branch. Its programs receive capabilities their launcher grants on request (loader launch sessions, MC-3.11): a VFS client for files the user may change, a `sysmon` client, a client of `init` for lifecycle control and a client of the system log `logd`, which every boot service also holds. A received capability can only land in a fixed slot (below `SLOT_DYNAMIC`), and on `main` slots 1–9 are all taken by the standard grants and the shell's privileges (`SLOT_CONTROL`, `SLOT_INPUT`, `SLOT_SERIAL`). The tools branch had raised `SLOT_DYNAMIC` on its own; ABI changes are made only in kernel issues.
+Issue [051](051-merge-main-into-tools.done) merges the tools branch. Its programs receive capabilities their launcher grants on request (loader launch sessions, MC-3.11): a VFS client for files the user may change, a `sysmon` client, a client of `init` for lifecycle control and a client of the system log `logd`, which every boot service also holds. A received capability can only land in a fixed slot (below `SLOT_DYNAMIC`), and on `main` slots 1–9 are all taken by the standard grants and the shell's privileges (`SLOT_CONTROL`, `SLOT_INPUT`, `SLOT_SERIAL`). The tools branch had raised `SLOT_DYNAMIC` on its own; ABI changes are made only in kernel issues.
 
 ## Plan
 
