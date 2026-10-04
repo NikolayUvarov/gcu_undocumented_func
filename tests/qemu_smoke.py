@@ -1560,7 +1560,17 @@ def services_suite(vm):
     assert len(described) == count and all(text.strip() for _, text in described), detailed
     assert re.search(r"^  fm +\d+ KB  file manager \(Norton Commander keys\)", detailed, re.M), detailed
     assert re.search(r"^  hello +\d+ KB  clock — a digital clock", detailed, re.M), detailed  # a copy of clock.elf
-    require(vm.command("list x"), "USAGE: LIST [-L]")
+    # A mask keeps the names that match: list a* shows the programs (and services) starting with a.
+    output = vm.command("list a*")
+    matching = int(re.search(r"PROGRAMS ON DISK MATCHING a\* \((\d+)\):", output)[1])
+    names = [name for row in output.splitlines() if row.startswith("  ") for name in row.split()]
+    assert len(names) == matching and {"app", "app2"} <= set(names) and all(n.startswith("a") for n in names), output
+    require(output, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): ata ahci audio_gw\n")
+    output = vm.command("list -l f*")
+    assert re.search(r"^  fm +\d+ KB  file manager", output, re.M) and not re.search(r"^  [^f]", output, re.M), output
+    assert "SERVICES" not in output, output
+    require(vm.command("list zz*"), "PROGRAMS ON DISK MATCHING zz* (0).")
+    require(vm.command("list -x"), "USAGE: LIST [-L] [MASK]")
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")

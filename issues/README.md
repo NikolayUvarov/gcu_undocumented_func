@@ -127,6 +127,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [090](../issues-done/090-read-only-status-and-modifier-key-bars.done) | Editor says READ-ONLY; key bars follow Shift, Ctrl and Alt | done (2026-10-04) |
 | [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
 | [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
+| [095](../issues-done/095-list-by-mask.done) | `list a*`: the programs whose names match a mask (`mind::mask` without allocation) | done (2026-10-04) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

@@ -1,0 +1,23 @@
+# 095 — `list a*`: the programs whose names match a mask — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Asked by the user: `list a*` has to show the programs whose names start with `a`, and so on. `list` ([091](091-program-list-fits-the-screen.done)) took no argument but `-l`.
+
+## Plan
+
+- `list [-l] [mask]`: the masks of `fm` and `find` (`*`, `?`, case-insensitive, several separated by spaces or commas) keep the programs and the services that match.
+- The shell has no heap and `mind::pattern` allocates: the mask matcher moves to a module that does not.
+
+## Acceptance criteria
+
+- QEMU: `list a*` lists only programs starting with `a` (`app`, `app2`) and the services `ata`, `ahci`, `audio_gw`; `list -l f*` gives the `f` programs with what they do and no services line; a mask that matches nothing says so; an unknown option shows the usage.
+
+## Resolution
+
+- `mind::mask` (`libmind/src/mask.rs`, no allocation): `glob` walks mask and name by byte offsets, compares characters with `to_lowercase` (Cyrillic folds too) and backtracks after `*`; `matches` takes several masks. `mind::pattern` re-exports both, so `fm` and `find` use the same code.
+- The shell: `list [-l] [mask...]` in any order; the header names the masks and the count (`PROGRAMS ON DISK MATCHING a* (2):`), the services line lists only matching services (none: no line), the closing hint is for the full list only; `list -x` shows `USAGE: LIST [-L] [MASK]`. `help` names it.
+- Tests: `tests/search_host.rs` `masks_without_allocation` (prefixes, `?`, backtracking, Cyrillic, several masks); the fm and search host tests pass with the new matcher; QEMU `services` suite (the checks above).
+- Docs: README (`LIST`).
