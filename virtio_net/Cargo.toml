@@ -8,6 +8,11 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 [dependencies]
 libmind = { path = "../libmind" }
 
+[features]
+# LEGACY: the legacy VirtIO interface for cards without the modern one (docs/legacy.md).
+default = ["legacy"]
+legacy = []
+
 [profile.release]
 panic = "abort"
 opt-level = 3

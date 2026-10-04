@@ -5,6 +5,8 @@
 // each service's capabilities for restarts and gives up the platform privilege (MC-3.12). As the lifecycle owner it
 // restarts failed services within a budget and serves idl/init.wit: start, list, stop and restart services, stop an
 // application.
+mod legacy;
+
 use mind::abi::*;
 use mind::dev::cap_info;
 use mind::idl::{init as idl_init, wire};
@@ -126,6 +128,7 @@ impl Init {
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
         match name {
+            // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
             "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
             "ps2_kbd" => {
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
@@ -167,7 +170,7 @@ impl Init {
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
-                // AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
+                // LEGACY: AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
                 if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
                     self.devices[index] = Some(device);
                     let devices = (|| -> Result<[usize; 3]> { Ok([Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, Self::bar(&mut minted, device, 1, CAP_KIND_PORTS)?, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?]) })();
@@ -193,6 +196,7 @@ impl Init {
                         grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
                         grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
                     }
+                    // LEGACY: a VirtIO card without the modern interface (docs/legacy.md).
                     None => { grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, 0); grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?, 0); }
                 }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "virtio_net")?, ALL); grants.copy(SLOT_MEM, self.dma(index, NET_DMA_BYTES)?, 0);
@@ -209,7 +213,7 @@ impl Init {
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
-                grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
+                grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0); // LEGACY: COM1 UART
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
                 self.lend(&mut grants, SLOT_SOCKET, "netstack")?;
@@ -369,6 +373,7 @@ fn main(_info: &'static BootInfo) {
             Err(error) => mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error),
         }
     }
+    legacy::report();
     // Process control, to stop services and applications on request (init is their lifecycle owner).
     if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.

@@ -307,6 +307,7 @@ pub const SYSCALL_STAT: usize = 51;
 pub const SYSCALL_SCHED_SET: usize = 52;
 // DEVICE_CONFIG: arg1 = an MMIO or port capability over a BAR of a PCI function, arg2 = offset (< 256) -> the
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
+// With the platform privilege as arg1, msg[0] = device index: any device, without enabling it (init's inventory).
 pub const SYSCALL_DEVICE_CONFIG: usize = 54;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;

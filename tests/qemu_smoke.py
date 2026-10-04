@@ -2135,6 +2135,11 @@ def net_suite(args, disk):
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
         require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
+        # The boot report of legacy hardware: the transitional card needs no legacy code; the PIIX IDE controller does.
+        report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+        for line in ("[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: NOT FOUND", "[INIT] VIRTIO TRANSITIONAL DEVICES: 1",
+                     "[INIT] LEGACY IDE CONTROLLER: FOUND 1", "[INIT] LEGACY AC97 AUDIO: NOT FOUND", "[INIT] LEGACY DEVICES FOUND: 1"):
+            require(report, line)
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
@@ -2181,6 +2186,9 @@ def net_suite(args, disk):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
         try:
             require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), mode)
+            report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+            require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
+            assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
             require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             if mode == "MODERN MSI-X":
