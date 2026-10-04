@@ -21,6 +21,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | — (077 done) | track G |
 | [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
+| [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | — (102 done) | track D |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
 | [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | benchmark | track D |
