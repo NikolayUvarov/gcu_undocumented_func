@@ -1,0 +1,8 @@
+/// Speech synthesis (Russian and Latin script), streamed to the audio gateway.
+package mind:tts@1.0.0;
+
+interface tts {
+    /// Speaks `text` with `pitch` (Hz, 0: 112) and `rate` (%, 0: 100); returns the speech duration in ms once it is
+    /// queued. Error not-found without an audio device, invalid for empty text.
+    say: func(text: string<4000>, pitch: u16, rate: u16) -> result<u32, error-code>;
+}

@@ -23,3 +23,4 @@ Only `rtc` uses MIND IDL; the other services use numeric conventions and share h
 ## Progress
 
 - 2026-10-04: `block.wit` (sectors, kind, attach, read) used by `ata`, `ahci`, `usb_storage` and the VFS block client. The buffer is lent to the driver (a copy the client can revoke). A restarted driver answers a read with not-found until the buffer is attached again. `loader.wit` came with issue 044.
+- 2026-10-04: `tts.wit` (say: text copied into the server's private memory before synthesis) and `init.wit` (run a service by name). The numeric TTS and init requests are removed.

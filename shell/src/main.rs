@@ -7,7 +7,7 @@ use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_event, Ports};
 use mind::font::FONT;
-use mind::ipc::{Endpoint, Message};
+use mind::ipc::Endpoint;
 use mind::mem::Pages;
 use mind::sys::Error;
 
@@ -164,8 +164,8 @@ impl Shell {
     fn start(name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
-            let words = mind::process::pack_name(name).ok_or(Error::Invalid)?;
-            return Endpoint::INIT.call(&Message::new(words[0], words[1]), 0).and_then(|reply| mind::sys::check(reply.data[0])).map(|pid| pid as u64);
+            let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
+            return mind::idl::init::run(Endpoint::INIT, name);
         }
         let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
         if args.is_empty() { return mind::process::spawn(name, None); }

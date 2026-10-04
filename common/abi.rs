@@ -191,8 +191,6 @@ pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
 // Program loader: idl/loader.wit (list, run with arguments). Legacy adapter until loader v1: CALL on SLOT_LOADER with
 // the program name packed into msg[2..4] and an optional endpoint for the child's INIT slot; reply msg[2] = PID or error.
-// init: CALL on SLOT_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
-// ERR_BUSY if it is running, ERR_NOT_FOUND if there is no such service.
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
 // index (boot images need the platform privilege), msg[1] = ELF length, msg[2] = address of a Grant array,
@@ -270,8 +268,7 @@ pub const AUDIO_WAIT: usize = 5; // the reply is deferred until the argument's n
 pub const AUDIO_RECORD_START: usize = 6;
 pub const AUDIO_RECORD_READ: usize = 7;
 pub const AUDIO_RECORD_STOP: usize = 8;
-// Speech synthesis: capability to a page of UTF-8 text, msg[2]=TTS_SAY|length<<8, msg[3]=pitch Hz|rate %<<16 (0 for default).
-pub const TTS_SAY: usize = 1;
+// Speech synthesis: idl/tts.wit. init: idl/init.wit.
 pub const AUDIO_RATE: usize = 48_000;
 
 // STAT (observe or control privilege): arg1 = class, arg2 = buffer, msg[0] = capacity in bytes, msg[1] = argument

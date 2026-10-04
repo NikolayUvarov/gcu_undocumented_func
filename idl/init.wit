@@ -1,0 +1,8 @@
+/// init: starts a boot service by name (the operator's RUN <service> &).
+package mind:init@1.0.0;
+
+interface init {
+    /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
+    /// (already running), not-found (no such service or no device), rights (cannot be started after boot).
+    run: func(name: string<16>) -> result<u64, error-code>;
+}

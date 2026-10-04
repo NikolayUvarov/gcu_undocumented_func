@@ -3,5 +3,7 @@
 pub mod codec;
 pub mod wire;
 pub mod block;
+pub mod init;
 pub mod loader;
 pub mod rtc;
+pub mod tts;

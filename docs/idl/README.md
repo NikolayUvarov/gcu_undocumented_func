@@ -85,7 +85,9 @@ A change that alters the meaning or layout of an existing function increments th
 | File | Service | Since |
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.0.0 |
+| [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage` (client: `vfs_server`) | 1.0.0 |
+| [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`) | 1.0.0 |
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; the start with an endpoint for the child is a legacy adapter until loader v1, issue 046) | 1.0.0 |
 
-The other services (VFS, audio, TTS, init) still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8 (issue 039).
+The other services (VFS, audio) still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8 (issue 039).

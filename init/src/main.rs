@@ -5,12 +5,14 @@
 // each service's capabilities for restarts and gives up the platform privilege (MC-3.12).
 use mind::abi::*;
 use mind::dev::cap_info;
-use mind::ipc::{self, Endpoint, Message};
+use mind::idl::{init as idl_init, wire};
+use mind::ipc::{self, Endpoint};
 use mind::platform;
 use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::{Error, Result};
 
 const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
+const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -244,18 +246,15 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[INIT] READY");
     // Exit notices of the services, and requests from the shell: start a boot service by name (msg[2..4]).
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
-        let (packed, len) = mind::process::unpack_name(request.data);
-        let index = BOOT_SERVICES.iter().position(|s| s.as_bytes().eq_ignore_ascii_case(&packed[..len]));
+        // idl/init.wit
+        let (name, call) = match idl_init::decode(&request, RECEIVED) { Ok((idl_init::Request::Run { name }, call)) => (name, call), Err(reason) => { let _ = wire::reject(reason); continue; } };
+        let index = BOOT_SERVICES.iter().position(|s| s.as_bytes().eq_ignore_ascii_case(name.as_str().as_bytes()));
         // An explicit RUN is the operator's decision: it lifts a quarantine and resets the restart budget.
         if let Some(index) = index.filter(|&i| !init.running(i)) { init.quarantined[index] = false; init.restarts[index] = [0; RESTART_BUDGET]; if init.pids[index] != 0 { init.quiesce(index); } }
-        let code = match index.map(|index| init.start(index)) {
-            None => ERR_NOT_FOUND,
-            Some(Ok(pid)) => pid as usize,
-            Some(Err(error)) => error.code(),
-        };
-        let _ = ipc::reply(&Message::new(code, 0));
+        let result = match index.map(|index| init.start(index)) { None => Err(Error::NotFound), Some(result) => result };
+        let _ = idl_init::reply_run(call, result);
     }
 }

@@ -9,8 +9,9 @@ mod text;
 
 use mind::abi::*;
 use mind::audio::Stream;
-use mind::ipc::{self, Endpoint, Message};
-use mind::mem::Mapping;
+use mind::idl::{tts, wire};
+use mind::ipc::Endpoint;
+use mind::sys::Error;
 use phonemes::{Ph, Unit};
 
 const RECEIVED_CAP: usize = 9;
@@ -49,20 +50,14 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[TTS] FORMANT SYNTHESIZER READY (RU/EN), AUDIO={}", present);
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
-        let (op, len) = (request.data[0] & 0xFF, request.data[0] >> 8);
-        let voice = synth::Voice { pitch: match request.data[1] & 0xFFFF { 0 => 112, p => p as i64 }, rate: match request.data[1] >> 16 { 0 => 100, r => r as i64 } };
-        // The text is copied out of the client's page, then the page is mapped back immediately.
-        let mut text = [0u8; 4096]; let mut length = 0;
-        if request.cap_received {
-            if let Ok(page) = Mapping::new(RECEIVED_CAP) { length = len.min(page.len()).min(text.len()); text[..length].copy_from_slice(&page.as_slice()[..length]); }
-            let _ = ipc::drop_cap(RECEIVED_CAP);
-        }
-        let result = match (op, core::str::from_utf8(&text[..length])) {
-            (TTS_SAY, Ok(words)) if present && length > 0 => say(words, voice),
-            (TTS_SAY, Ok(_)) if !present => Err(ERR_NOT_FOUND),
-            _ => Err(ERR_INVALID),
+        // idl/tts.wit: the text is copied into private memory and checked before synthesis.
+        let (text, pitch, rate, call) = match tts::decode(&request, RECEIVED_CAP) {
+            Ok((tts::Request::Say { text, pitch, rate }, call)) => (text, pitch, rate, call),
+            Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; }
         };
-        match result { Ok(ms) => mind::println!("[TTS] SPOKE {} BYTES, {} MS", length, ms), Err(code) => mind::println!("[TTS] ERROR {:#x}", code) }
-        if request.is_call { let _ = ipc::reply(&Message::new(result.unwrap_or_else(|code| code), 0)); }
+        let voice = synth::Voice { pitch: if pitch == 0 { 112 } else { pitch as i64 }, rate: if rate == 0 { 100 } else { rate as i64 } };
+        let result = if !present { Err(ERR_NOT_FOUND) } else if text.as_str().is_empty() { Err(ERR_INVALID) } else { say(text.as_str(), voice) };
+        match result { Ok(ms) => mind::println!("[TTS] SPOKE {} BYTES, {} MS", text.as_str().len(), ms), Err(code) => mind::println!("[TTS] ERROR {:#x}", code) }
+        let _ = tts::reply_say(call, result.map(|ms| ms as u32).map_err(|code| mind::sys::check(code).err().unwrap_or(Error::Invalid)));
     }
 }
