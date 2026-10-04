@@ -22,10 +22,10 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [077](077-voice-audio-front-end.md) | Voice V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` | tools | P1 | — | track G |
 | [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | 077 | track G |
 | [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
-| [081](081-caps-tool.md) | `caps`: capabilities and the derivation tree | tools | P1 | — (done) | track G, T3 |
-| [084](084-reboot.md) | `reboot` | tools | P2 | — (done) | track G, T3 |
-| [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | — (done) | track G, T3 |
-| [086](086-screenshot.md) | `screenshot` | tools | P2 | — (done) | track G, T3 |
+| [081](081-caps-tool.md) | `caps`: capabilities and the derivation tree | tools | P1 | — (151 done) | track G, T3 |
+| [084](084-reboot.md) | `reboot` | tools | P2 | — (152 done) | track G, T3 |
+| [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | — (151 done) | track G, T3 |
+| [086](086-screenshot.md) | `screenshot` | tools | P2 | — (151 done) | track G, T3 |
 | [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | — (101 done) | track D |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 102 | track D |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
