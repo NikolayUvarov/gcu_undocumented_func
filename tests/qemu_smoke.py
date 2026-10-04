@@ -2964,6 +2964,8 @@ def windows_suite(vm):
         time.sleep(.25)
     else:
         raise AssertionError(seen)
+    # A program may print its last line and end between the reads above and `ps`: its output stays readable once.
+    seen += "".join(vm.command(f"logs {pid}") for pid in pids)
     require(seen, "CLOSED AFTER")
     time.sleep(1.2)
     require(vm.command("dmesg -s windows"), "ENDED WITH PID")
