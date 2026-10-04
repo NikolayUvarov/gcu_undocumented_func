@@ -1554,9 +1554,12 @@ def services_suite(vm):
     assert len(names) == count and "fm" in names and "vfs_server" not in names and len(rows) < 20, listing
     assert sorted(names) == [rows[r].split()[c] for c in range(len(rows[0].split())) for r in range(len(rows)) if c < len(rows[r].split())], listing
     require(listing, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): init logd rtc")
+    # Every program says what it does (mind::about!, issue 091): list -l takes the first line from the program file.
     detailed = vm.command("list -l")
-    assert re.search(r"^  fm +\d+ KB  file manager: two panels", detailed, re.M), detailed
-    assert re.search(r"^  hello +\d+ KB *$", detailed, re.M), detailed  # a program the shell does not know: its size
+    described = re.findall(r"^  ([\w-]+) +\d+ KB  (.*)$", detailed, re.M)
+    assert len(described) == count and all(text.strip() for _, text in described), detailed
+    assert re.search(r"^  fm +\d+ KB  file manager \(Norton Commander keys\)", detailed, re.M), detailed
+    assert re.search(r"^  hello +\d+ KB  clock — a digital clock", detailed, re.M), detailed  # a copy of clock.elf
     require(vm.command("list x"), "USAGE: LIST [-L]")
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
@@ -1641,10 +1644,31 @@ def services_suite(vm):
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
     lifecycle_check(vm)
+    # help <name>: the program's text read from its file, the shell's own lines, or a service; nothing is started.
+    output = vm.command("help fm")
+    require(output, "Usage: fm [directory]")
+    assert "STARTED" not in output, output
+    output = vm.command("fm --help")  # a program with a screen: the shell shows its text instead of starting it
+    require(output, "fm — file manager")
+    assert "STARTED" not in output, output
+    require(vm.command("help cat"), "- ls [path], cat <file>: files")
+    output = vm.command("help voice")
+    require(output, "- voice on [--wav file] [seconds], voice off, voice listen: voice control")
+    require(output, "PROGRAM voice:")
+    require(vm.command("help rtc"), "rtc — a service init starts at boot")
+    require(vm.command("help nosuch"), "ERROR: NO COMMAND OR PROGRAM CALLED nosuch.")
+    # A console program answers --help itself, into the shell; for one with a screen (whose output would leave with it)
+    # the shell shows the same text from its file, with or without `run`.
+    output = vm.command("uptime --help")
+    require(output, "NAME=uptime FOREGROUND")
+    require(output, "uptime — uptime, load averages")
+    output = vm.command("run view --help")
+    require(output, "view — text and hex viewer.")
+    assert "STARTED" not in output, output
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), halt without init, reclaim", flush=True)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), help and --help from the programs' files, halt without init, reclaim", flush=True)
 
 
 def lifecycle_check(vm):

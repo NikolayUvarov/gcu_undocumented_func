@@ -7,6 +7,7 @@ use mind::mem::Pages;
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("beep — audio demo: a chord of tones and a PCM sweep through the audio gateway.\nUsage: beep\nEsc: exit.");
     if let Some(s) = Screen::new(info) { s.clear(0x00101010); s.text(24, 24, b"BEEP - AUDIO GATEWAY DEMO (ESC: EXIT)", 2, 0x00FFD080, None); }
     let info = match mind::audio::info() {
         Ok(info) => info,

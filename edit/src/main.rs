@@ -66,6 +66,7 @@ fn save(path: &str, text: &[u8]) -> Result<usize, String> {
 }
 
 fn main(info: &'static mind::BootInfo) {
+    mind::about!("edit — text editor: UTF-8 text in Russian and English, up to 8 MiB.\nUsage: edit [file]   (without a file: a new one on ram:)\nF1 keys, F2 save, Shift+F2 save as, F7 find, Shift+F7 next, Ctrl+F7 replace, Alt+F8 go to line, F9 menu, F10 or Esc quit.\nFiles on ram: and in data/ can be changed, others open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     let path = mind::process::args_str().trim();
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
         // The client's root is the file's directory.

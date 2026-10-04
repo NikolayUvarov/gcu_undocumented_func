@@ -9,6 +9,7 @@ const GREETING: &str = "Привет. Я разум корабля. Систем
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("say — speaks text through the synthesizer.\nUsage: say [-p <pitch Hz>] [-r <rate %>] [text]   (without text: say.txt or a greeting, until Esc)");
     // Options come first: -p <pitch Hz>, -r <rate %>; the rest is the text.
     let (mut pitch, mut rate) = (0u16, 0u16);
     let mut words = mind::process::args_str().trim();

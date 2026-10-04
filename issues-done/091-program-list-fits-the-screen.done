@@ -17,6 +17,6 @@ Reported by the user: `fm` was not in the program list. It was — first of 55 l
 
 ## Resolution
 
-- `shell/src/programs.rs`: `list` sorts the loader's applications and writes them down as many columns as fit (at most 8; on the 160-column screen 33 programs take 5 lines), then `SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): …` and a line on Ctrl+Z, Esc and `help`. `list -l` gives `name  size KB  what it does` from a table of the system's programs; another program shows its size only. `run` without a name shows the short list. `help` names `list -l`.
+- `shell/src/programs.rs`: `list` sorts the loader's applications and writes them down as many columns as fit (at most 8; on the 160-column screen 33 programs take 5 lines), then `SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): …` and a line on Ctrl+Z, Esc and `help`. `list -l` gives `name  size KB  what it does` from a table of the system's programs; another program shows its size only (since [092](092-help-for-every-program.done) the line comes from the program itself). `run` without a name shows the short list. `help` names `list -l`.
 - Tests: QEMU `services` suite (the columns, their order, the count in the header, no service among them, `fm` present, `list -l` for `fm` and the unknown `hello`, `list x` usage); `shell` suite's edited `list`.
 - Docs: README (`LIST`).

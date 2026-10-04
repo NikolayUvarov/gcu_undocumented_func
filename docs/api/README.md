@@ -134,7 +134,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | `sys` | `syscall`, `Error`, `Result`, `check` |
 | `ipc` | `Endpoint` (send, call, recv with timeouts), `Message`, `Received`, `mint`, `mint_badged`, `revoke`, `reply`, `save_reply` |
 | `mem` | `Pages` (own heap block: share, detach), `Mapping`, `sealed` |
-| `process` | `exit`, `spawn` (a launch session with one grant), `spawn_with_args`, `args`, `watch`, `alive`; `request!` and `REQUEST_*`: what a program asks its launcher for |
+| `process` | `exit`, `spawn` (a launch session with one grant), `spawn_with_args`, `args`, `watch`, `alive`; `request!` and `REQUEST_*`: what a program asks its launcher for; `about!`: what the program does — the first statement of `main` in every application, printed for `--help` and kept in the `.mind_about` section, which the shell's `help <name>` reads with `section` |
 | `time` | `sleep`, `uptime_ms`, `monotonic_ns` |
 | `input` | `KeyEvent`, `read_event`, `wait_event` |
 | `keys` | `Key`, `Code`, `Event`: key words for programs; PS/2 scan-code decoder with US/Russian layouts (`Ps2`), VT100/xterm and UTF-8 decoder for the serial line (`Vt`) |

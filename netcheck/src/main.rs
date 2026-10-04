@@ -58,5 +58,6 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS");
     for word in mind::process::args_str().split_whitespace() { report(word, check(word)); }
 }

@@ -1,51 +1,67 @@
 //! `list [-l]`: the programs on the boot disk, sorted, in columns that fit the screen, and the services; with `-l` one
-//! line per program with its size and what it does. 55 entries one per line scrolled the first ones (`fm`) off a
-//! 50-line screen.
+//! line per program with its size and what it does (the first line of its `mind::about!` text). 55 entries one per
+//! line scrolled the first ones (`fm`) off a 50-line screen. `help <name>`: what a command or program does.
 use crate::console::Console;
 use core::fmt::Write;
 use mind::abi::{BOOT_SERVICES, NAME_MAX, SERVICE_INSTANCES};
+use mind::fs::File;
+use mind::util::FixedBuf;
 use mind::idl::loader;
 use mind::ipc::Endpoint;
 
-/// What each program of the system does (`list -l`); a program not named here shows only its size.
-const ABOUT: [(&str, &str); 32] = [
-    ("app", "graphics demo (Esc exits)"),
-    ("app2", "test program: a second demo"),
-    ("beep", "tones and a PCM sweep on the speaker"),
-    ("caps", "capabilities of the tasks and their derivation tree"),
-    ("clock", "a digital clock from the RTC"),
-    ("df", "volumes: size and free space"),
-    ("dmesg", "the system log"),
-    ("dzen-clock", "the Dzen clock"),
-    ("edit", "text editor: edit <file>"),
-    ("files", "VFS demo: lists the disk and reads a file"),
-    ("find", "find files by name, type or size: find [path] [-name mask]"),
-    ("fm", "file manager: two panels, view, edit, copy, move, delete"),
-    ("format", "format the RAM disk: format ram: [-l label] -y"),
-    ("fsck", "check the FAT volumes (changes nothing)"),
-    ("grep", "search text in files: grep [-i -n -l -c -r] text path"),
-    ("hear", "recognize voice commands: hear [seconds] | hear --wav file"),
-    ("hw", "hardware: CPU, framebuffer, PCI devices, interrupts"),
-    ("ipc", "endpoints, their holders and who waits for whom"),
-    ("keys", "show the key events a program gets"),
-    ("listen", "record from the microphone; --vad: find speech; --wav file"),
-    ("load", "CPU load graphs"),
-    ("memmap", "memory: physical map, kernel arena, address spaces"),
-    ("netbench", "network benchmark: netbench <ip>:<port> [MB]"),
-    ("netcheck", "network access checks: netcheck tcp:<ip>:<port> ..."),
-    ("ping", "IPC demo: the client pong starts"),
-    ("pong", "IPC demo: lends a page to ping"),
-    ("say", "speak text: say [-p pitch] [-r rate] text"),
-    ("svc", "services: state, stop, start, restart"),
-    ("top", "processes: CPU, memory, sorting, tree"),
-    ("uptime", "uptime and load averages"),
-    ("view", "file viewer, text and hex: view <file>"),
-    ("voice", "voice control's listener (the shell starts it: voice on)"),
-];
+/// What a program says about itself (`mind::about!`: the `.mind_about` section of `name.elf`), read from the file
+/// without starting the program, into `out`; None for a program without it, or no such program.
+pub fn about<'a>(name: &str, out: &'a mut [u8]) -> Option<&'a str> {
+    if name.is_empty() || name.len() > NAME_MAX || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') { return None; }
+    let mut path = FixedBuf::<{ NAME_MAX + 4 }>::new();
+    let _ = write!(path, "{}.elf", name);
+    let file = File::open(core::str::from_utf8(path.as_bytes()).ok()?).ok()?;
+    let mut read = |at: usize, buffer: &mut [u8]| file.read_at(at, buffer).unwrap_or(0);
+    let (offset, size) = mind::process::section(&mut read, ".mind_about")?;
+    let length = size.min(out.len());
+    if read(offset, &mut out[..length]) < length { return None; }
+    let text = &out[..length];
+    Some(core::str::from_utf8(text).unwrap_or_else(|e| core::str::from_utf8(&text[..e.valid_up_to()]).unwrap_or("")))
+}
 
 fn name(entry: &([u8; NAME_MAX], usize, u64)) -> &str { core::str::from_utf8(&entry.0[..entry.1]).unwrap_or("?") }
 
-fn about(name: &str) -> &'static str { ABOUT.iter().find(|(n, _)| *n == name).map_or("", |(_, text)| text) }
+/// The first line of what `name` says about itself, without `name — ` (`list -l`).
+fn summary<'a>(name: &str, out: &'a mut [u8]) -> &'a str {
+    let line = about(name, out).and_then(|text| text.lines().next()).unwrap_or("");
+    line.split_once(" — ").filter(|(first, _)| first.eq_ignore_ascii_case(name)).map_or(line, |(_, rest)| rest)
+}
+
+/// `help <name>`: the lines of the shell's `commands` that name it, and what the program of that name says about
+/// itself (or that it is a service).
+pub fn help(out: &mut Console, name: &[u8], commands: &str) {
+    let name = core::str::from_utf8(name).unwrap_or("").trim();
+    let mut found = false;
+    for line in commands.lines().filter(|line| line.starts_with("- ")) {
+        let part = line[2..].split(": ").next().unwrap_or("");
+        if part.split(", ").filter_map(|item| item.split_whitespace().next()).any(|word| word.eq_ignore_ascii_case(name)) {
+            let _ = writeln!(out, "{}", line);
+            found = true;
+        }
+    }
+    let mut text = [0u8; 2048];
+    if let Some(about) = about(name, &mut text) {
+        if found { let _ = writeln!(out, "PROGRAM {}:", name); }
+        let _ = writeln!(out, "{}", about.trim_end());
+        found = true;
+    } else if BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).any(|s| s.eq_ignore_ascii_case(name)) {
+        let _ = writeln!(out, "{} — a service init starts at boot: svc shows its state, top what it uses.", name);
+        found = true;
+    }
+    if !found { let _ = writeln!(out, "ERROR: NO COMMAND OR PROGRAM CALLED {}. HELP: THE SHELL'S COMMANDS. LIST: THE PROGRAMS.", name); }
+}
+
+/// `<program> --help` for a program with a screen: what it would print goes to its own screen and COM1, so the shell
+/// shows the same text from its file instead of starting it. False if it has none.
+pub fn show_about(out: &mut Console, name: &str) -> bool {
+    let mut text = [0u8; 2048];
+    match about(name, &mut text) { Some(about) => { let _ = writeln!(out, "{}", about.trim_end()); true } None => false }
+}
 
 /// `list` (programs in columns) or `list -l` (one per line with what it does).
 pub fn list(out: &mut Console, long: bool) {
@@ -63,7 +79,8 @@ pub fn list(out: &mut Console, long: bool) {
 
     let _ = writeln!(out, "PROGRAMS ON DISK ({}): RUN <NAME> [ARGS] [&], OR JUST <NAME> [ARGS].{}", count, if long { "" } else { " LIST -L: WHAT EACH ONE DOES." });
     if long {
-        for entry in names.iter() { let _ = writeln!(out, "  {:<12} {:>5} KB  {}", name(entry), entry.2.div_ceil(1024), about(name(entry))); }
+        let mut text = [0u8; 2048];
+        for entry in names.iter() { let _ = writeln!(out, "  {:<12} {:>5} KB  {}", name(entry), entry.2.div_ceil(1024), summary(name(entry), &mut text)); }
     } else {
         // Down the columns, as ls does, as many as fit.
         let width = names.iter().map(|e| e.1).max().unwrap_or(1) + 2;

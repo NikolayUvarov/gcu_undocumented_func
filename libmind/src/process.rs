@@ -107,6 +107,52 @@ pub const fn request_note(flags: u32) -> [u8; 16] {
     [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', f[0], f[1], f[2], f[3], 0, 0, 0, 0]
 }
 
+/// Contents of the `.mind_about` section (`about!`): the text, UTF-8.
+pub const fn about_note<const N: usize>(text: &str) -> [u8; N] {
+    let bytes = text.as_bytes();
+    let mut out = [0u8; N];
+    let mut i = 0;
+    while i < N && i < bytes.len() { out[i] = bytes[i]; i += 1; }
+    out
+}
+
+/// What the program does: the first line `name — what it does` (`list -l` shows it), then how to run it and its keys.
+/// The first statement of `main`: with the argument `--help` the program prints the text and exits. The text is also
+/// kept in the program file (`.mind_about`; the linker script keeps it), where the shell's `help <program>` reads it
+/// without starting the program (`section`).
+#[macro_export]
+macro_rules! about {
+    ($text:expr) => {{
+        const MIND_ABOUT_TEXT: &str = $text;
+        #[used]
+        #[link_section = ".mind_about"]
+        static MIND_ABOUT: [u8; MIND_ABOUT_TEXT.len()] = $crate::process::about_note::<{ MIND_ABOUT_TEXT.len() }>(MIND_ABOUT_TEXT);
+        if $crate::process::args_str().trim() == "--help" { $crate::println!("{}", MIND_ABOUT_TEXT); $crate::process::exit(); }
+    }};
+}
+
+/// Where the section `name` (e.g. `.mind_about`) is in an ELF64 file read through `read(offset, buffer) -> bytes
+/// read`: its offset and size. At most 64 sections and 4 KiB of section names, as the loader reads them.
+pub fn section(read: &mut dyn FnMut(usize, &mut [u8]) -> usize, name: &str) -> Option<(usize, usize)> {
+    let mut header = [0u8; 64];
+    if read(0, &mut header) < 64 || &header[..4] != b"\x7fELF" { return None; }
+    let u16_at = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]) as usize;
+    let u64_at = |b: &[u8], at: usize| u64::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3], b[at + 4], b[at + 5], b[at + 6], b[at + 7]]) as usize;
+    let (offset, entry, count, names_index) = (u64_at(&header, 0x28), u16_at(&header, 0x3A), u16_at(&header, 0x3C), u16_at(&header, 0x3E));
+    if entry != 64 || count == 0 || count > 64 || names_index >= count { return None; }
+    let mut sections = [0u8; 64 * 64];
+    if read(offset, &mut sections[..count * 64]) < count * 64 { return None; }
+    let table = &sections[names_index * 64..names_index * 64 + 64];
+    let size = u64_at(table, 0x20).min(4096);
+    let mut names = [0u8; 4096];
+    if read(u64_at(table, 0x18), &mut names[..size]) < size { return None; }
+    (0..count).map(|index| &sections[index * 64..index * 64 + 64]).find_map(|section| {
+        let at = u32::from_le_bytes([section[0], section[1], section[2], section[3]]) as usize;
+        let wanted = names.get(at..size)?.strip_prefix(name.as_bytes())?.first() == Some(&0);
+        wanted.then(|| (u64_at(section, 0x18), u64_at(section, 0x20)))
+    })
+}
+
 /// Declares what the program asks its launcher for, e.g. `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO);`. The
 /// program's linker script keeps the `.mind_request` section (`KEEP`).
 #[macro_export]

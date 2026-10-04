@@ -35,6 +35,7 @@ fn wanted(options: &Options, entry: &mind::log::Entry) -> bool {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("dmesg — the system log: seconds since boot, the source (task and PID), the text.\nUsage: dmesg [-f] [-l debug|info|warn|error] [-s <name or PID>] [-n <count>]\n-f follows new records (Esc stops), -l hides records below a level, -s keeps one source, -n the last records only.");
     mind::log::keep_output_local();
     let options = match parse(mind::process::args_str()) { Ok(o) => o, Err(text) => { mind::println!("dmesg: {}", text); return; } };
     let state = match mind::log::state() {

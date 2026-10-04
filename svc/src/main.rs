@@ -25,6 +25,7 @@ fn reason(error: lifecycle::Error) -> &'static str {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("svc — the boot services through init: PID, starts, running or quarantined, what init gave each.\nUsage: svc [list | start <service> | stop <service or PID> | restart <service>]");
     if mind::dev::cap_info(SLOT_LIFECYCLE).0 != CAP_KIND_ENDPOINT { mind::println!("svc: no lifecycle control here (start svc from the shell)"); return; }
     let mut words = mind::process::args_str().split_whitespace();
     let (command, name) = (words.next().unwrap_or("list"), words.next());

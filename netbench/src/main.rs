@@ -145,6 +145,7 @@ fn checksum_cost() {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("netbench — network stack benchmark: TCP download and upload, then UDP round trips.\nUsage: netbench <a.b.c.d>:<port> [MB]   (against the test harness's bench server)");
     let mut words = mind::process::args_str().split_whitespace();
     let target = words.next().and_then(|t| t.split_once(':')).and_then(|(a, p)| Some((ipv4(a)?, p.parse::<u16>().ok()?)));
     let Some((address, port)) = target else { mind::println!("NETBENCH <A.B.C.D>:<PORT> [MB]"); return };

@@ -16,6 +16,7 @@ impl Source for Disk {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("view — text and hex viewer.\nUsage: view <file>\n↑↓ PgUp PgDn Space Home End scroll, F2 wrap, F4 hex or text, F5 go to, F7 search, Shift+F7 next, F1 keys, Esc F3 F10 quit.");
     let path = mind::process::args_str().trim();
     if path.is_empty() { mind::println!("[VIEW] USAGE: VIEW <FILE>"); return; }
     let file = match File::open(path) {

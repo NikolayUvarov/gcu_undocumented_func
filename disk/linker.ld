@@ -11,6 +11,7 @@ SECTIONS {
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) } :rodata
     .mind_request : { KEEP(*(.mind_request)) } :rodata
+    .mind_about : { KEEP(*(.mind_about)) } :rodata
     .dynsym : { *(.dynsym) } :rodata
     .gnu.hash : { *(.gnu.hash) } :rodata
     .hash : { *(.hash) } :rodata

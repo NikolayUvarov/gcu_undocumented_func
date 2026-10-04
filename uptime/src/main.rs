@@ -10,6 +10,7 @@ mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO);
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("uptime — uptime, load averages over 1, 5 and 15 minutes, the current CPU load and the task count.\nUsage: uptime");
     let load = match sysinfo::load(Endpoint::SYSINFO) {
         Ok(Ok(load)) => load,
         Ok(Err(error)) => { mind::println!("uptime: sysmon: {:?}", error); return; }

@@ -31,6 +31,7 @@ fn report(recognizer: &Recognizer, utterance: &Utterance) {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
+    mind::about!("hear — recognizes a spoken command offline (Russian and English) and prints what it heard.\nUsage: hear [seconds] | hear --wav file   (default: one utterance within 8 s from the microphone)\nThe commands are in voice/commands.txt. It acts on nothing; voice control is the shell's voice on.");
     let args = mind::process::args_str().trim();
     let (wav, seconds) = match args.split_whitespace().collect::<Vec<_>>().as_slice() {
         [] => (None, 8),

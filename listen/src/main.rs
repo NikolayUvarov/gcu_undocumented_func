@@ -60,6 +60,7 @@ fn rms(samples: &[i16]) -> i32 {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    mind::about!("listen — records from the microphone, shows the level and plays the recording back; finds speech.\nUsage: listen [seconds] | listen --vad [seconds] | listen [--vad] --wav file\n--vad prints each utterance (start, length, level); --wav takes a WAV file instead of the microphone.");
     let screen = Screen::new(info);
     match options() { Some(options) => run(&screen, options), None => mind::println!("{}", USAGE) }
     mind::println!("[LISTEN] DONE");

@@ -23,6 +23,7 @@ impl Tree for Fs {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
+    mind::about!("grep — prints the lines of text files that match a pattern (. * [a-z] [^...] ^ $ \\).\nUsage: grep [-i] [-n] [-r] [-l] [-c] pattern [path...]\n-i ignore case, -n line numbers, -r into directories, -l file names only, -c counts only.");
     let options = match grep::parse(mind::process::args_str()) { Ok(options) => options, Err(usage) => { mind::println!("{}", usage); return; } };
     let files = grep::files(&mut Fs, &options, &mut |path, error| mind::println!("GREP: {}: {}", path, error));
     let several = files.len() > 1 || options.recursive;
