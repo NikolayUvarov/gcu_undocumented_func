@@ -90,6 +90,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `gfx` | `Screen`: pixels, rectangles, 8×8 font text |
 | `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`audio::Stream`, `audio::wait_space`, `tts::say`) |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
+| `heap` | program heap: with the cargo feature `alloc` (`libmind = { path = "../libmind", features = ["alloc"] }`) a program gets a `GlobalAlloc` and can use `Vec`, `String`, `Box` after `extern crate alloc;`; `mind::heap_stats()` |
 
 The SDK also supplies the panic handler (logs the message and exits the task) and `memset`/`memcpy`/`memmove`/`memcmp`. `common/abi.rs` remains the single ABI definition shared by the kernel, the bootloader and `libmind`.
 
@@ -485,7 +486,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: 10 ms tick) |
 | 29 | CAP_INFO | slot → kind, arg2 = port base or memory rights, msg[2] = size/count/endpoint rights, msg[3] = 1 if the memory is sealed |
 
-This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later subdivide these blocks. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for programs: objects up to 2 KiB come from power-of-two size classes carved out of single pages, objects up to 256 KiB are runs of pages in 1 MiB arenas (at most 12), larger ones get their own block; allocation failure ends in the panic handler, which logs and exits the task. Services keep static memory. `tests/heap_host.rs` checks alignment, disjointness, reuse and exhaustion on the host. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
 ### Interfaces (MIND IDL)
 
@@ -498,6 +499,7 @@ After building, run the host tests for real ELF images, independent `.bss`/reloc
 ```bash
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
+rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /tmp/mind-core-heap-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 ```
 

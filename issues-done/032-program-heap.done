@@ -1,6 +1,6 @@
-# 032 — Program heap `mind::alloc`
+# 032 — Program heap `mind::alloc` — done
 
-**Type:** feature · **Priority:** P0 · **Status:** open · **Blocked by:** — · **Roadmap:** track G, tools plan F1 · **Constitution:** MC-5.1
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, tools plan F1 · **Constitution:** MC-5.1
 
 ## Problem
 
@@ -24,3 +24,7 @@ Programs get memory only as page blocks (`ALLOC`/`FREE`, `mind::mem::Pages`, 32 
 ## Related
 
 [docs/tools](../docs/tools/README.md) F1; README "Private program heap".
+
+## Resolution
+
+`libmind/src/heap.rs` (no dependencies, also built on the host): small objects up to 2 KiB in eight power-of-two classes carved from single pages with a free list per class; medium objects up to 256 KiB as first-fit page runs inside 1 MiB arenas (page bitmap, at most 12 arenas); larger objects as their own page block; alignment above a page is refused. The same layout always takes the same path, so freeing needs no header. `libmind/src/lib.rs` installs it as the `#[global_allocator]` when the cargo feature `alloc` is on and exports `mind::heap_stats()`; allocation failure reaches the panic handler (log and exit). `tests/heap_host.rs` runs a random 20 000-step workload (alignment, no overlap, contents intact), reuse of small objects, page-run coalescing and exhaustion/recovery. The `files` demo now collects and sorts the directory listing in a `Vec<String>`; the `services` and `ahci` QEMU suites check the sorted output and one arena.

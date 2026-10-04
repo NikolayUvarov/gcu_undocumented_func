@@ -673,6 +673,9 @@ def files_check(vm, pid):
         time.sleep(.2)
     require(output, "[FILES] kernel.elf ")
     require(output, "<DIR>")
+    require(output, "(SORTED, HEAP ARENAS=1)")  # Vec/String on the program heap (mind::alloc)
+    names = re.findall(r"^\[FILES\] (\S+) \d+$", output, re.M)
+    assert names == sorted(names), names
     size = (ROOT / "usb_root/kernel.elf").stat().st_size
     require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
     efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size

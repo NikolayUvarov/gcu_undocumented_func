@@ -6,4 +6,8 @@ edition = "2021"
 [lib]
 name = "mind"
 
+[features]
+# Program heap (`GlobalAlloc`), see src/heap.rs. Services leave it off and keep static memory.
+alloc = []
+
 [dependencies]
