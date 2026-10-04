@@ -15,10 +15,14 @@ Tasks that need a person (repository settings, legal decisions, coordination of 
 
 ## Open tasks
 
-Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **network track** (issues 100–149, so numbers of parallel tracks do not collide) builds drivers and the network services of track D. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [100](100-virtio-net-driver.md) | `virtio_net`: network card driver in ring 3 | driver / kernel track | P1 | — | track A, D |
+| [101](101-network-stack.md) | Network stack service (IPv4, ARP, ICMP, UDP, TCP) | network | P2 | 100 | track D |
+| [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | 101 | track D |
+| [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 101, 102 | track D |
 | [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | — (075 done) | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
