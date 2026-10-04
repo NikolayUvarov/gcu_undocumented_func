@@ -14,6 +14,7 @@
 |---|---|---|
 | Malicious application | Any code in ring 3 with the standard client capabilities (RTC, VFS, audio, loader, TTS endpoints, its INIT slot) | Cannot read or write kernel memory or other tasks' private memory, cannot use privileged system calls, cannot obtain device access. Faults terminate only it. |
 | Compromised service without DMA | Everything its capabilities allow (e.g. `rtc`: CMOS ports; `vfs_server`: block endpoints; `shell`: kill, focus, logs, input injection) | Damage is limited to those capabilities and what transitively reaches through them (MC-1.6, MC-3.9). |
+| Malicious application and files | Writing files | An application's file client reads only; the shell's (the user's badge) writes on `ram:` and in `data/` of the boot disk; boot files and the rest of the disk are not writable through any client, and only `vfs_server` holds write-badged block clients (Appendix B.6). |
 | Malicious file content | Crafted FAT structures and ELF files on the boot disk | FAT parsing happens in `vfs_server` (ring 3, block endpoints only). ELF images of applications are parsed by the kernel's ELF loader with bounds checks; the loader rejects malformed images. Program origin is **not** authenticated. |
 
 ## Out of scope (not claimed)
@@ -35,3 +36,4 @@
 | Device misbehaves (DMA) | Not contained. |
 | Kernel exception or panic | The system halts with a message on COM1. |
 | Loss of the disk | Programs can no longer be loaded; running tasks continue. |
+| Power loss or reset while files change | `vfs_server` keeps changed sectors in a write-back cache until a flush (`flush`, `sync`, the shell's file commands); everything since the last flush may be lost. A change is written as file data, then every FAT copy, then the directory entry, but the cache writes sectors in LBA order (the FAT before data), so a loss during a flush can leave: allocated clusters not yet in an entry (lost space), an entry with a size longer than its written data (stale bytes), or, after a move, the entry in both directories (a cross-link that `fsck` repairs). There is no journal and no atomicity beyond FAT itself; the dirty bit in FAT[1] (FAT16/32) marks a volume changed since the last flush, so a check knows to look. The RAM disk is lost at every reset by design. |

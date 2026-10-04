@@ -44,14 +44,15 @@ The kernel contains no list of services and no per-service capability table. It 
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
 | `ahci` | service endpoint, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
 | `usb_storage` | service endpoint, xHCI BAR0 (MMIO), 256 KiB DMA | first USB mass storage device (Bulk-Only, SCSI) on an xHCI controller (0C:03:30) |
-| `vfs_server` | service endpoint, send rights to the running block drivers | mounts the first FAT12/16/32 volume and serves files by descriptor |
+| `ramdisk` | service endpoint | an 8 MiB block device in its own memory: the RAM disk `ram:` |
+| `vfs_server` | service endpoint, write-badged clients of the running block drivers and of `ramdisk`, an `rtc` client | mounts the boot disk and `ram:` (FAT12/16/32) and serves files and directories through handles (`idl/vfs.wit`), writing included |
 | `loader` | service endpoint, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities; in a launch session (`idl/loader.wit`) also with the capabilities the launcher lends (slots 7–11) |
 | `audio_gw` | service endpoint, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
 | `tts` | service endpoint, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `sysmon` | service endpoint, observe privilege | system information (`idl/sysinfo.wit`): the kernel's `STAT` records, load samples every 100 ms (300 kept) and every second (600 kept), load averages; at most 20 requests at once and 40 per second per client |
 | `shell` | screen, init/loader/sysmon and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) eleven services run and applications start at PID 12. The kernel has room for 24 tasks. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) twelve services run and applications start at PID 13. The kernel has room for 24 tasks. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
 
 The shell runs in ring 3. It reads the UART itself, forwards bytes to the focused program through the input privilege, and prints that program's console output to COM1 with a `[PID n]` prefix. Focus is a kernel mechanism set only by the holder of process control: the focused task's screen is shown and receives keyboard input; when it exits, or on Ctrl+Z (an input event flagged as attention), focus returns to the shell and the shell gets a notice. The kernel writes to COM1 only its boot line, kernel exceptions and panics.
 
@@ -94,7 +95,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `gfx` | `Screen`: pixels, rectangles, 8×8 font text, UTF-8 text in the 8×16 font (`text16`, `glyph16`) |
 | `font16` | MIND Mono 16, the 8×16 text font: a subset of Terminus Font under the SIL OFL 1.1 with Cyrillic, box drawing, block elements and braille ([fonts/](fonts/README.md)) |
 | `stat` | kernel observation (`STAT`): records of tasks, CPUs, memory, physical map, address spaces, capabilities, endpoints, IRQs, devices, and their names |
-| `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`audio::Stream`, `audio::wait_space`, `tts::say`) |
+| `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`fs::File`, `fs::Dir`, `fs::list`/`mkdir`/`remove`/`rename`/`metadata`/`volume`, `audio::Stream`, `audio::wait_space`, `tts::say`) |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 | `heap` | program heap: with the cargo feature `alloc` (`libmind = { path = "../libmind", features = ["alloc"] }`) a program gets a `GlobalAlloc` and can use `Vec`, `String`, `Box` after `extern crate alloc;`; `mind::heap_stats()` |
 
@@ -129,18 +130,23 @@ Storage drivers are separate ring-3 services that speak one block protocol (`BLO
 
 ### Virtual file system
 
-`vfs_server` opens the block drivers it was given (in the order ATA, AHCI, USB), mounts the first FAT12/16/32 volume with or without an MBR, including long file names and subdirectories, and reads it through a 64-sector cache with read-ahead. Clients use `mind::fs`:
+`vfs_server` opens the block drivers it was given (in the order ATA, AHCI, USB) and mounts the first FAT12/16/32 volume, with or without an MBR, as the boot disk; the RAM disk (`ramdisk`, 8 MiB) is formatted as FAT16 (`MIND RAM`) when blank and mounted as `ram:`. Its contents never outlive the boot. The FAT code (`vfs_server/src/fat.rs`) reads and writes FAT12/16/32: long names in UTF-16 (Cyrillic included) with unique `~N` aliases and checksums, cluster allocation on every FAT copy, directories that grow, the fixed root of FAT12/16, `.` and `..`, moves between directories (not into themselves), times from the RTC, the dirty bit in FAT[1] from the first change until a flush, and an unknown free count in FAT32's FSInfo. Sectors go through a 64-sector cache with read-ahead and write-back; a flush writes the changed sectors in LBA order and empties the drive's cache.
+
+The protocol is `idl/vfs.wit` (MIND IDL): handles of volume roots, directories and files; `open-dir`, `open` (write, create, truncate, new), `read`, `write`, `truncate`, `stat`, `list`, `remove`, `rename`, `volume`, `flush`, `close`. Every path is relative to a directory handle and `..` is refused. A handle belongs to the client that opened it (PID and badge) and is never wider than the one it was opened from (MC-3.4). The badge of a client's capability decides what it may change: applications (through `loader`) read only; the shell's client carries `VFS_BADGE_USER` and writes anywhere on `ram:` and in `data/` of the boot disk — boot files and the rest of the disk stay read-only. A removed file's handles are closed. Clients use `mind::fs`:
 
 ```rust
 let mut file = mind::fs::File::open("EFI/BOOT/BOOTX64.EFI")?;
 let mut chunk = [0u8; 4096];
 let n = file.read(&mut chunk)?;
-mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
+mind::fs::list("ram:", |entry| mind::println!("{} {}", entry.name_str(), entry.size))?;
+let mut notes = mind::fs::File::create("ram:notes.txt")?; // needs a writing client (the shell's)
+notes.write(b"hello")?;
+notes.flush()?;
 ```
 
-The block drivers read and write (ATA WRITE SECTORS and FLUSH CACHE, AHCI WRITE DMA EXT and FLUSH CACHE EXT, USB SCSI WRITE(10) and SYNCHRONIZE CACHE(10), write protection from MODE SENSE(6)); `BLOCK_WRITE` and `BLOCK_FLUSH` are served only to a client whose endpoint capability carries the write badge, which `init` gives to `vfs_server` alone (Appendix B.6). An endpoint capability can carry a 16-bit **badge**, set once by `CAP_MINT` (`mind::ipc::mint_badged`); the server sees it with every message sent through that capability (`Received::badge`), so one endpoint serves clients with different rights. `vfs_server` itself does not write yet (VFS v2).
+The block drivers read and write (ATA WRITE SECTORS and FLUSH CACHE, AHCI WRITE DMA EXT and FLUSH CACHE EXT, USB SCSI WRITE(10) and SYNCHRONIZE CACHE(10), write protection from MODE SENSE(6)); `BLOCK_WRITE` and `BLOCK_FLUSH` are served only to a client whose endpoint capability carries the write badge, which `init` gives to `vfs_server` alone (Appendix B.6). An endpoint capability can carry a 16-bit **badge**, set once by `CAP_MINT` (`mind::ipc::mint_badged`); the server sees it with every message sent through that capability (`Received::badge`), so one endpoint serves clients with different rights. 
 
-Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. A listing gives each entry's size, attributes (`VFS_ENTRY_*`: directory, hidden, system, read-only, archive) and FAT modification time (`mind::fs::fat_time`). Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
+Each request is a `CALL` lending the client's 20 KiB transfer buffer. A listing gives each entry's size, attributes (`VFS_ENTRY_*`: directory, hidden, system, read-only, archive) and FAT modification time (`mind::fs::fat_time`). Handles of dead clients are recycled. A power loss before a flush can lose the changes since the last one; a power loss during one leaves what FAT allows (no journal): see [docs/profile/threat-model.md](docs/profile/threat-model.md). `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
 
 ### Audio gateway
 
@@ -363,6 +369,8 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `STAT <id>` — task details: state and what it waits for, run time, syscalls, IPC counts, memory, capabilities, quotas.
 * `CAPS <id>` — the capabilities of a task: slot, generation, kind, rights, derivation node and parent.
 * `ENDPOINTS`, `IRQS`, `DEVICES` — endpoints with server, holders, waiting senders and traffic; interrupt lines with holder and count; PCI functions with class, BARs and the task holding them.
+* `ls [path]`, `cat <file>` — list a directory (`ram:` is the RAM disk) with sizes and times; show a text file.
+* `write <file> <text>`, `mkdir <path>`, `rm <path>`, `mv <from> <to>`, `sync` — change files on `ram:` and in `data/` (the shell's file client may write there only); changes are flushed at once.
 * `CLOCK` — show the monotonic clock (ns), its resolution and the calibrated TSC frequency.
 * `DATE` — show the calendar date and time from the RTC (no time zone).
 * `FAULTS` — show the last 16 application exceptions: PID, CPU, exception vector/error code, instruction and fault addresses.
@@ -518,7 +526,7 @@ This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for progr
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc`, `sysmon` (`idl/sysinfo.wit`) and the loader's launch sessions (`idl/loader.wit`) are on MIND IDL; the other services still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc`, `sysmon` (`idl/sysinfo.wit`), `vfs_server` (`idl/vfs.wit`) and the loader's launch sessions (`idl/loader.wit`) are on MIND IDL; the other services still use the numeric conventions of `common/abi.rs` (roadmap C8).
 
 A program states what it needs with `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO)`: a `.mind_request` section in its ELF that grants nothing (MC-3.11). The shell, as the user's agent, reads it with the loader's `inspect`, opens a launch session (`begin`), lends what it holds and is willing to give (`grant`: today the `sysmon` client in slot 10) and starts the program (`commit`); `REQUEST_CONSOLE` starts it without a screen. Nothing is granted by program name.
 
@@ -539,11 +547,12 @@ rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests 
 rustc --edition=2021 --test tests/monitor_host.rs -o /tmp/mind-core-monitor-tests && /tmp/mind-core-monitor-tests   # top, memmap, load, hw on a fake sysmon
 rustc --edition=2021 --test tests/fm_host.rs -o /tmp/mind-core-fm-tests && /tmp/mind-core-fm-tests   # the file manager on a disk in memory
 rustc --edition=2021 --test tests/block_host.rs -o /tmp/mind-core-block-tests && /tmp/mind-core-block-tests   # block protocol: the write badge
+rustc --edition=2021 --test tests/fat_host.rs -o /tmp/mind-core-fat-tests && /tmp/mind-core-fat-tests   # FAT writer vs mkfs.fat, fsck.fat, mtools
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized), the audio gateway (AC97 output captured to a WAV file and checked for the expected tones) and block writes (`block` suite, with `mkfs.fat` and `mtools`: a raw FAT image boots three times — IDE, AHCI, USB — with `tests/block_app.rs` standing in for `vfs_server`; it writes, flushes and reads back sectors through the write-badged clients and the harness checks the image and runs `fsck.fat -n`):
+The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized), the audio gateway (AC97 output captured to a WAV file and checked for the expected tones) files on a raw FAT disk (`vfs` suite, with `mkfs.fat` and `mtools`: the shell writes in `data/`, the host checks the image with `fsck.fat -n` and `mtype`, a reboot reads the files back and finds `ram:` empty) and block writes (`block` suite, with `mkfs.fat` and `mtools`: a raw FAT image boots three times — IDE, AHCI, USB — with `tests/block_app.rs` standing in for `vfs_server`; it writes, flushes and reads back sectors through the write-badged clients and the harness checks the image and runs `fsck.fat -n`):
 
 ```bash
 for fixture in busy_app isolation_app heap_app block_app; do

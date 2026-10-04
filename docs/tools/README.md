@@ -152,7 +152,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
   - `ata`: WRITE SECTORS (0x30, PIO), FLUSH CACHE (0xE7);
   - `ahci`: WRITE DMA EXT (0x35), FLUSH CACHE EXT (0xEA);
   - `usb_storage`: SCSI WRITE(10) (0x2A), SYNCHRONIZE CACHE(10) (0x35), write protection from MODE SENSE.
-- **`ramdisk`** (new block service): memory-backed device of a size set by `init`'s policy, FAT-formatted on first use. It is `/tmp` and the target of all write tests, so FAT writing is developed without touching the boot disk.
+- **`ramdisk`** (new block service): memory-backed device of a size set by `init`'s policy, FAT-formatted on first use. It is `/tmp` and the target of all write tests, so FAT writing is developed without touching the boot disk. Done in issue 045 (8 MiB, a constant of the service; `vfs_server` formats it FAT16 when blank and mounts it as `ram:`).
 - **`vfs_server` v2** on `vfs.wit` — this is VFS's C8 port, done once:
   - **directory handles** instead of global paths: `open_dir(handle, path, rights)`; paths are relative, `..` above the handle's root is refused; rights read-only/read-write attenuate (MC-3.4). A handle for a subtree is what the shell gives a tool;
   - operations: create, write, truncate, rename, remove, mkdir, rmdir, stat (size, attributes, modification time), list with attributes and times, volume information (type, size, free), flush;
@@ -161,6 +161,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
   - several named volumes (boot disk, RAM disk);
   - one writer per file; readers see the last flushed size;
   - the boot set is protected by policy: `init` gives write handles only below a data directory (for example `/data`), never for `EFI/`, `kernel.elf` or service images.
+  - Done in issue 046: `idl/vfs.wit` 2.0; the zone of a root handle comes from the client's badge (applications read only, the shell's `VFS_BADGE_USER` writes on `ram:` and below `data/`); FSInfo's free count is marked unknown on the first change instead of being kept.
 - **Saving in the editor:** write `name.tmp`, flush, rename over `name` (in one directory this replaces one directory entry; best effort on FAT, stated as such).
 - **Tests:** QEMU's virtual FAT drive (`fat:rw:`) is a poor target for write tests; writes are tested on the RAM disk and on a raw FAT image attached as a second disk, and after the run `fsck.fat -n` on the host checks the image.
 

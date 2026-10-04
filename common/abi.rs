@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 13;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 14;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "sysmon.elf", "shell.elf"];
 pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
@@ -130,9 +130,12 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started.
+// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started; then the RAM disk and an
+// rtc client (calendar time for directory entries).
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
+pub const SLOT_RAMDISK: usize = 5;
+pub const SLOT_VFS_RTC: usize = 6;
 // Shell: application slots plus process control, the input privilege and the COM1 port range.
 pub const SLOT_CONTROL: usize = 7;
 pub const SLOT_INPUT: usize = 8;
@@ -169,6 +172,7 @@ pub const INPUT_QUEUE: usize = 64; // events per task; the oldest is dropped whe
 pub const BLOCK_KIND_ATA: usize = 1;
 pub const BLOCK_KIND_AHCI: usize = 2;
 pub const BLOCK_KIND_USB: usize = 3;
+pub const BLOCK_KIND_RAM: usize = 4;
 
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
 // A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
@@ -192,13 +196,12 @@ pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; p
 pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 
 // RTC protocol: idl/rtc.wit (MIND IDL, bindings in mind::idl::rtc).
-// VFS protocol: msg[2]=op|fd<<8|length<<16, msg[3]=offset; the buffer is passed as a memory capability.
-pub const VFS_OPEN: usize = 1;
-pub const VFS_READ: usize = 2;
-pub const VFS_CLOSE: usize = 3;
-pub const VFS_LIST: usize = 4;
-pub const VFS_STAT: usize = 5;
-// VFS_LIST entries: size u32, flags u8, name length u8, modified u32 (FAT date << 16 | FAT time), name.
+// VFS protocol: idl/vfs.wit (MIND IDL, bindings in mind::idl::vfs; mind::fs is the client). A client with the user
+// badge (init gives it to the shell) may write on `ram` and in the boot disk's `data` directory; others only read.
+pub const VFS_BADGE_USER: u16 = 1;
+// `open` mode bits.
+pub const VFS_MODE_WRITE: u8 = 1; pub const VFS_MODE_CREATE: u8 = 2; pub const VFS_MODE_TRUNCATE: u8 = 4; pub const VFS_MODE_NEW: u8 = 8;
+// Attributes of a directory entry (`entry.attributes`).
 pub const VFS_ENTRY_DIR: u8 = 1; pub const VFS_ENTRY_HIDDEN: u8 = 2; pub const VFS_ENTRY_SYSTEM: u8 = 4; pub const VFS_ENTRY_READ_ONLY: u8 = 8; pub const VFS_ENTRY_ARCHIVE: u8 = 16;
 // Program loader: CALL on SLOT_LOADER. msg[2..4] is the program name (up to 16 bytes) and the optional capability
 // is an endpoint for the child's INIT slot; reply msg[2] = PID or error. With msg[2] = 0 and msg[3] = LOADER_LIST

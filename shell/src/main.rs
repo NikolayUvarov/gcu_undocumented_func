@@ -3,6 +3,7 @@
 // Command shell in ring 3: text console on its own screen and COM1, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
 mod console;
+mod files;
 mod observe;
 
 use console::{Console, Position, COM1};
@@ -19,7 +20,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 23] = ["boot", "caps", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logs", "physmap", "pmap", "ps", "run", "stat", "stop"];
+const COMMANDS: [&str; 30] = ["boot", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "rm", "run", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
 
 struct Shell {
@@ -186,6 +187,14 @@ impl Shell {
             if name.len() > NAME_MAX { return self.report("PROGRAM NAME TOO LONG"); }
             if program_args.len() > ARGS_MAX { return self.report("ARGUMENTS TOO LONG"); }
             self.run_program(name, program_args, background);
+        } else if is(b"ls") {
+            files::ls(&mut self.term, args);
+        } else if is(b"cat") || is(b"mkdir") || is(b"rm") || is(b"mv") || is(b"write") {
+            if args.is_empty() { return self.report("EXPECTED A PATH"); }
+            if is(b"cat") { files::cat(&mut self.term, args) } else if is(b"write") { files::write(&mut self.term, args) }
+            else { files::change(&mut self.term, if is(b"mkdir") { "MKDIR" } else if is(b"rm") { "RM" } else { "MV" }, args) }
+        } else if is(b"sync") {
+            files::sync(&mut self.term);
         } else if is(b"pmap") || is(b"caps") || is(b"stat") {
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
             if is(b"pmap") { observe::pmap(&mut self.term, pid) } else if is(b"caps") { observe::caps(&mut self.term, pid) } else { observe::task_details(&mut self.term, pid) }
@@ -214,7 +223,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -243,6 +252,7 @@ impl Shell {
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"stop") {
+            files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");
             control::halt();
         } else if is(b"date") {

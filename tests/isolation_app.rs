@@ -259,6 +259,20 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if slot & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || call(mb, abi::SYSCALL_FREE, block, 0) != 0 || call(mb, abi::SYSCALL_CAP_DROP, slot, 0) != 0 {
                     asm!("ud2", options(noreturn));
                 }
+                // VFS v2 (idl/vfs.wit, encoded by hand): an application's client reads only. It opens the RAM disk's
+                // root, but creating a file there is denied (status 2, error 4 = denied).
+                let page = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let shared = call(mb, abi::SYSCALL_MEM_SHARE, page, 0);
+                let string = |text: &[u8]| { let b = page as *mut u8; *b = text.len() as u8; *b.add(1) = 0; for (i, &c) in text.iter().enumerate() { *b.add(2 + i) = c; } 2 + text.len() };
+                let n = string(b"ram");
+                (*mb).msg = [shared, 0, 1 | 2 << 8 | n << 16, 0];
+                let opened = call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_VFS, 0) == 0 && (*mb).msg[2] & 0xFF == 0;
+                let root = (*mb).msg[2] >> 16 & 0xFFFF_FFFF;
+                let n = string(b"x.txt");
+                (*mb).msg = [shared, 0, 3 | 2 << 8 | n << 16, root | ((abi::VFS_MODE_WRITE | abi::VFS_MODE_CREATE) as usize) << 32];
+                let denied = call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_VFS, 0) == 0 && (*mb).msg[2] & 0xFF == 2 && (*mb).msg[2] >> 16 & 0xFF == 4;
+                if !opened || !denied { asm!("ud2", options(noreturn)); }
+                call(mb, abi::SYSCALL_CAP_DROP, shared, 0); call(mb, abi::SYSCALL_FREE, page, 0);
                 print(mb, b"CAPABILITY CHECKS OK\r\n");
                 return;
             }

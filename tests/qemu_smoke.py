@@ -22,7 +22,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage drivers exist only when the controller is present.
-SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
+SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps)(\s+)(\d{1,18})\b", re.I)
@@ -774,6 +774,37 @@ def fm_check(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel", flush=True)
+    vfs_check(vm)
+
+
+def vfs_check(vm):
+    """Files through the shell (VFS v2, idl/vfs.wit): the RAM disk, Cyrillic names and text, directories, and what the
+    user's badge may not change."""
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    require(vm.command("ls ram:"), "0 ENTRIES")
+    require(utf8("write ram:заметки.txt Привет, мир"), "WROTE 21 BYTES")
+    require(utf8("cat ram:заметки.txt"), "Привет, мир")
+    require(vm.command("mkdir ram:docs/old"), "OK")
+    require(utf8("mv ram:заметки.txt ram:docs/old/note.txt"), "OK")
+    listing = vm.command("ls ram:docs/old")
+    require(listing, "note.txt")
+    require(listing, "1 FILES, 21 BYTES")
+    require(vm.command("rm ram:docs"), "ERROR: RM: DIRECTORY NOT EMPTY")
+    require(vm.command("rm ram:docs/old/note.txt"), "OK")
+    require(vm.command("rm ram:docs/old"), "OK")
+    # Boot files and the rest of the boot disk stay read-only; paths cannot climb out; data/ is writable.
+    require(vm.command("write kernel.elf x"), "ERROR: WRITE: DENIED")
+    require(vm.command("write EFI/BOOT/x.txt x"), "ERROR: WRITE: DENIED")
+    require(vm.command("mkdir system"), "ERROR: MKDIR: DENIED")
+    require(vm.command("cat ram:../kernel.elf"), "ERROR: CAT: INVALID PATH")
+    require(vm.command("rm kernel.elf"), "ERROR: RM: DENIED")
+    require(vm.command("mkdir data"), "OK")
+    require(vm.command("write data/n.txt hello"), "WROTE 6 BYTES")
+    require(vm.command("cat data/n.txt"), "hello")
+    require(vm.command("ls data"), "n.txt")
+    print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
 
 
 def busy_suite(vm):
@@ -1336,31 +1367,94 @@ def block_pattern(kind, sector):
     return bytes(data)
 
 
+MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+
+
+def raw_fat_image(temp, replace=None):
+    """A raw disk image: an MBR with one EFI system partition (what OVMF boots from a fixed disk) holding a FAT16 file
+    system of BLOCK_FS_MB with the built OS; `replace` maps file names to other files. Returns (image, start, sectors)."""
+    image = temp / "disk.img"
+    start, fs_sectors = 2048, (BLOCK_FS_MB << 20) // 512
+    with image.open("wb") as f:
+        f.truncate(BLOCK_IMAGE_MB << 20)
+        mbr = bytearray(512)
+        mbr[446:462] = struct.pack("<B3sB3sII", 0x80, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff", start, fs_sectors)
+        mbr[510:512] = b"\x55\xaa"
+        f.write(mbr)
+    subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
+    files = temp / "files"
+    (files / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
+        shutil.copyfile(ROOT / "usb_root" / name, files / name)
+    for name, source in (replace or {}).items():
+        shutil.copyfile(source, files / name)
+    subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
+    return image, start, fs_sectors
+
+
+def fsck_volume(image, start, fs_sectors):
+    volume = image.parent / "volume.img"
+    with image.open("rb") as f:
+        f.seek(start * 512)
+        volume.write_bytes(f.read(fs_sectors * 512))
+    check = subprocess.run(["fsck.fat", "-n", str(volume)], capture_output=True, text=True)
+    assert check.returncode == 0 and "Dirty bit" not in check.stdout + check.stderr, check.stdout + check.stderr
+    volume.unlink()
+
+
+def raw_tools():
+    return all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mtype", "mdel", "fsck.fat"))
+
+
+def vfs_suite(args):
+    """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
+    (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
+    if not raw_tools():
+        print("SKIP: vfs suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / "usb_root") as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp))
+        part = f"{image}@@{start * 512}"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            mounted = vm.service_logs("vfs_server", "AS RAM:")  # reading drains the log: both lines at once
+            require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048 (DEVICE WRITABLE)")
+            require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
+            for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
+                                    ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
+                require(vm.command(command), answer)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-vfs-1-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        mtype = lambda name: subprocess.run(["mtype", "-i", part, f"::/{name}"], env=MTOOLS_ENV, capture_output=True).stdout
+        assert mtype("data/notes.txt") == b"line one\n", mtype("data/notes.txt")
+        assert mtype("data/b.txt") == b"alpha\n"
+        assert b"sub" not in subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True).stdout
+        # After a reboot: the disk keeps its files, the RAM disk starts empty.
+        subprocess.run(["mdel", "-i", part, "::/NvVars"], env=MTOOLS_ENV, capture_output=True)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            require(vm.command("cat data/notes.txt"), "line one")
+            require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 15 BYTES")
+            require(vm.command("ls ram:"), "0 ENTRIES")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-vfs-2-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+    print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it", flush=True)
+
+
 def block_suite(args, block_elf):
     """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
     stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
     gives it, flushes and reads them back; the image is then checked on the host."""
-    if not (shutil.which("mkfs.fat") and shutil.which("mcopy")):
-        print("SKIP: block suite needs mkfs.fat and mcopy (dosfstools, mtools)", flush=True)
+    if not raw_tools():
+        print("SKIP: block suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
     with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / "usb_root") as temp:
-        image = Path(temp) / "disk.img"
-        start, fs_sectors = 2048, (BLOCK_FS_MB << 20) // 512
-        with image.open("wb") as f:
-            f.truncate(BLOCK_IMAGE_MB << 20)
-            # MBR with one EFI system partition: what OVMF boots from a fixed disk.
-            mbr = bytearray(512)
-            mbr[446:462] = struct.pack("<B3sB3sII", 0x80, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff", start, fs_sectors)
-            mbr[510:512] = b"\x55\xaa"
-            f.write(mbr)
-        subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
-        files = Path(temp) / "files"
-        (files / "EFI/BOOT").mkdir(parents=True)
-        for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
-            shutil.copyfile(ROOT / "usb_root" / name, files / name)
-        shutil.copyfile(block_elf, files / "vfs_server.elf")
-        env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
-        subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=env, capture_output=True)
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"vfs_server.elf": block_elf})
+        env = MTOOLS_ENV
         sectors = (BLOCK_IMAGE_MB << 20) // 512
         for kind, name, options in [(1, "ATA", {}), (2, "AHCI", {"ahci": True}), (3, "USB", {"usb": True})]:
             # OVMF keeps its variables (boot entries of the previous controller) in NvVars on the disk.
@@ -1378,12 +1472,7 @@ def block_suite(args, block_elf):
                 f.seek((sectors - 8 * kind) * 512)
                 written = f.read(8 * 512)
             assert written == b"".join(block_pattern(kind, s) for s in range(8)), f"{name}: the image does not hold the written sectors"
-        volume = Path(temp) / "volume.img"
-        with image.open("rb") as f:
-            f.seek(start * 512)
-            volume.write_bytes(f.read(fs_sectors * 512))
-        check = subprocess.run(["fsck.fat", "-n", str(volume)], capture_output=True, text=True) if shutil.which("fsck.fat") else None
-        assert check is None or check.returncode == 0, check.stdout + check.stderr
+        fsck_volume(image, start, fs_sectors)
     print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
@@ -1516,10 +1605,10 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1531,6 +1620,9 @@ def main():
     for suite in suites:
         if suite == "block":
             block_suite(args, args.block_elf)
+            continue
+        if suite == "vfs":
+            vfs_suite(args)
             continue
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)

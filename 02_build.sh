@@ -59,6 +59,7 @@ USER_CRATES=(
     "ata:ata:ata.elf"
     "ahci:ahci:ahci.elf"
     "usb_storage:usb_storage:usb_storage.elf"
+    "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"

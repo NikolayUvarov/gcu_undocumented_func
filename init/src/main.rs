@@ -115,6 +115,7 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
+            "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, "ramdisk")?, ALL),
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
@@ -122,6 +123,8 @@ impl Init {
                 for driver in ["ata", "ahci", "usb_storage"] {
                     if self.running(service_index(driver)) { let keeper = self.keeper(driver)?; grants.add(slot, minted.badged(keeper, CLIENT, BLOCK_BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
+                if self.running(service_index("ramdisk")) { let keeper = self.keeper("ramdisk")?; grants.add(SLOT_RAMDISK, minted.badged(keeper, CLIENT, BLOCK_BADGE_WRITE)?, CLIENT); }
+                grants.add(SLOT_VFS_RTC, self.client(&mut minted, "rtc")?, CLIENT);
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
@@ -147,7 +150,10 @@ impl Init {
                 // Application slots plus process control, input injection (UART) and the COM1 ports.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
-                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_VFS, "vfs_server"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { grants.add(slot, self.client(&mut minted, service)?, CLIENT); }
+                for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { grants.add(slot, self.client(&mut minted, service)?, CLIENT); }
+                // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
+                let keeper = self.keeper("vfs_server")?;
+                grants.add(SLOT_VFS, minted.badged(keeper, CLIENT, VFS_BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
                 grants.add(SLOT_SYSINFO, self.client(&mut minted, "sysmon")?, CLIENT);

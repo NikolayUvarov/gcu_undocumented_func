@@ -20,12 +20,13 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `ata` | server endpoint, ports 0x1F0–0x1F7 and 0x3F6 |
 | `ahci` | server endpoint, ABAR (BAR5) MMIO of the first AHCI controller, 128 KiB DMA |
 | `usb_storage` | server endpoint, BAR0 MMIO of the first xHCI controller, 256 KiB DMA |
-| `vfs_server` | server endpoint, client endpoints of the running block drivers |
+| `ramdisk` | server endpoint |
+| `vfs_server` | server endpoint, write-badged client endpoints of the running block drivers and of `ramdisk`, an `rtc` client (slot 6) |
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
 | `tts` | server endpoint, client endpoint of `audio_gw` |
 | `sysmon` | server endpoint, observe privilege (read-only statistics; nobody else gets it) |
-| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server`, `audio_gw`, `loader`, `tts`, `sysmon` (slot 10); process-control and input privileges; ports 0x3F8–0x3FF |
+| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10); process-control and input privileges; ports 0x3F8–0x3FF |
 
 5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–11 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it; a program that asks for the console starts without a screen.
 

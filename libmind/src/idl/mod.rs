@@ -4,3 +4,4 @@ pub mod wire;
 pub mod loader;
 pub mod rtc;
 pub mod sysinfo;
+pub mod vfs;
