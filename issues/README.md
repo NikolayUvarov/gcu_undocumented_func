@@ -18,6 +18,7 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
+| [032](032-minimal-supervision.md) | Minimal supervision: exit notices, restart budget, old-instance fencing | architecture | P1 | — | C6 |
 
 ## Finished tasks (`issues-done/`)
 
