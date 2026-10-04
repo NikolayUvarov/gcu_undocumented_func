@@ -19,13 +19,7 @@ Makes the project findable on GitHub.
 
 The repository keeps its name (`gcu_undocumented_func`); the `repository` field of every `Cargo.toml` already points to it.
 
-## 3. Copyright holder in LICENSE-MIT
-
-`LICENSE-MIT` says `Copyright (c) 2026 The MIND Core contributors`. That is valid, but naming the person who owns the project is clearer for users and for programs such as Claude for Open Source.
-
-- [ ] Decide the line, for example `Copyright (c) 2026 <your name> and the MIND Core contributors`, and tell an agent (or edit `LICENSE-MIT` yourself). Apache-2.0 needs no change.
-
-## 4. Optional: protect `main`
+## 3. Optional: protect `main`
 
 CI (`.github/workflows/ci.yml`) runs on every push. To stop a red build from reaching `main`:
 
