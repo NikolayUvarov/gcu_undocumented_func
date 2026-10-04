@@ -428,6 +428,62 @@ def keys_suite(vm):
     print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc", flush=True)
 
 
+def shell_suite(vm):
+    """The shell's line editor, history, completion, Cyrillic and scrollback, from the UART and from PS/2."""
+    def keys(data, fragment):
+        # Redraws of the edited line also print the prompt: wait for the command's output followed by a prompt.
+        vm.send_bytes(data)
+        seen = ""
+        while not (fragment in seen and seen.rfind("MIND> ") > seen.find(fragment)):
+            seen += vm.expect("MIND> ")
+        return seen
+    # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
+    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK:")
+    # Delete: "cpusX", Left, Delete -> "cpus".
+    keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
+    vm.command("clock")
+    # History: Up twice is "cpus".
+    keys(b"\x1b[A\x1b[A\r", "CPU=0 APIC=")
+    # Esc clears a typed line.
+    vm.send_bytes(b"garbage\x1b")
+    time.sleep(.2)
+    keys(b"heap\r", "HEAP: USED=")
+    # Tab completion of a program name after RUN, and of a command.
+    keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
+    keys(b"kil\t1\r", "KILLED PID=1")
+    # Several matches are listed under the line.
+    vm.send_bytes(b"c\t")
+    listing = vm.expect("cpus")
+    for word in ("clear", "clock"):
+        require(listing, word)
+    vm.send_bytes(b"\x1b")
+    time.sleep(.2)
+    # Cyrillic typed at the terminal is shown in the shell and reaches the command parser.
+    keys("привет мир\r".encode(), "ERROR: UNKNOWN COMMAND")
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(row.startswith(canon("MIND> привет мир")) for row in screen), screen
+    # PS/2: Up recalls the last command, Enter runs it.
+    vm.hmp("sendkey up")
+    vm.hmp("sendkey ret")
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
+    vm.output = ""
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back.
+    for _ in range(6):
+        vm.command("help")
+    assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
+    for _ in range(12):
+        vm.hmp("sendkey shift-pgup")
+    screen = screen_text(vm)
+    assert any(canon("MIND CORE v1.6") in row for row in screen), screen
+    vm.hmp("sendkey shift-pgdn")
+    vm.serial()
+    print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
+
+
 def busy_suite(vm):
     baseline = heap_used(vm)
     require(vm.command("run app2 &"), "PID=1 NAME=app2 BACKGROUND")
@@ -1025,10 +1081,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1067,7 +1123,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

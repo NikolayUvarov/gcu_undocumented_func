@@ -323,7 +323,7 @@ also lists and reads the image through `usb_storage` and `vfs_server`.
 
 ### Console
 
-At the `MIND>` prompt, enter a command and press Enter (commands are case-insensitive):
+At the `MIND>` prompt, enter a command and press Enter (commands are case-insensitive). The console uses the 8×16 font (lower case, Cyrillic, box drawing) and keeps 400 lines of scrollback (**Shift+PgUp/PgDn**). The line can be edited: **←/→**, **Home/End**, **Delete**, **Backspace**, **Ctrl+←/→** by word, **Esc** clears it, **↑/↓** walk the history of the last 32 commands, **Tab** completes a command or a program name (several matches are listed), **Ctrl+L** clears the screen. Edits are mirrored to the UART with VT100 sequences.
 
 * `LIST` — show the programs (`*.elf`) on the boot disk, read by `loader`, and the boot services.
 * `RUN <name>` — load `<name>.elf` (or a path such as `extra/demo.elf`) from the disk and start it in the foreground; any ELF built for MIND CORE can be copied to the disk and run. `RUN app` starts the rotating-square application; `BOOT` remains an alias for it.

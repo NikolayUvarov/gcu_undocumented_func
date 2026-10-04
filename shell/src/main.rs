@@ -2,70 +2,28 @@
 #![no_main]
 // Command shell in ring 3: text console on its own screen and COM1, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
+mod console;
+
+use console::{Console, Position, COM1};
 use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_event, Ports};
-use mind::font::FONT;
 use mind::input::{Code, Key};
+use mind::tui::widgets::{Edit, History, InputLine};
 use mind::ipc::{Endpoint, Message};
 use mind::keys::{Event, Vt};
 use mind::mem::Pages;
 use mind::sys::Error;
 
-const COM1: u16 = 0x3F8;
-const BACKGROUND: u32 = 0x001E1E2E;
-const FOREGROUND: u32 = 0x00A6E3A1;
+// Words the shell completes with Tab besides program names.
+const COMMANDS: [&str; 14] = ["boot", "clear", "clock", "cpus", "faults", "fg", "heap", "help", "kill", "list", "logs", "ps", "run", "stop"];
+const NAMES: usize = 64;
 
-struct Console { fb: *mut u32, width: usize, height: usize, stride: usize, cx: usize, cy: usize, serial: Ports }
-
-impl Console {
-    fn serial(&self, byte: u8) {
-        while self.serial.in8(COM1 + 5) & 0x20 == 0 {}
-        self.serial.out8(COM1, byte);
-    }
-    fn pixel(&self, x: usize, y: usize, color: u32) { unsafe { core::ptr::write_volatile(self.fb.add(y * self.stride + x), color); } }
-    fn scroll(&mut self) {
-        let limit = self.height - 10;
-        for y in 10..limit { for x in 0..self.width { unsafe { core::ptr::write_volatile(self.fb.add((y - 10) * self.stride + x), core::ptr::read_volatile(self.fb.add(y * self.stride + x))); } } }
-        for y in (limit - 10)..limit { for x in 0..self.width { self.pixel(x, y, BACKGROUND); } }
-        self.cy -= 10;
-    }
-    fn print_char(&mut self, ch: u8) {
-        if ch == b'\r' { return; }
-        if ch == b'\n' { self.serial(b'\r'); }
-        self.serial(ch);
-        // UTF-8 goes to COM1 as is; the 8x8 font has only ASCII, so a multi-byte character is drawn as one '?'.
-        if (0x80..0xC0).contains(&ch) { return; }
-        let ch = if ch >= 0xC0 { b'?' } else { ch };
-        if ch == b'\n' {
-            self.cx = 0; self.cy += 10;
-        } else if ch == 0x08 {
-            self.cx = self.cx.saturating_sub(8);
-            for row in 0..8 { for col in 0..8 { self.pixel(self.cx + col, self.cy + row, BACKGROUND); } }
-        } else {
-            let index = match ch { 32..=95 => (ch - 32) as usize, 97..=122 => (ch - 97 + 33) as usize, _ => 0 };
-            let bitmap = FONT[index];
-            for row in 0..8 {
-                let bits = (bitmap >> ((7 - row) * 8)) & 0xFF;
-                for col in 0..8 { self.pixel(self.cx + col, self.cy + row, if bits & (1 << (7 - col)) != 0 { FOREGROUND } else { BACKGROUND }); }
-            }
-            self.cx += 8;
-        }
-        if self.cx >= self.width { self.cx = 0; self.cy += 10; }
-        if self.cy >= self.height - 10 { self.scroll(); }
-    }
-    fn clear(&mut self) {
-        for y in 0..self.height { for x in 0..self.width { self.pixel(x, y, BACKGROUND); } }
-        self.cx = 0; self.cy = 0;
-    }
+struct Shell {
+    term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
+    names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
 }
-
-impl Write for Console {
-    fn write_str(&mut self, text: &str) -> core::fmt::Result { for byte in text.bytes() { self.print_char(byte); } Ok(()) }
-}
-
-struct Shell { term: Console, line: [u8; 256], len: usize, own: u64, focused: Option<u64>, line_start: bool }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
     if args.is_empty() { return None; }
@@ -102,7 +60,12 @@ fn tasks() -> ([TaskInfo; 20], usize) {
 
 impl Shell {
     fn report(&mut self, error: &str) { let _ = writeln!(self.term, "ERROR: {}", error); }
-    fn prompt(&mut self) { let _ = write!(self.term, "MIND> "); }
+    // The prompt and whatever was typed so far (output may have interrupted the line).
+    fn prompt(&mut self) {
+        let _ = write!(self.term, "MIND> ");
+        self.prompt_at = self.term.position();
+        if !self.line.is_empty() { self.redraw_input(true); }
+    }
 
     // Output of the focused program goes to COM1 only, each line prefixed with its PID.
     fn mirror(&mut self, pid: u64) {
@@ -209,7 +172,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -238,7 +201,7 @@ impl Shell {
             let (used, free, freed) = control::kernel_heap();
             let _ = writeln!(self.term, "Dynamic allocation works! Uptime: {} ms", mind::time::uptime_ms());
             let _ = writeln!(self.term, "HEAP: USED={} FREE={} TEST FREED={}", used, free, freed);
-        } else if cmd.len() <= NAME_MAX && !BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
+        } else if cmd.len() <= NAME_MAX && cmd.is_ascii() && !BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
             // Any other word runs the program of that name in the foreground: `say hello`, `listen 3`.
             match Self::start(cmd, args, false) {
                 Ok(pid) => {
@@ -255,28 +218,119 @@ impl Shell {
         }
     }
 
+    fn cursor(&self) -> Position { self.term.offset(self.prompt_at, self.line.cursor_chars()) }
+
+    // Redraws the input line after the prompt; `uart` also redraws it on the terminal (VT100: CR, prompt, line,
+    // erase to the end, cursor back).
+    fn redraw_input(&mut self, uart: bool) {
+        let mut copy = [0u8; 256];
+        let text = self.line.as_str(); let len = text.len(); copy[..len].copy_from_slice(text.as_bytes());
+        let text = core::str::from_utf8(&copy[..len]).unwrap_or("");
+        self.term.truncate(self.prompt_at);
+        self.term.put_str(text);
+        if uart {
+            self.term.serial_str("\r\x1b[KMIND> ");
+            self.term.serial_str(text);
+            let back = text.chars().count() - self.line.cursor_chars();
+            if back > 0 { let mut seq = mind::util::FixedBuf::<16>::new(); let _ = write!(seq, "\x1b[{}D", back); self.term.serial_str(core::str::from_utf8(seq.as_bytes()).unwrap_or("")); }
+        }
+    }
+
+    // Program names from the loader (the root of the boot disk) and the boot services, for completion.
+    fn refresh_names(&mut self) {
+        self.name_count = 0;
+        let add = |shell: &mut Self, name: &[u8]| {
+            if shell.name_count < NAMES && !name.is_empty() && name.len() <= NAME_MAX && !shell.names[..shell.name_count].iter().zip(&shell.name_lens).any(|(n, &l)| &n[..l] == name) {
+                shell.names[shell.name_count][..name.len()].copy_from_slice(name); shell.name_lens[shell.name_count] = name.len(); shell.name_count += 1;
+            }
+        };
+        if let Some(page) = Pages::new(4096) {
+            if let Ok(cap) = page.share() {
+                let reply = Endpoint::LOADER.call(&Message::new(0, LOADER_LIST).with_cap(cap, 0), 0);
+                let _ = mind::ipc::drop_cap(cap);
+                if let Ok(len) = reply.and_then(|r| mind::sys::check(r.data[0])) {
+                    let mut names = [[0u8; NAME_MAX]; NAMES]; let mut lens = [0usize; NAMES]; let mut count = 0;
+                    for line in page.as_slice()[..len.min(4096)].split(|&b| b == b'\n') {
+                        let word = line.trim_ascii().split(|b| b.is_ascii_whitespace()).next().unwrap_or(&[]);
+                        if !word.is_empty() && word.len() <= NAME_MAX && count < NAMES { names[count][..word.len()].copy_from_slice(word); lens[count] = word.len(); count += 1; }
+                    }
+                    for i in 0..count { add(self, &names[i][..lens[i]]); }
+                }
+            }
+        }
+        for name in BOOT_SERVICES { add(self, name.as_bytes()); }
+    }
+
+    // Tab: completes the word before the cursor with a command or program name; several matches are listed.
+    fn complete(&mut self) {
+        let mut copy = [0u8; 256];
+        let text = self.line.as_str(); let len = text.len(); copy[..len].copy_from_slice(text.as_bytes());
+        if self.line.cursor_chars() != text.chars().count() { return; }
+        let start = copy[..len].iter().rposition(|&b| b == b' ').map_or(0, |i| i + 1);
+        let word = &copy[start..len];
+        let first = copy[..start].trim_ascii().is_empty();
+        let first_token = copy[..len].split(|&b| b == b' ').next().unwrap_or(&[]);
+        if !first && !first_token.eq_ignore_ascii_case(b"run") { return; }
+        self.refresh_names();
+        let mut matches = [[0u8; NAME_MAX]; NAMES]; let mut lens = [0usize; NAMES]; let mut count = 0;
+        let names = (0..self.name_count).map(|i| &self.names[i][..self.name_lens[i]]);
+        let commands = COMMANDS.iter().map(|c| c.as_bytes()).filter(|_| first);
+        for name in commands.chain(names) {
+            if name.len() >= word.len() && name[..word.len()].eq_ignore_ascii_case(word) && count < NAMES && !matches[..count].iter().zip(&lens).any(|(m, &l)| &m[..l] == name) {
+                matches[count][..name.len()].copy_from_slice(name); lens[count] = name.len(); count += 1;
+            }
+        }
+        if count == 0 { return; }
+        // The longest common prefix of all matches.
+        let mut common = lens[0];
+        for i in 1..count { common = common.min(lens[i]); while common > 0 && !matches[i][..common].eq_ignore_ascii_case(&matches[0][..common]) { common -= 1; } }
+        if common > word.len() || count == 1 {
+            for &b in &matches[0][word.len()..common] { self.line.insert(b as char); }
+            if count == 1 { self.line.insert(' '); }
+            self.redraw_input(true);
+            return;
+        }
+        self.term.print_char(b'\n');
+        for i in 0..count { for &b in &matches[i][..lens[i]] { self.term.print_char(b); } self.term.print_char(b' '); self.term.print_char(b' '); }
+        self.term.print_char(b'\n');
+        let _ = write!(self.term, "MIND> ");
+        self.prompt_at = self.term.position();
+        self.redraw_input(true);
+    }
+
     // A key typed while the shell has the focus.
     fn key(&mut self, key: Key) {
-        match key.code() {
-            Code::Backspace if self.len != 0 => {
-                // Remove a whole UTF-8 character: continuation bytes, then the lead byte.
-                while self.len > 1 && (0x80..0xC0).contains(&self.line[self.len - 1]) { self.len -= 1; }
-                self.len -= 1; self.term.print_char(8);
-            }
-            Code::Enter => {
+        if key.shift() && matches!(key.code(), Code::PageUp | Code::PageDown) { self.term.scroll(key.code() == Code::PageUp); return; }
+        self.term.unscroll();
+        if key.is_ctrl('l') { self.term.clear(); let _ = write!(self.term, "MIND> "); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
+        if self.history.key(key, &mut self.line) { self.redraw_input(true); return; }
+        if key.code() == Code::Tab { self.complete(); return; }
+        let (old_len, old_at_end) = (self.line.as_str().len(), self.line.cursor_chars() == self.line.as_str().chars().count());
+        match self.line.key(key) {
+            Edit::Submit => {
+                let mut copy = [0u8; 256];
+                let text = self.line.as_str(); let len = text.len(); copy[..len].copy_from_slice(text.as_bytes());
+                self.history.push(core::str::from_utf8(&copy[..len]).unwrap_or(""));
+                self.line.clear();
                 self.term.print_char(b'\n');
-                let line = self.line; let len = self.len; self.len = 0;
-                self.command(&line[..len]);
+                self.command(&copy[..len]);
                 if self.focused.is_none() { self.prompt(); }
             }
-            _ => if let Some(ch) = key.text() {
-                let mut bytes = [0u8; 4];
-                let encoded = ch.encode_utf8(&mut bytes).as_bytes();
-                if self.len + encoded.len() <= self.line.len() {
-                    self.line[self.len..self.len + encoded.len()].copy_from_slice(encoded); self.len += encoded.len();
-                    for &byte in encoded { self.term.print_char(byte); }
+            Edit::Cancel => { if !self.line.is_empty() { self.line.clear(); self.history.reset(); self.redraw_input(true); } }
+            Edit::Changed => {
+                self.history.reset();
+                let text = self.line.as_str();
+                let at_end = self.line.cursor_chars() == text.chars().count();
+                if old_at_end && at_end && text.len() > old_len {
+                    // Typing at the end: echo only the new character (the common case on a slow UART).
+                    let mut copy = [0u8; 8]; let added = &text.as_bytes()[old_len..]; copy[..added.len()].copy_from_slice(added);
+                    for &byte in &copy[..added.len()] { self.term.print_char(byte); }
+                } else {
+                    self.redraw_input(true);
                 }
-            },
+            }
+            Edit::Moved => self.redraw_input(true),
+            _ => {}
         }
     }
     // A decoded UART event: the shell's own input, or forwarded to the focused program (Ctrl+Z is the attention key).
@@ -301,14 +355,14 @@ impl Events {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let term = Console { fb: info.fb_ptr, width: info.width, height: info.height, stride: info.stride, cx: 0, cy: 0, serial: Ports(SLOT_SERIAL) };
+    let term = Console::new(mind::gfx::Screen::new(info), Ports(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
-    let mut shell = Shell { term, line: [0; 256], len: 0, own, focused: None, line_start: true };
-    shell.term.clear();
+    let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
+                            names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0 };
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
-    let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP.");
+    let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
     shell.prompt();
     let serial = Ports(SLOT_SERIAL);
     let mut vt = Vt::new();
@@ -332,6 +386,8 @@ fn main(info: &'static BootInfo) {
         events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus.
         while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } }
+        let cursor = shell.focused.is_none().then(|| shell.cursor());
+        shell.term.render(cursor);
         mind::time::sleep(10);
     }
 }
