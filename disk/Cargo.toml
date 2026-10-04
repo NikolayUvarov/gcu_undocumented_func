@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
-# Console tools for volumes through vfs_server: df (sizes and free space) and fsck (a read-only check).
+# Console tools for volumes through vfs_server: df (sizes and free space), fsck (a read-only check) and format (the RAM disk).
 [[bin]]
 name = "df"
 path = "src/bin/df.rs"
@@ -12,6 +12,10 @@ path = "src/bin/df.rs"
 [[bin]]
 name = "fsck"
 path = "src/bin/fsck.rs"
+
+[[bin]]
+name = "format"
+path = "src/bin/format.rs"
 
 [dependencies]
 libmind = { path = "../libmind" }

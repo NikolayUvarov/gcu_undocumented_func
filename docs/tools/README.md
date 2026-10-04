@@ -36,8 +36,8 @@ Priority: **P0** — requested, or needed by a requested tool; **P1** — next; 
 | `edit` | Full-screen panel text editor (mcedit / FAR editor style) | One file handle given at launch (read-write or read-only) | P0 |
 | `view` | Text and hex viewer; the same code is `fm`'s F3 | A read-only file handle | P0 — the first tool that works on today's read-only VFS |
 | `df`, `fsck` | Volumes, size and free space; read-only FAT consistency check | Volume information from VFS | P1 (`fsck` is also the test oracle for FAT writes) |
-| `find`, `grep` | Search by name and content: in `fm` (Alt+F7) and as console tools | Read-only directory handle | P2 |
-| `format` | Create a FAT volume on the RAM disk or a data partition | Write right on the chosen block device, explicit confirmation | P2 |
+| `find`, `grep` | Search by name and content: in `fm` (Alt+F7) and as console tools | Read-only directory handle | P2 — done in issue 082 (`search/`, `mind::pattern`) |
+| `format` | Create a FAT volume on the RAM disk or a data partition | Write right on the chosen block device, explicit confirmation | P2 — done for the RAM disk in issue 083 (`vfs.wit` 2.3 `format`; confirmation by `-y`) |
 
 ### 2.2 Observation
 
@@ -229,7 +229,7 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 ### 4.7 The others in brief
 
 - **`hw`:** CPU vendor and model (CPUID), features that matter here (NX, invariant TSC, xAPIC), TSC frequency and clock resolution; framebuffer mode, stride and pixel format; PCI devices with class names and the service holding each; IRQ lines and their holders; DMA regions and their holders; block devices (kind, size, model from IDENTIFY / INQUIRY); audio device.
-- **`ipc`:** endpoints with server and clients by PID, queue depth (out of `ENDPOINT_QUEUE` = 8), waiting senders, saved replies, timeouts and `ERR_BUSY` counts; the wait-for graph (task → endpoint → server) with cycles highlighted as deadlocks.
+- **`ipc`:** endpoints with server and clients by PID, queue depth (out of `ENDPOINT_QUEUE` = 8), waiting senders, saved replies, timeouts and `ERR_BUSY` counts; the wait-for graph (task → endpoint → server) with cycles highlighted as deadlocks. Done in issue 080 (`monitor/src/ipc.rs`; `sysinfo.wit` 2.1 `holders`, collected by `sysmon` from `STAT_CAPS`); the queue bound is `ENDPOINT_QUEUE` = 4 on `main`. Deviation: saved replies are not counted (`STAT` has no such field).
 - **`caps`:** a task's slots with handle and generation, kind, rights, range, derivation parent; the derivation tree across tasks; "what would a revoke of this capability remove". Needs a stronger right than plain observation.
 - **`dmesg`:** filter by source and level, follow mode.
 - **`svc`:** services from `init`: PID, state, restarts, devices held; start, stop, restart; restart budgets and generations once C6 exists. Done in issue 070: `init` serves `idl/lifecycle.wit` on its endpoint (since the merge of `main` these requests are part of `idl/init.wit` 1.1) (it replaced the numeric "start by name" request) with the process-control privilege it mints for itself; the shell lends its client of `init` for `REQUEST_LIFECYCLE`; `svc` is a console program, `top` stops a task (k) and restarts a service (r) after a confirmation. "Devices held" is what `init` granted, in short.
@@ -290,6 +290,8 @@ graph LR
 Opened on 2026-10-04 on the tools branch as 032–050, renumbered [052–071](../../issues/README.md) when `main` was merged ([051](../../issues-done/051-merge-main-into-tools.done); every record says "Formerly tools-branch NNN."): 052 program heap, 053 font, 054 text UI library, 055 key events, 056 shell line editing, 057 `view`, 058 IDL v0.2, 059 observation ABI, 060 `sysmon`, 061 `top`/`memmap`/`load`/`hw`, 062 loader v1, 063 `fm` read-only, 064 endpoint badges and block write, 065 `ramdisk`, 066 VFS v2 with FAT write, 067 `edit`, 068 `fm` writes/`df`/`fsck`, 069 `logd`/`dmesg`, 070 `svc`; 071 (scoped file grants) split off from 067. `main` had opened the plan's remaining items as 040–043 and 045–050; the tools records replaced them.
 
 The merge kept `main`'s kernel, ABI, IDL wire format, `STAT` records, input event words and badges, and ported the tools to them: enums, `bytes<N>` and capability results are a minor extension of main's IDL v0.2; block write and flush are `block.wit` 1.1 with the data as sealed read-only memory; VFS v2 is `vfs.wit` 2.x; launch sessions replaced the loader's legacy adapter. The kernel changes the tools needed went through kernel-track issues 072 (fixed grant slots), 073 (`PORT_OUT_BLOCK`) and 074 (output of an exited console program); the `STAT` fields the monitors lost are [075](../../issues-done/075-stat-fields-for-the-monitors.done).
+
+The remaining tools of the catalogue are issues [080–086](../../issues/README.md): `ipc` (080), `find`/`grep` (082) and `format` (083) need nothing from the kernel; `caps` (081), `keymap` (085) and `screenshot` (086) wait for the shell's grant slots 13–15 (kernel issue 151), `reboot` (084) for the `REBOOT` system call (152).
 
 ## 8. Decisions (accepted 2026-10-04)
 

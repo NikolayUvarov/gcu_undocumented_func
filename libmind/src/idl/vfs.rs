@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 2, 0);
+pub const VERSION: (u8, u8, u8) = (2, 3, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -279,6 +279,24 @@ pub fn scope(endpoint: Endpoint, dir: u32, writable: bool, receive: usize) -> Re
     }
 }
 
+/// Writes a new empty FAT volume labelled `label` (ASCII, upper-cased) over the RAM disk and mounts it; `handle` is
+/// the root of `ram` opened with the user's badge. Handles below the root and scopes on the volume end; root handles
+/// stay valid. The boot disk is refused (denied) (2.3).
+pub fn format(endpoint: Endpoint, handle: u32, label: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        handle.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<11>(label, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 16 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16394;
 
@@ -300,6 +318,7 @@ pub enum Request<'a> {
     Close { handle: u32 },
     Check { handle: u32 },
     Scope { dir: u32, writable: bool },
+    Format { handle: u32, label: Text<11> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -427,6 +446,15 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Scope { dir: wire::field(&words, 0, 16, 32) as u32, writable: wire::field(&words, 0, 48, 1) != 0 }, Call::words(request, cap)))
         }
+        16 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let label = <Text<11> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Format { handle, label }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -491,4 +519,8 @@ pub fn reply_check(call: Call, value: core::result::Result<&Report, Error>) -> R
 pub fn reply_scope(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, false)
+}
+pub fn reply_format(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

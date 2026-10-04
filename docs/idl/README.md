@@ -94,8 +94,8 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt) | 1.0.0 |
 | [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
-| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result) | 2.2.0 |
+| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result), `format` of the RAM disk (2.3) | 2.3.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`; 1.1 adds the lifecycle requests of `svc` and `top`) | 1.1.0 |
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; 1.1 adds launch sessions: `begin`, `grant`, `commit`, `abort`, `inspect`) | 1.1.0 |
-| [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` (`STAT` records and load history for the monitors; 2.0 carries the fields of `STAT` version 2: largest free block, limits, kernel memory per task, PCI location, holders) | 2.0.0 |
+| [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` (`STAT` records and load history for the monitors; 2.0 carries the fields of `STAT` version 2: largest free block, limits, kernel memory per task, PCI location, holders; 2.1 adds `holders` of an endpoint) | 2.1.0 |
 | [`idl/log.wit`](../../idl/log.wit) | `logd` (the system log; reading needs the read badge) | 1.0.0 |

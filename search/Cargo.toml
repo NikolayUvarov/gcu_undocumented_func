@@ -1,0 +1,24 @@
+[package]
+name = "search"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# Console tools that search the volumes through vfs_server: find (names, types, sizes) and grep (lines of text).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "find"
+path = "src/bin/find.rs"
+
+[[bin]]
+name = "grep"
+path = "src/bin/grep.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

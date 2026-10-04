@@ -12,6 +12,8 @@ mod keys;
 mod util;
 #[path = "../libmind/src/tui/mod.rs"]
 mod tui;
+#[path = "../libmind/src/pattern.rs"]
+mod pattern;
 #[path = "../edit/src/buffer.rs"]
 mod buffer;
 #[path = "../edit/src/editor.rs"]

@@ -1,7 +1,7 @@
 /// System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
 /// an endpoint from the shell at launch (SLOT_SYSINFO); `sysmon` holds the observe privilege and limits each client's
-/// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records.
-package mind:sysinfo@2.0.0;
+/// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`.
+package mind:sysinfo@2.1.0;
 
 interface sysinfo {
     /// Why a request failed.
@@ -41,6 +41,8 @@ interface sysinfo {
     /// A PCI function (StatDevice): BAR sizes, class, IRQ, the task holding it, `location` (bus << 8 | device << 3 |
     /// function), `io-bars` (bit i: BAR i is a port range).
     record device { bar0: u64, bar1: u64, bar2: u64, bar3: u64, bar4: u64, bar5: u64, holder: u64, class: u32, irq: u32, location: u32, io-bars: u32 }
+    /// A task holding a capability for an endpoint: its slot, rights (CAP_*) and badge.
+    record holder { pid: u64, slot: u32, rights: u32, badge: u32 }
     /// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
     record sample { busy-low: u64, busy-high: u64, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u8, runnable: u8 }
     /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
@@ -61,4 +63,6 @@ interface sysinfo {
     /// holds those from position `start` on, at most 150 (call again with a larger `start` for the rest).
     history: func(slow: bool, count: u16, start: u16) -> result<list<sample, 150>, error>;
     load: func() -> result<load, error>;
+    /// The tasks holding a capability for endpoint `index` (2.1); error not-found for an index no endpoint has.
+    holders: func(index: u32) -> result<list<holder, 64>, error>;
 }

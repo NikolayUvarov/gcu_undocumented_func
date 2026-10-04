@@ -202,6 +202,42 @@ fn format_makes_a_volume_the_tools_accept() {
 }
 
 #[test]
+fn reformat_replaces_the_volume_in_place() {
+    // The RAM disk's `format` request (vfs.wit 2.3): files and directories are gone, the label is new, the volume
+    // works at once, and (with the tools) fsck.fat accepts the result.
+    let mut image = Image { data: vec![0u8; 8 << 20], writable: true, flushes: 0 };
+    fat::format(&mut image, "MIND RAM", STAMP).unwrap();
+    let mut v = Volume::mount(image).ok().unwrap();
+    let root = v.root();
+    let dir = v.create(&root, "docs", true, STAMP).unwrap();
+    let mut file = v.create(&dir, "note.txt", false, STAMP).unwrap();
+    v.write(&mut file, 0, &content(1, 5000), STAMP).unwrap();
+    let flushes = v.disk.flushes;
+    v.reformat("scratch", STAMP).unwrap();
+    assert!(v.disk.flushes > flushes, "the new volume is flushed");
+    assert_eq!(v.label(), "SCRATCH");
+    let root = v.root();
+    assert!(v.list(&root).unwrap().is_empty(), "nothing of the old volume is left");
+    assert!(v.lookup(&root, "docs/note.txt").is_err());
+    let mut file = v.create(&root, "new.txt", false, STAMP).unwrap();
+    v.write(&mut file, 0, b"fresh", STAMP).unwrap();
+    assert_eq!(v.check().unwrap().lost, 0);
+    if tools() {
+        let path = temp("reformat");
+        save(&mut v, &path);
+        fsck(&path);
+        assert_eq!(mtype(&path, "new.txt"), b"fresh");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+    // A read-only medium cannot be formatted.
+    let mut image = Image { data: vec![0u8; 1 << 20], writable: true, flushes: 0 };
+    fat::format(&mut image, "X", STAMP).unwrap();
+    let mut v = Volume::mount(image).ok().unwrap();
+    v.disk.writable = false;
+    assert_eq!(v.reformat("Y", STAMP), Err(Error::ReadOnly));
+}
+
+#[test]
 fn random_operations_match_a_model() {
     if !tools() { return; }
     for bits in [12u32, 16, 32] {

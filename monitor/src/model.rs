@@ -63,6 +63,15 @@ pub struct Irq { pub count: u64, pub line: u32, pub holder: u64, pub endpoint: u
 /// `location`: bus << 8 | device << 3 | function; `io_bars`: bit i set if BAR i is a port range.
 pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u64, pub index: u32, pub location: u32, pub io_bars: u32 }
 
+/// An endpoint (StatEndpoint): the index is a label, not an authority; the server is the task with the newest receive
+/// right; `senders` wait to be received (at most ENDPOINT_QUEUE), `receiving` wait for a message; `irq` is the bound line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EndpointInfo { pub index: u32, pub creator: u64, pub server: u64, pub holders: u32, pub receivers: u32, pub senders: u32, pub receiving: u32, pub messages: u64, pub busy: u64, pub timeouts: u64, pub irq: u32 }
+
+/// A task holding a capability for an endpoint: slot, rights (CAP_*) and badge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Holder { pub pid: u64, pub slot: u32, pub rights: u32, pub badge: u32 }
+
 /// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sample { pub busy: [u16; 8], pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u8, pub runnable: u8 }
@@ -96,6 +105,10 @@ pub trait Source {
     /// The last `count` samples, oldest first: every 100 ms (`slow` false) or every second.
     fn history(&mut self, slow: bool, count: u16) -> Result<Vec<Sample>, Problem>;
     fn load(&mut self) -> Result<Load, Problem>;
+    /// Live endpoints (sysinfo `endpoints`).
+    fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(Vec::new()) }
+    /// The tasks holding a capability for endpoint `index` (sysinfo 2.1 `holders`).
+    fn holders(&mut self, _index: u32) -> Result<Vec<Holder>, Problem> { Ok(Vec::new()) }
     /// Monotonic nanoseconds (the kernel's clock: the same base as `Task::started_ns`).
     fn now_ns(&self) -> u64;
     /// Stops a task through init's lifecycle requests (idl/init.wit 1.1): a service by name, an application by PID.

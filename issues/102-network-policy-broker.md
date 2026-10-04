@@ -18,4 +18,4 @@ A program must reach only the destinations its purpose needs (MC-11.6). Without 
 
 ## Related
 
-[101](101-network-stack.md), [103](103-tls-service.md).
+[101](../issues-done/101-network-stack.done), [103](103-tls-service.md).

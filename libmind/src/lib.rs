@@ -1,5 +1,7 @@
 #![no_std]
 //! libmind is the MIND CORE program SDK: system calls, IPC, memory, devices, graphics and service clients.
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 #[path = "../../common/abi.rs"]
 pub mod abi;
@@ -31,6 +33,8 @@ pub mod time;
 pub mod tts;
 pub mod tui;
 pub mod util;
+#[cfg(feature = "alloc")]
+pub mod pattern;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;

@@ -1,0 +1,28 @@
+# 082 — `find` and `grep` as console tools — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T3
+
+## Problem
+
+Search by name and content exists only inside `fm` (Alt+F7). The plan lists `find` and `grep` as console tools too ([docs/tools](../docs/tools/README.md) §2.1).
+
+## Plan
+
+- `find [dir] [-name mask] [-type f|d] [-size +N|-N]`: walks a volume (`A:`, `ram:`) with the application's read-only file client; masks with `*` and `?` (the `fm` mask code moves into `libmind`), case-insensitive for Latin and Cyrillic.
+- `grep [-i] [-n] [-r] [-l] pattern [path...]`: literal or simple regular expressions (`.`, `*`, `^`, `$`, `[...]`), UTF-8 aware, `-i` folds Latin and Cyrillic case; binary files are reported, not printed.
+- Both are console programs (`REQUEST_CONSOLE`) with bounded memory (streaming reads, lines up to 4 KiB).
+- Host tests for masks and matching; QEMU `disk` or `tools` suite: `find ram: -name *.txt` and `grep -rn привет ram:` on files the test writes.
+
+## Acceptance criteria
+
+- The tests above pass; README and `docs/tools` describe both.
+
+## Resolution
+
+- `libmind/src/pattern.rs` (`mind::pattern`, feature `alloc`): the name masks moved out of `fm` (`matches`, `glob`; `fm` uses them) and `Pattern`, a simple regular expression (literals, `.`, `*`, `[a-z]`, `[^...]`, `^`, `$`, `\`) matched on characters with optional case folding (Latin, Cyrillic and the rest of Unicode's simple lower-case mapping).
+- `search/` (new crate, `MIT OR Apache-2.0`): `find [path] [-name masks] [-type f|d] [-size +N|-N]` walks depth-first in name order with `A:`/nothing for the boot disk; `grep [-i] [-n] [-r] [-l] [-c] pattern [path...]` scans files in 4 KiB chunks, lines up to 4 KiB (longer ones in pieces), CRLF stripped, a NUL in the first chunk makes a file binary (reported, not printed). Both are console programs on the application's read-only file client; directories deeper than 32 are not entered.
+- Tests: `tests/search_host.rs` (masks, regular expressions with Cyrillic folding, the walk with filters on a tree in memory, scanning with lines split across chunks, binary files, long lines, option parsing, `-r`); the host test is in CI's build job. QEMU `tools` suite: `find` with name, type and size on `ram:` and the boot disk, `grep -rin` on Cyrillic text, `-l`, `-c`, a binary file, a directory without `-r`, an unknown option.
+
+## Related
+
+[063](063-file-manager-read-only.done), [066](066-vfs-v2-fat-write.done).

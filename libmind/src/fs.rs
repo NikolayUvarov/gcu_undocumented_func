@@ -188,6 +188,9 @@ impl Dir {
     }
     /// Writes what is cached for this volume to the disk.
     pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
+    /// Writes a new empty volume labelled `label` over the RAM disk (`self` is the root of `ram`; needs the user's
+    /// client). Handles below the root end; roots stay valid.
+    pub fn format(&self, label: &str) -> Result<()> { call(vfs::format(endpoint(), self.handle, label)) }
     /// A client confined to this directory (vfs.wit `scope`), received in the caller's fixed slot `receive`; it may
     /// change files only if `writable` and this handle may. For a launcher that gives a program one directory.
     pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(endpoint(), self.handle, writable, receive)).map(|()| receive) }

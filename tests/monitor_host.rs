@@ -22,6 +22,8 @@ mod memmap;
 mod load;
 #[path = "../monitor/src/hw.rs"]
 mod hw;
+#[path = "../monitor/src/ipc.rs"]
+mod ipc;
 
 use abi::*;
 use keys::{event, Key};
@@ -36,7 +38,7 @@ fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
 
 #[derive(Default)]
 struct Fake { tasks: Vec<Task>, now: u64, ranges: Vec<Range>, samples: Vec<Sample>, slow_requested: Vec<(bool, u16)>, vmap_requests: Vec<u64>, devices: Vec<Device>, irqs: Vec<Irq>,
-              lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String> }
+              lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String>, endpoints: Vec<EndpointInfo>, holder_requests: Vec<u32> }
 
 impl Source for Fake {
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> { Ok(self.tasks.clone()) }
@@ -46,6 +48,11 @@ impl Source for Fake {
                     tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 32, endpoints_limit: 127, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
+    fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(self.endpoints.clone()) }
+    fn holders(&mut self, index: u32) -> Result<Vec<Holder>, Problem> {
+        self.holder_requests.push(index);
+        Ok(vec![Holder { pid: 5, slot: 1, rights: (CAP_READ | CAP_WRITE | CAP_GRANT) as u32, badge: 0 }, Holder { pid: 7, slot: 5, rights: (CAP_WRITE | CAP_GRANT) as u32, badge: 2 }])
+    }
     fn vmap(&mut self, pid: u64) -> Result<Vec<Region>, Problem> {
         self.vmap_requests.push(pid);
         Ok(vec![Region { start: 0x80_0000_0000, bytes: 8192, kind: REGION_IMAGE, flags: REGION_READ | REGION_EXECUTE }, Region { start: 0x80_0100_0000, bytes: 4096, kind: REGION_GUARD, flags: 0 },
@@ -413,7 +420,9 @@ fn every_tool_draws_on_any_screen() {
     let mut source = system();
     source.ranges = physmap();
     source.samples = vec![Sample::default(); 50];
-    let mut tools: Vec<Box<dyn Tool>> = vec![Box::new(top::Top::new()), Box::new(memmap::Memmap::new()), Box::new(load::LoadView::new()), Box::new(hw::Hw::new(hw::Local::default()))];
+    source.endpoints = vec![EndpointInfo { index: 3, server: 5, holders: 4, messages: 10, ..EndpointInfo::default() }];
+    let mut tools: Vec<Box<dyn Tool>> = vec![Box::new(top::Top::new()), Box::new(memmap::Memmap::new()), Box::new(load::LoadView::new()), Box::new(hw::Hw::new(hw::Local::default())),
+                                             Box::new(ipc::Ipc::new())];
     for tool in tools.iter_mut() {
         tool.refresh(&mut source).unwrap();
         for (cols, rows) in [(20, 6), (40, 12), (80, 25), (100, 37), (160, 50), (240, 67)] {
@@ -424,4 +433,58 @@ fn every_tool_draws_on_any_screen() {
             }
         }
     }
+}
+
+#[test]
+fn ipc_wait_graph_and_deadlocks() {
+    // 12 sends to endpoint 9 (served by 13), 13 waits for a reply from 12: a deadlock; 7 waits for a reply from 5.
+    let mut tasks = system().tasks;
+    let set = |tasks: &mut Vec<Task>, pid: u64, state: u8, wait: u64| { let t = tasks.iter_mut().find(|t| t.pid == pid).unwrap(); t.state = state; t.wait = wait; };
+    set(&mut tasks, 12, WAIT_SEND, 9);
+    set(&mut tasks, 13, WAIT_REPLY, 12);
+    set(&mut tasks, 7, WAIT_REPLY, 5);
+    let endpoints = vec![EndpointInfo { index: 9, server: 13, ..EndpointInfo::default() }, EndpointInfo { index: 4, server: 5, ..EndpointInfo::default() }];
+    let edges = ipc::edges(&tasks, &endpoints);
+    assert_eq!(edges.len(), 3);
+    assert!(edges.contains(&ipc::Edge { from: 12, to: 13, endpoint: Some(9) }));
+    assert_eq!(ipc::cycles(&edges), vec![vec![12, 13]], "one deadlock, reported once");
+    // A sender to an endpoint without a server waits for nobody: no cycle through it.
+    let lonely = ipc::edges(&tasks, &[]);
+    assert!(lonely.contains(&ipc::Edge { from: 12, to: 0, endpoint: Some(9) }) && ipc::cycles(&lonely).is_empty());
+    let mut view = ipc::Ipc::new();
+    let mut source = system();
+    source.tasks = tasks;
+    source.endpoints = endpoints;
+    view.refresh(&mut source).unwrap();
+    let lines = view.wait_lines();
+    assert_eq!(lines[0], "DEADLOCK: busy (PID 12) → top (PID 13) → busy (PID 12)", "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "shell (PID 7) waits for a reply from loader (PID 5)"), "{:?}", lines);
+    assert!(view.status().contains("EDGES=3 DEADLOCKS=1"), "{}", view.status());
+}
+
+#[test]
+fn ipc_endpoints_and_holders() {
+    let mut source = system();
+    source.endpoints = vec![EndpointInfo { index: 4, server: 5, holders: 3, senders: 1, receiving: 0, messages: 1234, busy: 2, timeouts: 1, creator: 1, ..EndpointInfo::default() },
+                            EndpointInfo { index: 2, server: 7, holders: 2, receiving: 1, messages: 50000, irq: 1, creator: 1, ..EndpointInfo::default() }];
+    let mut view = ipc::Ipc::new();
+    view.refresh(&mut source).unwrap();
+    let screen = draw(&mut view, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("2 endpoints, 51 234 messages, a queue holds at most 4 senders")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("   4  loader (PID 5)               3   1/4     0      1 234       2         1    —  init (PID 1)")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("   2  shell (PID 7)") && l.contains("  1  init (PID 1)")), "the bound IRQ: {:#?}", screen);
+    view.key(chr('m'), &mut source);
+    assert!(view.status().starts_with("VIEW=ENDPOINTS SORT=MESSAGES ENDPOINTS=2 SELECTED=2"), "{}", view.status());
+    assert_eq!(view.key(code(KEY_ENTER), &mut source), Flow::Redraw);
+    assert_eq!(source.holder_requests, [2]);
+    let screen = draw(&mut view, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("Endpoint 2: 2 holders")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("loader (PID 5)                1  rwg-    —")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("shell (PID 7)                 5  -wg-    0x2")), "{:#?}", screen);
+    assert_eq!(view.key(code(KEY_ESC), &mut source), Flow::Redraw);
+    assert!(view.holders.is_none());
+    view.key(chr('2'), &mut source);
+    let screen = draw(&mut view, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("No task waits for another.")), "{:#?}", screen);
+    assert_eq!(view.key(chr('q'), &mut source), Flow::Quit);
 }

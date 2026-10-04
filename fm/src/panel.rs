@@ -57,25 +57,9 @@ pub fn short_size(bytes: u64) -> String {
     format!("{}", bytes)
 }
 
-/// Wildcard masks: `*` any run, `?` one character, case-insensitive; several masks separated by `,`, `;` or spaces.
-/// `*.*` matches names without an extension too (as in DOS).
-pub fn matches(masks: &str, name: &str) -> bool {
-    masks.split([',', ';', ' ']).filter(|m| !m.is_empty()).any(|m| m == "*.*" || glob(m, name))
-}
-
-fn glob(mask: &str, name: &str) -> bool {
-    let m: Vec<char> = mask.chars().flat_map(|c| c.to_lowercase()).collect();
-    let n: Vec<char> = name.chars().flat_map(|c| c.to_lowercase()).collect();
-    let (mut i, mut j, mut star, mut mark) = (0usize, 0usize, None, 0usize);
-    while j < n.len() {
-        if i < m.len() && (m[i] == '?' || m[i] == n[j]) { i += 1; j += 1; }
-        else if i < m.len() && m[i] == '*' { star = Some(i); i += 1; mark = j; }
-        else if let Some(s) = star { i = s + 1; mark += 1; j = mark; }
-        else { return false; }
-    }
-    while i < m.len() && m[i] == '*' { i += 1; }
-    i == m.len()
-}
+/// Wildcard masks (`mind::pattern`, shared with `find`): `*`, `?`, case-insensitive, several separated by `,`, `;` or
+/// spaces; `*.*` matches names without an extension too.
+pub use crate::pattern::matches;
 
 /// The volume of a path and the path on it: `ram:docs` -> (`ram:`, `docs`); a path without one is on the boot disk
 /// (`docs` -> (``, `docs`)).

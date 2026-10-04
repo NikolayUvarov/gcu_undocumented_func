@@ -20,7 +20,7 @@ Programs need flows (UDP sockets, TCP connections), not raw frames. Per B.6 the 
 
 ## Related
 
-[100](100-virtio-net-driver.done), [102](../issues/102-network-policy-broker.md), [104](../issues/104-virtio-modern-msix.md), [105](../issues/105-multiple-network-cards.md).
+[100](100-virtio-net-driver.done), [102](../issues/102-network-policy-broker.md), [104](104-virtio-modern-msix.done), [105](../issues/105-multiple-network-cards.md).
 
 ## Resolution
 

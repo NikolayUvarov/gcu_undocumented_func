@@ -146,6 +146,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | `control` | process control and statistics (`stat`, `records`, `sched_set`) |
 | `dev`, `platform` | ports, IRQ, MMIO, DMA, device state for drivers and init |
 | `util`, `font`, `font16` | fixed-capacity text buffers (`FixedBuf`), the 8×8 font, MIND Mono 16 (8×16 with Cyrillic and box drawing) |
+| `pattern` (feature `alloc`) | name masks (`matches`, `glob`) and simple regular expressions (`Pattern`: `.`, `*`, classes, anchors, case folding) |
 | `heap` (feature `alloc`) | the program heap behind `alloc` (`Vec`, `String`, `Box`): size classes in arenas taken with `ALLOC`, large blocks directly |
 | `idl` | generated MIND IDL bindings (`idl::vfs`, `idl::audio`, ...) and their codec |
 

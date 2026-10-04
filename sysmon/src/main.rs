@@ -168,6 +168,23 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call) -> mind::Result<()
             let items: Vec<sysinfo::Sample> = if slow { monitor.slow.last(count).skip(start).take(150).map(wire_sample).collect() } else { monitor.fast.last(count).skip(start).take(150).map(wire_sample).collect() };
             sysinfo::reply_history(call, Ok(&items))
         }
+        Request::Holders { index } => {
+            // Every task's capabilities (STAT_CAPS), filtered for the endpoint: the PIDs first, the scratch buffer is reused.
+            let pids: Result<Vec<u64>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().filter(|t| t.wait != WAIT_EXITED).map(|t| t.pid).collect());
+            let holders = pids.and_then(|pids| {
+                let exists = records!(STAT_ENDPOINTS, 0)?.iter::<StatEndpoint>().any(|e| e.index == index);
+                if !exists { return Err(Error::NotFound); }
+                let mut out = Vec::new();
+                for pid in pids {
+                    let Ok(caps) = records!(STAT_CAPS, pid) else { continue }; // the task ended meanwhile
+                    for c in caps.iter::<StatCap>().filter(|c| c.kind == CAP_KIND_ENDPOINT as u32 && c.endpoint == index) {
+                        if out.len() < 64 { out.push(sysinfo::Holder { pid, slot: c.slot, rights: c.rights, badge: c.badge }); }
+                    }
+                }
+                Ok(out)
+            });
+            sysinfo::reply_holders(call, holders.as_deref().map_err(|e| *e))
+        }
         Request::Load => {
             let [one, five, fifteen] = monitor.load.map(|l| (l * 100 / 2048) as u32);
             sysinfo::reply_load(call, Ok(&sysinfo::Load { one, five, fifteen, uptime_ms: mind::time::uptime_ms() as u64, fast_ms: FAST_MS as u32, slow_ms: 1000, fast_count: monitor.fast.count as u32, slow_count: monitor.slow.count as u32 }))
@@ -184,7 +201,7 @@ fn refuse(request: Request, call: Call) -> mind::Result<()> {
         Request::Vmap { .. } => sysinfo::reply_vmap(call, Err(busy)), Request::Caps { .. } => sysinfo::reply_caps(call, Err(busy)),
         Request::Endpoints => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
         Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
-        Request::Load => sysinfo::reply_load(call, Err(busy)),
+        Request::Load => sysinfo::reply_load(call, Err(busy)), Request::Holders { .. } => sysinfo::reply_holders(call, Err(busy)),
     }
 }
 

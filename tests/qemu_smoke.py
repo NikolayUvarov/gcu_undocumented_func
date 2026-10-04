@@ -723,13 +723,38 @@ def monitors_check(vm):
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
+    # ipc: endpoints with their servers, the holders of one, who waits for whom (issue 080).
+    vm.send("ipc\n")
+    vm.expect("[IPC] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: the holders of the selected (first) endpoint
+    assert table_row(screen, r"\d+ endpoints, .* messages, a queue holds at most 4 senders"), screen
+    for service in ("vfs_server", "loader", "sysmon", "logd", "rtc"):
+        assert table_row(screen, fr"^ +\d+ +{service} \(PID \d+\) +\d+ +\d/4 "), (service, screen)
+    status = tool_status(vm, "[IPC] VIEW=ENDPOINTS SORT=INDEX")
+    first, holders = int(re.search(r"SELECTED=(\d+)", status)[1]), int(re.search(r"HOLDERS=(\d+)", status)[1])
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter closes the window
+    assert holders >= 1 and table_row(screen, re.escape(canon(f"Endpoint {first}: {holders} holders"))), (status, screen)
+    tool_status(vm, "HOLDERS=0")
+    vm.send("2")
+    status_line(vm, "[IPC] VIEW=WAITS")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter does nothing in this view
+    assert table_row(screen, r"tasks wait for a message on their own endpoints; \d+ edges, 0 deadlocks"), screen
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[IPC] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command(f"kill {clock}"), "KILLED")
     for _ in range(20):
         if heap_used(vm) == baseline:
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders)", flush=True)
+    print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders), ipc (endpoints, holders, waits)", flush=True)
     fm_check(vm)
 
 
@@ -827,6 +852,37 @@ def vfs_check(vm):
     require(vm.command("cat data/n.txt"), "hello")
     require(vm.command("ls data"), "n.txt")
     print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
+    search_check(vm)
+
+
+def search_check(vm):
+    """find and grep (issue 082): console programs over the application's read-only file client."""
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    def lines(output):
+        skip = ("MIND>", "find ", "grep ", "STARTED PID=")
+        return [l.strip() for l in output.replace("\r", "").split("\n") if l.strip() and not l.startswith(skip) and "EXITED. SHELL RESUMED" not in l]
+    require(vm.command("write ram:a.txt hello world"), "WROTE")
+    require(vm.command("mkdir ram:docs"), "OK")
+    require(utf8("write ram:docs/заметки.txt Привет, мир"), "WROTE")
+    require(vm.command("write ram:docs/b.md # title"), "WROTE")
+    assert lines(vm.command("find ram:")) == ["ram:a.txt", "ram:docs/", "ram:docs/b.md", "ram:docs/заметки.txt"], vm.output
+    assert lines(vm.command("find ram: -name *.txt -type f")) == ["ram:a.txt", "ram:docs/заметки.txt"]
+    assert lines(vm.command("find ram: -size +12")) == ["ram:docs/заметки.txt"], "20 bytes of Cyrillic text"
+    assert lines(vm.command("find A: -name kernel.elf")) == ["kernel.elf"]
+    assert lines(utf8("grep -rn привет ram:")) == [], "case matters without -i"
+    assert lines(utf8("grep -rin привет ram:")) == ["ram:docs/заметки.txt:1:Привет, мир"]
+    assert lines(utf8("grep -l o ram:a.txt ram:docs/заметки.txt ram:docs/b.md")) == ["ram:a.txt"]
+    assert lines(vm.command("grep -c ^# ram:docs/b.md")) == ["1"]
+    assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
+    require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
+    require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
+    for path in ("ram:docs/b.md", "ram:a.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    require(utf8("rm ram:docs/заметки.txt"), "OK")
+    require(vm.command("rm ram:docs"), "OK")
+    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file", flush=True)
 
 
 def busy_suite(vm):
@@ -1886,6 +1942,19 @@ def disk_check(vm):
     require(output, "fsck: 1 volume with errors (nothing was changed)")
     require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
     print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+    # format (issue 083): only ram:, only with -y; the files are gone, the label is new, the volume works at once.
+    require(vm.command("write ram:keep.txt kept"), "WROTE")
+    require(vm.command("format ram: -l scratch"), "FORMAT: THIS ERASES ALL FILES ON ram: (NOTHING WAS CHANGED). TO GO ON: format ram: -l scratch -y")
+    require(vm.command("cat ram:keep.txt"), "kept")
+    require(vm.command("format A:"), "FORMAT: ONLY THE RAM DISK (ram:) CAN BE FORMATTED, NOT A:")
+    require(vm.command("format ram: -l scratch -y"), "FORMATTED ram: AS SCRATCH")
+    require(vm.service_logs("vfs_server", "[VFS] FORMATTED RAM: AS SCRATCH"), "[VFS] FORMATTED RAM: AS SCRATCH (FAT16)")
+    require(vm.command("ls ram:"), "0 ENTRIES")
+    assert re.search(r"^ram: +SCRATCH +FAT16 ", vm.command("df"), re.M)
+    require(vm.command("write ram:new.txt again"), "WROTE")
+    require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
+    require(vm.command("format ram: -y"), "FORMATTED ram: AS MIND RAM")
+    print("PASS: format: ram: only, only with -y (without it nothing changes); a new label and an empty volume that works at once", flush=True)
 
 
 def disk_suite(args):
