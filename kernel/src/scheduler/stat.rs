@@ -61,7 +61,8 @@ impl Scheduler {
                     shared_bytes: task.heap.shared_bytes() as u64, retained_bytes: task.heap.retained as u64,
                     image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64, screen_bytes: task.screen.as_ref().map_or(0, |s| s.len() as u64),
                     quota_tasks: task.quota_tasks as u16, used_tasks: if alive { self.used_tasks(index) as u16 } else { 0 },
-                    quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 }, reserved: 0,
+                    quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 },
+                    band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, reserved: 0, budget_ns: task.budget_ns, period_ns: task.period_ns,
                 });
             },
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {

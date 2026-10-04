@@ -10,7 +10,7 @@
 
 ## Not provided
 
-- Deadlines, jitter bounds or budgets for any task (MC-5.3, 5.4): not claimed.
+- Deadlines and jitter bounds (MC-5.3, 5.4): not claimed. CPU budgets per period exist (C7) but are enforced at the 10 ms tick.
 - Time zones and dates.
 - Sleeping or scheduling with resolution better than 10 ms: `WAIT` still uses the tick.
 - Accuracy of the TSC calibration beyond the PIT reference (50 ms window).

@@ -233,7 +233,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors\n- clock: monotonic clock and its resolution\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -263,6 +263,18 @@ impl Shell {
         } else if is(b"clock") {
             let (ns, resolution, hz) = mind::time::clock_info();
             let _ = writeln!(self.term, "CLOCK: MONOTONIC NS={} RESOLUTION NS={} TSC HZ={} UPTIME MS={}", ns, resolution, hz, mind::time::uptime_ms());
+        } else if is(b"budget") {
+            // budget <pid> <ms> <period ms>: CPU budget per period (0: no limit) — scheduling contexts (C7).
+            let text = core::str::from_utf8(args).unwrap_or("");
+            let numbers: [Option<u64>; 3] = { let mut w = text.split_whitespace().map(|w| w.parse::<u64>().ok()); [w.next().flatten(), w.next().flatten(), w.next().flatten()] };
+            match numbers {
+                [Some(pid), Some(budget), Some(period)] => match control::sched_set(pid, budget * 1000, period * 1000, BAND_KEEP) {
+                    Ok(()) => { let _ = writeln!(self.term, "BUDGET PID={} {} MS PER {} MS", pid, budget, period); }
+                    Err(Error::NotFound) => self.report("NO SUCH PID"),
+                    Err(_) => self.report("INVALID BUDGET (PERIOD >= 10 MS, BUDGET <= PERIOD)"),
+                },
+                _ => self.report("BUDGET <PID> <MS> <PERIOD MS>"),
+            }
         } else if is(b"stat") {
             self.stat(args);
         } else if is(b"heap") {

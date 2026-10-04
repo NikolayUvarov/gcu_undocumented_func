@@ -73,6 +73,7 @@ struct Task {
     call_seq: u64, // number of this task's current call; a reply must name it
     deadline: u64, // uptime ms at which a blocked IPC fails with ERR_TIMEOUT (0: none)
     watch: Option<usize>, // endpoint of the lifecycle owner that gets this task's exit notice
+    band: u8, budget_ns: u64, period_ns: u64, period_start: u64, consumed: u64, // scheduling context (C7)
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
 }
 struct Scheduler {
@@ -83,7 +84,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
     dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
-    accounting: Accounting,
+    accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
     exits_lost: usize,
@@ -120,12 +121,18 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
 impl Scheduler {
-    fn states(&self, cpu: usize) -> [State; SLOTS] { core::array::from_fn(|i| { if i == 0 { State::Ready } else { self.tasks[i].as_ref().filter(|t| t.cpu == cpu).map_or(State::Empty, |t| t.state) } }) }
+    // Ready tasks of one band on `cpu` that have budget left; the idle slot takes part only in the application band, so
+    // a CPU still passes through idle (and CPU 0 through reaping) when only applications run.
+    fn states(&self, cpu: usize, band: u8) -> [State; SLOTS] {
+        core::array::from_fn(|i| if i == 0 { if band == BAND_APPLICATION as u8 { State::Ready } else { State::Empty } } else {
+            self.tasks[i].as_ref().filter(|t| t.cpu == cpu && t.band == band && (t.budget_ns == 0 || t.consumed < t.budget_ns)).map_or(State::Empty, |t| t.state)
+        })
+    }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
         let current = self.current[cpu];
         // Every select reloads CR3, which completes a pending TLB flush of this CPU.
@@ -136,8 +143,17 @@ impl Scheduler {
         // Time since the last switch on this CPU goes to the task that ran or to idle.
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
         if current == 0 { self.accounting.idle_ns[cpu] += elapsed; } else { self.accounting.busy_ns[cpu] += elapsed; }
-        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; unsafe { context::save(sp, task.context.ptr() as usize); } }
-        let next = task_state::next(&self.states(cpu), current); self.current[cpu] = next;
+        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; unsafe { context::save(sp, task.context.ptr() as usize); } }
+        // A budget is refilled at the start of each of its periods.
+        for task in self.tasks.iter_mut().flatten().filter(|t| t.cpu == cpu && t.budget_ns != 0 && now >= t.period_start + t.period_ns) {
+            task.period_start = now - (now - task.period_start) % task.period_ns; task.consumed = 0;
+        }
+        let [system, application] = self.cursor[cpu];
+        let next = match task_state::next(&self.states(cpu, BAND_SYSTEM as u8), system) {
+            0 => { let next = task_state::next(&self.states(cpu, BAND_APPLICATION as u8), application); self.cursor[cpu][1] = next; next }
+            next => { self.cursor[cpu][0] = next; next }
+        };
+        self.current[cpu] = next;
         if next != current { self.accounting.switches[cpu] += 1; }
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
@@ -369,7 +385,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -767,6 +783,23 @@ impl Scheduler {
                     self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
+            SYSCALL_SCHED_SET => match self.find(request.arg1 as u64) {
+                None => Err(ERR_NOT_FOUND),
+                Some(target) => {
+                    let (budget_us, period_us, band) = (request.arg2 as u64, request.msg[0] as u64, request.msg[1]);
+                    let owner = self.tasks[target].as_ref().unwrap().parent == Some((slot, task.pid));
+                    let control = self.holds(slot, Capability::Control);
+                    let banding = control || self.holds(slot, Capability::Platform) || self.holds(slot, Capability::Restart);
+                    if !(owner || control) || (band != BAND_KEEP && !banding) { Err(ERR_RIGHTS) }
+                    else if (budget_us != 0 && (period_us < 10_000 || budget_us > period_us)) || !matches!(band, BAND_SYSTEM | BAND_APPLICATION | BAND_KEEP) { Err(ERR_INVALID) }
+                    else {
+                        let t = self.tasks[target].as_mut().unwrap();
+                        t.budget_ns = budget_us * 1000; t.period_ns = period_us * 1000; t.period_start = crate::clock::now_ns(); t.consumed = 0;
+                        if band != BAND_KEEP { t.band = band as u8; }
+                        Ok(0)
+                    }
+                }
+            },
             SYSCALL_TASK_WATCH => match (self.find(request.arg1 as u64), self.cap(slot, request.arg2)) {
                 // Only the lifecycle owner (the spawner) chooses where the exit notice goes.
                 (Some(target), Some(Capability::Endpoint(ep, rights, _))) if rights & CAP_READ != 0 && self.tasks[target].as_ref().unwrap().parent == Some((slot, task.pid)) => { self.tasks[target].as_mut().unwrap().watch = Some(ep); Ok(0) }
@@ -971,4 +1004,4 @@ unsafe fn serial_number(mut number: u64) { let mut buffer = [0; 20]; let mut at 
 // Called from the BSP idle loop: reclaims memory of exited tasks.
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
-pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { scheduler().states(cpu::id())[1..].iter().any(|s| *s == State::Ready) }); if ready { asm!("int 0x80"); } else { asm!("sti", "hlt", "cli"); } }); }
+pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); [BAND_SYSTEM as u8, BAND_APPLICATION as u8].iter().any(|&band| s.states(cpu::id(), band)[1..].iter().any(|t| *t == State::Ready)) }); if ready { asm!("int 0x80"); } else { asm!("sti", "hlt", "cli"); } }); }

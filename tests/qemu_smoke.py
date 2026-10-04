@@ -23,7 +23,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
-PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
+PID_IN = re.compile(r"\b(fg|kill|logs|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
 
@@ -321,10 +321,22 @@ def busy_suite(vm):
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
     assert int(second[2][-1]) > int(first[2][-1]), (first, second)
     require(vm.command("logs 1"), "BUSY FIXTURE")
+    # Scheduling budget (C7): 20 ms per 100 ms keeps the busy loop near 20 % of its CPU (enforced at the 10 ms tick).
+    require(vm.command("budget 1 20 100"), "BUDGET PID=1 20 MS PER 100 MS")
+    def run_ms():
+        return int(re.search(r"^\d+ PARENT=\d+ app2 WAIT=\S+ CPU=\d+ RUN_MS=(\d+)", vm.command("stat tasks", raw=True), re.M)[1])
+    start_run, start = run_ms(), time.monotonic()
+    time.sleep(3)
+    share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
+    assert 0.12 < share < 0.35, share
+    require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
+    start_run, start = run_ms(), time.monotonic()
+    time.sleep(1)
+    assert (run_ms() - start_run) / ((time.monotonic() - start) * 1000) > 0.6, "no budget: the loop takes most of its CPU"
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill", flush=True)
+    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; CPU budget per period", flush=True)
 
 
 def smp_suite(vm):
@@ -342,6 +354,12 @@ def smp_suite(vm):
     assert all(int(second[p][-2]) > int(first[p][-2]) for p in second), (first, second)
     assert all(int(row[-1]) == 1 for row in second.values()), second
     assert "FAULT PID=" not in vm.command("faults")
+    # Reserve (C7): with every CPU saturated by applications, init (system band) still restarts a killed service.
+    rtc = vm.services()["rtc"]
+    start = time.monotonic()
+    require(vm.command(f"kill {rtc}", raw=True), "KILLED PID=")
+    require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
+    assert time.monotonic() - start < 5, "init must not wait for the applications"
     for pid in range(1, count + 1):
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     assert heap_used(vm) == baseline
@@ -355,7 +373,7 @@ def smp_suite(vm):
         else:
             raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
     vm.serial()
-    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, SIMD preservation, remote kill, all CPUs HLT", flush=True)
+    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, SIMD preservation, supervisor reserve under load, remote kill, all CPUs HLT", flush=True)
 
 
 def isolation_suite(vm):

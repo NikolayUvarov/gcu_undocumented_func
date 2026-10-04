@@ -20,7 +20,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [038](038-scheduling-budgets.md) | Scheduling budgets | kernel | P1 | — | C7 |
 | [039](039-port-services.md) | Port the services to MIND IDL and the C4 memory modes | kernel | P1 | 044 | C8 |
 | [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
 | [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
@@ -72,5 +71,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [035](../issues-done/035-observe-and-stat.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04) |
 | [036](../issues-done/036-endpoint-badges.done) | Endpoint badges | done (2026-10-04) |
 | [037](../issues-done/037-task-limit.done) | Task limit 32, 127 endpoints | done (2026-10-04) |
+| [038](../issues-done/038-scheduling-budgets.done) | Scheduling budgets and bands (C7) | done (2026-10-04) |
 
 Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

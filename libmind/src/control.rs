@@ -41,3 +41,9 @@ pub fn records<'a, T: Copy + 'a>(buffer: &'a [u8], header: StatHeader) -> impl I
     let count = if header.record_size as usize == size { (header.count as usize).min((buffer.len() - start) / size) } else { 0 };
     (0..count).map(move |i| unsafe { core::ptr::read_unaligned(buffer.as_ptr().add(start + i * size).cast::<T>()) })
 }
+
+/// Scheduling context of `pid` (its lifecycle owner, or process control): `budget_us` per `period_us` (0: no limit)
+/// and the band (BAND_SYSTEM, BAND_APPLICATION or BAND_KEEP).
+pub fn sched_set(pid: u64, budget_us: u64, period_us: u64, band: usize) -> Result<()> {
+    check(syscall(SYSCALL_SCHED_SET, pid as usize, budget_us as usize, [period_us as usize, band, 0, 0]).result).map(drop)
+}

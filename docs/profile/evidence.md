@@ -22,6 +22,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Out-of-memory during spawn rolls back completely | `memory` suite |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
+| A CPU budget of 20 ms per 100 ms keeps a busy loop at 12–35 % of its CPU and lifting it restores the full share; `init` restarts a service within 5 s while eight busy applications saturate every CPU | `busy`, `smp` suites |
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |
 | A killed service is restarted by `init` and serves clients started before the failure; after 3 restarts in 60 s it is quarantined until `RUN`; killing `init` halts the system | `services` suite |
 | A send queued for a server that dies fails with `ERR_PEER` instead of waiting for a new instance | `isolation` suite, case `f` |

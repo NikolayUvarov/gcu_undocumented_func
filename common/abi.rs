@@ -288,6 +288,14 @@ pub const AUDIO_RATE: usize = 48_000;
 // Nothing returned is authority: endpoint indices are labels no system call accepts, and no task memory contents or
 // physical addresses of task memory are exported (MC-10.2).
 pub const SYSCALL_STAT: usize = 51;
+// SCHED_SET (the task's lifecycle owner, or process control): arg1 = PID, arg2 = budget in microseconds per period
+// (0: no limit), msg[0] = period in microseconds (>= 10 000), msg[1] = band (BAND_*, or BAND_KEEP; changing the band
+// needs process control or the platform/restart privilege). A task that spent its budget waits for its next period;
+// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the 10 ms tick.
+pub const SYSCALL_SCHED_SET: usize = 52;
+pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
+pub const BAND_APPLICATION: usize = 1;
+pub const BAND_KEEP: usize = 0xFF;
 pub const STAT_VERSION: u32 = 1;
 pub const STAT_TASKS: usize = 1;
 pub const STAT_CPUS: usize = 2;
@@ -307,7 +315,8 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub run_ns: u64, pub runs: u64, pub ticks: u64, pub calls: u64, pub sends: u64, pub receives: u64, pub started_ns: u64,
     pub heap_bytes: u64, pub heap_blocks: u32, pub caps: u32, pub shared_bytes: u64, pub retained_bytes: u64,
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
-    pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub reserved: u32,
+    pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub reserved: u16,
+    pub budget_ns: u64, pub period_ns: u64,
 }
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64 }
 // Kernel arena (bytes) by category, and the global limits.
