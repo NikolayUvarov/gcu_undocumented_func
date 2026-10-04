@@ -68,9 +68,10 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     devices
 }
 
-impl Device {
-    // bus << 16 | device << 8 | function (observation).
-    pub fn location(&self) -> u32 { (self.bus as u32) << 16 | (self.device as u32) << 8 | self.function as u32 }
+// Stops a device before its driver is restarted: no decoding, no bus mastering (no DMA).
+pub unsafe fn quiesce(device: &Device) {
+    let command = read(device.bus, device.device, device.function, 0x04);
+    write(device.bus, device.device, device.function, 0x04, command & !0x7);
 }
 
 // Enables I/O, memory decoding and bus mastering once a resource of the device is handed to a driver.

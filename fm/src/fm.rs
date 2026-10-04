@@ -1,7 +1,7 @@
 //! The file manager: two panels over the boot disk and the RAM disk, the built-in viewer and editor, quick view,
 //! information, find, copy/move/mkdir/delete with progress, the menu and the key bar (docs/tools §4.1). The disk is
 //! reached through `Disk` (vfs_server in the system, memory in tests).
-use crate::abi::*;
+use crate::panel::{VFS_ENTRY_ARCHIVE, VFS_ENTRY_HIDDEN, VFS_ENTRY_READ_ONLY, VFS_ENTRY_SYSTEM};
 use crate::editor::{Editor, Outcome as EditOutcome};
 use crate::keys::{Code, Key};
 use crate::panel::{self, display, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};

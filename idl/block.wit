@@ -1,0 +1,24 @@
+/// Block devices with 512-byte sectors: drivers serve it, vfs_server is the client (MIND IDL, word calls).
+package mind:block@1.1.0;
+
+interface block {
+    /// Number of sectors; error not-found without a drive.
+    sectors: func() -> result<u64, error-code>;
+    /// Device kind (BLOCK_KIND_*, `mind::block::KIND_RAM` for the RAM disk), to tell drives apart.
+    kind: func() -> u8;
+    /// Lends the client's transfer buffer (up to BLOCK_MAX_SECTORS sectors) to this driver instance; the driver writes
+    /// read data into it, the client reads it after the reply.
+    attach: func(buffer: borrow<memory>) -> result<_, error-code>;
+    /// Reads `count` sectors from `lba` into the attached buffer; returns the sectors read. Error not-found: no buffer is
+    /// attached to this instance (the driver was restarted), invalid: past the end or an empty request.
+    read: func(count: u16, lba: u64) -> result<u16, error-code>;
+    /// Whether this client may write: the medium is not write-protected and the client's capability carries the write
+    /// badge (`mind::block::BADGE_WRITE`; init gives it to vfs_server only, Appendix B.6) (1.1).
+    writable: func() -> bool;
+    /// Writes `count` sectors to `lba` from `data`, sealed read-only memory (SHARE_RO: nobody can change it while the
+    /// driver writes it) of at least `count` sectors; returns the sectors written. Errors: rights (no write badge, or the
+    /// medium is write-protected), invalid (the memory is not sealed or too small, past the end, an empty request) (1.1).
+    write: func(data: own<memory>, count: u16, lba: u64) -> result<u16, error-code>;
+    /// Empties the drive's write cache; error rights without the write badge (1.1).
+    flush: func() -> result<_, error-code>;
+}

@@ -129,17 +129,16 @@ impl Top {
         let t = &details.task;
         let mut lines = Vec::new();
         let kind = if t.service() { "service" } else { "application" };
-        let screen = if t.flags & TASK_FLAG_SCREEN != 0 { ", with a screen" } else { ", console" };
-        let focus = if t.flags & TASK_FLAG_FOCUS != 0 { ", in focus" } else { "" };
+        let screen = if t.flags & TASK_SCREEN != 0 { ", with a screen" } else { ", console" };
+        let focus = if t.flags & TASK_FOCUS != 0 { ", in focus" } else { "" };
         lines.push(format!("PID {}  {}  {}{}{}", t.pid, t.name, kind, screen, focus));
         lines.push(format!("Parent {} {}   CPU {}   {}", t.parent, details.parent, t.cpu, text::waits_for(t.state, t.wait)));
         lines.push(format!("Run time {}   age {}   runs {}   syscalls {}", text::cpu_time(t.run_ns), text::uptime(now_ns.saturating_sub(t.started_ns) / 1_000_000), text::count(t.runs), text::count(t.calls)));
         lines.push(format!("IPC: sent {}, received {}", text::count(t.sent), text::count(t.received)));
-        lines.push(format!("Memory: image {}, stack {}, screen {}, kernel {}", text::size(t.image), text::size(t.stack), text::size(t.screen), text::size(t.kernel)));
+        lines.push(format!("Memory: image {}, stack {}, screen {}, retained {}", text::size(t.image), text::size(t.stack), text::size(t.screen), text::size(t.retained)));
         lines.push(format!("Heap {} in {}/{} blocks, shared mappings {}", text::size(t.heap), t.heap_blocks, HEAP_MAX_BLOCKS, text::size(t.shared)));
-        let mapped: u64 = details.regions.iter().filter(|r| r.kind != VM_GUARD).map(|r| r.bytes).sum();
-        let guards = details.regions.iter().filter(|r| r.kind == VM_GUARD).count();
-        lines.push(format!("Address space: {} regions, {} mapped, {} guard pages", details.regions.len(), text::size(mapped), guards));
+        let mapped: u64 = details.regions.iter().map(|r| r.bytes).sum();
+        lines.push(format!("Address space: {} regions, {} mapped", details.regions.len(), text::size(mapped)));
         let mut kinds: Vec<(&str, usize)> = Vec::new();
         for c in &details.caps {
             let name = text::cap_kind(c.kind);
@@ -158,7 +157,7 @@ impl Top {
         grid.text_right(w - 1, 0, &format!("every {}.{} s", self.interval_ms / 1000, self.interval_ms % 1000 / 100), theme.status);
         let count = |states: &[u8]| self.tasks.iter().filter(|t| states.contains(&t.state)).count();
         let summary = format!("Tasks {}: {} running, {} ready, {} sleeping, {} blocked    IPC {}/s   syscalls {}/s   interrupts {}/s   switches {}/s",
-            self.tasks.len(), count(&[TASK_RUNNING]), count(&[TASK_READY]), count(&[TASK_SLEEPING]), count(&[TASK_SEND, TASK_RECV, TASK_REPLY, TASK_IRQ, TASK_FLUSH]),
+            self.tasks.len(), count(&[WAIT_RUNNING]), count(&[WAIT_NONE]), count(&[WAIT_SLEEP]), count(&[WAIT_SEND, WAIT_RECEIVE, WAIT_REPLY, WAIT_IRQ, WAIT_FLUSH]),
             text::count(self.rates.messages), text::count(self.rates.syscalls), text::count(self.rates.interrupts), text::count(self.rates.switches));
         grid.text(1, 1, &summary, theme.panel);
         // A busy bar per CPU, two per row when the screen is wide enough.
@@ -182,8 +181,8 @@ impl Top {
         grid.put(6, y, '[', theme.dim);
         grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
-                                         m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
+        grid.text(9 + bar, y, &format!("{}/{} used, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena),
+                                         m.tasks, TASKS_LIMIT, m.endpoints, ENDPOINTS_LIMIT), theme.panel);
         y + 2
     }
 
@@ -245,7 +244,7 @@ impl Tool for Top {
         let rows = self.rows();
         for (i, &(task, depth)) in rows.iter().enumerate().skip(self.list.top).take(self.height) {
             let row = y + 1 + i - self.list.top;
-            let style = if i == self.list.selected { theme.selected } else if task.service() { theme.dim } else if task.flags & TASK_FLAG_FOCUS != 0 { theme.accent } else { theme.panel };
+            let style = if i == self.list.selected { theme.selected } else if task.service() { theme.dim } else if task.flags & TASK_FOCUS != 0 { theme.accent } else { theme.panel };
             grid.fill(crate::tui::Rect::new(0, row, w, 1), ' ', style);
             let mut x = 1;
             for &(title, width, right) in &columns {

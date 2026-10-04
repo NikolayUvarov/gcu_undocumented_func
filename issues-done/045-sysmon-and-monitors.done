@@ -1,0 +1,24 @@
+# 045 — `sysmon` service and the monitors `top`, `memmap`, `load`, `hw` (tools F9, T1) — superseded
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** superseded (2026-10-04) · **Roadmap:** track G, T1 · **Blocked by:** 042 (035, 044 done)
+
+## Problem
+
+There is no way to watch the system beyond `ps` and `cpus`.
+
+## Plan
+
+- `sysmon` holds OBSERVE (from `init`) and serves `sysinfo.wit` with snapshots and history.
+- `top`, `memmap`, `load`, `hw` as TUI programs on `sysinfo.wit`.
+
+## Acceptance criteria
+
+- QEMU suites cross-check numbers (task count = `ps`, arena = `heap`, `busy_app` ≈ 100 % of its CPU).
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F9, §4.4–4.7.
+
+## Resolution
+
+Superseded by the tools branch's records [060](060-sysmon.done) and [061](061-top-memmap-load-hw.done), merged in [051](../issues/051-merge-main-into-tools.md): `sysmon` and the monitors (`idl/sysinfo.wit` on the `STAT` of [035](035-observe-and-stat.done)).

@@ -1,0 +1,45 @@
+# 044 — MIND IDL v0.2: records, strings and lists in buffers (tools F6)
+
+**Type:** kernel/IDL · **Owner:** kernel track (moved from the tools track: C8 needs it first) · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** track G, C8
+
+## Problem
+
+IDL v0 carries two words; paths, directory entries and task tables do not fit.
+
+## Plan
+
+- `record`, `string`, `list<record>` with declared maxima, placed in a memory buffer passed with the call (`borrow<memory>` for results, sealed read-only memory for inputs); generated encoders/decoders with bounds checks; the receiver rejects malformed buffers.
+- `docs/idl` v0.2; tests extend `tests/idl_test.py` (compile and round-trip).
+- Bounds are part of the type (`string<N>`, `list<T, N>`), a MIND extension of WIT syntax. Inputs are copied into a private buffer before they are validated (MC-2.11); the client revokes the server's access to its buffer before reading the reply. Errors are `result<T, error-code>`.
+- First user: `loader.wit` (program list, start with arguments); the legacy start-with-endpoint request stays as a bounded adapter until loader v1 (046).
+
+## Acceptance criteria
+
+- Generator tests incl. malformed buffers; one interface (e.g. `sysinfo.wit`) used end to end in QEMU.
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F6; [docs/idl](../docs/idl/README.md).
+
+## Resolution
+
+**Generator** (`scripts/mind_idl.py`):
+- records (one or several lines), `string<N>`, `list<T, N>`, `option<T>` of any data type, `result<T, error-code>` and `result<_, error-code>`;
+- functions are word calls (integers only, as in v0) or buffer calls (any string, list or record);
+- static request and reply maxima, at most 64 KiB;
+- records get a Rust struct and a `Wire` implementation;
+- server decode returns `(Request, Call)`; the reply functions take the `Call`.
+
+**libmind:**
+- `idl::codec`: `Wire` for integers and bool, `Text<N>`, `List<T, N>`, `encode_str`, `encode_slice`, `Reader`/`Writer` with bounds, UTF-8 and full-consumption checks. It makes no system calls and is tested on the host.
+- `idl::wire`: `call_buffer` (share the client's buffer, call, revoke the server's copy before decoding), `buffer_reply`, `take_buffer` (the request is copied into private memory before decoding, MC-2.11), `reply_buffer`, `reply_none`, `reply_error`, `check_error`, `Call`.
+
+**First user: `idl/loader.wit`** — `list() -> list<program, 64>`, `run(name, args) -> result<u64, error-code>`. Ported: the loader server, the shell's `list` and `mind::process::spawn_with_args`. `LOADER_LIST`/`LOADER_RUN` are removed. The start with an endpoint for the child stays as a bounded legacy adapter until loader v1 (046). `rtc` follows the new `Call` signature.
+
+**Tests:**
+- `tests/idl_test.py`: buffer-call classification, maxima, rejections, compile without warnings of a self-test interface with every v0.2 feature;
+- host test of the codec;
+- isolation case `k`: loader rejects a length past the bound, a length past the buffer and a missing buffer;
+- `services` and `listen` suites (list, run, errors, arguments).
+
+Specification: `docs/idl` v0.2.

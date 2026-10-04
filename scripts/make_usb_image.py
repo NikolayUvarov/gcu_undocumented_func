@@ -16,7 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS)
+# Licences travel with the image: tts.elf embeds third-party dictionaries, the text programs the MIND Mono font
+# (THIRD_PARTY.md).
+LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", "LICENSES/CC-BY-SA-4.0.txt", "LICENSES/CMUdict-BSD.txt",
+            "LICENSES/OFL-1.1.txt")
+FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES)
 SECTOR = 512
 
 
@@ -55,7 +59,9 @@ def read_payloads(source):
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
             raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
-        if name.endswith(".elf"):
+        if name in LICENSES:
+            pass
+        elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b">\x00":
                 raise ValueError(f"{file} is not an ELF64 x86-64 little-endian binary.")
         elif data[:2] != b"MZ":

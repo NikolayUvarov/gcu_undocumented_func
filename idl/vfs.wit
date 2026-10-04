@@ -2,7 +2,8 @@
 /// to a directory handle and cannot leave it (`..` is refused). A handle belongs to the client that opened it (PID and
 /// endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
-/// the shell (Appendix B.6); boot files are never writable.
+/// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files are never writable. Major version 2: directory
+/// handles change the meaning of `open` and `list` of 1.0.
 package mind:vfs@2.2.0;
 
 interface vfs {
@@ -10,7 +11,7 @@ interface vfs {
     enum error { not-found, exists, not-empty, invalid, denied, no-space, read-only, io, handles, name, not-directory, is-directory }
 
     /// An entry of a directory, or what `stat` reports. `modified` is FAT date << 16 | FAT time; `attributes` are
-    /// `VFS_ENTRY_*` bits.
+    /// `mind::fs::ENTRY_*` bits.
     record entry { name: string<255>, size: u32, modified: u32, attributes: u8, directory: bool }
 
     /// A mounted volume: its name (empty for the boot disk, `ram`), FAT label and type, size and free space.
@@ -23,36 +24,35 @@ interface vfs {
     record report { files: u32, directories: u32, used: u32, free: u32, lost: u32, lost-chains: u32, cross-linked: u32, bad-chains: u32, sizes: u32, bad-entries: u32, dirty: bool, first: string<255> }
 
     /// The root directory of volume `name`.
-    root: func(buffer: borrow<memory>, name: string<16>) -> result<u32, error>;
+    root: func(name: string<16>) -> result<u32, error>;
     /// A directory below `dir`; with `create` it is made if missing.
-    open-dir: func(buffer: borrow<memory>, dir: u32, path: string<255>, create: bool) -> result<u32, error>;
-    /// A file below `dir`. `mode` bits: 1 write, 2 create, 4 truncate, 8 refuse an existing file.
-    open: func(buffer: borrow<memory>, dir: u32, path: string<255>, mode: u8) -> result<u32, error>;
+    open-dir: func(dir: u32, path: string<255>, create: bool) -> result<u32, error>;
+    /// A file below `dir`. `mode` bits (`mind::fs::MODE_*`): 1 write, 2 create, 4 truncate, 8 refuse an existing file.
+    open: func(dir: u32, path: string<255>, mode: u8) -> result<u32, error>;
     /// Up to `length` bytes from `offset` (fewer at the end of the file).
-    read: func(buffer: borrow<memory>, file: u32, offset: u32, length: u32) -> result<bytes<65536>, error>;
+    read: func(file: u32, offset: u32, length: u32) -> result<bytes<16384>, error>;
     /// Writes `data` at `offset`; the file grows (a gap reads as zeros). Returns the bytes written.
-    write: func(buffer: borrow<memory>, file: u32, offset: u32, data: bytes<65536>) -> result<u32, error>;
+    write: func(file: u32, offset: u32, data: bytes<16384>) -> result<u32, error>;
     /// Sets the size of a file: clusters past it are freed, a longer file reads zeros.
     truncate: func(file: u32, size: u32) -> result<_, error>;
     /// The entry of an open file or directory.
-    stat: func(buffer: borrow<memory>, handle: u32) -> result<entry, error>;
-    /// Entries of `dir` from index `start`, as many as fit the buffer (an empty list: the end).
-    list: func(buffer: borrow<memory>, dir: u32, start: u32) -> result<list<entry, 256>, error>;
+    stat: func(handle: u32) -> result<entry, error>;
+    /// Entries of `dir` from index `start`, at most 16 (an empty list: the end).
+    list: func(dir: u32, start: u32) -> result<list<entry, 16>, error>;
     /// Removes a file or an empty directory below `dir`.
-    remove: func(buffer: borrow<memory>, dir: u32, path: string<255>) -> result<_, error>;
+    remove: func(dir: u32, path: string<255>) -> result<_, error>;
     /// Renames or moves `from` (below `dir`) to `to` (below `target`, on the same volume).
-    rename: func(buffer: borrow<memory>, dir: u32, from: string<255>, target: u32, to: string<255>) -> result<_, error>;
+    rename: func(dir: u32, from: string<255>, target: u32, to: string<255>) -> result<_, error>;
     /// The volume a handle is on.
-    volume: func(buffer: borrow<memory>, handle: u32) -> result<volume, error>;
+    volume: func(handle: u32) -> result<volume, error>;
     /// Writes what is cached for the volume of `handle` to the disk.
     flush: func(handle: u32) -> result<_, error>;
     close: func(handle: u32) -> result<_, error>;
-    /// Checks the volume of `handle` without changing it (version 2.1).
-    check: func(buffer: borrow<memory>, handle: u32) -> result<report, error>;
-    /// A client confined to directory `dir` (a handle of the caller), lands in the caller's fixed slot `receive`: its
+    /// Checks the volume of `handle` without changing it (2.1).
+    check: func(handle: u32) -> result<report, error>;
+    /// A client confined to directory `dir` (a handle of the caller), placed in the caller's fixed slot `receive`: its
     /// `root` of the directory's volume is that directory, every other root is refused, and it may change files there
     /// only if `writable` and the caller may (never more than `dir`, MC-3.4). It works for the first task that uses it
-    /// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory
-    /// (version 2.2).
+    /// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory (2.2).
     scope: func(dir: u32, writable: bool) -> result<borrow<endpoint>, error>;
 }

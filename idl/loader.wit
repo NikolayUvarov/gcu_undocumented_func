@@ -1,22 +1,32 @@
-/// Program loader: starts applications from the boot disk. A launch is a session: the caller names the program, lends
-/// the capabilities it decides to give (MC-3.11: the program only requests them, see `inspect`), then commits.
-package mind:loader@2.0.0;
+/// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
+/// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
+/// them, see `inspect`), then commits.
+package mind:loader@1.1.0;
 
 interface loader {
-    /// Why a request failed.
+    /// Why a launch session failed.
     enum error { not-found, invalid, no-memory, limit, busy, rights, sessions }
-
+    /// A program file in the root of the boot disk.
+    record program {
+        name: string<16>,
+        size: u64,
+        service: bool,
+    }
     /// What a program asks its launcher for (`mind::request!`, read from its ELF). It grants nothing.
     record needs { console: bool, sysinfo: bool, file: bool, lifecycle: bool, log: bool, files: bool }
-
-    /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session.
-    begin: func(buffer: borrow<memory>, name: string<64>, args: string<1024>) -> result<u32, error>;
-    /// Gives the new program a copy of `cap` in its slot `slot` (7..12; 12, the system log, since 1.1).
+    /// The `*.elf` programs in the root of the boot disk (at most 64); services are marked.
+    list: func() -> list<program, 64>;
+    /// Starts program `name` (a name, or a path with `.` or `/`) with `args` in its info page; returns its PID.
+    run: func(name: string<64>, args: string<1024>) -> result<u64, error-code>;
+    /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session (1.1).
+    begin: func(name: string<64>, args: string<1024>) -> result<u32, error>;
+    /// Gives the new program a copy of `cap` in its fixed slot `slot` (SLOT_FILE, SLOT_INIT for a ping/pong pair,
+    /// SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG) (1.1).
     grant: func(session: u32, slot: u8, cap: borrow<endpoint>) -> result<_, error>;
-    /// Starts the program (with a screen unless it asked to be a console program); returns its PID.
+    /// Starts the program (with a screen unless it asked to be a console program); returns its PID (1.1).
     commit: func(session: u32) -> result<u64, error>;
-    /// Drops a session and the capabilities granted to it.
+    /// Drops a session and the capabilities granted to it (1.1).
     abort: func(session: u32) -> result<_, error>;
-    /// What the program `name` requests.
-    inspect: func(buffer: borrow<memory>, name: string<64>) -> result<needs, error>;
+    /// What the program `name` requests (1.1).
+    inspect: func(name: string<64>) -> result<needs, error>;
 }

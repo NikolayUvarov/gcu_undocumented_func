@@ -1,7 +1,13 @@
 //! Kernel observation (`STAT`, MC-10.2): records about tasks, CPUs, memory, address spaces, capabilities, endpoints,
-//! interrupt lines and devices. Needs the observe or the process-control privilege.
+//! interrupt lines and devices (`common/abi.rs`: StatTask .. StatDevice), and names for what they contain. Needs the
+//! observe or the process-control privilege.
 use crate::abi::*;
-use crate::sys::{check, syscall, Error, Result};
+use crate::sys::{Error, Result};
+
+/// Flags of a task in idl/sysinfo.wit (`task.flags`): a boot service, has a screen, has the focus.
+pub const TASK_SERVICE: u8 = 1;
+pub const TASK_SCREEN: u8 = 2;
+pub const TASK_FOCUS: u8 = 4;
 
 /// Records of one class in a caller's buffer.
 pub struct Records<'a> { pub header: StatHeader, bytes: &'a [u8] }
@@ -19,12 +25,11 @@ impl<'a> Records<'a> {
     }
 }
 
-/// Reads class `class` (STAT_*) with `argument` (a PID for STAT_VMAP/STAT_CAPS, 0 = the caller) into `buffer`.
+/// Reads class `class` (STAT_*) with `argument` (a PID for STAT_VMAP/STAT_CAPS) into `buffer`.
 pub fn read(class: usize, argument: u64, buffer: &mut [u8]) -> Result<Records<'_>> {
     let header_size = core::mem::size_of::<StatHeader>();
     if buffer.len() < header_size { return Err(Error::Invalid); }
-    check(syscall(SYSCALL_STAT, class, argument as usize, [buffer.as_mut_ptr() as usize, buffer.len(), 0, 0]).result)?;
-    let header = unsafe { core::ptr::read_unaligned(buffer.as_ptr() as *const StatHeader) };
+    let header = crate::control::stat(class, argument as usize, buffer)?;
     if header.version != STAT_VERSION { return Err(Error::Invalid); }
     let end = header_size + header.count as usize * header.record_size as usize;
     Ok(Records { header, bytes: &buffer[header_size..end.min(buffer.len())] })
@@ -37,25 +42,28 @@ pub fn one<T: Copy + Default>(class: usize) -> Result<T> {
     first.ok_or(Error::NotFound)
 }
 
-/// Text for a task state.
-pub fn state_name(state: u8) -> &'static str {
-    match state { TASK_READY => "READY", TASK_RUNNING => "RUNNING", TASK_SLEEPING => "SLEEP", TASK_SEND => "SEND", TASK_RECV => "RECV", TASK_REPLY => "CALL", TASK_IRQ => "IRQ", TASK_FLUSH => "FLUSH", TASK_EXITED => "EXIT", _ => "?" }
+/// Text for what a task waits for (StatTask::wait, WAIT_*).
+pub fn state_name(wait: u8) -> &'static str {
+    match wait { WAIT_NONE => "READY", WAIT_RUNNING => "RUNNING", WAIT_SLEEP => "SLEEP", WAIT_SEND => "SEND", WAIT_RECEIVE => "RECV", WAIT_REPLY => "CALL", WAIT_IRQ => "IRQ", WAIT_FLUSH => "FLUSH", WAIT_EXITED => "EXIT", _ => "?" }
 }
+
+/// Whether a task with this wait state can run (ready or running).
+pub fn runnable(wait: u8) -> bool { matches!(wait, WAIT_NONE | WAIT_RUNNING) }
 
 /// Name of a physical range kind: UEFI memory types and the platform layout.
 pub fn phys_name(kind: u32) -> &'static str {
     match kind {
         0 => "reserved", 1 => "loader code", 2 => "loader data", 3 => "boot code", 4 => "boot data", 5 => "runtime code", 6 => "runtime data",
         7 => "free RAM", 8 => "unusable", 9 => "ACPI reclaim", 10 => "ACPI NVS", 11 => "MMIO", 12 => "MMIO ports", 13 => "PAL code", 14 => "persistent",
-        PHYS_KERNEL => "kernel", PHYS_HEAP => "kernel arena", PHYS_BOOT_IMAGE => "boot image", PHYS_FRAMEBUFFER => "framebuffer",
-        PHYS_TRAMPOLINE => "AP trampoline", PHYS_DEVICE => "device BAR", PHYS_DMA => "DMA",
+        PHYS_ARENA => "kernel arena", PHYS_BOOT_IMAGE => "boot image", PHYS_FRAMEBUFFER => "framebuffer",
+        PHYS_AP_TRAMPOLINE => "AP trampoline", PHYS_PCI_BAR => "device BAR",
         _ => "other",
     }
 }
 
-/// Name of an address-space region kind.
+/// Name of an address-space region kind (REGION_*).
 pub fn vm_name(kind: u32) -> &'static str {
-    match kind { VM_CODE => "code", VM_DATA => "data", VM_STACK => "stack", VM_GUARD => "guard", VM_SCREEN => "screen", VM_INFO => "info", VM_MAILBOX => "mailbox", VM_EXIT => "exit", VM_HEAP => "heap", VM_SHARED => "shared", VM_DEVICE => "device", _ => "?" }
+    match kind { REGION_IMAGE => "image", REGION_STACK => "stack", REGION_SCREEN => "screen", REGION_INFO => "info", REGION_MAILBOX => "mailbox", REGION_EXIT => "exit", REGION_HEAP => "heap", REGION_SHARED => "shared", REGION_DEVICE => "device", _ => "?" }
 }
 
 /// Name of a capability kind.
@@ -63,7 +71,7 @@ pub fn cap_name(kind: u32) -> &'static str {
     match kind as usize {
         CAP_KIND_ENDPOINT => "endpoint", CAP_KIND_MEMORY => "memory", CAP_KIND_DMA => "dma", CAP_KIND_PORTS => "ports", CAP_KIND_IRQ => "irq",
         CAP_KIND_INPUT => "input", CAP_KIND_DISPLAY => "display", CAP_KIND_MMIO => "mmio", CAP_KIND_SPAWN => "spawn", CAP_KIND_REPLY => "reply",
-        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_OBSERVE => "observe", _ => "?",
+        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_RESTART => "restart", CAP_KIND_OBSERVE => "observe", _ => "?",
     }
 }
 

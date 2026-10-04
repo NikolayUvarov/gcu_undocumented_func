@@ -24,3 +24,9 @@ Shared memory always stays a heap block of its creator, who keeps a writable map
 ## Resolution
 
 `MEM_DETACH` (47) moves a heap block that no capability or mapping refers to out of the caller's address space into a memory object (read/write, no grant), kept alive by the orphan list while referenced; objects and freed-but-referenced blocks are limited to `DETACHED_MAX_BYTES` (16 MiB) in total. A writable memory capability without `CAP_GRANT` is move-only: a copying IPC send or reply fails with `ERR_RIGHTS`, a copying spawn grant with `ERR_INVALID`, and `CAP_MINT` from it yields only read-only children. `CAP_INFO` sets `msg[3]` when no writable capability, writable mapping or DMA region overlaps the memory (sealed). libmind: `Pages::detach`, `mem::sealed`. Isolation case `d` (old address faults after detach) and new checks in case `k` (a shared block cannot be detached, rights of the object and its child, copy refused, sealed only after the owner is dropped, contents preserved) pass. All 12 QEMU suites, the USB smoke and the host tests pass.
+
+## Audit (2026-10-04)
+
+Was partial: through the `MEM_SHARE` hole (see 028) an object could be made copyable, and freed-but-referenced blocks were not limited. Fixed in the audit commit: the hole is closed; detached and freed-but-referenced memory is charged to the owner's heap quota while it lives, and the 16 MiB limit applies to `MEM_DETACH`. `sealed` now also counts task screens as writers. A successful move of an object is still untested.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): a successful move of a memory object is tested (isolation case `z`).

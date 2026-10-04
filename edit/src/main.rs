@@ -42,7 +42,7 @@ fn load(path: &str) -> Result<(Vec<u8>, bool), String> {
     let mut text = vec![0u8; file.size()];
     let got = file.read_at(0, &mut text).map_err(|error| format!("{}: {}", path, describe(error)))?;
     text.truncate(got);
-    let read_only = File::open_mode(path, VFS_MODE_WRITE).is_err();
+    let read_only = File::open_mode(path, fs::MODE_WRITE).is_err();
     Ok((text, read_only))
 }
 

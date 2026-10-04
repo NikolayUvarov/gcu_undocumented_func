@@ -11,7 +11,7 @@ Without text output no diagnostics are possible at all (exceptions in [004](004-
 
 ## Plan
 
-1. `gfx::Framebuffer { ptr, width, height, stride, format }` with `put_pixel`, `fill_rect`, `clear`; honouring `PixelFormat` from [009](../issues/009-gop-pixel-format.md).
+1. `gfx::Framebuffer { ptr, width, height, stride, format }` with `put_pixel`, `fill_rect`, `clear`; honouring `PixelFormat` from [009](009-gop-pixel-format.done).
 2. A built-in 8×8 or 8×16 bitmap font (e.g. the public-domain `font8x8` as `const [[u8; 8]; 128]` in `.rodata`; the "procedural" in the handoff can reasonably be interpreted as generation from a table). Functions `draw_char`, `draw_str`, a simple cursor/console with line wrapping and scrolling.
 3. `fmt::Write` for the console → `write!(console, "ticks={}", n)` without a heap (works before [003](003-bss-and-heap-allocator.done), since `core::fmt` does not require `alloc`).
 4. Primitives: `line` (Bresenham), `circle` (midpoint) — replace the per-pixel screen iteration in the current kernel.
@@ -25,4 +25,8 @@ Without text output no diagnostics are possible at all (exceptions in [004](004-
 
 ## Resolution
 
-Font and console exist (`common/font.rs`, kernel console, compositor). The remaining criterion — the panic handler printing the message and location — is split into [issues/018](../issues/018-kernel-panic-diagnostics.md).
+Font and console exist (`common/font.rs`, kernel console, compositor). The remaining criterion — the panic handler printing the message and location — is split into [issues/018](018-kernel-panic-diagnostics.done).
+
+## Audit (2026-10-04)
+
+Done; panic diagnostics remain in 018. Correction: since 021 the kernel has no font or console and writes only to serial; the console lives in the shell (`shell/src/main.rs`).

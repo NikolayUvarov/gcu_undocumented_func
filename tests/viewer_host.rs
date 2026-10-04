@@ -24,7 +24,7 @@ impl Source for Memory {
         n
     }
 }
-fn k(code: u32) -> Key { Key(event(code, 0, 0)) }
+fn k(code: u16) -> Key { Key(event(code, 0, 0)) }
 fn row(grid: &Grid, y: usize) -> String { (0..grid.cols).map(|x| grid.get(x, y).ch).collect::<String>().trim_end().to_string() }
 fn text_file(lines: usize) -> Vec<u8> { (1..=lines).map(|i| format!("строка {i} line {i}\n")).collect::<String>().into_bytes() }
 
@@ -44,7 +44,7 @@ fn text_pages_scroll_and_end() {
     assert_eq!(screen[1], "строка 1 line 1");
     viewer.key(k(KEY_DOWN));
     assert_eq!(draw(&mut viewer, &mut cells)[1], "строка 2 line 2");
-    viewer.key(k(KEY_PGDN));
+    viewer.key(k(KEY_PAGE_DOWN));
     let screen = draw(&mut viewer, &mut cells);
     assert_eq!(screen[1], "строка 11 line 11");
     assert!(screen[0].contains("Стр 11 "));
@@ -53,7 +53,7 @@ fn text_pages_scroll_and_end() {
     assert_eq!(screen[10], "строка 300 line 300", "the last page ends with the last line: {screen:?}");
     viewer.key(k(KEY_DOWN));
     assert_eq!(draw(&mut viewer, &mut cells)[10], "строка 300 line 300", "no scrolling past the end");
-    viewer.key(k(KEY_PGUP));
+    viewer.key(k(KEY_PAGE_UP));
     assert_eq!(draw(&mut viewer, &mut cells)[1], "строка 282 line 282");
     assert!(draw(&mut viewer, &mut cells)[0].contains("Стр 282 "), "line numbers follow scrolling up");
     viewer.key(k(KEY_HOME));
@@ -112,9 +112,9 @@ fn search_finds_case_insensitively_and_wraps() {
     viewer.key(Key(event(KEY_ENTER, 10, 0)));
     let screen = draw(&mut viewer, &mut cells);
     assert!(screen[1].starts_with("строка 150 line 150"), "{screen:?}");
-    viewer.key(Key(event(KEY_F1 + 6, 0, KEY_MOD_SHIFT)));
+    viewer.key(Key(event(KEY_F1 + 6, 0, MOD_SHIFT)));
     assert!(draw(&mut viewer, &mut cells)[1].starts_with("строка 150 line 150"), "the next match is in the same line");
-    viewer.key(Key(event(KEY_F1 + 6, 0, KEY_MOD_SHIFT)));
+    viewer.key(Key(event(KEY_F1 + 6, 0, MOD_SHIFT)));
     assert!(draw(&mut viewer, &mut cells)[1].starts_with("строка 150 line 150"), "only one line matches: the search wraps to it");
     // Cyrillic ignores case too.
     viewer.key(k(KEY_F1 + 6));

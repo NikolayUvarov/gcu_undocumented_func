@@ -14,7 +14,7 @@ MIND CORE has a command shell and demo programs, but no tools to work with files
 
 | Area | What exists | What limits the tools |
 |---|---|---|
-| Display | Every application has its own screen buffer; `compositor` copies the focused one to the framebuffer; `mind::gfx::Screen` draws pixels and 8×8 text | The font (`common/font.rs`) has 64 glyphs, ASCII 32–95: no lower case (drawn as upper case), no Cyrillic, no box-drawing characters. Colours assume BGR ([issue 009](../../issues/009-gop-pixel-format.md)) |
+| Display | Every application has its own screen buffer; `compositor` copies the focused one to the framebuffer; `mind::gfx::Screen` draws pixels and 8×8 text | The font (`common/font.rs`) has 64 glyphs, ASCII 32–95: no lower case (drawn as upper case), no Cyrillic, no box-drawing characters. Colours assume BGR ([issue 009](../../issues-done/009-gop-pixel-format.done)) |
 | Keyboard | `ps2_kbd` → `INPUT_EVENT` → the focused task reads bytes with `READ_KEY` | An application gets raw PS/2 make codes *or* raw UART bytes in one byte stream (0x1E is both scan code "A" and UART byte 0x1E). E0-prefixed keys — arrows, Home/End, PgUp/PgDn, Ins/Del — are dropped by the driver. No key release, modifiers or layouts. Ctrl+Z is the system attention key |
 | Program memory | `Pages` page blocks (`ALLOC`/`FREE`), 32 blocks and 16 MiB per task | No sub-page allocator, so programs cannot use `alloc` (`Vec`, `String`) |
 | Files | `vfs_server`: FAT12/16/32, `OPEN`/`READ`/`LIST`/`STAT`, long names, subdirectories | Read-only; the block protocol has no write; long-name characters ≥ 0x80 become `?`; one volume; global path names; `LIST` gives no time or attributes |
@@ -93,7 +93,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - 8×16 bitmap: ASCII, Latin-1, Cyrillic U+0400–U+045F (with Ё/ё), box drawing U+2500–U+257F (at least the single and double lines panels use), block elements U+2580–U+259F (bars and graphs), arrows, «», —, №, … — about 450 glyphs, ~7 KiB.
 - Source: an existing BDF font whose licence and coverage are confirmed and recorded next to the data, as for the TTS dictionaries (candidate: Terminus, SIL OFL 1.1). `scripts/font_gen.py` converts it into a generated, committed `common/font16.rs`; a test fails if it is stale (as `tests/idl_test.py` does for IDL bindings).
 - Lookup by a sorted table of code points (binary search, as in the TTS lexicons); unknown characters get a replacement glyph. The 8×8 font stays for the existing demos.
-- Grid size: 800×600 → 100×37 cells, 1024×768 → 128×48, 1280×800 → 160×50. A fixed target mode in the bootloader ([issue 009](../../issues/009-gop-pixel-format.md)) makes layouts predictable.
+- Grid size: 800×600 → 100×37 cells, 1024×768 → 128×48, 1280×800 → 160×50. A fixed target mode in the bootloader ([issue 009](../../issues-done/009-gop-pixel-format.done)) makes layouts predictable.
 
 ### F3. TUI library
 
@@ -133,15 +133,15 @@ Ten building blocks; the tools in §4 are thin on top of them.
 
 - Tools need text and tables (paths, directory entries, task tables); v0 carries two words.
 - Add `record`, `string` and `list<record>` with declared maximum sizes, placed in a memory buffer passed with the call: `borrow<memory>` for results the server fills, sealed read-only memory for inputs (SHARE_RO, MC-2.6). The two words carry method, version and lengths. The generator emits encoders and decoders with bounds checks; the receiver rejects malformed buffers (MC-2.4).
-- Interfaces to write with it: `sysinfo.wit`, `vfs.wit` (VFS v2), `loader.wit`, `log.wit`, `lifecycle.wit` (with C6), `rtc.wit` 1.1 (adds `date`, needed for file times; a new function at the end is a minor version).
+- Interfaces to write with it: `sysinfo.wit`, `vfs.wit` (VFS v2), `loader.wit`, `log.wit`, `lifecycle.wit` (with C6; since the merge of `main` the lifecycle requests are in `init.wit` 1.1), `rtc.wit` 1.1 (adds `date`, needed for file times; a new function at the end is a minor version).
 
 ### F7. Launch with granted capabilities
 
 - Today every application gets the same set; tools need more (a sysinfo client, a file handle, lifecycle control). Granting by program name would break MC-3.7.
 - The caller grants, the program only requests (MC-3.11):
-  - **Loader v1** (`loader.wit`): `begin(name, args) → session`, `grant(session, slot, capability)` — repeated, one capability per IPC message, `commit(session) → pid`, `abort(session)`, `inspect(name) → needs`. The loader copies only what the caller passed (slots 7–11); the program's request chooses screen or console program. Done in issue 042.
+  - **Loader v1** (`loader.wit`): `begin(name, args) → session`, `grant(session, slot, capability)` — repeated, one capability per IPC message, `commit(session) → pid`, `abort(session)`, `inspect(name) → needs`. The loader copies only what the caller passed (slot 1 for a ping/pong pair and the fixed slots 7, 10–12 of issue 072); the program's request chooses screen or console program. Done in issue 062; since the merge of `main` it is `loader.wit` 1.1 on main's IDL, and the legacy start-with-an-endpoint adapter is gone.
   - **Request:** a note section `.note.mind.request` in the ELF lists what the program asks for (`sysinfo`, `file:rw`, `dir:rw`, `lifecycle`) and whether it needs a screen; `inspect(name)` returns it to the caller, who decides.
-  - Done for files in issue 051: `REQUEST_FILE` gets a client of `vfs_server` confined to the named file's directory, `REQUEST_FILES` the user's whole client (fm).
+  - Done for files in issue 071: `REQUEST_FILE` gets a client of `vfs_server` confined to the named file's directory, `REQUEST_FILES` the user's whole client (fm).
   - **The shell as the user's agent (powerbox):** `edit notes.txt` → the shell opens `notes.txt` for writing and passes only that handle; `fm` → a read-only handle for `/` and a read-write one for the data directory; `top`, `memmap`, `load` → a sysinfo client. Anything else in the request is refused or confirmed by the user.
   - Signed manifests (track C, Article 9) later replace the note section.
 
@@ -149,11 +149,11 @@ Ten building blocks; the tools in §4 are thin on top of them.
 
 - **Constitution.** FAT and USB media are external media; writing goes through a separate path with separate rights (Appendix B.6); persistent native storage is track B (Article 4). FAT writing is therefore an export/compatibility path, declared as such in the profile, not the native store.
 - **Separate write right on block devices.** Two options: (a) a second endpoint per driver (`block.rw`) that `init` gives only to `vfs_server`; (b) **endpoint badges**: `CAP_MINT` sets a badge, `IPC_RECV` reports the badge of the capability the sender used, so one endpoint distinguishes read-only and read-write clients (as in seL4). (b) is a small, general kernel mechanism that `vfs_server` and `sysmon` also need; recommended, as its own issue.
-- **Block protocol:** `BLOCK_WRITE` and `BLOCK_FLUSH`; the data reaches the driver as sealed read-only memory, so it writes exactly what was checked.
+- **Block protocol:** `write` and `flush` (`block.wit` 1.1); the data reaches the driver as sealed read-only memory, so it writes exactly what was checked.
   - `ata`: WRITE SECTORS (0x30, PIO), FLUSH CACHE (0xE7);
   - `ahci`: WRITE DMA EXT (0x35), FLUSH CACHE EXT (0xEA);
   - `usb_storage`: SCSI WRITE(10) (0x2A), SYNCHRONIZE CACHE(10) (0x35), write protection from MODE SENSE.
-- **`ramdisk`** (new block service): memory-backed device of a size set by `init`'s policy, FAT-formatted on first use. It is `/tmp` and the target of all write tests, so FAT writing is developed without touching the boot disk. Done in issue 045 (8 MiB, a constant of the service; `vfs_server` formats it FAT16 when blank and mounts it as `ram:`).
+- **`ramdisk`** (new block service): memory-backed device of a size set by `init`'s policy, FAT-formatted on first use. It is `/tmp` and the target of all write tests, so FAT writing is developed without touching the boot disk. Done in issue 065 (8 MiB, a constant of the service; `vfs_server` formats it FAT16 when blank and mounts it as `ram:`).
 - **`vfs_server` v2** on `vfs.wit` — this is VFS's C8 port, done once:
   - **directory handles** instead of global paths: `open_dir(handle, path, rights)`; paths are relative, `..` above the handle's root is refused; rights read-only/read-write attenuate (MC-3.4). A handle for a subtree is what the shell gives a tool;
   - operations: create, write, truncate, rename, remove, mkdir, rmdir, stat (size, attributes, modification time), list with attributes and times, volume information (type, size, free), flush;
@@ -162,7 +162,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
   - several named volumes (boot disk, RAM disk);
   - one writer per file; readers see the last flushed size;
   - the boot set is protected by policy: `init` gives write handles only below a data directory (for example `/data`), never for `EFI/`, `kernel.elf` or service images.
-  - Done in issue 046: `idl/vfs.wit` 2.0; the zone of a root handle comes from the client's badge (applications read only, the shell's `VFS_BADGE_USER` writes on `ram:` and below `data/`); FSInfo's free count is marked unknown on the first change instead of being kept.
+  - Done in issue 066: `idl/vfs.wit` 2.0 (2.2 since the merge of `main`: listings in pages of 16 entries, reads and writes of up to 16 KiB); the zone of a root handle comes from the client's badge (applications read only, the shell's `VFS_BADGE_USER` writes on `ram:` and below `data/`); FSInfo's free count is marked unknown on the first change instead of being kept.
 - **Saving in the editor:** write `name.tmp`, flush, rename over `name` (in one directory this replaces one directory entry; best effort on FAT, stated as such).
 - **Tests:** QEMU's virtual FAT drive (`fat:rw:`) is a poor target for write tests; writes are tested on the RAM disk and on a raw FAT image attached as a second disk, and after the run `fsck.fat -n` on the host checks the image.
 
@@ -176,7 +176,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - A bounded ring (64 KiB) of records: monotonic time, source PID and name stamped by the server from the IPC sender (not taken from the message — provenance, MC-10.6), level, text up to 200 bytes. When full, the oldest records go and the gap is counted (gap detection, MC-10.6).
 - `init` and the services write to it; `dmesg` reads it. Kernel faults come through `sysmon` (`FAULTS`); the kernel keeps writing only its boot line and panics to COM1.
 - Later: the audit trail of authority changes (MC-10.3).
-- Done in issue 049 (`logd/`, `idl/log.wit`, `dmesg/`): 256 fixed slots of 256 bytes, sequence numbers for gap detection, a dropped count, and a rate limit of 64 records a second per sender (refused records are counted and noted, MC-10.2); the name comes from the kernel's task records through the observe privilege. Services do not call a logging API: every `println!` line of a process that holds a `logd` client (slot 12) goes to `logd`, so existing service messages arrived unchanged; `init`'s lines from before `logd` ran are kept and sent then. Deviations: kernel faults are not copied into the log yet (`faults` and `sysmon` show them); records get the time they arrive.
+- Done in issue 069 (`logd/`, `idl/log.wit`, `dmesg/`): 256 fixed slots of 256 bytes, sequence numbers for gap detection, a dropped count, and a rate limit of 64 records a second per sender (refused records are counted and noted, MC-10.2); the name comes from the kernel's task records through the observe privilege. Services do not call a logging API: every `println!` line of a process that holds a `logd` client (slot 12) goes to `logd`, so existing service messages arrived unchanged; `init`'s lines from before `logd` ran are kept and sent then. Deviations: kernel faults are not copied into the log yet (`faults` and `sysmon` show them); records get the time they arrive.
 
 ## 4. The tools
 
@@ -186,7 +186,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Keys (Norton Commander / FAR):** Tab — other panel; Enter — enter a directory, run an `.elf` (through the loader with the standard grants) or view a text; F3 view; F4 edit (starts `edit` with a read-write handle for that file); F5 copy; F6 move/rename; F7 mkdir; F8 delete; F9 menu; F10 quit; Ins select; `+`/`-` select by mask; Alt+F1/Alt+F2 volume for the left/right panel; Ctrl+R reread; Alt+F7 find.
 - **Operations:** progress dialog with cancel; on error retry / skip / abort; confirmation for delete and overwrite; copy between volumes (boot disk ↔ RAM disk).
 - **Phase 1** (read-only VFS): browse, view, run, information, find. **Phase 2** (after F8): write operations.
-- Phase 1 done in issue 043, phase 2 in issue 048: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILES` (issue 051 split it from the editor's one-directory `REQUEST_FILE`).
+- Phase 1 done in issue 063, phase 2 in issue 068: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILES` (issue 071 split it from the editor's one-directory `REQUEST_FILE`).
 - The viewer is built in rather than a separate process: every application with a screen costs a full frame of kernel memory.
 
 ### 4.2 `edit` — panel text editor
@@ -198,7 +198,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Modes:** read-only (opened with a read-only handle) and hex (shared with `view`).
 - **Later:** syntax highlighting (Rust, TOML, WIT, Markdown), column selection.
 - The core (buffer, cursor, search, undo) is a `no_std` module that also builds on the host and is tested there, like `tests/tts_host.rs`.
-- Done in issue 047 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Since issue 051 the editor gets a VFS client confined to its file's directory (`vfs.wit` `scope`) rather than a handle for the one file: saving through `name.tmp` and a rename needs the directory. Deviation: no hex mode yet (use `view`).
+- Done in issue 067 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Since issue 071 the editor gets a VFS client confined to its file's directory (`vfs.wit` `scope`) rather than a handle for the one file: saving through `name.tmp` and a rename needs the directory. Deviation: no hex mode yet (use `view`).
 
 ### 4.3 `view` — viewer
 
@@ -232,8 +232,8 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 - **`ipc`:** endpoints with server and clients by PID, queue depth (out of `ENDPOINT_QUEUE` = 8), waiting senders, saved replies, timeouts and `ERR_BUSY` counts; the wait-for graph (task → endpoint → server) with cycles highlighted as deadlocks.
 - **`caps`:** a task's slots with handle and generation, kind, rights, range, derivation parent; the derivation tree across tasks; "what would a revoke of this capability remove". Needs a stronger right than plain observation.
 - **`dmesg`:** filter by source and level, follow mode.
-- **`svc`:** services from `init`: PID, state, restarts, devices held; start, stop, restart; restart budgets and generations once C6 exists. Done in issue 050: `init` serves `idl/lifecycle.wit` on its endpoint (it replaced the numeric "start by name" request) with the process-control privilege it mints for itself; the shell lends its client of `init` for `REQUEST_LIFECYCLE`; `svc` is a console program, `top` stops a task (k) and restarts a service (r) after a confirmation. "Devices held" is what `init` granted, in short.
-- **`df` / `fsck`:** volume type, cluster size, size, free space (from FSInfo or by counting the FAT); `fsck` checks lost clusters, cross-linked chains and size mismatches without writing. Done in issue 048: `df` from `volume` (free space counted in the FAT once, then kept); `fsck` is `vfs.wit` 2.1 `check`, run by `vfs_server` (it alone reads the sectors), which also reports chains that run into a free or bad cluster, invalid entries and the dirty flag.
+- **`svc`:** services from `init`: PID, state, restarts, devices held; start, stop, restart; restart budgets and generations once C6 exists. Done in issue 070: `init` serves `idl/lifecycle.wit` on its endpoint (since the merge of `main` these requests are part of `idl/init.wit` 1.1) (it replaced the numeric "start by name" request) with the process-control privilege it mints for itself; the shell lends its client of `init` for `REQUEST_LIFECYCLE`; `svc` is a console program, `top` stops a task (k) and restarts a service (r) after a confirmation. "Devices held" is what `init` granted, in short.
+- **`df` / `fsck`:** volume type, cluster size, size, free space (from FSInfo or by counting the FAT); `fsck` checks lost clusters, cross-linked chains and size mismatches without writing. Done in issue 068: `df` from `volume` (free space counted in the FAT once, then kept); `fsck` is `vfs.wit` 2.1 `check`, run by `vfs_server` (it alone reads the sectors), which also reports chains that run into a free or bad cluster, invalid entries and the dirty flag.
 - **`format`, `screenshot`, `keymap`, `reboot`:** as in §2.
 
 ### 4.8 Shell
@@ -283,11 +283,13 @@ graph LR
 - **MC-10.2:** observation is behind OBSERVE, contents are never exported, `sysmon` limits each client's rate. **MC-10.6:** `logd` stamps the source and counts gaps.
 - **Article 4 / B.6:** FAT remains an external-media path with a separate write right; the native store is track B, and `fm` gets an object-store panel when it exists.
 - **MC-5.4, 5.5:** `STAT` copies are bounded; `sysmon` samples at a fixed period into preallocated buffers.
-- **Limits to revisit:** two new services take 2 of the 20 task slots (12 services + 8 applications = 20 in the default QEMU setup, see [kernel-objects.md](../profile/kernel-objects.md)); `MAX_TASKS` may need raising. Each application with a screen costs a full frame in the 64 MiB arena — console programs and the viewer built into `fm` reduce that.
+- **Limits to revisit:** two new services take 2 of the 20 task slots (12 services + 8 applications = 20 in the default QEMU setup, see [kernel-objects.md](../profile/kernel-objects.md)); `MAX_TASKS` may need raising. Issue 037 on `main` raised it to 32 tasks and 127 endpoints. Each application with a screen costs a full frame in the 64 MiB arena — console programs and the viewer built into `fm` reduce that.
 
 ## 7. Issues
 
-Opened on 2026-10-04 as [032–050](../../issues/README.md): 032 program heap, 033 font, 034 text UI library, 035 key events, 036 shell line editing, 037 `view`, 038 IDL v0.2, 039 observation ABI, 040 `sysmon`, 041 `top`/`memmap`/`load`/`hw`, 042 loader v1, 043 `fm` read-only, 044 endpoint badges and block write, 045 `ramdisk`, 046 VFS v2 with FAT write, 047 `edit`, 048 `fm` writes/`df`/`fsck`, 049 `logd`/`dmesg`, 050 `svc`; 051 (scoped file grants) split off from 047.
+Opened on 2026-10-04 on the tools branch as 032–050, renumbered [052–071](../../issues/README.md) when `main` was merged ([051](../../issues/051-merge-main-into-tools.md); every record says "Formerly tools-branch NNN."): 052 program heap, 053 font, 054 text UI library, 055 key events, 056 shell line editing, 057 `view`, 058 IDL v0.2, 059 observation ABI, 060 `sysmon`, 061 `top`/`memmap`/`load`/`hw`, 062 loader v1, 063 `fm` read-only, 064 endpoint badges and block write, 065 `ramdisk`, 066 VFS v2 with FAT write, 067 `edit`, 068 `fm` writes/`df`/`fsck`, 069 `logd`/`dmesg`, 070 `svc`; 071 (scoped file grants) split off from 067. `main` had opened the plan's remaining items as 040–043 and 045–050; the tools records replaced them.
+
+The merge kept `main`'s kernel, ABI, IDL wire format, `STAT` records, input event words and badges, and ported the tools to them: enums, `bytes<N>` and capability results are a minor extension of main's IDL v0.2; block write and flush are `block.wit` 1.1 with the data as sealed read-only memory; VFS v2 is `vfs.wit` 2.x; launch sessions replaced the loader's legacy adapter. The kernel changes the tools needed went through kernel-track issues 072 (fixed grant slots), 073 (`PORT_OUT_BLOCK`) and 074 (output of an exited console program); the `STAT` fields the monitors lost are [075](../../issues/075-stat-fields-for-the-monitors.md).
 
 ## 8. Decisions (accepted 2026-10-04)
 
@@ -296,4 +298,4 @@ Opened on 2026-10-04 as [032–050](../../issues/README.md): 032 program heap, 0
 3. **Endpoint badges** in the kernel distinguish read-only and read-write clients of one endpoint.
 4. **Font:** a subset of Terminus 4.49.1 (SIL OFL 1.1) named **MIND Mono 16** — the OFL forbids the reserved name "Terminus Font" for modified versions ([fonts/](../../fonts/README.md)).
 5. **Keys:** Norton Commander / FAR conventions; the layout switches with Ctrl+Shift or Alt+Shift pressed and released alone; Ctrl+Z stays the system attention key, so undo is Ctrl+U or Alt+Backspace.
-6. **Screen mode:** the bootloader selects a fixed target mode ([issue 009](../../issues/009-gop-pixel-format.md)).
+6. **Screen mode:** the bootloader selects a fixed target mode ([issue 009](../../issues-done/009-gop-pixel-format.done)).

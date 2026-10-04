@@ -9,15 +9,18 @@ extern crate alloc;
 mod disk;
 mod fat;
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use disk::Disk;
 use fat::{Node, Volume};
 use mind::abi::*;
+use mind::fs::{BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
+use mind::idl::wire::Call;
 use mind::idl::{rtc, wire};
 use mind::ipc::{self, Endpoint};
-use mind::mem::Mapping;
 
 const RECEIVED: usize = 9;
 const HANDLES: usize = 96;
@@ -149,11 +152,11 @@ impl Server {
         Ok(())
     }
 
-    fn serve(&mut self, request: Request, sender: u64, badge: u16, bytes: &mut [u8]) -> mind::Result<()> {
-        let user = badge == VFS_BADGE_USER;
+    fn serve(&mut self, request: Request, call: Call, sender: u64, badge: u16) -> mind::Result<()> {
+        let user = badge == BADGE_USER;
         match request {
-            Request::Root { payload, .. } => {
-                let name = match vfs::args_root(bytes, payload) { Ok(name) => String::from(name), Err(reason) => return wire::reject(reason) };
+            Request::Root { name } => {
+                let name = name.as_str();
                 let result = (|| {
                     // A scoped client's root of its volume is the scope's directory; other roots are refused.
                     if badge >= SCOPE_BADGE_FIRST {
@@ -161,20 +164,19 @@ impl Server {
                         let scope = self.scopes[index].as_mut().unwrap();
                         match scope.user { None => scope.user = Some(sender), Some(pid) if pid != sender => return Err(Error::Denied), _ => {} }
                         let (volume, node, zone, dir_name) = (scope.volume, scope.node, scope.zone, scope.name.clone());
-                        if !self.volumes[volume].name.eq_ignore_ascii_case(&name) { return Err(Error::Denied); }
+                        if !self.volumes[volume].name.eq_ignore_ascii_case(name) { return Err(Error::Denied); }
                         return self.add(Handle { owner: sender, badge, volume, node, name: dir_name, zone });
                     }
-                    let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(&name)).ok_or(Error::NotFound)?;
+                    let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(name)).ok_or(Error::NotFound)?;
                     let zone = if !user { Zone::ReadOnly } else if self.volumes[volume].name.is_empty() { Zone::BootRoot } else { Zone::Writable };
                     let node = self.volumes[volume].volume.root();
                     self.add(Handle { owner: sender, badge, volume, node, name: String::new(), zone })
                 })();
-                vfs::reply_root(result)
+                vfs::reply_root(call, result)
             }
-            Request::OpenDir { payload, dir, create, .. } => {
-                let path = match vfs::args_open_dir(bytes, payload) { Ok(p) => String::from(p), Err(reason) => return wire::reject(reason) };
+            Request::OpenDir { dir, path, create } => {
                 let result = (|| {
-                    let parts = parts(&path)?;
+                    let parts = parts(path.as_str())?;
                     let h = self.get(dir, sender, badge)?;
                     let (volume, node, zone, name) = (h.volume, h.node, h.zone, h.name.clone());
                     if !node.is_dir() { return Err(Error::NotDirectory); }
@@ -182,55 +184,52 @@ impl Server {
                     let name = parts.last().map_or(name, |p| String::from(*p));
                     self.add(Handle { owner: sender, badge, volume, node, name, zone })
                 })();
-                vfs::reply_open_dir(result)
+                vfs::reply_open_dir(call, result)
             }
-            Request::Open { payload, dir, mode, .. } => {
-                let path = match vfs::args_open(bytes, payload) { Ok(p) => String::from(p), Err(reason) => return wire::reject(reason) };
+            Request::Open { dir, path, mode } => {
                 let result = (|| {
-                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, &path)?;
+                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
                     let zone = zone.below(name);
-                    let write = mode & (VFS_MODE_WRITE | VFS_MODE_CREATE | VFS_MODE_TRUNCATE) != 0;
+                    let write = mode & (MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) != 0;
                     if write { self.writable(zone, volume)?; }
                     let v = &mut self.volumes[volume].volume;
                     let mut node = match v.find(&parent, name) {
-                        Ok(_) if mode & VFS_MODE_NEW != 0 => return Err(Error::Exists),
+                        Ok(_) if mode & MODE_NEW != 0 => return Err(Error::Exists),
                         Ok(entry) => entry.node,
-                        Err(fat::Error::NotFound) if mode & VFS_MODE_CREATE != 0 => v.create(&parent, name, false, now()).map_err(error)?,
+                        Err(fat::Error::NotFound) if mode & MODE_CREATE != 0 => v.create(&parent, name, false, now()).map_err(error)?,
                         Err(e) => return Err(error(e)),
                     };
                     if node.is_dir() { return Err(Error::IsDirectory); }
-                    if mode & VFS_MODE_TRUNCATE != 0 && node.size != 0 { v.truncate(&mut node, 0, now()).map_err(error)?; }
-                    let zone = if mode & VFS_MODE_WRITE != 0 { zone } else { Zone::ReadOnly };
+                    if mode & MODE_TRUNCATE != 0 && node.size != 0 { v.truncate(&mut node, 0, now()).map_err(error)?; }
+                    let zone = if mode & MODE_WRITE != 0 { zone } else { Zone::ReadOnly };
                     let id = self.add(Handle { owner: sender, badge, volume, node, name: String::from(name), zone })?;
                     self.refresh(volume, node);
                     Ok(id)
                 })();
-                vfs::reply_open(result)
+                vfs::reply_open(call, result)
             }
-            Request::Read { file, offset, length, .. } => {
+            Request::Read { file, offset, length } => {
                 let mut data = Vec::new();
                 let result = (|| {
                     let h = self.get(file, sender, badge)?;
                     let (volume, node) = (h.volume, h.node);
-                    // The reply must fit the buffer: 4 bytes of length, then the data.
-                    data.resize((length as usize).min(bytes.len().saturating_sub(4)).min(65536), 0);
+                    data.resize((length as usize).min(mind::fs::CHUNK), 0);
                     let n = self.volumes[volume].volume.read(&node, offset, &mut data).map_err(error)?;
                     data.truncate(n);
                     Ok(())
                 })();
-                vfs::reply_read(bytes, result.map(|_| &data[..]))
+                vfs::reply_read(call, result.map(|_| &data[..]))
             }
-            Request::Write { payload, file, offset, .. } => {
-                let data = match vfs::args_write(bytes, payload) { Ok(d) => Vec::from(d), Err(reason) => return wire::reject(reason) };
+            Request::Write { file, offset, data } => {
                 let result = (|| {
                     let h = self.get(file, sender, badge)?;
                     let (volume, mut node, zone) = (h.volume, h.node, h.zone);
                     self.writable(zone, volume)?;
-                    let n = self.volumes[volume].volume.write(&mut node, offset, &data, now()).map_err(error)?;
+                    let n = self.volumes[volume].volume.write(&mut node, offset, data, now()).map_err(error)?;
                     self.refresh(volume, node);
                     Ok(n as u32)
                 })();
-                vfs::reply_write(result)
+                vfs::reply_write(call, result)
             }
             Request::Truncate { file, size } => {
                 let result = (|| {
@@ -241,38 +240,26 @@ impl Server {
                     self.refresh(volume, node);
                     Ok(())
                 })();
-                vfs::reply_truncate(result)
+                vfs::reply_truncate(call, result)
             }
-            Request::Stat { handle, .. } => {
-                let result = self.get(handle, sender, badge).map(|h| (h.name.clone(), h.node));
-                vfs::reply_stat(bytes, result.as_ref().map(|(name, node)| entry(name, node)).map_err(|e| *e))
+            Request::Stat { handle } => {
+                let result = self.get(handle, sender, badge).map(|h| entry(&h.name, &h.node));
+                vfs::reply_stat(call, result.as_ref().map_err(|e| *e))
             }
-            Request::List { dir, start, .. } => {
+            Request::List { dir, start } => {
                 let result = (|| {
                     let h = self.get(dir, sender, badge)?;
                     let (volume, node) = (h.volume, h.node);
                     if !node.is_dir() { return Err(Error::NotDirectory); }
                     self.volumes[volume].volume.list(&node).map_err(error)
                 })();
-                match result {
-                    Ok(all) => {
-                        // As many entries as fit: 4 bytes of count, each entry its name and 12 bytes.
-                        let (mut used, mut items) = (4usize, Vec::new());
-                        for e in all.iter().skip(start as usize).take(256) {
-                            let name = clip(&e.name);
-                            if used + name.len() + 12 > bytes.len() { break; }
-                            used += name.len() + 12;
-                            items.push(entry(name, &e.node));
-                        }
-                        vfs::reply_list(bytes, Ok(&items))
-                    }
-                    Err(e) => vfs::reply_list(bytes, Err(e)),
-                }
+                // At most 16 entries from `start` (vfs.wit `list<entry, 16>`).
+                let items: Result<Vec<vfs::Entry>, Error> = result.map(|all| all.iter().skip(start as usize).take(16).map(|e| entry(&e.name, &e.node)).collect());
+                vfs::reply_list(call, items.as_deref().map_err(|e| *e))
             }
-            Request::Remove { payload, dir, .. } => {
-                let path = match vfs::args_remove(bytes, payload) { Ok(p) => String::from(p), Err(reason) => return wire::reject(reason) };
+            Request::Remove { dir, path } => {
                 let result = (|| {
-                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, &path)?;
+                    let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
                     self.writable(zone.below(name), volume)?;
                     let v = &mut self.volumes[volume].volume;
                     let entry = v.find(&parent, name).map_err(error)?;
@@ -287,13 +274,12 @@ impl Server {
                     }
                     Ok(())
                 })();
-                vfs::reply_remove(result)
+                vfs::reply_remove(call, result)
             }
-            Request::Rename { payload, dir, target, .. } => {
-                let (from, to) = match vfs::args_rename(bytes, payload) { Ok((f, t)) => (String::from(f), String::from(t)), Err(reason) => return wire::reject(reason) };
+            Request::Rename { dir, from, target, to } => {
                 let result = (|| {
-                    let (volume, source, source_zone, name) = self.parent(dir, sender, badge, &from)?;
-                    let (target_volume, destination, target_zone, new_name) = self.parent(target, sender, badge, &to)?;
+                    let (volume, source, source_zone, name) = self.parent(dir, sender, badge, from.as_str())?;
+                    let (target_volume, destination, target_zone, new_name) = self.parent(target, sender, badge, to.as_str())?;
                     if volume != target_volume { return Err(Error::Invalid); }
                     self.writable(source_zone.below(name), volume)?;
                     self.writable(target_zone.below(new_name), volume)?;
@@ -303,9 +289,9 @@ impl Server {
                     for h in self.handles.iter_mut().flatten() { if h.volume == volume && old.entry.is_some() && h.node.entry == old.entry { h.node = moved; h.name = String::from(new_name); } }
                     Ok(())
                 })();
-                vfs::reply_rename(result)
+                vfs::reply_rename(call, result)
             }
-            Request::Volume { handle, .. } => {
+            Request::Volume { handle } => {
                 let result = (|| {
                     let h = self.get(handle, sender, badge)?;
                     let (volume, zone) = (h.volume, h.zone);
@@ -313,14 +299,16 @@ impl Server {
                     let free = m.volume.free_clusters().map_err(error)? as u64 * m.volume.cluster_bytes() as u64;
                     Ok((m.name, m.volume.label(), m.volume.bits(), m.volume.total_bytes(), free, m.volume.cluster_bytes(), m.volume.writable() && zone != Zone::ReadOnly))
                 })();
-                vfs::reply_volume(bytes, result.as_ref().map(|r| vfs::Volume { name: r.0, label: &r.1, fat_bits: r.2, bytes: r.3, free: r.4, cluster: r.5, writable: r.6 }).map_err(|e| *e))
+                let volume = result.map(|r| vfs::Volume { name: text(r.0), label: text(&r.1), fat_bits: r.2, bytes: r.3, free: r.4, cluster: r.5, writable: r.6 });
+                vfs::reply_volume(call, volume.as_ref().map_err(|e| *e))
             }
-            Request::Check { handle, .. } => {
+            Request::Check { handle } => {
                 // A check reads the whole FAT and directory tree; any client may ask (it changes nothing).
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.check().map_err(error));
-                vfs::reply_check(bytes, result.as_ref().map(|r| vfs::Report { files: r.files, directories: r.directories, used: r.used, free: r.free, lost: r.lost,
+                let report = result.map(|r| vfs::Report { files: r.files, directories: r.directories, used: r.used, free: r.free, lost: r.lost,
                     lost_chains: r.lost_chains, cross_linked: r.cross_linked, bad_chains: r.bad_chains, sizes: r.sizes, bad_entries: r.bad_entries, dirty: r.dirty,
-                    first: &r.first }).map_err(|e| *e))
+                    first: text(&r.first) });
+                vfs::reply_check(call, report.as_ref().map_err(|e| *e))
             }
             Request::Scope { dir, writable } => {
                 let result = (|| {
@@ -341,11 +329,11 @@ impl Server {
                     self.scopes[index] = Some(Scope { badge, volume, node, name, zone, user: None, made_ms: mind::time::uptime_ms() as u64, cap });
                     Ok(cap)
                 })();
-                vfs::reply_scope(result)
+                vfs::reply_scope(call, result)
             }
             Request::Flush { handle } => {
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
-                vfs::reply_flush(result)
+                vfs::reply_flush(call, result)
             }
             Request::Close { handle } => {
                 // Closing a file opened for writing flushes its volume.
@@ -354,23 +342,23 @@ impl Server {
                     self.handles[handle as usize] = None;
                     if wrote { self.volumes[volume].volume.flush().map_err(error) } else { Ok(()) }
                 });
-                vfs::reply_close(result)
+                vfs::reply_close(call, result)
             }
         }
     }
 }
 
-// Names are sent up to 255 bytes of UTF-8 (a longer one is cut at a character).
-fn clip(name: &str) -> &str { let mut end = name.len().min(255); while !name.is_char_boundary(end) { end -= 1; } &name[..end] }
+// Text of at most N bytes of UTF-8 (a longer one is cut at a character).
+fn text<const N: usize>(text: &str) -> Text<N> { let mut end = text.len().min(N); while !text.is_char_boundary(end) { end -= 1; } Text::new(&text[..end]).unwrap_or_default() }
 
-fn entry<'a>(name: &'a str, node: &Node) -> vfs::Entry<'a> {
+fn entry(name: &str, node: &Node) -> vfs::Entry {
     let a = node.attributes;
-    let attributes = node.is_dir() as u8 * VFS_ENTRY_DIR | if a & fat::ATTR_HIDDEN != 0 { VFS_ENTRY_HIDDEN } else { 0 } | if a & fat::ATTR_SYSTEM != 0 { VFS_ENTRY_SYSTEM } else { 0 }
-        | if a & fat::ATTR_READ_ONLY != 0 { VFS_ENTRY_READ_ONLY } else { 0 } | if a & fat::ATTR_ARCHIVE != 0 { VFS_ENTRY_ARCHIVE } else { 0 };
-    vfs::Entry { name: clip(name), size: node.size, modified: node.modified, attributes, directory: node.is_dir() }
+    let attributes = node.is_dir() as u8 * ENTRY_DIR | if a & fat::ATTR_HIDDEN != 0 { ENTRY_HIDDEN } else { 0 } | if a & fat::ATTR_SYSTEM != 0 { ENTRY_SYSTEM } else { 0 }
+        | if a & fat::ATTR_READ_ONLY != 0 { ENTRY_READ_ONLY } else { 0 } | if a & fat::ATTR_ARCHIVE != 0 { ENTRY_ARCHIVE } else { 0 };
+    vfs::Entry { name: text(name), size: node.size, modified: node.modified, attributes, directory: node.is_dir() }
 }
 
-fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", BLOCK_KIND_RAM => "RAM", _ => "?" } }
+fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", mind::block::KIND_RAM => "RAM", _ => "?" } }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
@@ -400,17 +388,13 @@ fn main(_info: &'static BootInfo) {
         }
     }
     let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST };
+    // The private copy of each request (MC-2.11); the data of a write is decoded in place from it.
+    let mut scratch: Box<[u8; vfs::REQUEST_MAX]> = alloc::vec![0u8; vfs::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
-        let decoded = vfs::decode(&request, RECEIVED);
-        let mut mapping = if request.cap_received { Mapping::new(RECEIVED).ok() } else { None };
-        let mut empty = [0u8; 0];
-        let bytes: &mut [u8] = match mapping.as_mut() { Some(m) => m.as_mut_slice(), None => &mut empty };
-        let _ = match decoded {
-            Ok(call) => server.serve(call, request.sender, request.badge, bytes),
-            Err(reason) => wire::reject(reason),
+        let _ = match vfs::decode(&request, RECEIVED, &mut scratch) {
+            Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),
+            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
-        drop(mapping);
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED); }
     }
 }

@@ -1,29 +1,38 @@
-/// Test interface for the MIND IDL generator (tests/idl_host.rs): every v0.2 type.
+/// Test interface for the MIND IDL generator (tests/idl_host.rs): v0.2 types and the extensions (enums, bytes,
+/// capability results).
 package mind:sample@2.1.0;
 
 interface sample {
     /// Why a call failed.
     enum error { not-found, exists, too-big }
-    enum kind { file, directory, device }
+    enum kind {
+        file,
+        directory,
+        device,
+    }
     /// A directory entry.
     record entry {
-        name: string<32>,
-        size: u64,
-        hidden: bool,
-        kind: kind,
+        name: string<32>, size: u64,
+        hidden: bool, kind: kind,
     }
     record pair { tag: u8, entry: entry }
 
-    /// Scalars only, as in v0.
+    /// Scalars only.
     ping: func(x: u32, flag: bool) -> u32;
     /// A string argument and a fallible scalar result.
-    find: func(dir: u32, buffer: borrow<memory>, name: string<64>) -> result<u32, error>;
+    find: func(dir: u32, name: string<64>) -> result<u32, error>;
     /// A list of records as the result.
-    list: func(buffer: borrow<memory>, start: u32) -> list<entry, 16>;
+    list: func(start: u32) -> list<entry, 16>;
     /// Two bulk arguments and a result without a value.
-    put: func(buffer: borrow<memory>, items: list<u16, 8>, note: bytes<10>) -> result<_, error>;
-    /// A nested record result.
-    info: func(buffer: borrow<memory>, of: kind) -> pair;
-    /// An enum argument and an optional result.
-    mode: func(k: kind) -> option<u8>;
+    put: func(items: list<u16, 8>, note: bytes<10>) -> result<_, error>;
+    /// An enum argument of a buffer call and a nested record result.
+    info: func(of: kind) -> pair;
+    /// An enum argument of a word call and an optional enum result.
+    mode: func(k: kind) -> option<kind>;
+    /// Bytes as the result.
+    fetch: func(length: u16) -> result<bytes<64>, error>;
+    /// A capability as the result.
+    open: func(id: u32) -> result<borrow<endpoint>, error>;
+    /// An enum result of a word call with a system error.
+    sys: func(k: kind, fail: bool) -> result<kind, error-code>;
 }

@@ -21,7 +21,7 @@ The command shell (`LIST`, `RUN`, `PS`, `FG`, `KILL`, `LOGS`, `FAULTS`, `CPUS`, 
 
 ## Related
 
-[020](020-init-bootstrap-authority.done), [018](../issues/018-kernel-panic-diagnostics.md), [ROADMAP](../ROADMAP.md) K1.
+[020](020-init-bootstrap-authority.done), [018](018-kernel-panic-diagnostics.done), [ROADMAP](../ROADMAP.md) K1.
 
 ## Resolution
 

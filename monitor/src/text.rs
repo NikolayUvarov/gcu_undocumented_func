@@ -47,16 +47,16 @@ pub fn permille(value: u32) -> String { format!("{}.{}", value / 10, value % 10)
 
 /// Short name of a task state.
 pub fn state(state: u8) -> &'static str {
-    match state { TASK_READY => "READY", TASK_RUNNING => "RUN", TASK_SLEEPING => "SLEEP", TASK_SEND => "SEND", TASK_RECV => "RECV", TASK_REPLY => "CALL", TASK_IRQ => "IRQ", TASK_FLUSH => "FLUSH", TASK_EXITED => "EXIT", _ => "?" }
+    match state { WAIT_NONE => "READY", WAIT_RUNNING => "RUN", WAIT_SLEEP => "SLEEP", WAIT_SEND => "SEND", WAIT_RECEIVE => "RECV", WAIT_REPLY => "CALL", WAIT_IRQ => "IRQ", WAIT_FLUSH => "FLUSH", WAIT_EXITED => "EXIT", _ => "?" }
 }
 
-/// What a task in `state` waits for, from `TaskStat.wait`.
+/// What a task in `state` (WAIT_*) waits for, from `StatTask.wait_on`.
 pub fn waits_for(state: u8, wait: u64) -> String {
     match state {
-        TASK_SEND => format!("sending to endpoint {}", wait), TASK_RECV => format!("receiving on endpoint {}", wait),
-        TASK_REPLY => format!("waiting for a reply from PID {}", wait), TASK_IRQ => format!("waiting for IRQ {}", wait),
-        TASK_SLEEPING => format!("sleeping until {} ms", wait), TASK_FLUSH => String::from("waiting for a TLB flush"),
-        TASK_RUNNING => String::from("running"), TASK_READY => String::from("ready to run"), TASK_EXITED => String::from("exited"), _ => String::new(),
+        WAIT_SEND => format!("sending to endpoint {}", wait), WAIT_RECEIVE => format!("receiving on endpoint {}", wait),
+        WAIT_REPLY => format!("waiting for a reply from PID {}", wait), WAIT_IRQ => format!("waiting for IRQ {}", wait),
+        WAIT_SLEEP => String::from("sleeping"), WAIT_FLUSH => String::from("waiting for a TLB flush"),
+        WAIT_RUNNING => String::from("running"), WAIT_NONE => String::from("ready to run"), WAIT_EXITED => String::from("exited"), _ => String::new(),
     }
 }
 
@@ -65,20 +65,20 @@ pub fn phys_kind(kind: u32) -> &'static str {
     match kind {
         0 => "reserved", 1 => "loader code", 2 => "loader data", 3 => "boot code", 4 => "boot data", 5 => "runtime code", 6 => "runtime data",
         7 => "free RAM", 8 => "unusable", 9 => "ACPI reclaim", 10 => "ACPI NVS", 11 => "MMIO", 12 => "MMIO ports", 13 => "PAL code", 14 => "persistent",
-        PHYS_KERNEL => "kernel", PHYS_HEAP => "kernel arena", PHYS_BOOT_IMAGE => "boot image", PHYS_FRAMEBUFFER => "framebuffer",
-        PHYS_TRAMPOLINE => "AP trampoline", PHYS_DEVICE => "device BAR", PHYS_DMA => "DMA",
+        PHYS_ARENA => "kernel arena", PHYS_BOOT_IMAGE => "boot image", PHYS_FRAMEBUFFER => "framebuffer",
+        PHYS_AP_TRAMPOLINE => "AP trampoline", PHYS_PCI_BAR => "device BAR",
         _ => "other",
     }
 }
 
 /// Name of an address-space region kind.
 pub fn region_kind(kind: u32) -> &'static str {
-    match kind { VM_CODE => "code", VM_DATA => "data", VM_STACK => "stack", VM_GUARD => "guard", VM_SCREEN => "screen", VM_INFO => "info", VM_MAILBOX => "mailbox", VM_EXIT => "exit", VM_HEAP => "heap", VM_SHARED => "shared", VM_DEVICE => "device", _ => "?" }
+    match kind { REGION_IMAGE => "image", REGION_STACK => "stack", REGION_SCREEN => "screen", REGION_INFO => "info", REGION_MAILBOX => "mailbox", REGION_EXIT => "exit", REGION_HEAP => "heap", REGION_SHARED => "shared", REGION_DEVICE => "device", _ => "?" }
 }
 
 /// `rwx` rights of a region.
 pub fn rights(flags: u32) -> String {
-    [(VM_READ, 'r'), (VM_WRITE, 'w'), (VM_EXEC, 'x')].iter().map(|&(bit, ch)| if flags & bit != 0 { ch } else { '-' }).collect()
+    [(REGION_READ, 'r'), (REGION_WRITE, 'w'), (REGION_EXECUTE, 'x')].iter().map(|&(bit, ch)| if flags & bit != 0 { ch } else { '-' }).collect()
 }
 
 /// Name of a capability kind.
@@ -86,7 +86,7 @@ pub fn cap_kind(kind: u32) -> &'static str {
     match kind as usize {
         CAP_KIND_ENDPOINT => "endpoint", CAP_KIND_MEMORY => "memory", CAP_KIND_DMA => "dma", CAP_KIND_PORTS => "ports", CAP_KIND_IRQ => "irq",
         CAP_KIND_INPUT => "input", CAP_KIND_DISPLAY => "display", CAP_KIND_MMIO => "mmio", CAP_KIND_SPAWN => "spawn", CAP_KIND_REPLY => "reply",
-        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_OBSERVE => "observe", _ => "?",
+        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_RESTART => "restart", CAP_KIND_OBSERVE => "observe", _ => "?",
     }
 }
 

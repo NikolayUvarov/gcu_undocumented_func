@@ -72,8 +72,8 @@ impl Hw {
         Self { local, cpus: Vec::new(), devices: Vec::new(), irqs: Vec::new(), ranges: Vec::new(), tasks: Vec::new(), memory: Memory::default(), uptime_ms: 0, top: 0, height: 10 }
     }
 
-    fn holder(&self, pid: u32) -> String {
-        if pid == 0 { String::from("—") } else { format!("{} (PID {})", task_name(&self.tasks, pid as u64), pid) }
+    fn holder(&self, pid: u64) -> String {
+        if pid == 0 { String::from("—") } else { format!("{} (PID {})", task_name(&self.tasks, pid), pid) }
     }
 
     /// The report, line by line.
@@ -106,11 +106,10 @@ impl Hw {
         for d in &self.devices {
             let mut bars = String::new();
             for (i, &bytes) in d.bars.iter().enumerate().filter(|(_, b)| **b != 0) {
-                bars.push_str(&format!(" BAR{} {}{}", i, text::size(bytes), if d.io_bars & (1 << i) != 0 { " io" } else { "" }));
+                bars.push_str(&format!(" BAR{} {}", i, text::size(bytes)));
             }
             let irq = if d.irq == 0 || d.irq == 0xFF { String::from("  —   ") } else { format!("IRQ {:<2}", d.irq) };
-            line(format!("  {:02x}:{:02x}.{}  {:06X}  {:<16} {}  {:<22}{}", d.location >> 16, (d.location >> 8) & 0xFF, d.location & 7, d.class, text::pci_class(d.class),
-                         irq, self.holder(d.holder), bars), Kind::Text);
+            line(format!("  {:>2}  {:06X}  {:<16} {}  {:<22}{}", d.index, d.class, text::pci_class(d.class), irq, self.holder(d.holder), bars), Kind::Text);
         }
         line(String::new(), Kind::Text);
         line(String::from("Interrupt lines"), Kind::Heading);
@@ -128,8 +127,8 @@ impl Hw {
         line(format!("  RAM {} usable, {} free after boot (firmware map)", text::size(usable), text::size(free)), Kind::Text);
         let sum = |kind: u32| self.ranges.iter().filter(|r| r.kind == kind).map(|r| r.bytes).sum::<u64>();
         let images = self.ranges.iter().filter(|r| r.kind == PHYS_BOOT_IMAGE).count();
-        line(format!("  kernel {}, kernel arena {}, {} boot images {}", text::size(sum(PHYS_KERNEL)), text::size(sum(PHYS_HEAP)), images, text::size(sum(PHYS_BOOT_IMAGE))), Kind::Text);
-        line(format!("  DMA buffers {} of {}, device registers {}", text::size(self.memory.dma), text::size(self.memory.dma_limit), text::size(sum(PHYS_DEVICE))), Kind::Text);
+        line(format!("  kernel arena {}, {} boot images {}", text::size(sum(PHYS_ARENA)), images, text::size(sum(PHYS_BOOT_IMAGE))), Kind::Text);
+        line(format!("  DMA buffers {} of {}, device registers {}", text::size(self.memory.dma), text::size(self.memory.dma_limit), text::size(sum(PHYS_PCI_BAR))), Kind::Text);
         line(String::new(), Kind::Text);
         line(String::from("  Block devices and the audio codec are not listed yet: their drivers do not report them."), Kind::Dim);
         out

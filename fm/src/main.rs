@@ -13,7 +13,7 @@ use fm::panel::{self, Entry};
 use mind::abi::*;
 use mind::fs::{self, Error, File};
 use mind::gfx::Screen;
-use mind::idl::{loader, wire};
+use mind::idl::loader;
 use mind::ipc::Endpoint;
 use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
@@ -38,7 +38,7 @@ fn failure(error: Error) -> Failure {
     }
 }
 
-struct Vfs { shared: Option<wire::Shared> }
+struct Vfs;
 
 impl Disk for Vfs {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String> {
@@ -49,19 +49,18 @@ impl Disk for Vfs {
     }
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> { File::open(path).ok().map(|file| Box::new(DiskFile(file)) as Box<dyn Source>) }
     fn run(&mut self, path: &str) -> Result<u64, String> {
-        let shared = self.shared.as_mut().ok_or_else(|| String::from("no memory"))?;
         let failed = |e: loader::Error| alloc::format!("{:?}", e);
-        let session = loader::begin(Endpoint::LOADER, shared.buffer(), path, "").map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)?;
+        let session = loader::begin(Endpoint::LOADER, path, "").map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)?;
         loader::commit(Endpoint::LOADER, session).map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
-        let mode = VFS_MODE_WRITE | VFS_MODE_CREATE | if replace { VFS_MODE_TRUNCATE } else { VFS_MODE_NEW };
+        let mode = fs::MODE_WRITE | fs::MODE_CREATE | if replace { fs::MODE_TRUNCATE } else { fs::MODE_NEW };
         File::open_mode(path, mode).map(|file| Box::new(DiskSink(file)) as Box<dyn Sink>).map_err(failure)
     }
     fn mkdir(&mut self, path: &str) -> Result<(), Failure> { fs::mkdir(path).map_err(failure) }
     fn remove(&mut self, path: &str) -> Result<(), Failure> { fs::remove(path).map_err(failure) }
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Failure> { fs::rename(from, to).map_err(failure) }
-    fn writable(&mut self, path: &str) -> bool { File::open_mode(path, VFS_MODE_WRITE).is_ok() }
+    fn writable(&mut self, path: &str) -> bool { File::open_mode(path, fs::MODE_WRITE).is_ok() }
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
         let name = panel::volume(path).0.trim_end_matches(':');
         fs::volume(name).ok().map(|v| VolumeInfo { label: String::from(v.label()), fat_bits: v.fat_bits, bytes: v.bytes, free: v.free })
@@ -73,7 +72,7 @@ mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
-    let mut disk = Vfs { shared: wire::Shared::new(4096).ok() };
+    let mut disk = Vfs;
     // The viewer's window lives as long as the program; the viewer gives it back when it closes.
     let window: &'static mut [u8] = Box::leak(alloc::vec![0u8; 64 * 1024].into_boxed_slice());
     let mut fm = Fm::new(window, &mut disk);

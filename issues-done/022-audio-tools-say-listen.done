@@ -27,3 +27,7 @@ Sound is reachable only through demos: `beep` plays fixed tones, `say` speaks `s
 ## Resolution
 
 `SPAWN` takes `name\0arguments`; the kernel copies up to 1 KiB of arguments into the child's read-only info page (`mind::process::args()`). `loader` accepts a run request with a page `name\0arguments` (`mind::process::spawn_with_args`). The shell runs `run <name> [arguments] [&]` and any non-command word as a program in the foreground, and accepts UTF-8 from the UART. `say` takes `-p`, `-r` and the text. `audio_gw` gained an AC97 PCM-in ring (16 buffers) with `AUDIO_RECORD_START/READ/STOP`; `init` gives it a 200 KiB DMA region. New program `listen/`. New QEMU suite `listen` (audiodev `none`): 48 000 frames recorded in 1 s, playback, arguments, run by name; all other suites pass.
+
+## Audit (2026-10-04)
+
+Was partial: no test showed that the text argument reached `say` or that a bare program name starts a program. Fixed in the audit commit: the `listen` suite runs `run say -p 150 -r 120 hello world` and `say hi` in the foreground and bounds the spoken length (the greeting is 2.5–9 s). `say` with a text argument now exits after speaking. Still untested: playback reaching the audio output in that suite, UTF-8 input over the UART. Correction: there is no `mind::audio::Recorder`; capture uses `record_start`, `record_read`, `record_stop`.

@@ -8,28 +8,44 @@ use alloc::vec::Vec;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Task {
     pub pid: u64, pub parent: u64, pub run_ns: u64, pub runs: u64, pub calls: u64, pub sent: u64, pub received: u64, pub started_ns: u64,
-    pub image: u64, pub stack: u64, pub screen: u64, pub heap: u64, pub shared: u64, pub kernel: u64, pub wait: u64,
+    pub image: u64, pub stack: u64, pub screen: u64, pub heap: u64, pub shared: u64, pub retained: u64, pub wait: u64,
     pub heap_blocks: u32, pub caps: u32, pub quota_tasks: u32, pub used_tasks: u32, pub quota_endpoints: u32, pub used_endpoints: u32,
     pub name: String, pub state: u8, pub cpu: u8, pub flags: u8,
 }
 
+/// Flags of a task (idl/sysinfo.wit `task.flags`, as sysmon sets them from `mind::stat::TASK_*`).
+pub const TASK_SERVICE: u8 = 1;
+pub const TASK_SCREEN: u8 = 2;
+pub const TASK_FOCUS: u8 = 4;
+
+// `state` is what the task waits for (WAIT_*), `wait` the endpoint index, IRQ line or server PID; `retained` is freed
+// memory still referenced elsewhere and charged to the task; `flags`: `mind::stat::TASK_*`.
 impl Task {
-    pub fn service(&self) -> bool { self.flags & crate::abi::TASK_FLAG_SERVICE != 0 }
-    /// Kernel memory the task holds: image, stack, screen, heap and kernel pages (shared mappings not counted).
-    pub fn memory(&self) -> u64 { self.image + self.stack + self.screen + self.heap + self.kernel }
+    pub fn service(&self) -> bool { self.flags & TASK_SERVICE != 0 }
+    /// Kernel memory the task holds: image, stack, screen, heap and retained memory (shared mappings not counted).
+    pub fn memory(&self) -> u64 { self.image + self.stack + self.screen + self.heap + self.retained }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cpu { pub busy_ns: u64, pub idle_ns: u64, pub ticks: u64, pub switches: u64, pub interrupts: u64, pub current: u64, pub apic: u32, pub online: bool }
 
+/// The kernel arena by use (StatMemory, bytes) and the live tasks and endpoints.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Memory {
-    pub arena: u64, pub used: u64, pub free: u64, pub largest_free: u64, pub images: u64, pub stacks: u64, pub screens: u64, pub heaps: u64,
-    pub task_kernel: u64, pub page_tables: u64, pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub mapped: u64,
-    pub other: u64, pub tasks: u32, pub tasks_limit: u32, pub endpoints: u32, pub endpoints_limit: u32,
+    pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64, pub heaps: u64,
+    pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub tasks: u32, pub endpoints: u32,
+}
+impl Memory {
+    /// Used arena bytes not in a category of their own (page tables, kernel structures).
+    pub fn other(&self) -> u64 { self.used.saturating_sub(self.images + self.stacks + self.task_pages + self.screens + self.heaps + self.objects + self.dma) }
 }
 
-/// A physical range: UEFI memory type (0..15) or platform layout (`PHYS_*`).
+/// The kernel's table limits (docs/profile/kernel-objects.md): tasks and endpoints.
+pub const TASKS_LIMIT: u32 = 32;
+pub const ENDPOINTS_LIMIT: u32 = 127;
+
+/// A physical range: UEFI memory type (0..15) or platform layout (`PHYS_*` from PHYS_PLATFORM on); `detail` is the boot
+/// image or device index.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Range { pub start: u64, pub bytes: u64, pub kind: u32, pub detail: u32 }
 impl Range { pub fn end(&self) -> u64 { self.start.saturating_add(self.bytes) } }
@@ -38,13 +54,13 @@ impl Range { pub fn end(&self) -> u64 { self.start.saturating_add(self.bytes) } 
 pub struct Region { pub start: u64, pub bytes: u64, pub kind: u32, pub flags: u32 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Capability { pub node: u64, pub parent: u64, pub size: u64, pub base: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub endpoint: u32 }
+pub struct Capability { pub node: u64, pub parent: u64, pub size: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub badge: u32 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Irq { pub count: u64, pub line: u32, pub holder: u32, pub endpoint: u32, pub masked: bool }
+pub struct Irq { pub count: u64, pub line: u32, pub holder: u64, pub endpoint: u32, pub masked: bool }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u32, pub index: u32, pub location: u32, pub io_bars: u32 }
+pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u64, pub index: u32 }
 
 /// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,7 +97,7 @@ pub trait Source {
     fn load(&mut self) -> Result<Load, Problem>;
     /// Monotonic nanoseconds (the kernel's clock: the same base as `Task::started_ns`).
     fn now_ns(&self) -> u64;
-    /// Stops a task through init's lifecycle interface (idl/lifecycle.wit): a service by name, an application by PID.
+    /// Stops a task through init's lifecycle requests (idl/init.wit 1.1): a service by name, an application by PID.
     fn stop(&mut self, _task: &Task) -> Result<(), String> { Err(String::from(NO_LIFECYCLE)) }
     /// Restarts a service through init; returns its new PID.
     fn restart(&mut self, _name: &str) -> Result<u64, String> { Err(String::from(NO_LIFECYCLE)) }

@@ -31,7 +31,7 @@ use tui::{Cell, Grid, DARK};
 const MS: u64 = 1_000_000;
 
 fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
-    Task { pid, parent, name: name.into(), state: TASK_RECV, flags: if service { TASK_FLAG_SERVICE } else { 0 }, caps: 3, quota_endpoints: 4, ..Task::default() }
+    Task { pid, parent, name: name.into(), state: WAIT_RECEIVE, flags: if service { TASK_SERVICE } else { 0 }, caps: 3, quota_endpoints: 4, ..Task::default() }
 }
 
 #[derive(Default)]
@@ -42,14 +42,14 @@ impl Source for Fake {
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> { Ok(self.tasks.clone()) }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> { Ok((0..4).map(|i| Cpu { apic: i, online: i < 2, ..Cpu::default() }).collect()) }
     fn memory(&mut self) -> Result<Memory, Problem> {
-        Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, largest_free: 40 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
-                    tasks: self.tasks.len() as u32, tasks_limit: 24, endpoints: 8, endpoints_limit: 63, ..Memory::default() })
+        Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
+                    tasks: self.tasks.len() as u32, endpoints: 8, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
     fn vmap(&mut self, pid: u64) -> Result<Vec<Region>, Problem> {
         self.vmap_requests.push(pid);
-        Ok(vec![Region { start: 0x80_0000_0000, bytes: 8192, kind: VM_CODE, flags: VM_READ | VM_EXEC }, Region { start: 0x80_0100_0000, bytes: 4096, kind: VM_GUARD, flags: 0 },
-                Region { start: 0x80_0100_1000, bytes: 65536, kind: VM_STACK, flags: VM_READ | VM_WRITE }])
+        Ok(vec![Region { start: 0x80_0000_0000, bytes: 8192, kind: REGION_IMAGE, flags: REGION_READ | REGION_EXECUTE }, Region { start: 0x80_0100_1000, bytes: 65536, kind: REGION_STACK, flags: REGION_READ | REGION_WRITE },
+                Region { start: 0x80_0400_0000, bytes: 4096, kind: REGION_INFO, flags: REGION_READ }])
     }
     fn caps(&mut self, _pid: u64) -> Result<Vec<Capability>, Problem> {
         Ok(vec![Capability { slot: 2, kind: CAP_KIND_ENDPOINT as u32, ..Capability::default() }, Capability { slot: 12, kind: CAP_KIND_MEMORY as u32, ..Capability::default() }])
@@ -83,7 +83,7 @@ fn system() -> Fake {
 }
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
-fn code(code: u32) -> Key { Key(event(code, 0, 0)) }
+fn code(code: u16) -> Key { Key(event(code, 0, 0)) }
 
 fn draw(tool: &mut dyn Tool, cols: usize, rows: usize) -> Vec<String> {
     let mut cells = vec![Cell::BLANK; cols * rows];
@@ -108,7 +108,7 @@ fn numbers() {
     assert_eq!(text::hundredths(7), "0.07");
     assert_eq!(text::permille(425), "42.5");
     assert_eq!([0, 3, 11, 2360, 54_880].map(text::nice_max), [1, 5, 20, 5000, 100_000]);
-    assert_eq!(text::rights(VM_READ | VM_EXEC), "r-x");
+    assert_eq!(text::rights(REGION_READ | REGION_EXECUTE), "r-x");
 }
 
 #[test]
@@ -202,8 +202,8 @@ fn details_window_and_keys() {
     let lines = top::Top::details_lines(details, source.now);
     assert!(lines[0].contains("PID 5  loader  service"), "{:?}", lines);
     assert!(lines[1].contains("Parent 1 init"), "{:?}", lines);
-    assert!(lines.iter().any(|l| l == "Capabilities 3/31: endpoint 1, memory 1"), "{:?}", lines);
-    assert!(lines.iter().any(|l| l.contains("3 regions, 72.0K mapped, 1 guard pages")), "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "Capabilities 3/63: endpoint 1, memory 1"), "{:?}", lines);
+    assert!(lines.iter().any(|l| l.contains("3 regions, 76.0K mapped")), "{:?}", lines);
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("Task 5")), "{:#?}", screen);
     assert_eq!(top.key(chr('x'), &mut source), Flow::Ignored, "other keys wait while the window is open");
@@ -289,7 +289,7 @@ fn columns_fit_the_screen() {
 fn physmap() -> Vec<Range> {
     vec![Range { start: 0, bytes: 0x1000, kind: 3, detail: 3 }, Range { start: 0x1000, bytes: 0x9F000, kind: 7, detail: 7 }, Range { start: 0x100000, bytes: 0x700000, kind: 7, detail: 7 },
          Range { start: 0x800000, bytes: 0x800000, kind: 7, detail: 7 }, Range { start: 0x1000000, bytes: 0x400_0000, kind: 2, detail: 2 },
-         Range { start: 0x1000000, bytes: 0x400_0000, kind: PHYS_HEAP, detail: 0 }, Range { start: 0x8000_0000, bytes: 0x40_0000, kind: PHYS_FRAMEBUFFER, detail: 0 },
+         Range { start: 0x1000000, bytes: 0x400_0000, kind: PHYS_ARENA, detail: 0 }, Range { start: 0x8000_0000, bytes: 0x40_0000, kind: PHYS_FRAMEBUFFER, detail: 0 },
          Range { start: 0xFD_0000_0000, bytes: 0x3_0000_0000, kind: 0, detail: 0 }]
 }
 
@@ -300,12 +300,12 @@ fn physical_map() {
     // The two touching free ranges become one; the arena follows the loader data it lies in.
     assert_eq!(merged.iter().filter(|r| r.kind == 7).count(), 2);
     assert!(merged.iter().any(|r| r.kind == 7 && r.start == 0x100000 && r.bytes == 0xF00000));
-    let arena = merged.iter().position(|r| r.kind == PHYS_HEAP).unwrap();
+    let arena = merged.iter().position(|r| r.kind == PHYS_ARENA).unwrap();
     assert_eq!(merged[arena - 1].kind, 2);
     // 4 GiB in 64 cells of 64 MiB: the first is mostly free RAM, the arena wins over loader data, then a hole, the framebuffer.
     let bar = memmap::bar_kinds(&ranges, 4 << 30, 64);
-    assert_eq!(bar[0], Some(PHYS_HEAP));
-    assert_eq!(bar[1], Some(PHYS_HEAP), "the arena ends at 80 MiB");
+    assert_eq!(bar[0], Some(PHYS_ARENA));
+    assert_eq!(bar[1], Some(PHYS_ARENA), "the arena ends at 80 MiB");
     assert_eq!(bar[2], None);
     assert_eq!(bar[32], Some(PHYS_FRAMEBUFFER));
     let bar = memmap::bar_kinds(&ranges, 0x1000000, 16);
@@ -373,8 +373,8 @@ fn graphs() {
 fn hardware_report() {
     let mut source = system();
     source.ranges = physmap();
-    source.devices = vec![Device { class: 0x010180, location: 0x000109, holder: 5, irq: 14, bars: [0, 0, 0, 0, 16, 0], io_bars: 1 << 4, ..Device::default() },
-                          Device { class: 0x0C0330, location: 0x000400, holder: 0, irq: 11, bars: [0x4000, 0, 0, 0, 0, 0], ..Device::default() }];
+    source.devices = vec![Device { class: 0x010180, index: 3, holder: 5, irq: 14, bars: [0, 0, 0, 0, 16, 0], ..Device::default() },
+                          Device { class: 0x0C0330, index: 4, holder: 0, irq: 11, bars: [0x4000, 0, 0, 0, 0, 0], ..Device::default() }];
     source.irqs = vec![Irq { line: 1, count: 1234, holder: 7, endpoint: 4, masked: false }, Irq { line: 3, ..Irq::default() }];
     let local = hw::Local { vendor: "GenuineIntel".into(), brand: "Test CPU".into(), family: 6, model: 85, stepping: 4, features: vec![("NX", true), ("x2APIC", false)],
                             tsc_hz: 2_400_000_000, resolution_ns: 1, width: 1280, height: 800, stride: 1280 };
@@ -388,8 +388,8 @@ fn hardware_report() {
     has("+NX  -x2APIC");
     has("TSC 2400.000 MHz");
     has("GOP framebuffer 1280x800, 1280 pixels per line, 32 bits per pixel, 4.0M at 0x80000000");
-    has("00:01.1  010180  IDE controller   IRQ 14  loader (PID 5)");
-    has("BAR4 16B io");
+    has(" 3  010180  IDE controller   IRQ 14  loader (PID 5)");
+    has("BAR4 16B");
     has("USB xHCI");
     has("IRQ 1         1 234 interrupts  shell (PID 7), endpoint 4");
     assert!(!lines.iter().any(|l| l.contains("IRQ 3 ")), "unused lines are left out");
@@ -412,7 +412,7 @@ fn every_tool_draws_on_any_screen() {
             for key in ['1', '2', '3', '4', 'c'] {
                 let _ = tool.key(chr(key), &mut source);
                 let _ = draw(tool.as_mut(), cols, rows);
-                for code_ in [KEY_DOWN, KEY_END, KEY_PGDN, KEY_TAB] { let _ = tool.key(code(code_), &mut source); let _ = draw(tool.as_mut(), cols, rows); }
+                for code_ in [KEY_DOWN, KEY_END, KEY_PAGE_DOWN, KEY_TAB] { let _ = tool.key(code(code_), &mut source); let _ = draw(tool.as_mut(), cols, rows); }
             }
         }
     }

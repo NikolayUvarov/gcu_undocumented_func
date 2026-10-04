@@ -1,7 +1,13 @@
-//! The server side of the block protocol without I/O: what a driver does for one request, and the write rule of
-//! Appendix B.6 (writing needs `BLOCK_BADGE_WRITE` in the badge of the client's capability). Builds on the host for
-//! tests (tests/block_host.rs).
+//! The server side of the block protocol (idl/block.wit) without IPC: what a driver does for one request, and the write
+//! rule of Appendix B.6 (writing needs `BADGE_WRITE` in the badge of the client's capability and a writable medium).
+//! Builds on the host for tests (tests/block_host.rs).
 use crate::abi::*;
+use crate::sys::{Error, Result};
+
+/// Badge of the block client that may write; init mints it for vfs_server only.
+pub const BADGE_WRITE: u16 = 1;
+/// Device kind of the RAM disk, after BLOCK_KIND_ATA, _AHCI and _USB.
+pub const KIND_RAM: usize = 4;
 
 /// Storage driver with 512-byte sectors.
 pub trait Driver {
@@ -16,27 +22,36 @@ pub trait Driver {
     fn read_only(&self) -> bool { true }
 }
 
-/// The reply to INFO, READ, WRITE or FLUSH: `buffer` is the attached client buffer, `badge` the badge of the
-/// capability the client used, `kind` the BLOCK_KIND_* of the driver.
-pub fn handle(op: usize, count: usize, lba: u64, badge: u16, kind: usize, buffer: Option<&mut [u8]>, driver: &mut dyn Driver) -> [usize; 2] {
-    let writer = badge & BLOCK_BADGE_WRITE != 0 && !driver.read_only();
-    match op {
-        // A client learns whether it can write: the medium allows it and its capability carries the right.
-        BLOCK_INFO => [driver.sectors() as usize, kind | if writer { 0 } else { BLOCK_INFO_READ_ONLY }],
-        BLOCK_READ | BLOCK_WRITE => {
-            if op == BLOCK_WRITE && !writer { return [ERR_RIGHTS, 0]; }
-            match buffer {
-                Some(target) if count > 0 && lba < driver.sectors() => {
-                    let count = count.min(BLOCK_MAX_SECTORS).min(target.len() / BLOCK_SECTOR).min((driver.sectors() - lba) as usize);
-                    let bytes = &mut target[..count * BLOCK_SECTOR];
-                    let done = if op == BLOCK_READ { driver.read(lba, count, bytes) } else { driver.write(lba, count, bytes) };
-                    if done { [count, 0] } else { [ERR_PEER, 0] }
-                }
-                _ => [ERR_INVALID, 0],
-            }
-        }
-        BLOCK_FLUSH if !writer => [ERR_RIGHTS, 0],
-        BLOCK_FLUSH => if driver.flush() { [0, 0] } else { [ERR_PEER, 0] },
-        _ => [ERR_INVALID, 0],
-    }
+/// Whether a client whose capability carries `badge` may write: the medium allows it and the badge carries the right.
+pub fn writable(badge: u16, driver: &dyn Driver) -> bool { badge & BADGE_WRITE != 0 && !driver.read_only() }
+
+// Sectors of a request of `count` at `lba` within the device, a buffer of `bytes` and BLOCK_MAX_SECTORS.
+fn span(driver: &dyn Driver, count: u16, lba: u64, bytes: usize) -> Result<usize> {
+    if count == 0 || lba >= driver.sectors() { return Err(Error::Invalid); }
+    let count = (count as usize).min(BLOCK_MAX_SECTORS).min((driver.sectors() - lba) as usize);
+    if bytes < count * BLOCK_SECTOR { return Err(Error::Invalid); }
+    Ok(count)
+}
+
+/// `read`: `count` sectors from `lba` into `target` (the attached buffer), clipped at the end of the device and of the
+/// buffer.
+pub fn read(driver: &mut dyn Driver, target: &mut [u8], count: u16, lba: u64) -> Result<u16> {
+    let fits = (target.len() / BLOCK_SECTOR).min(u16::MAX as usize) as u16;
+    let count = span(driver, count.min(fits), lba, target.len())?;
+    if driver.read(lba, count, &mut target[..count * BLOCK_SECTOR]) { Ok(count as u16) } else { Err(Error::Peer) }
+}
+
+/// `write`: `count` sectors to `lba` from `data` (sealed memory of at least `count` sectors, clipped at the end of the
+/// device). Rights without the write badge or on a protected medium.
+pub fn write(driver: &mut dyn Driver, badge: u16, data: &[u8], count: u16, lba: u64) -> Result<u16> {
+    if !writable(badge, driver) { return Err(Error::Rights); }
+    if data.len() < count as usize * BLOCK_SECTOR { return Err(Error::Invalid); }
+    let count = span(driver, count, lba, data.len())?;
+    if driver.write(lba, count, &data[..count * BLOCK_SECTOR]) { Ok(count as u16) } else { Err(Error::Peer) }
+}
+
+/// `flush`: empties the drive's write cache. Rights without the write badge.
+pub fn flush(driver: &mut dyn Driver, badge: u16) -> Result<()> {
+    if !writable(badge, driver) { return Err(Error::Rights); }
+    if driver.flush() { Ok(()) } else { Err(Error::Peer) }
 }

@@ -5,9 +5,10 @@
 use core::fmt::Write;
 use mind::abi::*;
 use mind::fs::{self, File};
-use mind::ipc::{self, Endpoint, Message};
-use mind::mem::{Mapping, Pages};
+use mind::idl::codec::{List, Text};
 use mind::idl::{loader, wire};
+use mind::ipc::{self, Endpoint};
+use mind::mem::Pages;
 use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::Error;
 use mind::util::FixedBuf;
@@ -70,9 +71,9 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap())?, task))
 }
 
-// Starts `name` with the standard client endpoints, an optional endpoint in the INIT slot and the capabilities `extra`
-// (handles in this task, moved into the child's slots). A program that asked to be a console program gets no screen.
-fn load(name: &[u8], args: &[u8], init: Option<usize>, extra: &[(u8, usize)]) -> Result<u64, Error> {
+// Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
+// child's slots). A program that asked to be a console program gets no screen.
+fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     let (file, task) = open(name)?;
     let size = file.size();
     if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
@@ -86,7 +87,6 @@ fn load(name: &[u8], args: &[u8], init: Option<usize>, extra: &[(u8, usize)]) ->
                     grant(SLOT_LOADER, SLOT_SERVICE, client), grant(SLOT_TTS, OWN_TTS, client)];
     grants[..5].copy_from_slice(&standard);
     let mut count = 5;
-    if let Some(slot) = init { grants[count] = grant(SLOT_INIT, slot, CAP_READ | CAP_WRITE | CAP_GRANT); count += 1; }
     for &(child, handle) in extra { grants[count] = grant_moved(child as usize, handle, u8::MAX); count += 1; }
     // SPAWN takes `name\0arguments`.
     let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
@@ -131,7 +131,9 @@ impl Launcher {
 
     fn grant(&mut self, owner: u64, id: u32, slot: u8) -> Result<(), loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
-        if !(7..=12).contains(&slot) { return Err(loader::Error::Invalid); }
+        // The fixed slots a launcher may fill: an endpoint for the program's INIT slot (a ping/pong pair), its file
+        // client, sysinfo, lifecycle control, the system log. The standard grants (2..6) cannot be replaced.
+        if ![SLOT_INIT, SLOT_FILE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();
@@ -144,7 +146,7 @@ impl Launcher {
     fn commit(&mut self, owner: u64, id: u32) -> Result<u64, loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         let mut session = self.sessions[index].take().unwrap();
-        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], None, &session.grants[..session.count]);
+        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count]);
         if result.is_err() { session.drop_grants(); }
         result.map_err(|error| match error {
             Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory, Error::Rights => loader::Error::Rights,
@@ -166,45 +168,17 @@ fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
     Ok(loader::Needs { console: flags & REQUEST_CONSOLE != 0, sysinfo: flags & REQUEST_SYSINFO != 0, file: flags & REQUEST_FILE != 0, lifecycle: flags & REQUEST_LIFECYCLE != 0, log: flags & REQUEST_LOG != 0, files: flags & REQUEST_FILES != 0 })
 }
 
-// A request in the MIND IDL protocol (idl/loader.wit): method 1..5 and the interface's major version in the low bytes. The older
-// protocol's first word is a program name (printable bytes) or 0.
-fn idl_request(launcher: &mut Launcher, request: &ipc::Received) {
-    let decoded = loader::decode(request, RECEIVED_CAP);
-    let mut mapping = match decoded { Ok(loader::Request::Begin { .. } | loader::Request::Inspect { .. }) => Mapping::new(RECEIVED_CAP).ok(), _ => None };
-    let mut empty = [0u8; 0];
-    let bytes: &mut [u8] = match mapping.as_mut() { Some(m) => m.as_mut_slice(), None => &mut empty };
-    let _ = match decoded {
-        Ok(loader::Request::Begin { payload, .. }) => match loader::args_begin(bytes, payload) {
-            Ok((name, args)) => { let (mut n, mut a) = ([0u8; 64], [0u8; ARGS_MAX]); n[..name.len()].copy_from_slice(name.as_bytes()); a[..args.len()].copy_from_slice(args.as_bytes());
-                loader::reply_begin(launcher.begin(request.sender, core::str::from_utf8(&n[..name.len()]).unwrap_or(""), core::str::from_utf8(&a[..args.len()]).unwrap_or(""))) }
-            Err(reason) => wire::reject(reason),
-        },
-        Ok(loader::Request::Grant { session, slot, .. }) => loader::reply_grant(launcher.grant(request.sender, session, slot)),
-        Ok(loader::Request::Commit { session }) => loader::reply_commit(launcher.commit(request.sender, session)),
-        Ok(loader::Request::Abort { session }) => loader::reply_abort(launcher.abort(request.sender, session)),
-        Ok(loader::Request::Inspect { payload, .. }) => match loader::args_inspect(bytes, payload) {
-            Ok(name) => { let mut n = [0u8; 64]; n[..name.len()].copy_from_slice(name.as_bytes()); let result = inspect(core::str::from_utf8(&n[..name.len()]).unwrap_or("")); loader::reply_inspect(bytes, result) }
-            Err(reason) => wire::reject(reason),
-        },
-        Err(reason) => wire::reject(reason),
-    };
-    drop(mapping);
-    if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
-}
-
-// Text for LIST: *.elf programs in the disk root, except the kernel; services are marked.
-fn listing(out: &mut [u8]) -> usize {
-    let mut at = 0;
+// The *.elf programs in the disk root, except the kernel; services are marked.
+fn programs() -> List<loader::Program, 64> {
+    let mut list = List::default();
     let _ = fs::list("", |entry| {
         if entry.is_dir || entry.name.len() < 5 || !entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf") { return; }
         let name = task_name(entry.name);
         if name.as_bytes() == b"kernel" { return; }
-        let mut line = FixedBuf::<64>::new();
         let service = BOOT_SERVICES.iter().any(|s| s.as_bytes() == name.as_bytes());
-        let _ = writeln!(line, "  {:<12} {} BYTES{}", core::str::from_utf8(name.as_bytes()).unwrap_or("?"), entry.size, if service { " (SERVICE)" } else { "" });
-        if at + line.as_bytes().len() <= out.len() { out[at..at + line.as_bytes().len()].copy_from_slice(line.as_bytes()); at += line.as_bytes().len(); }
+        if let Some(name) = Text::new(core::str::from_utf8(name.as_bytes()).unwrap_or("?")) { list.push(loader::Program { name, size: entry.size as u64, service }); }
     });
-    at
+    list
 }
 
 mind::entry!(main);
@@ -214,32 +188,17 @@ fn main(_info: &'static BootInfo) {
     let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0 };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
-        if !request.is_call {
-            if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
-            continue;
-        }
-        if (1..=5).contains(&(request.data[0] & 0xFF)) && (request.data[0] >> 8) & 0xFF == loader::VERSION.0 as usize { idl_request(&mut launcher, &request); continue; }
-        let code = if request.data == [0, LOADER_LIST] {
-            // Program list into the caller's memory page.
-            match Mapping::new(RECEIVED_CAP) { Ok(mut page) => listing(page.as_mut_slice()), Err(error) => error.code() }
-        } else if request.data == [0, LOADER_RUN] {
-            // Start with arguments: the page holds `name\0arguments\0`.
-            match Mapping::new(RECEIVED_CAP) {
-                Ok(page) => {
-                    let bytes = page.as_slice();
-                    let name_end = bytes.iter().position(|&b| b == 0).unwrap_or(0);
-                    let rest = &bytes[(name_end + 1).min(bytes.len())..];
-                    let args = &rest[..rest.iter().position(|&b| b == 0).unwrap_or(rest.len()).min(ARGS_MAX)];
-                    if name_end == 0 || name_end > NAME_MAX { ERR_INVALID } else { match load(&bytes[..name_end], args, None, &[]) { Ok(pid) => pid as usize, Err(error) => error.code() } }
-                }
-                Err(error) => error.code(),
-            }
-        } else {
-            // Spawn: name in two message words, optional endpoint for the child's INIT slot.
-            let (packed, len) = mind::process::unpack_name(request.data);
-            match load(&packed[..len], &[], request.cap_received.then_some(RECEIVED_CAP), &[]) { Ok(pid) => pid as usize, Err(error) => error.code() }
+        let owner = request.sender;
+        // Requests in idl/loader.wit; a message that is not a call is dropped with its capability.
+        let _ = match loader::decode(&request, RECEIVED_CAP) {
+            Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
+            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[])),
+            Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
+            Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
+            Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session)),
+            Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
+            Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
+            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
-        let _ = ipc::reply(&Message::new(code, 0));
     }
 }

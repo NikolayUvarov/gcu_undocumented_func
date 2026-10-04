@@ -1,0 +1,23 @@
+/// Audio gateway: 16-bit stereo 48 kHz PCM out of a lent buffer, tones, microphone capture (AC97).
+package mind:audio@1.0.0;
+
+interface audio {
+    /// Output sample rate; none without an audio device.
+    device: func() -> option<u32>;
+    /// Queues a sine wave of `hz` for `ms` (at most 5 s); returns the frames queued.
+    tone: func(hz: u32, ms: u32) -> result<u32, error-code>;
+    /// Flushes the playback queue; clients waiting for space are answered.
+    stop: func() -> result<_, error-code>;
+    /// Copies `bytes` of interleaved samples from the lent buffer into the DMA ring; returns the bytes accepted (0: the
+    /// ring is full).
+    play: func(bytes: u32, pcm: borrow<memory>) -> result<u32, error-code>;
+    /// Answers once `buffers` DMA buffers are free (the reply waits for the playback interrupt); returns the free count.
+    wait: func(buffers: u8) -> result<u32, error-code>;
+    /// Starts microphone capture; error not-found without a capture-capable device.
+    record-start: func() -> result<_, error-code>;
+    record-stop: func() -> result<_, error-code>;
+    /// Copies captured samples into the lent buffer (at most `capacity` bytes); returns the bytes copied.
+    record-read: func(capacity: u32, buffer: borrow<memory>) -> result<u32, error-code>;
+    /// Capture buffers lost to overflow since capture started.
+    overflows: func() -> u32;
+}

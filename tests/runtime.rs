@@ -20,6 +20,8 @@ mod elf_reloc;
 mod memory;
 #[path = "../kernel/src/paging.rs"]
 mod paging;
+#[path = "../libmind/src/idl/codec.rs"]
+mod codec;
 #[path = "../kernel/src/task_state.rs"]
 mod task_state;
 #[path = "../kernel/src/user_heap.rs"]
@@ -92,4 +94,63 @@ fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
     }
     let image = elf::Image::parse(&data).unwrap();
     assert!(image.load(&mut [0; 16], 0x100000).is_err());
+}
+
+#[test]
+fn input_event_words_round_trip() {
+    let word = abi::input_event(0x1E, abi::KEY_CHAR, abi::MOD_SHIFT | abi::MOD_CTRL, true, 'Ж' as u32);
+    assert_eq!((abi::event_byte(word), abi::event_key(word), abi::event_mods(word), abi::event_pressed(word), abi::event_char(word)), (0x1E, abi::KEY_CHAR, 3, true, 'Ж' as u32));
+    let release = abi::input_event(0, abi::KEY_F1 + 11, 0, false, 0);
+    assert_eq!((abi::event_byte(release), abi::event_key(release), abi::event_pressed(release), abi::event_char(release)), (0, abi::KEY_F1 + 11, false, 0));
+    assert_eq!(abi::event_char(abi::input_event(0, abi::KEY_CHAR, 0, true, 0x10FFFF)), 0x10FFFF);
+}
+
+#[test]
+fn idl_codec_round_trips_and_rejects_malformed_payloads() {
+    use codec::{List, Reader, Text, Wire, Writer};
+    let mut buffer = [0u8; 64];
+    let mut w = Writer::new(&mut buffer);
+    codec::encode_str::<8>("путь", &mut w).unwrap();
+    codec::encode_slice::<u16, 3>(&[1, 2, 3], &mut w).unwrap();
+    true.encode(&mut w).unwrap();
+    0x0102_0304_0506_0708u64.encode(&mut w).unwrap();
+    let length = w.len();
+    assert_eq!(length, 2 + 8 + 2 + 6 + 1 + 8);
+    let mut r = Reader::new(&buffer[..length]);
+    assert_eq!(Text::<8>::decode(&mut r).unwrap().as_str(), "путь");
+    assert_eq!(List::<u16, 3>::decode(&mut r).unwrap().as_slice(), &[1, 2, 3]);
+    assert!(bool::decode(&mut r).unwrap());
+    assert_eq!(u64::decode(&mut r), Some(0x0102_0304_0506_0708));
+    assert!(r.done());
+    // Bounds are checked on both sides.
+    let mut w = Writer::new(&mut buffer);
+    assert!(codec::encode_str::<3>("long", &mut w).is_none());
+    assert!(codec::encode_slice::<u8, 2>(&[1, 2, 3], &mut w).is_none());
+    assert!(Text::<4>::new("toolong").is_none());
+    let malformed: [&[u8]; 5] = [
+        &[5, 0, b'a', b'b'],         // length beyond the payload
+        &[9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // length beyond the declared bound (8)
+        &[2, 0, 0xC3, 0x28],         // invalid UTF-8
+        &[],                         // missing length
+        &[1, 0, 0xFF],               // invalid UTF-8 (lone byte)
+    ];
+    for payload in malformed { assert!(Text::<8>::decode(&mut Reader::new(payload)).is_none(), "{:?}", payload); }
+    assert!(bool::decode(&mut Reader::new(&[2])).is_none());
+    assert!(List::<u8, 2>::decode(&mut Reader::new(&[3, 0, 1, 2, 3])).is_none());
+    let mut r = Reader::new(&[1, 0, b'x', 7]);
+    assert!(Text::<8>::decode(&mut r).is_some() && !r.done(), "trailing bytes are visible to the caller");
+    assert_eq!(<List<Text<16>, 64> as Wire>::MAX, 2 + 64 * 18);
+}
+
+#[test]
+fn pixels_reach_every_framebuffer_format() {
+    use abi::{pixel_to_device, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB};
+    let orange = 0x00FF_8000;
+    assert_eq!(pixel_to_device(orange, PIXEL_BGR, [0; 3]), 0x00FF_8000);
+    assert_eq!(pixel_to_device(orange, PIXEL_RGB, [0; 3]), 0x0000_80FF);
+    // 8-bit channels at the BGR positions give the same word; 10-bit channels (2:10:10:10) are scaled.
+    assert_eq!(pixel_to_device(orange, PIXEL_BITMASK, [0xFF_0000, 0xFF00, 0xFF]), 0x00FF_8000);
+    assert_eq!(pixel_to_device(0x00FF_0001, PIXEL_BITMASK, [0x3FF0_0000, 0xF_FC00, 0x3FF]), 0x3FC0_0004);
+    // A 5:6:5 layout keeps the high bits of each channel.
+    assert_eq!(pixel_to_device(0x00FF_FFFF, PIXEL_BITMASK, [0xF800, 0x07E0, 0x001F]), 0xFFFF);
 }

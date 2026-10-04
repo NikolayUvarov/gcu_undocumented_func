@@ -1,0 +1,37 @@
+# 038 — Scheduling budgets (roadmap C7)
+
+**Type:** kernel · **Owner:** kernel track (coordinates `kernel/src/scheduler.rs`, `common/abi.rs`) · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C7 · **Constitution:** MC-5.1–5.5
+
+## Problem
+
+Scheduling is round-robin per CPU with a 10 ms tick: a busy task takes its CPU share regardless of importance, and nothing reserves time for `init` to recover the system under overload.
+
+## Plan
+
+- A scheduling context per task: budget and period (default: unlimited), charged in TSC time at each switch; a task that spends its budget waits for the next period.
+- Priority bands: supervisor/drivers above applications; `init` sets contexts for services (policy) and has a reserve that application load cannot consume.
+- `SCHED_SET(pid, budget_us, period_us)` for the lifecycle owner.
+
+## Acceptance criteria
+
+- `busy` suite variant: a CPU-bound application with a 20 % budget uses about 20 % (±5 %) of its CPU; the shell and `init` stay responsive while all CPUs are saturated.
+
+## Related
+
+[ROADMAP](../ROADMAP.md) C7.
+
+## Resolution
+
+**Scheduling context.** Each task has a band (`BAND_SYSTEM` for `init` and services, `BAND_APPLICATION` for the rest), a budget and a period. Time is charged in TSC nanoseconds at every switch, and a budget refills at the start of each period. A ready task of the system band always runs before an application. Each band has its own round-robin cursor per CPU: a shared cursor starved one of two applications on a CPU that also ran a service. The idle slot takes part only in the application band's rotation.
+
+**`SCHED_SET` (52).** The caller is the task's lifecycle owner or a holder of process control. Changing a band needs process control or the platform/restart privilege. The period is at least 10 ms and the budget at most the period. `STAT` reports band, budget, period and whether the task is throttled.
+
+**libmind and shell:** `control::sched_set`; shell command `budget <pid> <ms> <period ms>`, with PID translation in the harness.
+
+**Tests:**
+- `busy` suite: 20 ms per 100 ms gives a 12–35 % share over 3 s, and lifting the budget gives more than 60 %;
+- `smp` suite: `init` restarts a killed `rtc` within 5 s while eight busy applications saturate four CPUs.
+
+**Also fixed:** the kernel's boot line is now printed before any task can run (it used to land in the middle of the shell's first `ps`).
+
+Not done: deadlines, admission control, budgets below the 10 ms tick, `init` setting budgets for services (all unlimited today).

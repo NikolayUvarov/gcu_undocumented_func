@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """MIND IDL v0.2: generates libmind bindings from a WIT subset (docs/idl/README.md).
 
-Usage: mind_idl.py                    write libmind/src/idl/<interface>.rs for every idl/*.wit
-       mind_idl.py --check            fail if a generated file is missing or out of date
-       mind_idl.py --one in.wit out.rs   generate one interface (tests)
+Usage: mind_idl.py            write libmind/src/idl/<interface>.rs for every idl/*.wit
+       mind_idl.py --check    fail if a generated file is missing or out of date
+       mind_idl.py --one SOURCE TARGET   generate one interface into TARGET (the generator's host tests)
+       --root DIR             use DIR instead of the repository root
 """
 import re
 import sys
@@ -16,73 +17,80 @@ OUT_DIR = ROOT / "libmind" / "src" / "idl"
 
 INTEGERS = {"bool": 1, "u8": 8, "u16": 16, "u32": 32, "u64": 64}
 HANDLES = {"memory": "CAP_KIND_MEMORY", "endpoint": "CAP_KIND_ENDPOINT"}
-WORD0_START, WORD_BITS = 16, 64  # word 0: method:8 | major:8 | fields
-STRING_MAX, BYTES_MAX, LIST_MAX = 65535, 1 << 20, 4096
+WORD0_START, WORD_BITS = 16, 64  # word calls: method:8 | major:8 | fields
+BUFFER_MAX = 64 * 1024  # largest request or reply of a buffer call
+PAGE = 4096
+# Names the generated code uses itself; an interface type may not take them (`error` is allowed: the system error
+# type is then imported as `SysError`).
+RESERVED = {"Result", "Endpoint", "Received", "Pages", "Wire", "Reader", "Writer", "Text", "List", "Call", "Reject", "Request", "SysError"}
 
 
 class IdlError(Exception):
     pass
 
 
-@dataclass
-class Type:
-    """kind: int, enum (scalars, carried in the message words); string, bytes, list, record (bulk, in the buffer)."""
-    kind: str
-    name: str = ""       # integer type, enum or record name
-    max: int = 0         # string/bytes bytes, list items
-    item: "Type" = None  # list item
+# Types: ("int", name) · ("enum", name) · ("str", n) · ("bytes", n) · ("list", type, n) · ("rec", name) ·
+# ("handle", mode, kind). `records` holds the records and enums declared so far.
+def parse_type(text, records, where):
+    text = text.strip()
+    if text in INTEGERS:
+        return ("int", text)
+    if m := re.fullmatch(r"string<\s*(\d+)\s*>", text):
+        return ("str", int(m.group(1)))
+    if m := re.fullmatch(r"bytes<\s*(\d+)\s*>", text):
+        if not 1 <= int(m.group(1)) <= 0xFFFF:
+            raise IdlError(f"{where}: bytes<N> needs 1 <= N <= 65535")
+        return ("bytes", int(m.group(1)))
+    if m := re.fullmatch(r"list<\s*(.+)\s*,\s*(\d+)\s*>", text):
+        inner = parse_type(m.group(1), records, where)
+        if inner[0] not in ("int", "enum", "str", "rec"):
+            raise IdlError(f"{where}: list items must be integers, enums, strings or records")
+        return ("list", inner, int(m.group(2)))
+    if m := re.fullmatch(r"(own|borrow)<\s*(\w+)\s*>", text):
+        if m.group(2) not in HANDLES:
+            raise IdlError(f"{where}: unknown handle kind '{m.group(2)}'")
+        return ("handle", m.group(1), m.group(2))
+    if text in records:
+        return ("enum", text) if isinstance(records[text], Enum) else ("rec", text)
+    raise IdlError(f"{where}: unsupported type '{text}'")
 
-    @property
-    def scalar(self):
-        return self.kind in ("int", "enum")
 
-    @property
-    def bits(self):
-        return INTEGERS[self.name] if self.kind == "int" else 8
+def bounded(t):
+    return t[0] in ("str", "list", "rec", "bytes")
+
+
+def max_size(t, records):
+    kind = t[0]
+    if kind == "int":
+        return max(1, INTEGERS[t[1]] // 8)
+    if kind == "enum":
+        return 1
+    if kind in ("str", "bytes"):
+        return 2 + t[1]
+    if kind == "list":
+        return 2 + t[2] * max_size(t[1], records)
+    if kind == "rec":
+        return sum(max_size(f.type, records) for f in records[t[1]].fields)
+    raise IdlError(f"type {t} has no wire size")
 
 
 @dataclass
 class Field:
     name: str
-    type: str  # source text of the type
+    type: tuple
     word: int = 0
     shift: int = 0
-    t: Type = None
-
-    @property
-    def handle(self):
-        match = re.fullmatch(r"(own|borrow)<(\w+)>", self.type)
-        return (match.group(1), match.group(2)) if match else None
 
     @property
     def bits(self):
-        return self.t.bits if self.t else INTEGERS[self.type]
-
-
-@dataclass
-class Function:
-    name: str
-    doc: list
-    params: list
-    result: str | None  # source text of the result type
-    index: int = 0
-    result_field: Field | None = None
-    handle: Field | None = None
-    used: list = field(default_factory=lambda: [0, 0])
-    scalars: list = field(default_factory=list)
-    bulk: list = field(default_factory=list)
-    payload: Field | None = None   # implicit length of the bulk input
-    ok: Type | None = None         # result value (None: no value)
-    error: str | None = None       # enum of result<T, E>
-    optional: bool = False
-    ok_handle: tuple | None = None  # result<own|borrow<kind>, E>: a capability in the reply
+        return 8 if self.type[0] == "enum" else INTEGERS[self.type[1]]
 
 
 @dataclass
 class Record:
     name: str
     doc: list
-    fields: list  # [(name, Type)]
+    fields: list
 
 
 @dataclass
@@ -93,14 +101,28 @@ class Enum:
 
 
 @dataclass
+class Function:
+    name: str
+    doc: list
+    params: list
+    result: tuple | None  # (type or None, optional, fallible, enum error name or None)
+    index: int = 0
+    buffered: bool = False
+    handle: Field | None = None
+    used: list = field(default_factory=lambda: [0, 0])
+    result_field: Field | None = None
+    request_max: int = 0
+    reply_max: int = 0
+
+
+@dataclass
 class Interface:
     package: str
     name: str
     version: tuple
     doc: list
+    records: dict
     functions: list
-    records: dict = field(default_factory=dict)
-    enums: dict = field(default_factory=dict)
 
 
 def snake(name):
@@ -111,55 +133,8 @@ def camel(name):
     return "".join(part.capitalize() for part in re.split(r"[-_]", name))
 
 
-def split_top(text):
-    """Splits on commas that are not inside <...>."""
-    parts, depth, current = [], 0, ""
-    for ch in text:
-        if ch == "<":
-            depth += 1
-        elif ch == ">":
-            depth -= 1
-        if ch == "," and depth == 0:
-            parts.append(current.strip())
-            current = ""
-        else:
-            current += ch
-    if current.strip():
-        parts.append(current.strip())
-    return parts
-
-
-def parse_type(text, interface, where):
-    text = text.strip()
-    if text in INTEGERS:
-        return Type("int", text)
-    if match := re.fullmatch(r"string<(\d+)>", text):
-        size = int(match.group(1))
-        if not 1 <= size <= STRING_MAX:
-            raise IdlError(f"{where}: string size 1..{STRING_MAX}")
-        return Type("string", max=size)
-    if match := re.fullmatch(r"bytes<(\d+)>", text):
-        size = int(match.group(1))
-        if not 1 <= size <= BYTES_MAX:
-            raise IdlError(f"{where}: bytes size 1..{BYTES_MAX}")
-        return Type("bytes", max=size)
-    if match := re.fullmatch(r"list<(.+),\s*(\d+)>", text):
-        item = parse_type(match.group(1), interface, where)
-        count = int(match.group(2))
-        if item.kind not in ("int", "enum", "record") or not 1 <= count <= LIST_MAX:
-            raise IdlError(f"{where}: list items are integers, enums or records; 1..{LIST_MAX} of them")
-        return Type("list", max=count, item=item)
-    if re.fullmatch(r"[\w-]+", text):
-        name = snake(text)
-        if name in interface.enums:
-            return Type("enum", name)
-        if name in interface.records:
-            return Type("record", name)
-    raise IdlError(f"{where}: unsupported type '{text}'")
-
-
 def layout(fields, start=WORD0_START):
-    """Places scalar fields in declaration order; a field never straddles words. Returns the used-bit masks."""
+    """Places integer fields of a word call in declaration order; a field never straddles words."""
     used, word, offset = [0, 0], 0, start
     for f in fields:
         if offset + f.bits > WORD_BITS:
@@ -172,13 +147,29 @@ def layout(fields, start=WORD0_START):
     return used
 
 
+def parse_result(text, records, where):
+    if text is None:
+        return None
+    text = text.strip()
+    if m := re.fullmatch(r"option<(.+)>", text):
+        inner = parse_type(m.group(1), records, where)
+        if inner[0] == "handle":
+            raise IdlError(f"{where}: unsupported result type '{text}'")
+        return (inner, True, False, None)
+    if m := re.fullmatch(r"result<\s*(.+?)\s*,\s*([\w-]+)\s*>", text):
+        error = m.group(2)
+        if error != "error-code" and not isinstance(records.get(error), Enum):
+            raise IdlError(f"{where}: the error of a result is error-code or an enum, not '{error}'")
+        inner = None if m.group(1) == "_" else parse_type(m.group(1), records, where)
+        return (inner, False, error == "error-code", None if error == "error-code" else error)
+    return (parse_type(text, records, where), False, False, None)
+
+
 def parse(text, source="<idl>"):
-    lines = text.splitlines()
-    package = name = None
-    version, doc, pending, functions, depth = None, [], [], [], 0
-    interface = Interface("", "", (0, 0, 0), [], [])
-    raw_records, block = [], None  # block: ("record"|"enum", name, doc, [lines])
-    for number, raw in enumerate(lines, 1):
+    package = name = version = None
+    doc, pending, functions, records, depth = [], [], [], {}, 0
+    record = enum = None
+    for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         where = f"{source}:{number}"
         if not line:
@@ -188,452 +179,504 @@ def parse(text, source="<idl>"):
             continue
         if line.startswith("//"):
             continue
-        if block:
+        if enum is not None:
             if line == "}":
-                kind, bname, bdoc, body = block
-                items = [p for p in split_top(" ".join(body)) if p]
-                if bname in ("request", "reject", "status", "buffer", "result", "ipc", "wire"):
-                    raise IdlError(f"{where}: '{bname}' is reserved in the generated bindings")
-                if kind == "enum":
-                    if not 1 <= len(items) <= 255:
-                        raise IdlError(f"{where}: an enum has 1..255 cases")
-                    interface.enums[bname] = Enum(bname, bdoc, [snake(c) for c in items])
-                else:
-                    raw_records.append((bname, bdoc, items, where))
-                block = None
-            else:
-                body = block[3]
-                body.append(re.sub(r"///.*", "", line))
+                declare(records, enum, where)
+                enum = None
+                continue
+            enum.cases += [c.strip() for c in line.split(",") if c.strip()]
+            pending = []
             continue
-        if match := re.fullmatch(r"package\s+([\w-]+:[\w-]+)@(\d+)\.(\d+)\.(\d+);", line):
-            package, version = match.group(1), tuple(int(match.group(i)) for i in (2, 3, 4))
+        if record is not None:
+            if line == "}":
+                if not record.fields:
+                    raise IdlError(f"{where}: empty record '{record.name}'")
+                declare(records, record, where)
+                record = None
+                continue
+            for part in split_params(line):  # one or several fields per line
+                m = re.fullmatch(r"([\w-]+)\s*:\s*(.+)", part)
+                if not m:
+                    raise IdlError(f"{where}: bad record field: {line}")
+                record.fields.append(Field(snake(m.group(1)), record_field(m.group(2), records, where)))
+            pending = []
+            continue
+        if m := re.fullmatch(r"package\s+([\w-]+:[\w-]+)@(\d+)\.(\d+)\.(\d+);", line):
+            package, version = m.group(1), tuple(int(m.group(i)) for i in (2, 3, 4))
             doc, pending = doc + pending, []
             continue
-        if match := re.fullmatch(r"interface\s+([\w-]+)\s*\{", line):
+        if m := re.fullmatch(r"interface\s+([\w-]+)\s*\{", line):
             if name or depth:
                 raise IdlError(f"{where}: one interface per file")
-            name, depth = match.group(1), 1
+            name, depth = m.group(1), 1
             doc, pending = doc + pending, []
             continue
-        if match := re.fullmatch(r"(record|enum)\s+([\w-]+)\s*\{(.*?)(\})?", line):
+        if m := re.fullmatch(r"enum\s+([\w-]+)\s*\{(.*?)(\})?", line):
             if depth != 1:
-                raise IdlError(f"{where}: {match.group(1)} outside the interface")
-            block = (match.group(1), snake(match.group(2)), pending, [match.group(3)])
+                raise IdlError(f"{where}: enum outside the interface")
+            enum, pending = Enum(m.group(1), pending, [c.strip() for c in m.group(2).split(",") if c.strip()]), []
+            if m.group(3):
+                declare(records, enum, where)
+                enum = None
+            continue
+        if m := re.fullmatch(r"record\s+([\w-]+)\s*\{(.+)\}", line):  # one-line record
+            if depth != 1:
+                raise IdlError(f"{where}: record outside the interface")
+            fields = []
+            for part in split_params(m.group(2)):
+                fm = re.fullmatch(r"([\w-]+)\s*:\s*(.+)", part)
+                if not fm:
+                    raise IdlError(f"{where}: bad record field: {part}")
+                fields.append(Field(snake(fm.group(1)), record_field(fm.group(2), records, where)))
+            declare(records, Record(m.group(1), pending, fields), where)
             pending = []
-            if match.group(4):
-                lines.insert(number, "}")  # one-line declaration: close it on the next line
+            continue
+        if m := re.fullmatch(r"record\s+([\w-]+)\s*\{", line):
+            if depth != 1:
+                raise IdlError(f"{where}: record outside the interface")
+            record, pending = Record(m.group(1), pending, []), []
             continue
         if line == "}":
             depth -= 1
             continue
-        if match := re.fullmatch(r"([\w-]+)\s*:\s*func\((.*)\)\s*(?:->\s*(.+?))?\s*;", line):
+        if m := re.fullmatch(r"([\w-]+)\s*:\s*func\((.*)\)\s*(?:->\s*(.+?))?\s*;", line):
             if depth != 1:
                 raise IdlError(f"{where}: function outside the interface")
             params = []
-            for part in split_top(match.group(2)):
+            for part in split_params(m.group(2)):
                 pm = re.fullmatch(r"([\w-]+)\s*:\s*(.+)", part)
                 if not pm:
                     raise IdlError(f"{where}: bad parameter '{part}'")
-                params.append(Field(snake(pm.group(1)), pm.group(2).strip()))
-            functions.append(Function(snake(match.group(1)), pending, params, match.group(3)))
+                params.append(Field(snake(pm.group(1)), parse_type(pm.group(2), records, where)))
+            functions.append(Function(snake(m.group(1)), pending, params, parse_result(m.group(3), records, where)))
             pending = []
             continue
         raise IdlError(f"{where}: unsupported syntax: {line}")
-    if not package or not name or depth != 0 or block:
+    if not package or not name or depth != 0 or record is not None or enum is not None:
         raise IdlError(f"{source}: needs a package line and one closed interface")
     if version[0] == 0 or version[0] > 255:
         raise IdlError(f"{source}: major version must be 1..255")
     if not 1 <= len(functions) <= 255:
         raise IdlError(f"{source}: 1..255 functions")
-    interface.package, interface.name, interface.version, interface.doc, interface.functions = package, name, version, doc, functions
-    # Records may refer to records declared before them (no recursion).
-    for rname, rdoc, items, where in raw_records:
-        interface.records[rname] = None
-    for rname, rdoc, items, where in raw_records:
-        fields = []
-        for item in items:
-            fm = re.fullmatch(r"([\w-]+)\s*:\s*(.+)", item)
-            if not fm:
-                raise IdlError(f"{where}: bad record field '{item}'")
-            t = parse_type(fm.group(2), interface, where)
-            if t.kind == "list":
-                raise IdlError(f"{where}: lists are not allowed inside records")
-            if t.kind == "record" and interface.records.get(t.name) is None:
-                raise IdlError(f"{where}: record '{t.name}' must be declared before '{rname}'")
-            fields.append((snake(fm.group(1)), t))
-        if not fields:
-            raise IdlError(f"{where}: empty record")
-        interface.records[rname] = Record(rname, rdoc, fields)
     for index, function in enumerate(functions, 1):
-        check(function, interface, f"{source}: {function.name}")
+        check(function, records, f"{source}: {function.name}")
         function.index = index
-    return interface
+    return Interface(package, name, version, doc, records, functions)
 
 
-def check(function, interface, where):
-    for p in function.params:
-        if p.handle:
-            if p.handle[1] not in HANDLES:
-                raise IdlError(f"{where}: unknown handle kind '{p.handle[1]}'")
-            if function.handle:
-                raise IdlError(f"{where}: at most one capability per message")
-            function.handle = p
-            continue
-        p.t = parse_type(p.type, interface, where)
-        (function.scalars if p.t.scalar else function.bulk).append(p)
-    result = function.result
-    if result is not None:
-        if match := re.fullmatch(r"result<(.+),\s*([\w-]+)>", result):
-            ok, error = match.group(1).strip(), snake(match.group(2))
-            if error not in interface.enums:
-                raise IdlError(f"{where}: the error of result<> must be an enum")
-            function.error = error
-            if handle := re.fullmatch(r"(own|borrow)<(\w+)>", ok):
-                if handle.group(2) not in HANDLES:
-                    raise IdlError(f"{where}: unknown handle kind '{handle.group(2)}'")
-                function.ok_handle = (handle.group(1), handle.group(2))
-                function.ok = None
-            else:
-                function.ok = None if ok == "_" else parse_type(ok, interface, where)
-        elif match := re.fullmatch(r"option<(\w+)>", result):
-            function.optional = True
-            function.ok = parse_type(match.group(1), interface, where)
-            if function.ok.kind != "int":
-                raise IdlError(f"{where}: option<> holds an integer")
+def record_field(text, records, where):
+    t = parse_type(text, records, where)
+    if t[0] == "handle":
+        raise IdlError(f"{where}: records cannot hold capabilities")
+    if t[0] == "bytes":
+        raise IdlError(f"{where}: bytes<N> is a parameter or a result, not a record field")
+    return t
+
+
+def declare(records, item, where):
+    if item.name in records:
+        raise IdlError(f"{where}: '{item.name}' is declared twice")
+    if camel(item.name) in RESERVED:
+        raise IdlError(f"{where}: the name '{item.name}' is reserved")
+    if isinstance(item, Enum):
+        if not 1 <= len(item.cases) <= 256 or len(set(item.cases)) != len(item.cases):
+            raise IdlError(f"{where}: an enum has 1..256 distinct cases")
+        for case in item.cases:
+            if not re.fullmatch(r"[a-z][\w-]*", case):
+                raise IdlError(f"{where}: bad enum case '{case}'")
+    records[item.name] = item
+
+
+def split_params(text):
+    """Splits on commas outside angle brackets."""
+    parts, depth, current = [], 0, ""
+    for c in text:
+        if c == "<":
+            depth += 1
+        elif c == ">":
+            depth -= 1
+        if c == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
         else:
-            function.ok = parse_type(result, interface, where)
-        if function.ok and function.ok.scalar:
-            function.result_field = Field("value", function.ok.name if function.ok.kind == "int" else "u8", t=function.ok)
-            layout([function.result_field])
-    needs_buffer = function.bulk or (function.ok and not function.ok.scalar)
-    if needs_buffer and not (function.handle and function.handle.handle == ("borrow", "memory")):
-        raise IdlError(f"{where}: strings, bytes, lists and records travel in a borrow<memory> buffer parameter")
-    scalars = list(function.scalars)
-    if function.bulk:
-        function.payload = Field("payload", "u32")
-        scalars = [function.payload] + scalars
-    function.used = layout(scalars)
+            current += c
+    if current.strip():
+        parts.append(current.strip())
+    return parts
 
 
-# --- Rust generation --------------------------------------------------------------------------------------------
-
-def rust_int(t):
-    return {"bool": "bool", "u8": "u8", "u16": "u16", "u32": "u32", "u64": "u64"}[t]
-
-
-def needs_life(t, interface):
-    if t.kind in ("string", "bytes", "list"):
-        return True
-    if t.kind == "record":
-        return any(needs_life(ft, interface) for _, ft in interface.records[t.name].fields)
-    return False
+# Parameter names the generated code uses for its own locals.
+BUFFER_LOCALS = {"endpoint", "buffer", "reply", "w", "r", "call", "copy", "scratch", "request", "cap", "out"}
+WORD_LOCALS = {"endpoint", "words", "reply", "received", "receive", "out", "none"}
 
 
-def rust_type(t, interface, life="'a", view=False):
-    """Rust type for a value: `view` gives the decoded form of a list (a List view), otherwise a slice."""
-    if t.kind == "int":
-        return rust_int(t.name)
-    if t.kind == "enum":
-        return camel(t.name)
-    if t.kind == "string":
-        return f"&{life} str"
-    if t.kind == "bytes":
-        return f"&{life} [u8]"
-    if t.kind == "record":
-        return camel(t.name) + (f"<{life}>" if needs_life(t, interface) else "")
-    if t.kind == "list":
-        item = rust_type(t.item, interface, life)
-        return f"wire::List<{life}, {item}>" if view else f"&{life} [{item}]"
-    raise AssertionError(t)
+def check(function, records, where):
+    result_type = function.result[0] if function.result else None
+    for p in function.params:
+        if p.name in WORD_LOCALS or (p.type[0] == "enum" and p.name in ("request", "cap")):
+            raise IdlError(f"{where}: parameter name '{p.name}' is used by the generated code")
+    function.buffered = any(bounded(p.type) for p in function.params) or (result_type is not None and bounded(result_type))
+    handles = [p for p in function.params if p.type[0] == "handle"]
+    if len(handles) > 1:
+        raise IdlError(f"{where}: at most one capability per message")
+    if function.buffered:
+        for p in function.params:
+            if p.name in BUFFER_LOCALS:
+                raise IdlError(f"{where}: parameter name '{p.name}' is used by the generated code")
+        if handles:
+            raise IdlError(f"{where}: a buffer call carries its buffer as the capability; no other capability")
+        if result_type is not None and result_type[0] == "handle":
+            raise IdlError(f"{where}: a capability result needs a word call")
+        function.request_max = sum(max_size(p.type, records) for p in function.params)
+        function.reply_max = max_size(result_type, records) if result_type else 0
+        if max(function.request_max, function.reply_max) > BUFFER_MAX:
+            raise IdlError(f"{where}: more than {BUFFER_MAX} bytes")
+        return
+    function.handle = handles[0] if handles else None
+    function.used = layout([p for p in function.params if p.type[0] in ("int", "enum")])
+    if result_type is not None and result_type[0] != "handle":
+        function.result_field = Field("value", result_type)
+        layout([function.result_field])
 
 
-def write_value(t, expr, interface):
-    if t.kind == "int":
-        return f"w.{t.name}({expr})?;"
-    if t.kind == "enum":
-        return f"w.u8({expr} as u8)?;"
-    if t.kind == "string":
-        return f"w.str({expr}, {t.max})?;"
-    if t.kind == "bytes":
-        return f"w.bytes({expr}, {t.max})?;"
-    if t.kind == "record":
-        return f"wire::Item::encode(&{expr}, w)?;" if not expr.startswith("&") else f"wire::Item::encode({expr}, w)?;"
-    if t.kind == "list":
-        return f"w.list({expr}, {t.max})?;"
-    raise AssertionError(t)
+# Rust names of types; SYS is the name of the system error type in the file being generated.
+SYS = "Error"
 
 
-def read_value(t, interface, life="'a"):
-    if t.kind == "int":
-        return f"r.{t.name}()?"
-    if t.kind == "enum":
-        return f"{camel(t.name)}::from_u8(r.u8()?)?"
-    if t.kind == "string":
-        return f"r.str({t.max})?"
-    if t.kind == "bytes":
-        return f"r.bytes({t.max})?"
-    if t.kind == "record":
-        return f"<{rust_type(t, interface, life)} as wire::Item>::decode(r)?"
-    if t.kind == "list":
-        return f"wire::List::read(r, {t.max})?"
-    raise AssertionError(t)
+def rust(t):
+    kind = t[0]
+    if kind == "int":
+        return t[1]
+    if kind == "str":
+        return f"Text<{t[1]}>"
+    if kind == "bytes":
+        return "&'a [u8]"
+    if kind == "list":
+        return f"List<{rust(t[1])}, {t[2]}>"
+    if kind in ("rec", "enum"):
+        return camel(t[1])
+    return "usize"
 
 
-def encode_word(f, expr):
-    value = f"({expr} as u8)" if f.t and f.t.kind == "enum" else expr
-    return f"(({value}) as usize) << {f.shift}"
+def rust_param(t):
+    kind = t[0]
+    if kind == "str":
+        return "&str"
+    if kind == "bytes":
+        return "&[u8]"
+    if kind == "list":
+        return f"&[{rust(t[1])}]"
+    if kind == "rec":
+        return f"&{camel(t[1])}"
+    return rust(t)
 
 
-def decode_word(f, words):
+def encode_expr(t, value, writer="w"):
+    kind = t[0]
+    if kind == "str":
+        return f"codec::encode_str::<{t[1]}>({value}, {writer})"
+    if kind == "bytes":
+        return f"codec::encode_bytes::<{t[1]}>({value}, {writer})"
+    if kind == "list":
+        return f"codec::encode_slice::<{rust(t[1])}, {t[2]}>({value}, {writer})"
+    return f"{value}.encode({writer})"
+
+
+def result_rust(function):
+    if function.result is None:
+        return "()"
+    inner, optional, fallible, error = function.result
+    if inner is None or inner[0] == "handle":
+        value = "()"
+    elif inner[0] == "bytes":
+        value = "usize"
+    else:
+        value = rust(inner)
+    value = f"Option<{value}>" if optional else value
+    return f"core::result::Result<{value}, {camel(error)}>" if error else value
+
+
+def word_encode(f, expr):
+    return f"(({expr}) as usize) << {f.shift}"
+
+
+def word_decode(f, words):
     value = f"wire::field(&{words}, {f.word}, {f.shift}, {f.bits})"
-    if f.t and f.t.kind == "enum":
-        return f"{camel(f.t.name)}::from_u8({value} as u8)"
-    if f.type == "bool" or (f.t and f.t.kind == "int" and f.t.name == "bool"):
-        return f"{value} != 0"
-    return f"{value} as {rust_int(f.t.name if f.t else f.type)}"
+    if f.type[0] == "enum":
+        return f"{camel(f.type[1])}::from_code({value})"
+    return f"{value} != 0" if f.type[1] == "bool" else f"{value} as {f.type[1]}"
 
 
 def generate(interface, source):
+    global SYS
+    SYS = "SysError" if "Error" in (camel(n) for n in interface.records) else "Error"
     out = []
     w = out.append
     major, minor, patch = interface.version
     w(f"// Generated by scripts/mind_idl.py from {source}; do not edit.")
     for line in interface.doc:
         w(f"//! {line}" if line else "//!")
-    w("#![allow(clippy::all, unused_imports, unused_variables, unused_mut, dead_code)]")
+    w("#![allow(clippy::all, unused_imports, unused_mut, unused_variables)]")
     w("use crate::abi::*;")
-    w("use crate::ipc::{self, Received};")
-    w("use crate::sys::{Error as SysError, Result};")
-    w("use super::wire::{self, Reject};")
+    w("use crate::ipc::{Endpoint, Received};")
+    w("use crate::mem::Pages;")
+    w("use crate::sys::{Error, Result};" if SYS == "Error" else "use crate::sys::{Error as SysError, Result};")
+    w("use super::codec::{self, List, Reader, Text, Wire, Writer};")
+    w("use super::wire::{self, Call, Reject};")
     w("")
     w(f'pub const PACKAGE: &str = "{interface.package}";')
     w(f"pub const VERSION: (u8, u8, u8) = ({major}, {minor}, {patch});")
     w(f"const MAJOR: usize = {major};")
     w("")
-    # Enums.
-    for e in interface.enums.values():
-        for line in e.doc:
+    for item in interface.records.values():
+        if isinstance(item, Enum):
+            generate_enum(w, item)
+            continue
+        record = item
+        for line in record.doc:
             w(f"/// {line}")
-        name = camel(e.name)
-        w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
-        w("#[repr(u8)]")
-        w(f"pub enum {name} {{ {', '.join(f'{camel(c)} = {i}' for i, c in enumerate(e.cases))} }}")
-        w(f"impl {name} {{")
-        w(f"    pub fn from_u8(value: u8) -> Option<Self> {{ match value {{ {' '.join(f'{i} => Some(Self::{camel(c)}),' for i, c in enumerate(e.cases))} _ => None }} }}")
-        w("}")
-        w(f"impl<'a> wire::Item<'a> for {name} {{")
-        w("    fn encode(&self, w: &mut wire::Writer) -> Result<()> { w.u8(*self as u8) }")
-        w("    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Self::from_u8(r.u8()?) }")
+        w("#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]")
+        w(f"pub struct {camel(record.name)} {{ {', '.join(f'pub {f.name}: {rust(f.type)}' for f in record.fields)} }}")
+        w(f"impl Wire for {camel(record.name)} {{")
+        w(f"    const MAX: usize = {' + '.join(f'<{rust(f.type)} as Wire>::MAX' for f in record.fields)};")
+        w(f"    fn encode(&self, w: &mut Writer) -> Option<()> {{ {' '.join(f'self.{f.name}.encode(w)?;' for f in record.fields)} Some(()) }}")
+        w(f"    fn decode(r: &mut Reader) -> Option<Self> {{ Some(Self {{ {', '.join(f'{f.name}: Wire::decode(r)?' for f in record.fields)} }}) }}")
         w("}")
         w("")
-    # Records.
-    for rec in interface.records.values():
-        for line in rec.doc:
-            w(f"/// {line}")
-        rt = Type("record", rec.name)
-        life = needs_life(rt, interface)
-        name = camel(rec.name)
-        w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
-        w(f"pub struct {name}{'<' + chr(39) + 'a>' if life else ''} {{ {', '.join(f'pub {n}: {rust_type(t, interface)}' for n, t in rec.fields)} }}")
-        w(f"impl<'a> wire::Item<'a> for {name}{'<' + chr(39) + 'a>' if life else ''} {{")
-        w("    fn encode(&self, w: &mut wire::Writer) -> Result<()> {")
-        for n, t in rec.fields:
-            w(f"        {write_value(t, ('&self.' if t.kind == 'record' else 'self.') + n, interface)}")
-        w("        Ok(())")
-        w("    }")
-        w(f"    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> {{ Some(Self {{ {', '.join(f'{n}: {read_value(t, interface)}' for n, t in rec.fields)} }}) }}")
-        w("}")
-        w("")
-    # Client side.
     for f in interface.functions:
-        for line in f.doc:
-            w(f"/// {line}")
-        buffered = f.handle is not None and (f.bulk or (f.ok and not f.ok.scalar))
-        life = "<'b>" if buffered else ""
-        args = ["endpoint: ipc::Endpoint"]
+        generate_client(w, f)
+    generate_server(w, interface)
+    return "\n".join(out)
+
+
+def generate_enum(w, enum):
+    name = camel(enum.name)
+    for line in enum.doc:
+        w(f"/// {line}")
+    w("#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]")
+    w("#[repr(u8)]")
+    w(f"pub enum {name} {{ {', '.join(('#[default] ' if i == 0 else '') + f'{camel(c)} = {i}' for i, c in enumerate(enum.cases))} }}")
+    w(f"impl {name} {{")
+    w("    /// The case with wire code `code`; None for a code the interface does not define.")
+    w(f"    pub fn from_code(code: usize) -> Option<Self> {{ match code {{ {' '.join(f'{i} => Some(Self::{camel(c)}),' for i, c in enumerate(enum.cases))} _ => None }} }}")
+    w("}")
+    w(f"impl Wire for {name} {{")
+    w("    const MAX: usize = 1;")
+    w("    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }")
+    w("    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }")
+    w("}")
+    w("")
+
+
+def generate_client(w, f):
+    for line in f.doc:
+        w(f"/// {line}")
+    inner, optional, fallible, error = f.result if f.result else (None, False, False, None)
+    args = ["endpoint: Endpoint"] + [f"{p.name}: {'usize' if p.type[0] == 'handle' else rust_param(p.type)}" for p in f.params]
+    if inner is not None and inner[0] == "handle":
+        args.append("receive: usize")
+    if inner is not None and inner[0] == "bytes":
+        args.append("out: &mut [u8]")
+    w(f"pub fn {f.name}({', '.join(args)}) -> Result<{result_rust(f)}> {{")
+    ok = (lambda value: f"Ok(Ok({value}))") if error else (lambda value: f"Ok({value})")
+    enum_error = f"    if let Some(code) = wire::enum_error(&reply)? {{ return Ok(Err({camel(error)}::from_code(code).ok_or({SYS}::Invalid)?)); }}" if error else None
+    if f.buffered:
+        size = (max(f.request_max, f.reply_max, 1) + PAGE - 1) // PAGE * PAGE
+        w(f"    let mut buffer = Pages::new({size}).ok_or({SYS}::NoMemory)?;")
+        w("    let length = {")
+        w("        let mut w = Writer::new(buffer.as_mut_slice());")
         for p in f.params:
-            if p.handle:
-                args.append(f"{p.name}: wire::Buffer<'b>" if buffered else f"{p.name}: usize")
-            elif p.t.scalar:
-                args.append(f"{p.name}: {rust_type(p.t, interface)}")
-        for p in f.bulk:
-            args.append(f"{p.name}: {rust_type(p.t, interface, chr(39) + '_')}")
-        if f.ok_handle:
-            args.append("receive: usize")
-        value = "usize" if f.ok_handle else "()" if f.ok is None else rust_type(f.ok, interface, "'b", view=True)
-        if f.optional:
-            value = f"Option<{value}>"
-        ret = f"core::result::Result<{value}, {camel(f.error)}>" if f.error else value
-        w(f"pub fn {f.name}{life}({', '.join(args)}) -> Result<{ret}> {{")
-        if buffered:
-            w(f"    let wire::Buffer {{ cap, bytes }} = {f.handle.name};")
-            w("    let mut writer = wire::Writer::new(bytes);")
-            if f.bulk:
-                w("    {")
-                w("        let w = &mut writer;")
-                for p in f.bulk:
-                    w(f"        {write_value(p.t, p.name, interface)}")
-                w("    }")
-            w("    let payload = writer.len();")
-            w("    let bytes = writer.into_inner();")
-        words = [[f"{f.index}", "MAJOR << 8"], []]
-        if f.payload:
-            words[f.payload.word].append(encode_word(f.payload, "payload"))
-        for p in f.scalars:
-            words[p.word].append(encode_word(p, p.name))
-        w(f"    let words = [{' | '.join(words[0])}, {' | '.join(words[1]) or '0'}];")
-        sent = "None"
-        if f.handle:
-            mode, _ = f.handle.handle
-            cap = "cap" if buffered else f.handle.name
-            sent = f"Some(({cap}, {'true' if mode == 'own' else 'false'}))"
-        if f.ok_handle:
-            w(f"    let (reply, received) = wire::call_receiving(endpoint, words, {sent}, receive)?;")
+            w(f"        {encode_expr(p.type, p.name, '&mut w')}.ok_or({SYS}::Invalid)?;")
+        w("        w.len()")
+        w("    };")
+        w(f"    let reply = wire::call_buffer(endpoint, {f.index} | MAJOR << 8, &buffer, length)?;")
+        if enum_error:
+            w(enum_error)
+        w(f"    let length = wire::buffer_reply(&reply, {f.reply_max}, {str(optional).lower()}, {str(fallible).lower()})?;")
+        if inner is None:
+            w(f"    if length != Some(0) {{ return Err({SYS}::Invalid); }}")
+            w(f"    {ok('()')}")
         else:
-            w(f"    let reply = wire::call(endpoint, words, {sent})?;")
-        # Reply: status, then the value (scalar in the words, bulk in the buffer).
-        if f.ok is not None and f.ok.scalar:
-            rf = f.result_field
-            used = [0, 0]
-            used[rf.word] = ((1 << rf.bits) - 1) << rf.shift
-        elif f.ok is not None:
-            used = [0xFFFF_FFFF << 16, 0]
-        else:
-            used = [0, 0]
-        w(f"    let status = wire::check_reply(&reply, [{used[0]:#x}, {used[1]:#x}], {'true' if f.optional else 'false'}, {'true' if f.error else 'false'})?;")
-        if f.error:
-            w(f"    if let wire::Status::Failed(code) = status {{ return {camel(f.error)}::from_u8(code).map(Err).ok_or(SysError::Invalid); }}")
-        if f.ok_handle:
-            w(f"    if !received || crate::dev::cap_info(receive).0 != {HANDLES[f.ok_handle[1]]} {{ return Err(SysError::Invalid); }}")
-            value_expr = "receive"
-        elif f.ok is None:
-            value_expr = "()"
-        elif f.ok.scalar:
-            value_expr = decode_word(f.result_field, "reply")
-            if f.ok.kind == "enum":
-                value_expr += ".ok_or(SysError::Invalid)?"
-        else:
-            w("    let len = wire::field(&reply, 0, 16, 32);")
-            w("    if len > bytes.len() { return Err(SysError::Invalid); }")
-            w("    let bytes: &'b [u8] = bytes;")
-            w("    let mut reader = wire::Reader::new(&bytes[..len]);")
-            w("    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = " + read_value(f.ok, interface, "'b") + "; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;")
-            value_expr = "value"
-        if f.optional:
-            value_expr = f"if status == wire::Status::None {{ None }} else {{ Some({value_expr}) }}"
-        w(f"    Ok({'Ok(' + value_expr + ')' if f.error else value_expr})")
+            if inner[0] == "bytes":
+                decode = (f"{{ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<{inner[1]}>(&mut r).filter(|_| r.done()).ok_or({SYS}::Invalid)?; "
+                          f"out.get_mut(..data.len()).ok_or({SYS}::Invalid)?.copy_from_slice(data); data.len() }}")
+            else:
+                decode = f"{{ let mut r = Reader::new(&buffer.as_slice()[..length]); <{rust(inner)} as Wire>::decode(&mut r).filter(|_| r.done()).ok_or({SYS}::Invalid)? }}"
+            if optional:
+                w(f"    {ok(f'match length {{ None => None, Some(length) => Some({decode}) }}')}")
+            else:
+                w(f"    let length = length.ok_or({SYS}::Invalid)?;")
+                w(f"    {ok(decode)}")
         w("}")
         w("")
-    # Server side.
+        return
+    words = [[f"{f.index}", "MAJOR << 8"], []]
+    for p in f.params:
+        if p.type[0] in ("int", "enum"):
+            words[p.word].append(word_encode(p, p.name))
+    w(f"    let words = [{' | '.join(words[0])}, {' | '.join(words[1]) or '0'}];")
+    cap = f"Some(({f.handle.name}, {'true' if f.handle.type[1] == 'own' else 'false'}))" if f.handle else "None"
+    if inner is not None and inner[0] == "handle":
+        # The capability lands in `receive`; one that comes with an error reply is dropped.
+        w(f"    let (reply, received) = wire::call_receiving(endpoint, words, {cap}, receive)?;")
+        w("    match wire::check_cap_reply(&reply, received, receive)? {")
+        w(f"        None => {ok('()')},")
+        if error:
+            w(f"        Some(code) => Ok(Err({camel(error)}::from_code(wire::enum_code(code)?).ok_or({SYS}::Invalid)?)),")
+        elif fallible:
+            w(f"        Some(code) => Err(crate::sys::check(code).err().unwrap_or({SYS}::Invalid)),")
+        else:
+            w(f"        Some(_) => Err({SYS}::Invalid),")
+        w("    }")
+        w("}")
+        w("")
+        return
+    w(f"    let reply = wire::call(endpoint, words, {cap})?;")
+    if fallible:
+        w("    wire::check_error(&reply)?;")
+    if enum_error:
+        w(enum_error)
+    if inner is None:
+        w(f"    wire::check_reply(&reply, [0, 0], false)?;" if error else "    wire::check_reply(&reply, [0, 0], false).map(drop)")
+        if error:
+            w(f"    {ok('()')}")
+    else:
+        rf = f.result_field
+        used = [0, 0]
+        used[rf.word] = ((1 << rf.bits) - 1) << rf.shift
+        w(f"    let {'none' if optional else '_'} = wire::check_reply(&reply, [{used[0]:#x}, {used[1]:#x}], {'true' if optional else 'false'})?;")
+        value = word_decode(rf, "reply")
+        if inner[0] == "enum":
+            value = f"{value}.ok_or({SYS}::Invalid)?"
+        w(f"    {ok('if none { None } else { Some(' + value + ') }' if optional else value)}")
+    w("}")
+    w("")
+
+
+def generate_server(w, interface):
+    # Interfaces with a bytes parameter decode into a caller's scratch buffer: the bytes are borrowed from it.
+    borrowed = any(p.type[0] == "bytes" for f in interface.functions for p in f.params)
+    life = "<'a>" if borrowed else ""
+    if borrowed:
+        w("/// Size of the scratch buffer `decode` copies a request into (the largest request).")
+        w(f"pub const REQUEST_MAX: usize = {max([f.request_max for f in interface.functions] + [1])};")
+        w("")
     w(f"/// A request to the `{interface.name}` interface that passed the receiver's schema check.")
     w("#[derive(Clone, Copy, Debug, PartialEq, Eq)]")
-    w("pub enum Request {")
+    w(f"pub enum Request{life} {{")
     for f in interface.functions:
-        fields = []
-        if f.payload:
-            fields.append("payload: u32")
-        for p in f.params:
-            if p.handle:
-                fields.append(f"{p.name}: usize")
-            elif p.t.scalar:
-                fields.append(f"{p.name}: {rust_type(p.t, interface)}")
+        fields = [f"{p.name}: {'usize' if p.type[0] == 'handle' else rust(p.type)}" for p in f.params]
         w(f"    {camel(f.name)}" + (f" {{ {', '.join(fields)} }}," if fields else ","))
     w("}")
     w("")
-    w("/// Checks a received message against the schema (MC-2.4): method, major version, unused bits, enum values, capability")
-    w("/// kind. `cap` is the slot passed to `recv`; an unexpected capability is dropped (MC-2.12). Bulk arguments are checked")
-    w("/// by `args_<function>` once the server has mapped the buffer.")
-    w("pub fn decode(request: &Received, cap: usize) -> core::result::Result<Request, Reject> {")
+    w("/// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and")
+    w("/// for buffer calls every length and value of a private copy of the request (MC-2.11). `cap` is the slot passed to")
+    w("/// `recv`; an unexpected capability is dropped (MC-2.12). The `Call` is what the reply functions need.")
+    if borrowed:
+        w("/// The private copy is `scratch`, which the `bytes` of the request borrow.")
+        w("pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_MAX]) -> core::result::Result<(Request<'a>, Call), Reject> {")
+    else:
+        w("pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, Call), Reject> {")
     w("    let words = request.data;")
     w("    wire::header(request, cap, MAJOR)?;")
     w("    match words[0] & 0xFF {")
     for f in interface.functions:
-        handle = f.handle
-        kind = HANDLES[handle.handle[1]] if handle else None
         w(f"        {f.index} => {{")
-        w(f"            wire::body(request, cap, [{f.used[0]:#x}, {f.used[1]:#x}], {kind if kind else 'CAP_KIND_NONE'}, {'true' if handle else 'false'})?;")
-        fields = []
-        if f.payload:
-            fields.append(f"payload: {decode_word(f.payload, 'words')}")
-        for p in f.params:
-            if p.handle:
-                fields.append(f"{p.name}: cap")
-            elif p.t.scalar:
-                value = decode_word(p, "words")
-                if p.t.kind == "enum":
-                    value = f"match {value} {{ Some(v) => v, None => {{ wire::discard(request, cap); return Err(Reject::Invalid); }} }}"
-                fields.append(f"{p.name}: {value}")
-        if fields:
-            w(f"            Ok(Request::{camel(f.name)} {{ {', '.join(fields)} }})")
+        if f.buffered:
+            if borrowed:
+                w(f"            let (call, length) = wire::take_buffer(request, cap, {f.reply_max}, &mut *scratch)?;")
+                w("            let copy: &'a [u8; REQUEST_MAX] = scratch;")
+                w("            let mut r = Reader::new(&copy[..length]);")
+            else:
+                w(f"            let mut copy = [0u8; {max(f.request_max, 1)}];")
+                w(f"            let (call, length) = wire::take_buffer(request, cap, {f.reply_max}, &mut copy)?;")
+                w("            let mut r = Reader::new(&copy[..length]);")
+            for p in f.params:
+                if p.type[0] == "bytes":
+                    w(f"            let {p.name} = codec::decode_bytes::<{p.type[1]}>(&mut r).ok_or(Reject::Invalid)?;")
+                else:
+                    w(f"            let {p.name} = <{rust(p.type)} as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;")
+            w("            if !r.done() { return Err(Reject::Invalid); }")
+            fields = ", ".join(p.name for p in f.params)
+            w(f"            Ok((Request::{camel(f.name)}{' { ' + fields + ' }' if fields else ''}, call))")
         else:
-            w(f"            Ok(Request::{camel(f.name)})")
+            handle = f.handle
+            kind = HANDLES[handle.type[2]] if handle else "CAP_KIND_NONE"
+            w(f"            wire::body(request, cap, [{f.used[0]:#x}, {f.used[1]:#x}], {kind}, {'true' if handle else 'false'})?;")
+            for p in f.params:
+                if p.type[0] == "enum":
+                    w(f"            let Some({p.name}) = {word_decode(p, 'words')} else {{ wire::discard(request, cap); return Err(Reject::Invalid) }};")
+            fields = [f"{p.name}: cap" if p.type[0] == "handle" else (p.name if p.type[0] == "enum" else f"{p.name}: {word_decode(p, 'words')}") for p in f.params]
+            w(f"            Ok((Request::{camel(f.name)}{' { ' + ', '.join(fields) + ' }' if fields else ''}, Call::words(request, cap)))")
         w("        }")
     w("        _ => { wire::discard(request, cap); Err(Reject::Invalid) }")
     w("    }")
     w("}")
     w("")
     for f in interface.functions:
-        if f.bulk:
-            types = [rust_type(p.t, interface, "'a", view=True) for p in f.bulk]
-            tuple_type = types[0] if len(types) == 1 else f"({', '.join(types)})"
-            w(f"/// Bulk arguments of `{f.name}` from the mapped buffer: exactly `payload` bytes, every limit checked.")
-            w(f"pub fn args_{f.name}<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<{tuple_type}, Reject> {{")
-            w("    let len = payload as usize;")
-            w("    if len > bytes.len() { return Err(Reject::Invalid); }")
-            w("    let mut reader = wire::Reader::new(&bytes[..len]);")
-            reads = ", ".join(f"{read_value(p.t, interface)}" for p in f.bulk)
-            tuple_expr = reads if len(f.bulk) == 1 else f"({reads})"
-            w(f"    let value = (|r: &mut wire::Reader<'a>| -> Option<_> {{ let value = {tuple_expr}; r.end().then_some(value) }})(&mut reader);")
-            w("    value.ok_or(Reject::Invalid)")
-            w("}")
-            w("")
-    for f in interface.functions:
-        bulk_result = f.ok is not None and not f.ok.scalar
-        if f.ok_handle:
-            value_type = "usize"
-        elif f.ok is None:
-            value_type = "()"
+        generate_reply(w, f)
+
+
+def generate_reply(w, f):
+    inner, optional, fallible, error = f.result if f.result else (None, False, False, None)
+    name = f"reply_{f.name}"
+    if inner is None:
+        value_type = None
+    elif inner[0] == "handle":
+        value_type = "usize"
+    elif f.buffered:
+        value_type = rust_param(inner)
+    else:
+        value_type = rust(inner)
+    if optional:
+        value_type = f"Option<{value_type}>"
+    if fallible:
+        value_type = f"Result<{value_type or '()'}>"
+    if error:
+        value_type = f"core::result::Result<{value_type or '()'}, {camel(error)}>"
+    signature = f"pub fn {name}(call: Call{', value: ' + value_type if value_type else ''}) -> Result<()> {{"
+    if inner is not None and inner[0] == "handle":
+        w(f"/// `value` is the handle of the capability to send ({'moved' if inner[1] == 'own' else 'copied'}).")
+    w(signature)
+    body_value = "value"
+    if fallible:
+        w("    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };")
+    if error:
+        w("    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };")
+    if optional:
+        w("    let Some(value) = value else { return wire::reply_none(call) };")
+    if f.buffered:
+        if inner is None:
+            w("    wire::reply_buffer(call, |_| Some(()))")
         else:
-            value_type = rust_type(f.ok, interface, "'_")
-        if f.error:
-            value_type = f"core::result::Result<{value_type}, {camel(f.error)}>"
-        elif f.optional:
-            value_type = f"Option<{value_type}>"
-        args = (["bytes: &mut [u8]"] if bulk_result else []) + ([] if (f.ok is None and not f.error and not f.ok_handle) else [f"value: {value_type}"])
-        w(f"pub fn reply_{f.name}({', '.join(args)}) -> Result<()> {{")
-        ok_value = "value"
-        if f.error:
-            w(f"    let value = match value {{ Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) }};")
-        if f.optional:
-            w("    let Some(value) = value else { return wire::reply([wire::STATUS_NONE, 0]) };")
-        if f.ok_handle:
-            w(f"    wire::reply_cap([0, 0], value, {'true' if f.ok_handle[0] == 'own' else 'false'})")
-        elif f.ok is None:
-            w("    wire::reply([0, 0])")
-        elif f.ok.scalar:
-            rf = f.result_field
-            words = ["0", "0"]
-            words[rf.word] = encode_word(rf, "value")
-            w(f"    wire::reply([{words[0]}, {words[1]}])")
-        else:
-            w("    let mut writer = wire::Writer::new(bytes);")
-            w(f"    let encoded = (|w: &mut wire::Writer| -> Result<()> {{ {write_value(f.ok, 'value', interface)} Ok(()) }})(&mut writer);")
-            w("    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }")
-            w("    wire::reply([(writer.len() as usize) << 16, 0])")
-        w("}")
-    w("")
-    return "\n".join(out)
+            w(f"    wire::reply_buffer(call, |w| {encode_expr(inner, body_value)})")
+    elif inner is None:
+        w("    wire::finish(call, [0, 0])")
+    elif inner[0] == "handle":
+        w(f"    wire::finish_cap(call, value, {'true' if inner[1] == 'own' else 'false'})")
+    else:
+        rf = f.result_field
+        words = ["0", "0"]
+        words[rf.word] = word_encode(rf, body_value)
+        w(f"    wire::finish(call, [{words[0]}, {words[1]}])")
+    w("}")
 
 
 def main(argv):
+    global ROOT, IDL_DIR, OUT_DIR
     if argv[:1] == ["--one"] and len(argv) == 3:
-        # One interface to a given file (the generator's own tests).
         source = Path(argv[1])
-        Path(argv[2]).write_text(generate(parse(source.read_text(), source.as_posix()), source.as_posix()))
+        try:
+            Path(argv[2]).write_text(generate(parse(source.read_text(), source.as_posix()), source.as_posix()))
+        except IdlError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         return 0
+    if "--root" in argv:  # generate for another tree (tests)
+        ROOT = Path(argv[argv.index("--root") + 1]).resolve()
+        IDL_DIR, OUT_DIR = ROOT / "idl", ROOT / "libmind" / "src" / "idl"
     check_only = "--check" in argv
-    stale = []
-    names = []
+    stale, names = [], []
     for path in sorted(IDL_DIR.glob("*.wit")):
         source = path.relative_to(ROOT).as_posix()
         try:
@@ -650,7 +693,8 @@ def main(argv):
                 stale.append(target.relative_to(ROOT).as_posix())
         else:
             target.write_text(text)
-    module = "// Generated by scripts/mind_idl.py; do not edit.\n//! Interfaces generated from idl/*.wit (MIND IDL v0.2).\npub mod wire;\n" + "".join(f"pub mod {n};\n" for n in names)
+    module = ("// Generated by scripts/mind_idl.py; do not edit.\n//! Interfaces generated from idl/*.wit (MIND IDL v0.2).\n"
+              "pub mod codec;\npub mod wire;\n" + "".join(f"pub mod {n};\n" for n in names))
     mod_path = OUT_DIR / "mod.rs"
     if check_only:
         if not mod_path.exists() or mod_path.read_text() != module:

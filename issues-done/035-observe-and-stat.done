@@ -1,0 +1,44 @@
+# 035 — OBSERVE privilege, STAT system call, firmware memory map (tools F5)
+
+**Type:** kernel · **Owner:** kernel track (coordinates `kernel/src/scheduler.rs`, `common/abi.rs`) · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** track G, T1 · **Constitution:** MC-10.2, MC-5.4
+
+## Problem
+
+Monitoring tools (`top`, `memmap`, `load`) need statistics the kernel keeps only partially (10 ms tick counts) and can read them today only with the process-control privilege, which also allows kill, focus and reading other tasks' output.
+
+## Plan
+
+- Privilege `CAP_KIND_OBSERVE`: `TASK_LIST`, `CPU_INFO`, `KERNEL_HEAP`, `FAULTS` and `STAT` accept OBSERVE or CONTROL; kill, focus, halt, logs, console stay CONTROL only.
+- `STAT(class, buffer, capacity, argument)` → versioned fixed-size records with a `StatHeader`; copies bounded by the table sizes. Classes: TASKS, CPUS, MEMORY, PHYSMAP, VMAP(pid), CAPS(pid), ENDPOINTS, IRQS, DEVICES (fields as in the tools plan, F5).
+- Accounting: TSC time per context switch (run ns per task, busy/idle ns per CPU), counters per IRQ line and endpoint, kernel arena by category.
+- Bootloader: the UEFI memory map in `BootInfo`.
+- Never exported: memory contents, physical addresses of task memory, anything usable as authority.
+
+## Acceptance criteria
+
+- `isolation` case: OBSERVE cannot kill, focus or read logs; STAT rejects a short buffer.
+- QEMU suite: task count of STAT = `ps`; arena used = `heap`; the VMAP of a test application matches its known layout.
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) F5; [045](045-sysmon-and-monitors.done).
+
+## Resolution
+
+**ABI** (`common/abi.rs`): `STAT` (51) with the classes TASKS, CPUS, MEMORY, PHYSMAP, VMAP(pid), CAPS(pid), ENDPOINTS, IRQS, DEVICES. Each class has a versioned `repr(C)` record (`StatTask`, `StatCpu`, `StatMemory`, `StatPhys`, `StatRegion`, `StatCap`, `StatEndpoint`, `StatIrq`, `StatDevice`) after a `StatHeader { version, record_size, count, total }`.
+
+**Kernel** (`kernel/src/scheduler/stat.rs`):
+- Accounting: TSC time at every switch (run ns per task, busy/idle ns per CPU), interrupts and switches per CPU, IPC sends and receives per task, messages/`ERR_BUSY`/timeouts per endpoint, interrupts per IRQ line.
+- VMAP walks the present page tables and coalesces equal attributes.
+- PHYSMAP has the firmware map, now passed by the bootloader in `BootInfo.memory_map`, plus the platform layout (arena, framebuffer, AP trampoline, boot images, PCI BARs).
+- Privilege `CAP_KIND_OBSERVE` (`init` can mint it before READY): `TASK_LIST`, `CPU_INFO`, `KERNEL_HEAP`, `FAULTS`, `STAT` accept observe or control; the rest stays control only.
+
+**libmind and shell:** `control::stat` and `control::records`; shell command `stat <class> [pid]`.
+
+**Bug found and fixed.** The STAT ENDPOINTS view showed two receivers per service. Since 033, `init` kept the server's receive capability for restarts, so a dead or quarantined service's clients blocked instead of getting `ERR_PEER`, and queued sends were not fenced. `init` now keeps only the keeper and mints a fresh receive capability for each instance, moving it into the server.
+
+**Tests:**
+- services suite: STAT task count = `ps`, arena used ≈ `heap`, the shell's VMAP has IMAGE R-X, STACK, SCREEN, INFO and MAILBOX, every CPU accounts time, and a client of the quarantined `rtc` is not blocked in a send;
+- isolation case `k`: an application is refused `STAT`.
+
+Not tested yet: a task with only the observe privilege being refused kill and focus (no such task exists before `sysmon`, issue 045).

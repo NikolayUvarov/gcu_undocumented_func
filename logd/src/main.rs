@@ -3,13 +3,14 @@
 // logd: the system log (idl/log.wit, MC-10.6). Records go into a ring of 256 (ring.rs) stamped with the time of
 // arrival and with the sender's PID from IPC and its task name from the kernel's task records (the observe
 // privilege): a message cannot name its own source. Every client may write; reading needs the read badge
-// (LOG_BADGE_READ), which init gives to the shell's client only.
+// (`mind::log::BADGE_READ`), which init gives to the shell's client only.
 mod ring;
 
 use mind::abi::*;
+use mind::idl::codec::Text;
 use mind::idl::{log, wire};
-use mind::ipc::{self, Endpoint};
-use mind::mem::{Mapping, Pages};
+use mind::ipc::Endpoint;
+use mind::mem::Pages;
 use mind::stat;
 use ring::{Ring, NAME};
 
@@ -27,7 +28,7 @@ impl Names {
         let mut name = *b"?\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
         if let Some(scratch) = self.scratch.as_mut() {
             if let Ok(records) = stat::read(STAT_TASKS, 0, scratch.as_mut_slice()) {
-                if let Some(task) = records.iter::<TaskStat>().find(|t| t.pid == pid) { name.copy_from_slice(&task.name[..NAME]); }
+                if let Some(task) = records.iter::<StatTask>().find(|t| t.pid == pid) { name.copy_from_slice(&task.name[..NAME]); }
             }
         }
         self.cache[self.next] = (pid, name); self.next = (self.next + 1) % CACHE;
@@ -42,47 +43,35 @@ fn main(_info: &'static BootInfo) {
     let ring = unsafe { &mut *core::ptr::addr_of_mut!(RING) };
     let mut names = Names { cache: [(0, [0; NAME]); CACHE], next: 0, scratch: Pages::new(64 * 1024) };
     let observe = names.scratch.as_mut().is_some_and(|s| stat::read(STAT_TASKS, 0, s.as_mut_slice()).is_ok());
-    let own = names.scratch.as_mut().and_then(|s| stat::read(STAT_TASKS, 0, s.as_mut_slice()).ok().and_then(|r| r.iter::<TaskStat>().find(|t| text(&t.name[..NAME].try_into().unwrap()) == "logd").map(|t| t.pid))).unwrap_or(0);
+    let own = names.scratch.as_mut().and_then(|s| stat::read(STAT_TASKS, 0, s.as_mut_slice()).ok().and_then(|r| r.iter::<StatTask>().find(|t| text(&t.name[..NAME].try_into().unwrap()) == "logd").map(|t| t.pid))).unwrap_or(0);
     let now = || mind::time::uptime_ms() as u64;
     ring.push(now(), own, "logd", 1, if observe { "[LOGD] READY: 256 RECORDS OF 200 BYTES" } else { "[LOGD] NO OBSERVE PRIVILEGE: SOURCES ARE PIDS ONLY" });
     mind::println!("[LOGD] READY");
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
-        let decoded = log::decode(&request, RECEIVED);
-        let mut mapping = if request.cap_received { Mapping::new(RECEIVED).ok() } else { None };
-        let mut empty = [0u8; 0];
-        let bytes: &mut [u8] = match mapping.as_mut() { Some(m) => m.as_mut_slice(), None => &mut empty };
-        let reader = request.badge & LOG_BADGE_READ != 0;
-        let _ = match decoded {
-            Ok(log::Request::Write { payload, level, .. }) => match log::args_write(bytes, payload) {
-                Ok(line) => {
-                    let name = names.get(request.sender);
-                    ring.push(now(), request.sender, text(&name), level, line);
-                    log::reply_write(Ok(()))
-                }
-                Err(reason) => wire::reject(reason),
-            },
-            Ok(log::Request::Read { from, .. }) if reader => {
-                // As many records as the buffer holds: each takes its strings plus about 40 bytes.
-                let start = from.max(ring.first());
-                let mut entries: [Option<log::Entry>; 64] = [None; 64];
-                let (mut count, mut size) = (0, 16);
-                for seq in start..ring.next() {
-                    let Some(r) = ring.get(seq) else { break };
-                    let need = 48 + r.name().len() + r.text().len();
-                    if count == entries.len() || size + need > bytes.len() { break; }
-                    entries[count] = Some(log::Entry { seq: r.seq, time_ms: r.time_ms, pid: r.pid, name: r.name(), level: r.level, text: r.text() });
-                    count += 1; size += need;
-                }
-                let list: [log::Entry; 64] = core::array::from_fn(|i| entries[i].unwrap_or(log::Entry { seq: 0, time_ms: 0, pid: 0, name: "", level: 0, text: "" }));
-                log::reply_read(bytes, Ok(&list[..count]))
+        let reader = request.badge & mind::log::BADGE_READ != 0;
+        let _ = match log::decode(&request, RECEIVED) {
+            Ok((log::Request::Write { level, text: line }, call)) => {
+                let name = names.get(request.sender);
+                ring.push(now(), request.sender, text(&name), level, line.as_str());
+                log::reply_write(call, Ok(()))
             }
-            Ok(log::Request::State { .. }) if reader => log::reply_state(bytes, Ok(log::State { first: ring.first(), next: ring.next(), dropped: ring.dropped(), suppressed: ring.suppressed() })),
-            Ok(log::Request::Read { .. }) => log::reply_read(bytes, Err(log::Error::Denied)),
-            Ok(log::Request::State { .. }) => log::reply_state(bytes, Err(log::Error::Denied)),
-            Err(reason) => wire::reject(reason),
+            Ok((log::Request::Read { from }, call)) if reader => {
+                // At most 16 records from `from` on (from the oldest kept if that is later).
+                let mut entries = [log::Entry::default(); 16];
+                let mut count = 0;
+                for seq in from.max(ring.first())..ring.next() {
+                    let Some(r) = ring.get(seq) else { break };
+                    if count == entries.len() { break; }
+                    entries[count] = log::Entry { seq: r.seq, time_ms: r.time_ms, pid: r.pid, name: Text::new(r.name()).unwrap_or_default(), level: r.level, text: Text::new(r.text()).unwrap_or_default() };
+                    count += 1;
+                }
+                log::reply_read(call, Ok(&entries[..count]))
+            }
+            Ok((log::Request::State, call)) if reader => log::reply_state(call, Ok(&log::State { first: ring.first(), next: ring.next(), dropped: ring.dropped(), suppressed: ring.suppressed() })),
+            Ok((log::Request::Read { .. }, call)) => log::reply_read(call, Err(log::Error::Denied)),
+            Ok((log::Request::State, call)) => log::reply_state(call, Err(log::Error::Denied)),
+            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
-        drop(mapping);
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED); }
     }
 }

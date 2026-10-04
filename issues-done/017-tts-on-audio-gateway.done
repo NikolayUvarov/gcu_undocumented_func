@@ -1,6 +1,6 @@
 # 017 — Speech synthesis (TTS) on top of the audio gateway — done
 
-- Type: feature · Priority: low · Status: done · Date: 2026-10-03
+- Type: feature · Priority: low · Status: done (2026-10-03)
 
 ## Problem
 `audio_gw` accepted PCM and tones, but there was no speech synthesis; a client pushed a stream larger than 16 KiB by polling with sleeps.
@@ -18,3 +18,7 @@
 
 ## Limitations
 The voice is noticeably synthetic; stress is heuristic (no dictionary), so the reduction is sometimes wrong; English is read by simplified rules; pauses between words are lengthened for intelligibility.
+
+## Audit (2026-10-04)
+
+Done. Corrections: stress now comes from a dictionary (`data/stress_ru.txt`) and Latin script from a CMUdict-based lexicon (`data/lexicon_en.txt`); the current intelligibility figures are in the README.

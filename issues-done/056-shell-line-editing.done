@@ -1,0 +1,29 @@
+# 056 — Shell: line editing, history, Cyrillic, scrollback — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 053, 055 · **Roadmap:** track G, tools plan §4.8
+
+Formerly tools-branch 036.
+
+## Problem
+
+The shell console draws only upper-case ASCII with the 8×8 font, edits a line only with Backspace and keeps no history; Cyrillic typed at the UART is drawn as `?`.
+
+## Plan
+
+- Console on the 8×16 font: lower case, Cyrillic, box drawing.
+- Line editor: ←/→, Home/End, Delete, Backspace by character, Ctrl+←/→ by word, insert in the middle; history of 32 lines on ↑/↓; Tab completes the command or the program name (loader `LIST`); Esc clears the line.
+- Scrollback of the last screens with Shift+PgUp/PgDn.
+- The UART mirror keeps working: the line is redrawn on COM1 with VT100 sequences only when the cursor is not at the end.
+
+## Acceptance criteria
+
+- QEMU suite `keys` (055) edits a command with arrows and recalls it from the history, both from the UART and PS/2.
+- A screendump shows Cyrillic in the shell.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) §2.4, §4.8.
+
+## Resolution
+
+`shell/src/console.rs`: the console is a ring of 400 text lines drawn through `mind::tui::Terminal` with the 8×16 font (lower case, Cyrillic, box drawing; UTF-8 output decoded for the screen, passed unchanged to COM1), redrawn once per loop pass and only where cells changed; Shift+PgUp/PgDn scroll back with a marker of how far. `shell/src/main.rs`: the input line is a `tui::widgets::InputLine` after the prompt — ←/→, Home/End, Delete, Backspace, Ctrl+←/→, Esc clears, Ctrl+L clears the screen; `History<32>` on ↑/↓ keeps the line being typed; Tab completes commands and program names (from the loader's `LIST` and the boot services) and lists several matches. Typing at the end is echoed to the UART byte by byte; other edits redraw the line on the terminal with VT100 sequences. A prompt after asynchronous output redraws the line typed so far. A non-ASCII command word is an unknown command. The QEMU suite `shell` edits in the middle of a line, deletes, recalls history from the UART and from PS/2, clears with Esc, completes a program name and a command, lists matches, shows Cyrillic on the screen (read back with `screen_text`) and scrolls back to the banner. All QEMU suites pass.

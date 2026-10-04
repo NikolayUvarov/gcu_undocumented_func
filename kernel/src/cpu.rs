@@ -7,8 +7,8 @@ pub static COUNT: AtomicUsize = AtomicUsize::new(1);
 static LAPIC: AtomicUsize = AtomicUsize::new(0xfee00000);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
 pub static TICKS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
-// Hardware interrupts and IPIs taken by each CPU (observation; system calls are not counted).
-pub static INTERRUPTS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
+// PID and name (16 bytes) of the task running on each CPU, 0 when idle: read by the panic handler without locks.
+pub static RUNNING: [[AtomicU64; 3]; MAX] = [const { [const { AtomicU64::new(0) }; 3] }; MAX];
 
 #[repr(C, align(16))]
 struct Cpu {
@@ -166,15 +166,20 @@ pub unsafe fn wake(index: usize) {
     if ONLINE[index].load(Ordering::Acquire) { ipi(apic_id(index), 0x32); }
 }
 
+// Sends the halt IPI to every other online CPU.
+pub fn stop_others() {
+    let this = id();
+    for i in 0..COUNT.load(Ordering::Acquire) {
+        if i != this && ONLINE[i].load(Ordering::Acquire) {
+            unsafe { ipi(apic_id(i), 0x31); }
+        }
+    }
+}
+
 pub fn halt_all() -> ! {
     unsafe {
         asm!("cli");
-        let this = id();
-        for i in 0..COUNT.load(Ordering::Acquire) {
-            if i != this && ONLINE[i].load(Ordering::Acquire) {
-                ipi(apic_id(i), 0x31);
-            }
-        }
+        stop_others();
         loop {
             asm!("hlt");
         }

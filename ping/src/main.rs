@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Client: writes a string into its shared page and passes a capability for it to the server via CALL.
+// Client: writes a string into its page and lends it read-only to the server for one CALL.
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
@@ -24,7 +24,10 @@ fn main(info: &'static BootInfo) {
         let _ = write!(text, "HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: {}", counter);
         let bytes = shared.as_mut_slice(); bytes[..text.as_bytes().len()].copy_from_slice(text.as_bytes()); bytes[text.as_bytes().len()] = 0;
         screen.text(40, 100, b"CALLING SERVER WITH MEMORY CAP", 1, 0x00FFFFFF, None);
-        match server.call(&Message::new(counter, 0).with_cap(cap, 0), 0) {
+        let lent = mind::ipc::mint(cap, mind::abi::CAP_READ, 0, 0).expect("MEM MINT FAILED");
+        let reply = server.call(&Message::new(counter, 0).with_cap(lent, 0), 0);
+        let _ = mind::ipc::revoke(cap);
+        match reply {
             Ok(reply) if reply.data[0] == counter => { screen.text(40, 160, b"SERVER CONFIRMED RECEIPT!", 1, 0x0000FF00, None); mind::println!("[PING] ACK {}", counter); }
             _ => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
         }

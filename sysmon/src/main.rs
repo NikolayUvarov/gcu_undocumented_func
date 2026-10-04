@@ -8,10 +8,11 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use mind::abi::*;
+use mind::idl::codec::Text;
 use mind::idl::sysinfo::{self, Error, Request};
-use mind::idl::wire;
-use mind::ipc::{self, Endpoint};
-use mind::mem::{Mapping, Pages};
+use mind::idl::wire::{self, Call};
+use mind::ipc::Endpoint;
+use mind::mem::Pages;
 use mind::stat;
 
 mod limit;
@@ -53,7 +54,7 @@ impl Monitor {
         let mut sample = Sample::default();
         let (mut interrupts, mut switches) = (0u64, 0u64);
         if let Ok(records) = stat::read(STAT_CPUS, 0, self.scratch.as_mut_slice()) {
-            for (index, cpu) in records.iter::<CpuStat>().enumerate().take(8) {
+            for (index, cpu) in records.iter::<StatCpu>().enumerate().take(8) {
                 let busy = cpu.busy_ns.saturating_sub(self.totals.busy[index]);
                 let idle = cpu.idle_ns.saturating_sub(self.totals.idle[index]);
                 sample.busy[index] = if busy + idle == 0 { 0 } else { (busy * 1000 / (busy + idle)) as u16 };
@@ -63,14 +64,14 @@ impl Monitor {
         }
         let (mut syscalls, mut tasks, mut runnable) = (0u64, 0u8, 0u8);
         if let Ok(records) = stat::read(STAT_TASKS, 0, self.scratch.as_mut_slice()) {
-            for task in records.iter::<TaskStat>() {
+            for task in records.iter::<StatTask>() {
                 syscalls += task.calls; tasks += 1;
-                if matches!(task.state, TASK_READY | TASK_RUNNING) { runnable += 1; }
+                if stat::runnable(task.wait) { runnable += 1; }
             }
         }
         let mut messages = 0u64;
-        if let Ok(records) = stat::read(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice()) { messages = records.iter::<EndpointStat>().map(|e| e.messages).sum(); }
-        if let Ok(memory) = stat::one::<MemoryStat>(STAT_MEMORY) { sample.used_kib = (memory.arena_used / 1024) as u32; }
+        if let Ok(records) = stat::read(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice()) { messages = records.iter::<StatEndpoint>().map(|e| e.messages).sum(); }
+        if let Ok(memory) = stat::one::<StatMemory>(STAT_MEMORY) { sample.used_kib = (memory.used / 1024) as u32; }
         let delta = |now: u64, before: &mut u64| { let d = now.saturating_sub(*before); *before = now; d.min(u32::MAX as u64) as u32 };
         sample.interrupts = delta(interrupts, &mut self.totals.interrupts);
         sample.switches = delta(switches, &mut self.totals.switches);
@@ -99,80 +100,96 @@ fn wire_sample(s: &Sample) -> sysinfo::Sample {
     sysinfo::Sample { busy_low: pack(&s.busy[..4]), busy_high: pack(&s.busy[4..]), interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages, switches: s.switches, used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }
 }
 
-fn serve(monitor: &mut Monitor, request: Request, out: &mut [u8]) -> mind::Result<()> {
-    macro_rules! records { ($class:expr, $arg:expr, $ty:ty) => {{
+// The focused task (TASK_LIST, allowed with the observe privilege): StatTask does not carry it.
+fn focused() -> u64 {
+    let mut list = [TaskInfo { pid: 0, name: [0; NAME_MAX], state: [0; 8], cpu: 0, focus: 0, service: 0, screen: 0, reserved: 0, runs: 0, ticks: 0, calls: 0, quota_tasks: 0, used_tasks: 0, quota_endpoints: 0, used_endpoints: 0 }; 40];
+    let count = mind::control::tasks(&mut list).unwrap_or(0).min(list.len());
+    list[..count].iter().find(|t| t.focus != 0).map_or(0, |t| t.pid)
+}
+
+fn name(bytes: &[u8; NAME_MAX]) -> Text<16> {
+    let len = bytes.iter().position(|&b| b == 0).unwrap_or(NAME_MAX);
+    Text::new(core::str::from_utf8(&bytes[..len]).unwrap_or("?")).unwrap_or_default()
+}
+
+fn serve(monitor: &mut Monitor, request: Request, call: Call) -> mind::Result<()> {
+    macro_rules! records { ($class:expr, $arg:expr) => {{
         let scratch = monitor.scratch.as_mut_slice();
         match stat::read($class, $arg, scratch) { Ok(records) => Ok(records), Err(mind::Error::NotFound) => Err(Error::NotFound), Err(_) => Err(Error::Unavailable) }
     }}; }
     match request {
-        Request::Tasks { .. } => {
-            let list: Vec<TaskStat> = match records!(STAT_TASKS, 0, TaskStat) { Ok(r) => r.iter::<TaskStat>().take(24).collect(), Err(e) => return sysinfo::reply_tasks(out, Err(e)) };
-            let n = list.len();
-            let names: Vec<&str> = list.iter().map(|t| { let len = t.name.iter().position(|&b| b == 0).unwrap_or(t.name.len()); core::str::from_utf8(&t.name[..len]).unwrap_or("?") }).collect();
-            let items: Vec<sysinfo::Task> = (0..n).map(|i| { let t = &list[i]; sysinfo::Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sent, received: t.received, started_ns: t.started_ns,
-                image: t.image_bytes, stack: t.stack_bytes, screen: t.screen_bytes, heap: t.heap_bytes, shared: t.shared_bytes, kernel: t.kernel_bytes, wait: t.wait, heap_blocks: t.heap_blocks, caps: t.caps,
-                quota_tasks: t.quota_tasks, used_tasks: t.used_tasks, quota_endpoints: t.quota_endpoints, used_endpoints: t.used_endpoints, name: names[i], state: t.state, cpu: t.cpu, flags: t.flags } }).collect();
-            sysinfo::reply_tasks(out, Ok(&items))
+        Request::Tasks => {
+            let focus = focused();
+            let items: Result<Vec<sysinfo::Task>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().take(40).map(|t| sysinfo::Task {
+                pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, ticks: t.ticks, calls: t.calls, sends: t.sends, receives: t.receives, started_ns: t.started_ns,
+                image: t.image_bytes, stack: t.stack_bytes, screen: t.screen_bytes, heap: t.heap_bytes, shared: t.shared_bytes, retained: t.retained_bytes,
+                budget_ns: t.budget_ns, period_ns: t.period_ns, wait_on: t.wait_on, heap_blocks: t.heap_blocks, caps: t.caps,
+                quota_tasks: t.quota_tasks, used_tasks: t.used_tasks, quota_endpoints: t.quota_endpoints, used_endpoints: t.used_endpoints,
+                name: name(&t.name), wait: t.wait, cpu: t.cpu, band: t.band, throttled: t.throttled != 0,
+                flags: if t.service != 0 { stat::TASK_SERVICE } else { 0 } | if t.screen != 0 { stat::TASK_SCREEN } else { 0 } | if t.pid == focus { stat::TASK_FOCUS } else { 0 },
+            }).collect());
+            sysinfo::reply_tasks(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Cpus { .. } => {
-            let mut items = [sysinfo::Cpu { busy_ns: 0, idle_ns: 0, ticks: 0, switches: 0, interrupts: 0, current: 0, apic: 0, online: false }; 8]; let mut n = 0;
-            match records!(STAT_CPUS, 0, CpuStat) { Ok(r) => for c in r.iter::<CpuStat>().take(8) { items[n] = sysinfo::Cpu { busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current, apic: c.apic, online: c.online != 0 }; n += 1; }, Err(e) => return sysinfo::reply_cpus(out, Err(e)) }
-            sysinfo::reply_cpus(out, Ok(&items[..n]))
+        Request::Cpus => {
+            let items: Result<Vec<sysinfo::Cpu>, Error> = records!(STAT_CPUS, 0).map(|r| r.iter::<StatCpu>().take(8).map(|c| sysinfo::Cpu {
+                busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current_pid, apic: c.apic_id, online: c.online != 0 }).collect());
+            sysinfo::reply_cpus(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Memory { .. } => {
-            let m = match stat::read(STAT_MEMORY, 1, monitor.scratch.as_mut_slice()).ok().and_then(|r| r.iter::<MemoryStat>().next()) { Some(m) => m, None => return sysinfo::reply_memory(out, Err(Error::Unavailable)) };
-            sysinfo::reply_memory(out, Ok(sysinfo::Memory { arena: m.arena_bytes, used: m.arena_used, free: m.arena_free, largest_free: m.largest_free, images: m.task_images, stacks: m.task_stacks, screens: m.task_screens, heaps: m.task_heaps,
-                task_kernel: m.task_kernel, page_tables: m.page_tables, objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, mapped: m.shared_mapped, other: m.kernel_other,
-                tasks: m.tasks, tasks_limit: m.tasks_limit, endpoints: m.endpoints, endpoints_limit: m.endpoints_limit }))
+        Request::Memory => {
+            let memory = stat::one::<StatMemory>(STAT_MEMORY).map_err(|_| Error::Unavailable).map(|m| sysinfo::Memory {
+                arena: m.arena, used: m.used, free: m.free, images: m.images, stacks: m.stacks, task_pages: m.task_pages, screens: m.screens, heaps: m.heaps,
+                objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks as u32, endpoints: m.endpoints as u32 });
+            sysinfo::reply_memory(call, memory.as_ref().map_err(|e| *e))
         }
-        Request::Physmap { .. } => {
-            let items: Vec<sysinfo::Range> = match records!(STAT_PHYSMAP, 0, PhysRange) { Ok(r) => r.iter::<PhysRange>().take(220).map(|p| sysinfo::Range { start: p.start, bytes: p.bytes, kind: p.kind, detail: p.detail }).collect(), Err(e) => return sysinfo::reply_physmap(out, Err(e)) };
-            sysinfo::reply_physmap(out, Ok(&items))
+        Request::Physmap => {
+            let items: Result<Vec<sysinfo::Range>, Error> = records!(STAT_PHYSMAP, 0).map(|r| r.iter::<StatPhys>().take(256).map(|p| sysinfo::Range { start: p.start, pages: p.pages, kind: p.kind, index: p.index }).collect());
+            sysinfo::reply_physmap(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Vmap { pid, .. } => {
-            let mut items = [sysinfo::Region { start: 0, bytes: 0, kind: 0, flags: 0 }; 80]; let mut n = 0;
-            match records!(STAT_VMAP, pid, VmRegion) { Ok(r) => for v in r.iter::<VmRegion>().take(80) { items[n] = sysinfo::Region { start: v.start, bytes: v.bytes, kind: v.kind, flags: v.flags }; n += 1; }, Err(e) => return sysinfo::reply_vmap(out, Err(e)) }
-            sysinfo::reply_vmap(out, Ok(&items[..n]))
+        Request::Vmap { pid } => {
+            let items: Result<Vec<sysinfo::Region>, Error> = records!(STAT_VMAP, pid).map(|r| r.iter::<StatRegion>().take(80).map(|v| sysinfo::Region { start: v.start, size: v.size, kind: v.kind, flags: v.flags }).collect());
+            sysinfo::reply_vmap(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Caps { pid, .. } => {
-            let mut items = [sysinfo::Capability { node: 0, parent: 0, size: 0, base: 0, slot: 0, generation: 0, kind: 0, rights: 0, endpoint: 0 }; 32]; let mut n = 0;
-            match records!(STAT_CAPS, pid, CapStat) { Ok(r) => for c in r.iter::<CapStat>().take(32) { items[n] = sysinfo::Capability { node: c.node, parent: c.parent, size: c.size, base: c.base, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, endpoint: c.endpoint }; n += 1; }, Err(e) => return sysinfo::reply_caps(out, Err(e)) }
-            sysinfo::reply_caps(out, Ok(&items[..n]))
+        Request::Caps { pid } => {
+            let items: Result<Vec<sysinfo::Capability>, Error> = records!(STAT_CAPS, pid).map(|r| r.iter::<StatCap>().take(64).map(|c| sysinfo::Capability {
+                node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge }).collect());
+            sysinfo::reply_caps(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Endpoints { .. } => {
-            let items: Vec<sysinfo::Endpoint> = match records!(STAT_ENDPOINTS, 0, EndpointStat) { Ok(r) => r.iter::<EndpointStat>().take(64).map(|e| sysinfo::Endpoint { messages: e.messages, busy: e.busy, timeouts: e.timeouts, index: e.index, creator: e.creator, server: e.server, receivers: e.receivers, holders: e.holders, waiting: e.waiting, receiving: e.receiving, irq: e.irq }).collect(), Err(e) => return sysinfo::reply_endpoints(out, Err(e)) };
-            sysinfo::reply_endpoints(out, Ok(&items))
+        Request::Endpoints => {
+            let items: Result<Vec<sysinfo::EndpointInfo>, Error> = records!(STAT_ENDPOINTS, 0).map(|r| r.iter::<StatEndpoint>().take(128).map(|e| sysinfo::EndpointInfo {
+                messages: e.messages, busy: e.busy, timeouts: e.timeouts, creator: e.creator, index: e.index, receivers: e.receivers, senders: e.waiting_senders, receiving: e.waiting_receivers }).collect());
+            sysinfo::reply_endpoints(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Irqs { .. } => {
-            let mut items = [sysinfo::Irq { count: 0, line: 0, holder: 0, endpoint: 0, masked: false }; 16]; let mut n = 0;
-            match records!(STAT_IRQS, 0, IrqStat) { Ok(r) => for i in r.iter::<IrqStat>().take(16) { items[n] = sysinfo::Irq { count: i.count, line: i.line, holder: i.holder, endpoint: i.endpoint, masked: i.masked != 0 }; n += 1; }, Err(e) => return sysinfo::reply_irqs(out, Err(e)) }
-            sysinfo::reply_irqs(out, Ok(&items[..n]))
+        Request::Irqs => {
+            let items: Result<Vec<sysinfo::Irq>, Error> = records!(STAT_IRQS, 0).map(|r| r.iter::<StatIrq>().take(16).map(|i| sysinfo::Irq { count: i.count, holder: i.holder, line: i.line, endpoint: i.endpoint, masked: i.masked != 0 }).collect());
+            sysinfo::reply_irqs(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Devices { .. } => {
-            let items: Vec<sysinfo::Device> = match records!(STAT_DEVICES, 0, DeviceStat) { Ok(r) => r.iter::<DeviceStat>().take(64).map(|d| { let b = d.bar_bytes; sysinfo::Device { bar0: b[0], bar1: b[1], bar2: b[2], bar3: b[3], bar4: b[4], bar5: b[5], class: d.class, irq: d.irq, holder: d.holder, index: d.index, location: d.location, io_bars: d.io_bars } }).collect(), Err(e) => return sysinfo::reply_devices(out, Err(e)) };
-            sysinfo::reply_devices(out, Ok(&items))
+        Request::Devices => {
+            let items: Result<Vec<sysinfo::Device>, Error> = records!(STAT_DEVICES, 0).map(|r| r.iter::<StatDevice>().take(64).map(|d| { let b = d.bar_sizes; sysinfo::Device {
+                bar0: b[0], bar1: b[1], bar2: b[2], bar3: b[3], bar4: b[4], bar5: b[5], holder: d.holder, class: d.class, irq: d.irq } }).collect());
+            sysinfo::reply_devices(call, items.as_deref().map_err(|e| *e))
         }
-        Request::History { slow, count, .. } => {
-            let items: Vec<sysinfo::Sample> = if slow { monitor.slow.last(count as usize).map(wire_sample).collect() } else { monitor.fast.last(count as usize).map(wire_sample).collect() };
-            sysinfo::reply_history(out, Ok(&items))
+        Request::History { slow, count, start } => {
+            let (count, start) = (count as usize, start as usize);
+            let items: Vec<sysinfo::Sample> = if slow { monitor.slow.last(count).skip(start).take(150).map(wire_sample).collect() } else { monitor.fast.last(count).skip(start).take(150).map(wire_sample).collect() };
+            sysinfo::reply_history(call, Ok(&items))
         }
-        Request::Load { .. } => {
+        Request::Load => {
             let [one, five, fifteen] = monitor.load.map(|l| (l * 100 / 2048) as u32);
-            sysinfo::reply_load(out, Ok(sysinfo::Load { one, five, fifteen, uptime_ms: mind::time::uptime_ms() as u64, fast_ms: FAST_MS as u32, slow_ms: 1000, fast_count: monitor.fast.count as u32, slow_count: monitor.slow.count as u32 }))
+            sysinfo::reply_load(call, Ok(&sysinfo::Load { one, five, fifteen, uptime_ms: mind::time::uptime_ms() as u64, fast_ms: FAST_MS as u32, slow_ms: 1000, fast_count: monitor.fast.count as u32, slow_count: monitor.slow.count as u32 }))
         }
     }
 }
 
 // A refused request (over the rate) gets the `busy` error of its function.
-fn refuse(request: Request, out: &mut [u8]) -> mind::Result<()> {
+fn refuse(request: Request, call: Call) -> mind::Result<()> {
     let busy = Error::Busy;
     match request {
-        Request::Tasks { .. } => sysinfo::reply_tasks(out, Err(busy)), Request::Cpus { .. } => sysinfo::reply_cpus(out, Err(busy)),
-        Request::Memory { .. } => sysinfo::reply_memory(out, Err(busy)), Request::Physmap { .. } => sysinfo::reply_physmap(out, Err(busy)),
-        Request::Vmap { .. } => sysinfo::reply_vmap(out, Err(busy)), Request::Caps { .. } => sysinfo::reply_caps(out, Err(busy)),
-        Request::Endpoints { .. } => sysinfo::reply_endpoints(out, Err(busy)), Request::Irqs { .. } => sysinfo::reply_irqs(out, Err(busy)),
-        Request::Devices { .. } => sysinfo::reply_devices(out, Err(busy)), Request::History { .. } => sysinfo::reply_history(out, Err(busy)),
-        Request::Load { .. } => sysinfo::reply_load(out, Err(busy)),
+        Request::Tasks => sysinfo::reply_tasks(call, Err(busy)), Request::Cpus => sysinfo::reply_cpus(call, Err(busy)),
+        Request::Memory => sysinfo::reply_memory(call, Err(busy)), Request::Physmap => sysinfo::reply_physmap(call, Err(busy)),
+        Request::Vmap { .. } => sysinfo::reply_vmap(call, Err(busy)), Request::Caps { .. } => sysinfo::reply_caps(call, Err(busy)),
+        Request::Endpoints => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
+        Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
+        Request::Load => sysinfo::reply_load(call, Err(busy)),
     }
 }
 
@@ -194,16 +211,10 @@ fn main(_info: &'static BootInfo) {
         }
         let wait = (next - now).max(10) as u32;
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
-        let decoded = sysinfo::decode(&request, RECEIVED);
-        let mut mapping = if request.cap_received { Mapping::new(RECEIVED).ok() } else { None };
-        let mut empty = [0u8; 0];
-        let out: &mut [u8] = match mapping.as_mut() { Some(m) => m.as_mut_slice(), None => &mut empty };
-        let _ = match decoded {
-            Ok(request_data) if !monitor.limiter.admit(request.sender, now) => refuse(request_data, out),
-            Ok(request_data) => serve(&mut monitor, request_data, out),
-            Err(reason) => wire::reject(reason),
+        let _ = match sysinfo::decode(&request, RECEIVED) {
+            Ok((request_data, call)) if !monitor.limiter.admit(request.sender, now) => refuse(request_data, call),
+            Ok((request_data, call)) => serve(&mut monitor, request_data, call),
+            Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
-        drop(mapping);
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED); }
     }
 }

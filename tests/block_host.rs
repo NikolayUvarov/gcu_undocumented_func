@@ -1,12 +1,16 @@
-//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs): writing needs the write badge on
-//! the client's capability and a writable medium (Appendix B.6); reads, clipping at the end, errors.
+//! Host tests of the block protocol's server side (libmind/src/block_protocol.rs, idl/block.wit 1.1): writing needs
+//! the write badge on the client's capability and a writable medium (Appendix B.6); the data must hold every sector
+//! written; reads, clipping at the end, errors.
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
+#[path = "../libmind/src/sys.rs"]
+mod sys;
 #[path = "../libmind/src/block_protocol.rs"]
 mod block_protocol;
 use abi::*;
-use block_protocol::{handle, Driver};
+use block_protocol::{flush, read, writable, write, Driver, BADGE_WRITE};
+use sys::Error;
 
 struct Memory { data: Vec<u8>, protected: bool, flushes: usize, fail: bool }
 impl Memory { fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * BLOCK_SECTOR], protected: false, flushes: 0, fail: false } } }
@@ -34,54 +38,58 @@ impl Driver for ReadOnly {
     fn read(&mut self, _: u64, _: usize, _: &mut [u8]) -> bool { true }
 }
 
-const WRITER: u16 = BLOCK_BADGE_WRITE;
+const WRITER: u16 = BADGE_WRITE;
 
 #[test]
 fn writing_needs_the_badge() {
     let mut disk = Memory::new(64);
-    let mut buffer = vec![0xA5u8; 4 * BLOCK_SECTOR];
-    assert_eq!(handle(BLOCK_WRITE, 4, 10, 0, BLOCK_KIND_ATA, Some(&mut buffer), &mut disk), [ERR_RIGHTS, 0], "no badge");
-    assert_eq!(handle(BLOCK_WRITE, 4, 10, 2, BLOCK_KIND_ATA, Some(&mut buffer), &mut disk), [ERR_RIGHTS, 0], "another badge");
-    assert_eq!(handle(BLOCK_FLUSH, 0, 0, 0, BLOCK_KIND_ATA, None, &mut disk), [ERR_RIGHTS, 0]);
+    let data = vec![0xA5u8; 4 * BLOCK_SECTOR];
+    assert_eq!(write(&mut disk, 0, &data, 4, 10), Err(Error::Rights), "no badge");
+    assert_eq!(write(&mut disk, 2, &data, 4, 10), Err(Error::Rights), "another badge");
+    assert_eq!(flush(&mut disk, 0), Err(Error::Rights));
     assert!(disk.data.iter().all(|&b| b == 0) && disk.flushes == 0);
-    assert_eq!(handle(BLOCK_WRITE, 4, 10, WRITER, BLOCK_KIND_ATA, Some(&mut buffer), &mut disk), [4, 0]);
-    assert_eq!(handle(BLOCK_FLUSH, 0, 0, WRITER, BLOCK_KIND_ATA, None, &mut disk), [0, 0]);
+    assert_eq!(write(&mut disk, WRITER, &data, 4, 10), Ok(4));
+    assert_eq!(flush(&mut disk, WRITER), Ok(()));
     assert_eq!(disk.flushes, 1);
     assert!(disk.data[10 * BLOCK_SECTOR..14 * BLOCK_SECTOR].iter().all(|&b| b == 0xA5));
     assert!(disk.data[14 * BLOCK_SECTOR..].iter().all(|&b| b == 0));
     // Reading needs no badge.
     let mut out = vec![0u8; 2 * BLOCK_SECTOR];
-    assert_eq!(handle(BLOCK_READ, 2, 12, 0, BLOCK_KIND_ATA, Some(&mut out), &mut disk), [2, 0]);
+    assert_eq!(read(&mut disk, &mut out, 2, 12), Ok(2));
     assert!(out.iter().all(|&b| b == 0xA5));
 }
 
 #[test]
-fn info_tells_whether_the_client_can_write() {
+fn writable_tells_whether_the_client_can_write() {
     let mut disk = Memory::new(64);
-    assert_eq!(handle(BLOCK_INFO, 0, 0, WRITER, BLOCK_KIND_USB, None, &mut disk), [64, BLOCK_KIND_USB]);
-    assert_eq!(handle(BLOCK_INFO, 0, 0, 0, BLOCK_KIND_USB, None, &mut disk), [64, BLOCK_KIND_USB | BLOCK_INFO_READ_ONLY]);
+    assert!(writable(WRITER, &disk));
+    assert!(!writable(0, &disk));
     disk.protected = true;
-    assert_eq!(handle(BLOCK_INFO, 0, 0, WRITER, BLOCK_KIND_USB, None, &mut disk), [64, BLOCK_KIND_USB | BLOCK_INFO_READ_ONLY]);
-    let mut buffer = vec![1u8; BLOCK_SECTOR];
-    assert_eq!(handle(BLOCK_WRITE, 1, 0, WRITER, BLOCK_KIND_USB, Some(&mut buffer), &mut disk), [ERR_RIGHTS, 0], "write-protected medium");
+    assert!(!writable(WRITER, &disk));
+    let data = vec![1u8; BLOCK_SECTOR];
+    assert_eq!(write(&mut disk, WRITER, &data, 1, 0), Err(Error::Rights), "write-protected medium");
     // A driver without a write path is read-only for everyone.
-    assert_eq!(handle(BLOCK_INFO, 0, 0, WRITER, BLOCK_KIND_ATA, None, &mut ReadOnly), [16, BLOCK_KIND_ATA | BLOCK_INFO_READ_ONLY]);
-    assert_eq!(handle(BLOCK_WRITE, 1, 0, WRITER, BLOCK_KIND_ATA, Some(&mut buffer), &mut ReadOnly), [ERR_RIGHTS, 0]);
+    assert!(!writable(WRITER, &ReadOnly));
+    assert_eq!(write(&mut ReadOnly, WRITER, &data, 1, 0), Err(Error::Rights));
 }
 
 #[test]
 fn requests_are_clipped_and_checked() {
     let mut disk = Memory::new(16);
-    let mut buffer = vec![7u8; 8 * BLOCK_SECTOR];
+    let data = vec![7u8; 8 * BLOCK_SECTOR];
     // At the end of the disk only what is there is written.
-    assert_eq!(handle(BLOCK_WRITE, 8, 12, WRITER, BLOCK_KIND_AHCI, Some(&mut buffer), &mut disk), [4, 0]);
+    assert_eq!(write(&mut disk, WRITER, &data, 8, 12), Ok(4));
+    // The sealed data must hold every sector asked for.
+    assert_eq!(write(&mut disk, WRITER, &data[..BLOCK_SECTOR], 2, 0), Err(Error::Invalid));
+    assert_eq!(write(&mut disk, WRITER, &data, 0, 0), Err(Error::Invalid), "no sectors");
+    assert_eq!(write(&mut disk, WRITER, &data, 1, 16), Err(Error::Invalid), "past the end");
     // Not beyond the attached buffer either.
     let mut small = vec![0u8; 2 * BLOCK_SECTOR];
-    assert_eq!(handle(BLOCK_READ, 8, 0, 0, BLOCK_KIND_AHCI, Some(&mut small), &mut disk), [2, 0]);
-    assert_eq!(handle(BLOCK_READ, 1, 16, 0, BLOCK_KIND_AHCI, Some(&mut small), &mut disk), [ERR_INVALID, 0], "past the end");
-    assert_eq!(handle(BLOCK_READ, 0, 0, 0, BLOCK_KIND_AHCI, Some(&mut small), &mut disk), [ERR_INVALID, 0], "no sectors");
-    assert_eq!(handle(BLOCK_READ, 1, 0, 0, BLOCK_KIND_AHCI, None, &mut disk), [ERR_INVALID, 0], "no buffer attached");
-    assert_eq!(handle(99, 1, 0, WRITER, BLOCK_KIND_AHCI, None, &mut disk), [ERR_INVALID, 0]);
+    assert_eq!(read(&mut disk, &mut small, 8, 0), Ok(2));
+    assert_eq!(read(&mut disk, &mut small, 1, 16), Err(Error::Invalid), "past the end");
+    assert_eq!(read(&mut disk, &mut small, 0, 0), Err(Error::Invalid), "no sectors");
+    assert_eq!(read(&mut disk, &mut [], 1, 0), Err(Error::Invalid), "an empty buffer");
     disk.fail = true;
-    assert_eq!(handle(BLOCK_WRITE, 1, 0, WRITER, BLOCK_KIND_AHCI, Some(&mut buffer), &mut disk), [ERR_PEER, 0], "a device error");
+    assert_eq!(write(&mut disk, WRITER, &data, 1, 0), Err(Error::Peer), "a device error");
+    assert_eq!(read(&mut disk, &mut small, 1, 0), Err(Error::Peer));
 }

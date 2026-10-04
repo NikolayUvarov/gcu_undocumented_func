@@ -2,8 +2,7 @@
 
 - Type: feature
 - Priority: high
-- Status: done
-- Date: 2026-09-19
+- Status: done (2026-09-19)
 - Dependency: 013 (done)
 
 ## Problem and choice of the next step
@@ -105,3 +104,7 @@ paging. The guard only protects the unmapped page, not an overflow within a mapp
 page. Address reuse does not provide temporal memory safety.
 The local TLB flush is correct with the current pinned single-threaded processes;
 shared address spaces on several CPUs will require a TLB shootdown.
+
+## Audit (2026-10-04)
+
+Was partial: the record claimed host tests for the user heap that never existed. Fixed in the audit commit: `user_heap::tests` (hole reuse, block and byte limits including retained memory, double and interior free, shareability of own blocks only, unmapping by node, detach). Rollback after page-table exhaustion is still covered only by the `memory` suite. Corrections: `common/user_memory.rs` is now `libmind/src/mem.rs`; the heap window is `USER_HEAP`..`USER_END`.

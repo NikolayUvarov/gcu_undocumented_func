@@ -10,17 +10,17 @@ use console::{Console, Position, COM1};
 use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
-use mind::dev::{input_event, Ports};
-use mind::idl::{lifecycle, loader, wire};
+use mind::dev::{input_key, Ports};
+use mind::idl::{init as idl_init, loader};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
-use mind::ipc::{Endpoint, Message};
+use mind::ipc::Endpoint;
 use mind::keys::{Event, Vt};
 use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 31] = ["boot", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "rm", "run", "stat", "stop", "sync", "write"];
+const COMMANDS: [&str; 33] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "quotas", "rm", "run", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -29,7 +29,6 @@ const SCOPE_RECEIVE: usize = 11;
 struct Shell {
     term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
     console: Option<u64>, // console program running in the shell
-    shared: Option<wire::Shared>, // buffer lent to the loader (idl/loader.wit)
     names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
 }
 
@@ -60,8 +59,8 @@ fn error_text(error: Error, service: bool) -> &'static str {
 
 fn label(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches([' ', '\0']) }
 
-fn tasks() -> ([TaskInfo; 24], usize) {
-    let mut list = [unsafe { core::mem::zeroed::<TaskInfo>() }; 24];
+fn tasks() -> ([TaskInfo; 40], usize) {
+    let mut list = [unsafe { core::mem::zeroed::<TaskInfo>() }; 40];
     let count = control::tasks(&mut list).unwrap_or(0);
     (list, count)
 }
@@ -87,6 +86,32 @@ impl Shell {
         }
     }
 
+    // Kernel statistics (STAT), one record per line.
+    fn stat(&mut self, args: &[u8]) {
+        let text = core::str::from_utf8(args).unwrap_or("");
+        let mut words = text.split_whitespace();
+        let (name, pid) = (words.next().unwrap_or(""), words.next().and_then(|w| w.parse::<usize>().ok()).unwrap_or(0));
+        let class = match name { "tasks" => STAT_TASKS, "cpus" => STAT_CPUS, "memory" => STAT_MEMORY, "physmap" => STAT_PHYSMAP, "vmap" => STAT_VMAP, "caps" => STAT_CAPS, "endpoints" => STAT_ENDPOINTS, "irqs" => STAT_IRQS, "devices" => STAT_DEVICES, _ => { self.report("STAT <CLASS> [PID]: SEE HELP"); return; } };
+        let Some(mut page) = Pages::new(4 * 4096) else { self.report("OUT OF MEMORY"); return };
+        let header = match control::stat(class, pid, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
+        let buffer = page.as_slice(); let t = &mut self.term;
+        let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={}", Upper(name), header.version, header.count, header.total);
+        match class {
+            STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps); },
+            STAT_CPUS => for (i, r) in control::records::<StatCpu>(buffer, header).enumerate() { let _ = writeln!(t, "CPU {} APIC={} ONLINE={} BUSY_MS={} IDLE_MS={} INTERRUPTS={} SWITCHES={} PID={}", i, r.apic_id, r.online, r.busy_ns / 1_000_000, r.idle_ns / 1_000_000, r.interrupts, r.switches, r.current_pid); },
+            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} IMAGES={} STACKS={} TASK_PAGES={} SCREENS={} HEAPS={} OBJECTS={} DMA={} TASKS={} ENDPOINTS={}", r.arena, r.used, r.free, r.images, r.stacks, r.task_pages, r.screens, r.heaps, r.objects, r.dma, r.tasks, r.endpoints); },
+            STAT_PHYSMAP => for r in control::records::<StatPhys>(buffer, header).filter(|r| r.kind >= PHYS_PLATFORM) { let _ = writeln!(t, "KIND={:#x} INDEX={} START={:#x} PAGES={}", r.kind, r.index, r.start, r.pages); },
+            STAT_VMAP => for r in control::records::<StatRegion>(buffer, header) {
+                let kind = ["?", "IMAGE", "STACK", "SCREEN", "INFO", "MAILBOX", "EXIT", "HEAP", "SHARED", "DEVICE"].get(r.kind as usize).copied().unwrap_or("?");
+                let _ = writeln!(t, "{:#x} {} {} {}{}{}", r.start, r.size, kind, if r.flags & REGION_READ != 0 { 'R' } else { '-' }, if r.flags & REGION_WRITE != 0 { 'W' } else { '-' }, if r.flags & REGION_EXECUTE != 0 { 'X' } else { '-' });
+            },
+            STAT_CAPS => for r in control::records::<StatCap>(buffer, header) { let _ = writeln!(t, "SLOT={} GEN={} KIND={} RIGHTS={} SIZE={} BADGE={} NODE={} PARENT={}", r.slot, r.generation, r.kind, r.rights, r.size, r.badge, r.node, r.parent); },
+            STAT_ENDPOINTS => for r in control::records::<StatEndpoint>(buffer, header) { let _ = writeln!(t, "EP {} RECEIVERS={} SENDERS={} WAITING={} CREATOR={} MESSAGES={} BUSY={} TIMEOUTS={}", r.index, r.receivers, r.waiting_senders, r.waiting_receivers, r.creator, r.messages, r.busy, r.timeouts); },
+            STAT_IRQS => for r in control::records::<StatIrq>(buffer, header) { let _ = writeln!(t, "IRQ {} ENDPOINT={} MASKED={} HOLDER={} COUNT={}", r.line, r.endpoint, r.masked, r.holder, r.count); },
+            _ => for r in control::records::<StatDevice>(buffer, header) { let _ = writeln!(t, "DEVICE CLASS={:06x} IRQ={} HOLDER={} BARS={:?}", r.class, r.irq, r.holder, r.bar_sizes); },
+        }
+    }
+
     fn focus(&mut self, pid: u64, keep_output: bool) -> Result<(), Error> {
         control::focus(pid, keep_output)?;
         self.focused = Some(pid); self.line_start = true;
@@ -94,16 +119,12 @@ impl Shell {
     }
 
     fn list_programs(&mut self) {
-        let listing = (|| -> Result<(Pages, usize), Error> {
-            let page = Pages::new(4096).ok_or(Error::NoMemory)?;
-            let cap = page.share()?;
-            let reply = Endpoint::LOADER.call(&Message::new(0, LOADER_LIST).with_cap(cap, 0), 0);
-            let _ = mind::ipc::drop_cap(cap);
-            let len = mind::sys::check(reply?.data[0])?;
-            Ok((page, len.min(4096)))
-        })();
-        match listing {
-            Ok((page, len)) => { let _ = writeln!(self.term, "PROGRAMS ON DISK:"); for &byte in &page.as_slice()[..len] { self.term.print_char(byte); } }
+        // idl/loader.wit: a typed list instead of text.
+        match mind::idl::loader::list(Endpoint::LOADER) {
+            Ok(programs) => {
+                let _ = writeln!(self.term, "PROGRAMS ON DISK:");
+                for p in programs.as_slice() { let _ = writeln!(self.term, "  {:<12} {} BYTES{}", p.name.as_str(), p.size, if p.service { " (SERVICE)" } else { "" }); }
+            }
             Err(_) => self.report("CANNOT LIST THE BOOT DISK"),
         }
         let _ = write!(self.term, "SERVICES (STARTED AT BOOT): ");
@@ -121,13 +142,7 @@ impl Shell {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
             let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
-            let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
-            return match lifecycle::start(Endpoint::INIT, shared.buffer(), name)? {
-                Ok(pid) => Ok(pid),
-                Err(lifecycle::Error::Running) => Err(Error::Other(ERR_BUSY)),
-                Err(lifecycle::Error::NotFound | lifecycle::Error::NoDevice) => Err(Error::NotFound),
-                Err(_) => Err(Error::Invalid),
-            };
+            return idl_init::run(Endpoint::INIT, name);
         }
         let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
         let args = core::str::from_utf8(args).map_err(|_| Error::Invalid)?;
@@ -135,9 +150,8 @@ impl Shell {
             loader::Error::NotFound => Error::NotFound, loader::Error::Invalid => Error::Invalid, loader::Error::NoMemory => Error::NoMemory,
             loader::Error::Rights => Error::Rights, loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY),
         };
-        let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
-        let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
-        let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
+        let needs = loader::inspect(Endpoint::LOADER, name)?.map_err(failed)?;
+        let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
         let scoped = needs.file && !needs.files;
@@ -226,7 +240,8 @@ impl Shell {
             let Ok(text) = core::str::from_utf8(args) else { return self.report("NOT UTF-8") };
             if text.is_empty() { return self.report("EXPECTED A TEXT"); }
             match mind::log::write(mind::log::INFO, text) { Ok(()) => { let _ = writeln!(self.term, "LOGGED"); } Err(_) => self.report("NO SYSTEM LOG") }
-        } else if is(b"pmap") || is(b"caps") || is(b"stat") {
+        } else if is(b"pmap") || is(b"caps") || (is(b"stat") && pid_arg(args).is_some()) {
+            // `stat <id>`: task details; `stat <class> [pid]`: the kernel's records (below).
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
             if is(b"pmap") { observe::pmap(&mut self.term, pid) } else if is(b"caps") { observe::caps(&mut self.term, pid) } else { observe::task_details(&mut self.term, pid) }
         } else if is(b"fg") || is(b"kill") || is(b"logs") {
@@ -251,10 +266,10 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
+        } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -273,6 +288,11 @@ impl Shell {
             let mut faults = [FaultInfo::default(); 16];
             let count = control::faults(&mut faults).unwrap_or(0);
             for f in &faults[..count] { let _ = writeln!(self.term, "FAULT PID={} CPU={} VECTOR={} ERROR={:#x} RIP={:#x} ADDR={:#x}", f.pid, f.cpu, f.vector, f.error, f.rip, f.address); }
+        } else if is(b"quotas") {
+            // Quotas delegated at spawn (MC-1.7): tasks reserved by live children, endpoints created or delegated.
+            let _ = writeln!(self.term, "PID NAME TASKS ENDPOINTS");
+            let (list, count) = tasks();
+            for t in &list[..count] { let _ = writeln!(self.term, "{} {} {}/{} {}/{}", t.pid, label(&t.name), t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints); }
         } else if is(b"ps") {
             let _ = writeln!(self.term, "PID NAME STATE FOCUS CPU RUNS CPU_TICKS SYSCALLS");
             let (list, count) = tasks();
@@ -295,6 +315,20 @@ impl Shell {
         } else if is(b"clock") {
             let (ns, resolution, hz) = mind::time::clock_info();
             let _ = writeln!(self.term, "CLOCK: MONOTONIC NS={} RESOLUTION NS={} TSC HZ={} UPTIME MS={}", ns, resolution, hz, mind::time::uptime_ms());
+        } else if is(b"budget") {
+            // budget <pid> <ms> <period ms>: CPU budget per period (0: no limit) — scheduling contexts (C7).
+            let text = core::str::from_utf8(args).unwrap_or("");
+            let numbers: [Option<u64>; 3] = { let mut w = text.split_whitespace().map(|w| w.parse::<u64>().ok()); [w.next().flatten(), w.next().flatten(), w.next().flatten()] };
+            match numbers {
+                [Some(pid), Some(budget), Some(period)] => match control::sched_set(pid, budget * 1000, period * 1000, BAND_KEEP) {
+                    Ok(()) => { let _ = writeln!(self.term, "BUDGET PID={} {} MS PER {} MS", pid, budget, period); }
+                    Err(Error::NotFound) => self.report("NO SUCH PID"),
+                    Err(_) => self.report("INVALID BUDGET (PERIOD >= 10 MS, BUDGET <= PERIOD)"),
+                },
+                _ => self.report("BUDGET <PID> <MS> <PERIOD MS>"),
+            }
+        } else if is(b"stat") {
+            self.stat(args);
         } else if is(b"heap") {
             let (used, free, freed) = control::kernel_heap();
             let _ = writeln!(self.term, "Dynamic allocation works! Uptime: {} ms", mind::time::uptime_ms());
@@ -337,19 +371,8 @@ impl Shell {
                 shell.names[shell.name_count][..name.len()].copy_from_slice(name); shell.name_lens[shell.name_count] = name.len(); shell.name_count += 1;
             }
         };
-        if let Some(page) = Pages::new(4096) {
-            if let Ok(cap) = page.share() {
-                let reply = Endpoint::LOADER.call(&Message::new(0, LOADER_LIST).with_cap(cap, 0), 0);
-                let _ = mind::ipc::drop_cap(cap);
-                if let Ok(len) = reply.and_then(|r| mind::sys::check(r.data[0])) {
-                    let mut names = [[0u8; NAME_MAX]; NAMES]; let mut lens = [0usize; NAMES]; let mut count = 0;
-                    for line in page.as_slice()[..len.min(4096)].split(|&b| b == b'\n') {
-                        let word = line.trim_ascii().split(|b| b.is_ascii_whitespace()).next().unwrap_or(&[]);
-                        if !word.is_empty() && word.len() <= NAME_MAX && count < NAMES { names[count][..word.len()].copy_from_slice(word); lens[count] = word.len(); count += 1; }
-                    }
-                    for i in 0..count { add(self, &names[i][..lens[i]]); }
-                }
-            }
+        if let Ok(programs) = loader::list(Endpoint::LOADER) {
+            for program in programs.as_slice() { add(self, program.name.as_str().as_bytes()); }
         }
         for name in BOOT_SERVICES { add(self, name.as_bytes()); }
     }
@@ -434,9 +457,9 @@ impl Shell {
     // A decoded UART event: the shell's own input, or forwarded to the focused program (Ctrl+Z is the attention key).
     fn uart(&mut self, event: Event) {
         match event {
-            Event::Key(word) if self.focused.is_some() => { let _ = input_event(word, false); }
+            Event::Key(word) if self.focused.is_some() => { let _ = input_key(word, word, false); }
             Event::Key(word) => self.key(Key(word)),
-            Event::Attention if self.focused.is_some() => { let _ = input_event(0, true); }
+            Event::Attention if self.focused.is_some() => { let _ = input_key(0, 0, true); }
             _ => {}
         }
     }
@@ -456,7 +479,7 @@ fn main(info: &'static BootInfo) {
     let term = Console::new(mind::gfx::Screen::new(info), Ports(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
     let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
-                            console: None, shared: wire::Shared::new(8192).ok(),
+                            console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0 };
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
@@ -490,4 +513,10 @@ fn main(info: &'static BootInfo) {
         shell.term.render(cursor);
         mind::time::sleep(10);
     }
+}
+
+// Upper-case display of an ASCII word.
+struct Upper<'a>(&'a str);
+impl core::fmt::Display for Upper<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { for c in self.0.chars() { write!(f, "{}", c.to_ascii_uppercase())?; } Ok(()) }
 }

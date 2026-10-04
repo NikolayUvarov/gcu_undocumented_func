@@ -3,8 +3,7 @@ use crate::abi::*;
 use crate::ipc::Endpoint;
 use crate::sys::{call, check, syscall, Result};
 
-/// What a capability slot holds: (CAP_KIND_* kind, base, size). Ports give their base and count, an IRQ its line, an
-/// endpoint its badge and rights.
+/// What a capability slot holds: (CAP_KIND_* kind, base, size).
 pub fn cap_info(slot: usize) -> (usize, usize, usize) { let raw = syscall(SYSCALL_CAP_INFO, slot, 0, [0; 4]); (raw.result, raw.arg2, raw.msg[2]) }
 
 /// I/O port range in a capability slot (port numbers are absolute).
@@ -47,10 +46,15 @@ impl Irq {
     pub fn ack(&self) -> Result<()> { check(call(SYSCALL_IRQ_ACK, self.0, 0)).map(drop) }
 }
 
-/// Key event (`common/abi.rs`, KEY_*) for the focused task from a holder of the input capability (keyboard driver,
-/// shell for the UART); `attention` (Ctrl+Z) gives the focus back to its owner instead.
-pub fn input_event(event: u32, attention: bool) -> Result<()> {
-    check(syscall(SYSCALL_INPUT_EVENT, event as usize, 0, [attention as usize, 0, 0, 0]).result).map(drop)
+/// Keyboard event from a driver holding the input capability.
+pub fn input_event(app: u8, shell: u8, background: bool) -> Result<()> {
+    check(syscall(SYSCALL_INPUT_EVENT, app as usize, shell as usize, [background as usize, 0, 0, 0]).result).map(drop)
+}
+
+/// Decoded key event (see `mind::input::KeyEvent`) for the focused application and for the focus owner; `attention`
+/// returns the focus to the owner instead.
+pub fn input_key(app: usize, owner: usize, attention: bool) -> Result<()> {
+    check(syscall(SYSCALL_INPUT_EVENT, 0, 0, [attention as usize, app, owner, 0]).result).map(drop)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

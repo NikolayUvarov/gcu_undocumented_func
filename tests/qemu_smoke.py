@@ -25,7 +25,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
-PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps)(\s+)(\d{1,18})\b", re.I)
+PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
 
@@ -38,7 +38,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, display=()):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image.
         self.disk = disk
@@ -53,7 +53,7 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot",
+             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *display,
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -62,6 +62,8 @@ class VM:
         self.log = ""
         self.monitor = False
         threading.Thread(target=self._read, daemon=True).start()
+        if not prompt:
+            return
         try:
             self.expect("MIND> ", timeout=30)
             global BASE
@@ -247,9 +249,18 @@ def require(text, fragment):
 
 
 def heap_used(vm):
-    output = vm.command("heap")
-    require(output, "TEST FREED=true")
-    return int(re.search(r"HEAP: USED=(\d+)", output).group(1))
+    # IDL clients allocate a buffer per call (log lines of the services, for instance), so a reading can catch one in
+    # flight: the value counts once two readings in a row agree.
+    previous = None
+    for _ in range(20):
+        output = vm.command("heap")
+        require(output, "TEST FREED=true")
+        used = int(re.search(r"HEAP: USED=(\d+)", output).group(1))
+        if used == previous:
+            return used
+        previous = used
+        time.sleep(.1)
+    return previous
 
 
 def task_rows(vm):
@@ -367,7 +378,12 @@ def normal_suite(vm):
     vm.keys("kill 25\n")
     vm.serial()
     assert task_rows(vm) == {}
-    registers = vm.hmp("info registers")
+    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken).
+    for _ in range(10):
+        registers = vm.hmp("info registers")
+        if "HLT=1" in registers:
+            break
+        time.sleep(.02)
     require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
@@ -638,7 +654,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/24")), screen
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/32")), screen
     vm.send("3")
     vm.expect("VIEW=PROCESS")
     for _ in range(30):
@@ -651,7 +667,8 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
-    for line in (r"0x0000008000000000 +\S+ +r-x +code", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
+    # main's VMAP records: the image's segments, no guard page (issue 075).
+    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001001000 +64\.0K +rw- +stack",
                  r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
         assert table_row(screen, line), (line, screen)
     vm.send("4")
@@ -670,7 +687,7 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
-    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 24"]:
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 32"]:
         assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
     vm.send("c")
     vm.expect("TOTAL=1")
@@ -695,9 +712,11 @@ def monitors_check(vm):
     vm.serial()
     tool_status(vm, "[HW] TOP=0")
     for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
-                 "00:01.1  010180  IDE controller", "Interrupt lines", "kernel arena 64.0M"):
+                 "Interrupt lines", "kernel arena 64.0M"):
         assert table_row(screen, re.escape(canon(text))), (text, screen)
-    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\)"), screen
+    # main's STAT: devices by index (no PCI location) and the first holder of a capability, init (issue 075).
+    assert table_row(screen, r"^ +\d+ +010180 +IDE controller"), screen
+    assert table_row(screen, r"IRQ 1 .* init \(PID 1\)"), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -842,10 +861,22 @@ def busy_suite(vm):
     after, elapsed = run(), time.monotonic() - started
     assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
     require(vm.command("logs 1"), "BUSY FIXTURE")
+    # Scheduling budget (C7): 20 ms per 100 ms keeps the busy loop near 20 % of its CPU (enforced at the 10 ms tick).
+    require(vm.command("budget 1 20 100"), "BUDGET PID=1 20 MS PER 100 MS")
+    def run_ms():
+        return int(re.search(r"^\d+ PARENT=\d+ app2 WAIT=\S+ CPU=\d+ RUN_MS=(\d+)", vm.command("stat tasks", raw=True), re.M)[1])
+    start_run, start = run_ms(), time.monotonic()
+    time.sleep(3)
+    share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
+    assert 0.12 < share < 0.35, share
+    require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
+    start_run, start = run_ms(), time.monotonic()
+    time.sleep(1)
+    assert (run_ms() - start_run) / ((time.monotonic() - start) * 1000) > 0.6, "no budget: the loop takes most of its CPU"
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU", flush=True)
+    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
 
 
 def smp_suite(vm):
@@ -863,6 +894,12 @@ def smp_suite(vm):
     assert all(int(second[p][-2]) > int(first[p][-2]) for p in second), (first, second)
     assert all(int(row[-1]) == 1 for row in second.values()), second
     assert "FAULT PID=" not in vm.command("faults")
+    # Reserve (C7): with every CPU saturated by applications, init (system band) still restarts a killed service.
+    rtc = vm.services()["rtc"]
+    start = time.monotonic()
+    require(vm.command(f"kill {rtc}", raw=True), "KILLED PID=")
+    require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
+    assert time.monotonic() - start < 5, "init must not wait for the applications"
     for pid in range(1, count + 1):
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     assert heap_used(vm) == baseline
@@ -876,7 +913,7 @@ def smp_suite(vm):
         else:
             raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
     vm.serial()
-    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, SIMD preservation, remote kill, all CPUs HLT", flush=True)
+    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, SIMD preservation, supervisor reserve under load, remote kill, all CPUs HLT", flush=True)
 
 
 def isolation_suite(vm):
@@ -890,7 +927,9 @@ def isolation_suite(vm):
              # Read-only memory mint written to; a revoked lease read afterwards.
              ("m", 14, 7), ("v", 14, 4),
              # Address of a detached block.
-             ("d", 14, 4)]
+             ("d", 14, 4),
+             # Lease dropped after mapping, then revoked by the owner.
+             ("l", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")
@@ -912,6 +951,33 @@ def isolation_suite(vm):
     output = vm.expect(f"PID={len(cases) + 3} EXITED. SHELL RESUMED.")
     require(output, "CAPABILITY CHECKS OK")
     time.sleep(.1); vm.collect(); vm.output = ""
+    # A send queued for a server that dies fails with ERR_PEER instead of waiting for a new instance.
+    parent = len(cases) + 4
+    vm.send("run app2\n")
+    vm.expect("RING3 IOPL0 READY")
+    vm.send("f\n")
+    output = vm.expect(f"PID={parent} EXITED. SHELL RESUMED.")
+    require(output, "PARENT EXITS")
+    time.sleep(.5); vm.collect(); vm.output = ""
+    assert parent + 1 not in task_rows(vm), "the child must not wait for a future instance"
+    assert f"FAULT PID={parent + 1} " not in vm.command("faults")
+
+    # Cases with children started through loader (they get the parent's endpoint in their INIT slot).
+    def family(key, children, done):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send(key + "\n")
+        require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=20), done)
+        time.sleep(.5); vm.collect(); vm.output = ""
+        rows, faults = task_rows(vm), vm.command("faults")
+        assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
+        return pid, faults
+    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 1, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
+        pid, faults = family(key, children, done)
+        assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
+    # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).
+    pid, faults = family("x", 1, "LEASE REVOKED")
+    assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
@@ -1224,7 +1290,16 @@ def ahci_suite(vm):
     files_check(vm, 1)
     vm.command("kill 1")
     assert heap_used(vm) == baseline
-    print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads", flush=True)
+    # A killed DMA driver is restarted only after its device was quiesced and its DMA region cleared (MC-6.3);
+    # the VFS keeps reading through the same endpoint.
+    require(vm.command(f"kill {services['ahci']}", raw=True), "KILLED PID=")
+    log = vm.service_logs("init", "ahci RESTARTED")
+    assert log.index("ahci DEVICE QUIESCED") < log.index("ahci RESTARTED"), log
+    require(vm.service_logs("ahci", "[AHCI] PORT 0: "), "[AHCI] PORT 0: ")
+    files = int(re.search(r"PID=(\d+) NAME=files BACKGROUND", vm.command("run files &"))[1])  # the restart took a PID
+    files_check(vm, files)
+    vm.command(f"kill {files}")
+    print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
 def services_suite(vm):
@@ -1239,20 +1314,20 @@ def services_suite(vm):
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
     tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
-    assert f"TASKS={tasks}/24" in free, (tasks, free)
-    arena, used, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=\d+ LARGEST=(\d+)", free).groups())
-    assert arena == 64 << 20 and 0 < used < arena and 0 < largest <= arena - used, free
+    assert f"TASKS={tasks} " in free, (tasks, free)
+    arena, used, free_bytes = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+)", free).groups())
+    assert arena == 64 << 20 and 0 < used < arena and used + free_bytes <= arena, free
     cpus = vm.command("cpus")
     assert len(re.findall(r"BUSY_MS=\d+ IDLE_MS=\d+ SWITCHES=\d+", cpus)) == vm.cpus, cpus
     physmap = vm.command("physmap")
-    for kind in ("free RAM", "kernel arena", "kernel", "framebuffer", "boot image"):
+    for kind in ("free RAM", "kernel arena", "framebuffer", "boot image", "AP trampoline"):
         require(physmap, kind)
     free_ram = int(re.search(r"FREE_RAM=(\d+)K", physmap)[1])
     assert 128 * 1024 < free_ram < 512 * 1024, free_ram  # the VM has 512 MiB
     require(vm.command("irqs"), f"IRQ=1 COUNT=")
-    require(vm.command("devices"), "00:01.1 010180 IDE controller")
+    assert re.search(r"^\d+ 010180 IDE controller IRQ=", vm.command("devices"), re.M)
     endpoints = vm.command("endpoints")
-    assert len(re.findall(r"^EP=\d+ CREATOR=1 SERVER=\d+", endpoints, re.M)) >= 6, endpoints
+    assert len(re.findall(r"^EP=\d+ CREATOR=1 RECEIVERS=1 ", endpoints, re.M)) >= 6, endpoints
     require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
     # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
     import datetime
@@ -1260,7 +1335,23 @@ def services_suite(vm):
     date = vm.command("date")
     assert any(f"DATE: {d.isoformat()} " in date for d in (today, today - datetime.timedelta(days=1), today + datetime.timedelta(days=1))), date
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
-    vm.send("fg 0\n"); vm.expect("ERROR:")
+    vm.send("fg 0\n"); vm.expect("ERROR: EXPECTED ONE POSITIVE PID\nMIND> ")  # the whole reply, prompt included
+    # End of the initial distribution: init gives up the platform privilege before READY.
+    require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
+    # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
+    tasks = vm.command("stat tasks", raw=True)
+    assert int(re.search(r"STAT TASKS VERSION=1 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])
+    heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
+    assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
+    layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-"):
+        require(layout, region)
+    cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
+    assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
+    # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
+    quotas = vm.command("quotas", raw=True)
+    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/31 \d+/127$", quotas, re.M), quotas
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)
@@ -1296,19 +1387,19 @@ def services_suite(vm):
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
-    assert re.search(r"0x0000008000000000 +\d+ r-x code", pmap), pmap
-    for line in ("0x0000008001000000      4096 --- guard", "0x0000008001001000     65536 rw- stack", "0x0000008001011000      4096 --- guard",
+    assert re.search(r"0x0000008000000000 +\d+ r-x image", pmap), pmap
+    for line in ("0x0000008001001000     65536 rw- stack",
                  "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
         require(pmap, line)
     assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
-    require(details, "CAPS=5/31")
+    require(details, "CAPS=5/63")
     # The standard client endpoints in slots 2..6, write and grant only; no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):
-        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=\d+ RIGHTS=-wg-", caps), (slot, caps)
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ RIGHTS=-wg-", caps), (slot, caps)
     assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)
@@ -1323,20 +1414,40 @@ def services_suite(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline, "IPC/VFS clients leaked memory or shared mappings"
-    # No endpoint numbers: a restarted service gets a new receiver of the endpoint init keeps, so a client granted
-    # earlier reaches it again; while it is dead, calls fail instead of hanging.
-    require(vm.command(f"kill {vm.services()['rtc']}", raw=True), "KILLED PID=")
+    # Supervision: init restarts a killed service from the endpoint it keeps, so a client started before the failure
+    # reaches the new instance; after three restarts in 60 s the service is quarantined until the operator runs it.
     require(vm.command("run hello &"), "PID=6 NAME=hello BACKGROUND")
-    time.sleep(1)
-    assert "[CLOCK] " not in vm.command("logs 6"), "a dead RTC service must not answer"
+
+    def clock_resumes():
+        vm.command("logs 6")
+        output = ""
+        for _ in range(30):
+            output += vm.command("logs 6")
+            if "[CLOCK] " in output:
+                return
+            time.sleep(.2)
+        raise AssertionError("client did not reach the restarted rtc: " + output)
+
+    def kill_rtc():
+        pid = vm.services()["rtc"]
+        require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+        for _ in range(30):
+            if vm.services().get("rtc", pid) != pid:
+                return pid
+            time.sleep(.1)
+        return pid
+
+    first = kill_rtc()
+    require(vm.service_logs("init", f"rtc PID={first} KILLED"), "RESTARTED PID=")
+    clock_resumes()
+    kill_rtc(); kill_rtc(); kill_rtc()
+    require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S")
+    assert "rtc" not in vm.services(), "a quarantined service stays down"
+    # Its client is not left waiting in a send to the dead endpoint (init keeps no receive right).
+    time.sleep(.5)
+    assert not re.search(r" hello WAIT=1:", vm.command("stat tasks", raw=True)), "client blocked on a quarantined service"
     require(vm.command("run rtc &"), "NAME=rtc")
-    output = ""
-    for _ in range(20):
-        output += vm.command("logs 6")
-        if "[CLOCK] " in output:
-            break
-        time.sleep(.2)
-    require(output, "[CLOCK] ")
+    clock_resumes()
     vm.command("kill 6")
     # Loader v1 (idl/loader.wit): uptime asks in its ELF for the console and sysmon (idl/sysinfo.wit); the shell grants the
     # client endpoint in a launch session and shows the output of the console program (sysmon's last sample, taken
@@ -1355,17 +1466,20 @@ def services_suite(vm):
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
     lifecycle_check(vm)
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top)", flush=True)
+    # Final recovery boundary: without init the system stops instead of running unsupervised.
+    vm.send(f"kill {vm.services()['init']}\n", raw=True)
+    vm.expect("INIT EXITED: SYSTEM HALTED")
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, supervised restart with budget and quarantine for existing clients, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top), halt without init, reclaim", flush=True)
 
 
 def lifecycle_check(vm):
-    """init's lifecycle interface (idl/lifecycle.wit): svc lists, restarts, stops and starts services, refuses init and
+    """init's lifecycle requests (idl/init.wit 1.1): svc lists, restarts, stops and starts services, refuses init and
     the shell; clients reach a restarted service; top stops an application after asking."""
     import datetime
     pids = vm.services()
     listing = vm.command("svc", raw=True)
     require(listing, "SERVICE         PID  STARTS  STATE    HOLDS")
-    assert re.search(r"^init\s+1\s+1\s+running\s+platform and spawn privileges$", listing, re.M), listing
+    assert re.search(r"^init\s+1\s+1\s+running\s+restart and process control$", listing, re.M), listing
     assert re.search(fr"^logd\s+{pids['logd']}\s+1\s+running\s+observe privilege$", listing, re.M), listing
     assert re.search(r"^ahci\s+0\s+0\s+stopped\s+AHCI registers", listing, re.M), listing
     # A restarted rtc: a new PID, one more start, and the shell's client reaches it.
@@ -1385,7 +1499,7 @@ def lifecycle_check(vm):
     require(vm.command("svc stop tts"), "svc: stop tts: it does not run")
     require(vm.command("svc start tts"), "tts started: PID")
     require(vm.command("svc start tts"), "svc: start tts: it runs already")
-    require(vm.command("svc start ahci"), "svc: start ahci: its device is missing")
+    require(vm.command("svc start ahci"), "svc: start ahci: no such service, or its device is missing")
     require(vm.command("svc restart nothing"), "svc: restart nothing: no such service or task")
     require(vm.command("svc stop 1"), "svc: stop 1: init and the shell cannot be stopped")
     require(vm.command("svc frobnicate"), "usage: svc")
@@ -1590,7 +1704,7 @@ def edit_check(vm):
     keys("Вторая строка".encode(), "BYTES=34 ")
     keys(b"\r", "LINE=3 COL=1 BYTES=35 ")
     keys(f2, "[EDIT] SAVED 35 BYTES TO data/edit.txt")
-    # The editor's client is confined to data/: other places are refused (issue 051).
+    # The editor's client is confined to data/: other places are refused (issue 071).
     for outside in (b"ram:x.txt", b"kernel.elf", b"EFI/x.txt"):
         keys(shift_f2, "DIALOG=SAVEAS")
         keys(b"\x7f" * 16, "DIALOG=SAVEAS")
@@ -1820,7 +1934,7 @@ def block_suite(args, block_elf):
                 output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
                 line = next((l for l in output.splitlines() if f"KIND={kind} " in l), None)
                 assert line and "BADGE=1 " in line and "WRITABLE" in line and f"SECTORS={sectors} " in line, output
-                assert "ATTACH=OK WRITE=OK FLUSH=OK READBACK=OK" in line, line
+                assert "ATTACH=OK WRITE=OK UNSEALED=REFUSED FLUSH=OK READBACK=OK" in line, line
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-block-{name.lower()}-{args.cpus}cpu.log").write_text(vm.log)
@@ -1879,15 +1993,18 @@ def listen_suite(vm):
     require(log, "[LISTEN] PLAYED BACK")
     vm.command("kill 1")
     # Program arguments: options and text reach say; a plain word runs a program in the foreground.
-    require(vm.command("run say -p 150 -r 120 hello world &"), "PID=2 NAME=say BACKGROUND")
-    log = ""
-    for _ in range(40):
-        log += vm.command("logs 2")
-        if "[SAY] DONE" in log:
-            break
-        time.sleep(.25)
-    assert re.search(r"\[SAY\] SPOKE \d+ MS", log), log
-    vm.command("kill 2")
+    vm.send("run say -p 150 -r 120 hello world\n")
+    output = vm.expect("PID=2 EXITED. SHELL RESUMED.", timeout=20)
+    require(output, "STARTED PID=2 NAME=say FOREGROUND")
+    # Two short words, not the default greeting (2.5-9 s): the text argument reached say.
+    spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    assert 200 < spoken < 2000, spoken
+    # Run by name: a plain word starts the program in the foreground with the rest as arguments.
+    vm.send("say hi\n")
+    output = vm.expect("PID=3 EXITED. SHELL RESUMED.", timeout=20)
+    require(output, "STARTED PID=3 NAME=say FOREGROUND")
+    spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    assert 50 < spoken < 1500, spoken
     require(vm.command("nosuchprogram"), "ERROR: UNKNOWN COMMAND")
     require(vm.command("run rtc x &"), "SERVICES TAKE NO ARGUMENTS")
     assert "FAULT PID=" not in vm.command("faults")
@@ -1952,6 +2069,61 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def display_suite(args, disk):
+    # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
+    for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), display=display)
+        try:
+            require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
+            vm.send("fg 1\n")
+            vm.expect("FOREGROUND PID=1")
+            time.sleep(.3)
+            assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
+            vm.serial()  # the screenshot switched the console to the QEMU monitor
+            vm.send(" \n")
+            time.sleep(.3)
+            assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
+        finally:
+            vm.close()
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
+
+
+def boot_suite(args, disk):
+    # The bootloader names a broken or missing boot file instead of hanging silently.
+    kernel = (disk / "kernel.elf").read_bytes()
+    for name, data, reason in [("kernel.elf", b"XELF" + kernel[4:], "bad ELF magic"),
+                               ("kernel.elf", kernel[:40], "file too short for an ELF header"),
+                               ("kernel.elf", kernel[:64] + b"\0" * 64, "program headers outside the file"),
+                               ("rtc.elf", None, "file not found")]:
+        target = disk / name
+        original = target.read_bytes()
+        if data is None:
+            target.unlink()
+        else:
+            target.write_bytes(data)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
+        finally:
+            vm.close()
+        target.write_bytes(original)
+    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    if args.panic_kernel:
+        # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
+        target = disk / "kernel.elf"
+        target.write_bytes(Path(args.panic_kernel).read_bytes())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            deadline, pattern = time.monotonic() + 30, re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n")
+            while not pattern.search(vm.output.replace("\r", "")):
+                assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
+                vm.collect(); time.sleep(.05)
+        finally:
+            vm.close()
+        target.write_bytes(kernel)
+        print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
@@ -1961,10 +2133,11 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -2007,6 +2180,12 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+            if suite == "boot":
+                boot_suite(args, disk)
+                continue
+            if suite == "display":
+                display_suite(args, disk)
+                continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")

@@ -1,0 +1,35 @@
+# 061 — `top`, `memmap`, `load`, `hw` — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 054, 060, 062 · **Roadmap:** track G, tools plan §4.4–4.7
+
+Formerly tools-branch 041.
+
+## Problem
+
+The shell's `ps`, `cpus`, `heap` are one-shot text dumps; there is no interactive task monitor, memory map, load graph or device list.
+
+## Plan
+
+- `top`: header (uptime, task states, per-CPU busy bars, load averages, kernel memory, IPC/s, faults), task table with %CPU from run-time deltas, sorting (P/M/N/T), service filter (S), tree (t), task details (Enter).
+- `memmap`: physical map (firmware map + platform layout), kernel arena (use, fragments, categories, limits), process address space (pmap) with guards and shared mappings, quotas.
+- `load`: per-CPU, interrupt, syscall, IPC and memory graphs over 30 s / 10 min; `uptime` as a console summary.
+- `hw`: CPU (CPUID), clocks, framebuffer, PCI devices with holders, IRQ lines, DMA regions.
+
+## Acceptance criteria
+
+- QEMU suite `tools`: each tool starts, shows values that agree with `ps`/`heap`/`cpus`, reacts to keys, exits with Esc; screendumps checked.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) §4.4–4.7.
+
+## Resolution
+
+- `monitor/`: one crate, four ELFs (`top`, `memmap`, `load`, `hw`). Each tool is a `model::Tool` that reads a `model::Source` (sysmon's `idl/sysinfo.wit` through the client the shell lends, `mind::request!(REQUEST_SYSINFO)`) and draws into a `tui::Grid` in the dark theme; `app::run` refreshes, draws and passes keys. A program started without the grant shows "No access to sysmon".
+- `top`: header (uptime, load averages, task states, IPC/syscall/interrupt/switch rates from the 100 ms samples, a busy bar per CPU, kernel memory); table with PID, PPID, NAME, STATE, CPU, %CPU (run-time deltas in ns), TIME, SYSC/s, MEM, HEAP, SHARED, CAPS, EP — lower-priority columns drop on narrow screens; P/M/N/T sort, S hides services, t spawn tree, Enter details (what the task waits for, memory, address space, capabilities by kind, quotas), +/- interval. `k`/`r` say to use `KILL` until the lifecycle interface (070).
+- `memmap`: physical bar (0–4 GiB or RAM only, layout over firmware ranges, holes dotted) with legend and a merged/raw range list; kernel arena by category with the object and DMA limits and the free space outside the largest block; a task's address space; quotas as a spawn tree.
+- `load`: braille graphs over 30 s or 10 min of busy time per CPU (or all CPUs), interrupts, syscalls, IPC and switches per second, kernel arena and tasks.
+- `hw`: CPUID (vendor, brand, family/model, NX, invariant TSC, xAPIC/x2APIC, SSE/AVX, SMEP/SMAP…), TSC rate and clock resolution, framebuffer, PCI devices with holders, IRQ lines, platform memory.
+- `Key::latin()`: letter commands in the Russian layout too.
+- Not done here: fault counts in `top` (not in sysinfo 1.0), per-line interrupt graphs, block devices and the audio codec in `hw` (their drivers do not report them), DMA regions by holder. The "arena used = `heap`" cross-check is replaced by task counts and the arena size (the shell cannot run commands while a tool is in front).
+- Tests: `tests/monitor_host.rs` (CPU from deltas, rates, sorting/filter/tree with a kept selection, details, column fitting, merged map, bar kinds, resampling, report lines, every tool drawn from 20x6 to 240x67); QEMU `tools` suite (task count = services + 2, details, PID order, filter, tree; physical map and arena; clock's address space matches the layout `pmap` shows; `loader 2/8` quota; graphs per CPU, total, 10 min; CPUID, framebuffer size = screen, IDE controller, IRQ 1 held by ps2_kbd) and `busy` (top shows the busy loop at ≥ 80 % of its CPU).

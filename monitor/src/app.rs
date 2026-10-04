@@ -5,13 +5,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
-use mind::idl::{lifecycle, sysinfo, wire};
+use mind::idl::{init as lifecycle, sysinfo};
 use mind::ipc::Endpoint;
 use mind::tui::widgets::message;
 use mind::tui::{Terminal, DARK};
 
-/// sysmon through a buffer lent with every call (idl/sysinfo.wit); replies are copied out at once.
-pub struct Client { shared: wire::Shared }
+/// sysmon through its client endpoint (idl/sysinfo.wit); every call lends its own buffer and copies the reply out.
+pub struct Client;
 
 fn take<T>(reply: mind::Result<core::result::Result<T, sysinfo::Error>>) -> Result<T, Problem> {
     match reply {
@@ -26,7 +26,7 @@ fn take<T>(reply: mind::Result<core::result::Result<T, sysinfo::Error>>) -> Resu
 }
 
 impl Client {
-    pub fn new() -> Option<Self> { wire::Shared::new(32 * 1024).ok().map(|shared| Self { shared }) }
+    pub fn new() -> Option<Self> { Some(Self) }
 }
 
 // A reply of init's lifecycle interface as text for the notice line.
@@ -49,54 +49,59 @@ const LIFECYCLE: Endpoint = Endpoint(mind::abi::SLOT_LIFECYCLE);
 
 impl Source for Client {
     fn stop(&mut self, task: &Task) -> Result<(), String> {
-        if task.service() { lifecycle_call(lifecycle::stop(LIFECYCLE, self.shared.buffer(), &task.name)) } else { lifecycle_call(lifecycle::stop_task(LIFECYCLE, task.pid)) }
+        if task.service() { lifecycle_call(lifecycle::stop(LIFECYCLE, &task.name)) } else { lifecycle_call(lifecycle::stop_task(LIFECYCLE, task.pid)) }
     }
-    fn restart(&mut self, name: &str) -> Result<u64, String> { lifecycle_call(lifecycle::restart(LIFECYCLE, self.shared.buffer(), name)) }
+    fn restart(&mut self, name: &str) -> Result<u64, String> { lifecycle_call(lifecycle::restart(LIFECYCLE, name)) }
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> {
-        let list = take(sysinfo::tasks(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(list.iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sent, received: t.received, started_ns: t.started_ns,
-            image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, kernel: t.kernel, wait: t.wait, heap_blocks: t.heap_blocks, caps: t.caps,
-            quota_tasks: t.quota_tasks, used_tasks: t.used_tasks, quota_endpoints: t.quota_endpoints, used_endpoints: t.used_endpoints, name: String::from(t.name),
-            state: t.state, cpu: t.cpu, flags: t.flags }).collect())
+        let list = take(sysinfo::tasks(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
+            image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, retained: t.retained, wait: t.wait_on as u64, heap_blocks: t.heap_blocks, caps: t.caps,
+            quota_tasks: t.quota_tasks as u32, used_tasks: t.used_tasks as u32, quota_endpoints: t.quota_endpoints as u32, used_endpoints: t.used_endpoints as u32,
+            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags }).collect())
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
-        let list = take(sysinfo::cpus(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(list.iter().map(|c| Cpu { busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current, apic: c.apic, online: c.online }).collect())
+        let list = take(sysinfo::cpus(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().map(|c| Cpu { busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current, apic: c.apic, online: c.online }).collect())
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
-        let m = take(sysinfo::memory(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(Memory { arena: m.arena, used: m.used, free: m.free, largest_free: m.largest_free, images: m.images, stacks: m.stacks, screens: m.screens, heaps: m.heaps,
-                    task_kernel: m.task_kernel, page_tables: m.page_tables, objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit,
-                    mapped: m.mapped, other: m.other, tasks: m.tasks, tasks_limit: m.tasks_limit, endpoints: m.endpoints, endpoints_limit: m.endpoints_limit })
+        let m = take(sysinfo::memory(Endpoint::SYSINFO))?;
+        Ok(Memory { arena: m.arena, used: m.used, free: m.free, images: m.images, stacks: m.stacks, task_pages: m.task_pages, screens: m.screens, heaps: m.heaps,
+                    objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks, endpoints: m.endpoints })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> {
-        let list = take(sysinfo::physmap(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(list.iter().map(|r| Range { start: r.start, bytes: r.bytes, kind: r.kind, detail: r.detail }).collect())
+        let list = take(sysinfo::physmap(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().map(|r| Range { start: r.start, bytes: r.pages * 4096, kind: r.kind, detail: r.index }).collect())
     }
     fn vmap(&mut self, pid: u64) -> Result<Vec<Region>, Problem> {
-        let list = take(sysinfo::vmap(Endpoint::SYSINFO, pid, self.shared.buffer()))?;
-        Ok(list.iter().map(|r| Region { start: r.start, bytes: r.bytes, kind: r.kind, flags: r.flags }).collect())
+        let list = take(sysinfo::vmap(Endpoint::SYSINFO, pid))?;
+        Ok(list.as_slice().iter().map(|r| Region { start: r.start, bytes: r.size, kind: r.kind, flags: r.flags }).collect())
     }
     fn caps(&mut self, pid: u64) -> Result<Vec<Capability>, Problem> {
-        let list = take(sysinfo::caps(Endpoint::SYSINFO, pid, self.shared.buffer()))?;
-        Ok(list.iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, base: c.base, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, endpoint: c.endpoint }).collect())
+        let list = take(sysinfo::caps(Endpoint::SYSINFO, pid))?;
+        Ok(list.as_slice().iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge }).collect())
     }
     fn irqs(&mut self) -> Result<Vec<Irq>, Problem> {
-        let list = take(sysinfo::irqs(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(list.iter().map(|i| Irq { count: i.count, line: i.line, holder: i.holder, endpoint: i.endpoint, masked: i.masked }).collect())
+        let list = take(sysinfo::irqs(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().map(|i| Irq { count: i.count, line: i.line, holder: i.holder, endpoint: i.endpoint, masked: i.masked }).collect())
     }
     fn devices(&mut self) -> Result<Vec<Device>, Problem> {
-        let list = take(sysinfo::devices(Endpoint::SYSINFO, self.shared.buffer()))?;
-        Ok(list.iter().map(|d| Device { bars: [d.bar0, d.bar1, d.bar2, d.bar3, d.bar4, d.bar5], class: d.class, irq: d.irq, holder: d.holder, index: d.index, location: d.location, io_bars: d.io_bars }).collect())
+        let list = take(sysinfo::devices(Endpoint::SYSINFO))?;
+        Ok(list.as_slice().iter().enumerate().map(|(i, d)| Device { bars: [d.bar0, d.bar1, d.bar2, d.bar3, d.bar4, d.bar5], class: d.class, irq: d.irq, holder: d.holder, index: i as u32 }).collect())
     }
     fn history(&mut self, slow: bool, count: u16) -> Result<Vec<Sample>, Problem> {
-        let list = take(sysinfo::history(Endpoint::SYSINFO, self.shared.buffer(), slow, count))?;
         let unpack = |low: u64, high: u64| core::array::from_fn(|i| (if i < 4 { low >> (16 * i) } else { high >> (16 * (i - 4)) } & 0xFFFF) as u16);
-        Ok(list.iter().map(|s| Sample { busy: unpack(s.busy_low, s.busy_high), interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages, switches: s.switches,
-                                        used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }).collect())
+        // In replies of up to 150 samples.
+        let mut samples = Vec::new();
+        while samples.len() < count as usize {
+            let list = take(sysinfo::history(Endpoint::SYSINFO, slow, count, samples.len() as u16))?;
+            samples.extend(list.as_slice().iter().map(|s| Sample { busy: unpack(s.busy_low, s.busy_high), interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages,
+                                                                  switches: s.switches, used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }));
+            if list.len() < 150 { break; }
+        }
+        Ok(samples)
     }
     fn load(&mut self) -> Result<Load, Problem> {
-        let l = take(sysinfo::load(Endpoint::SYSINFO, self.shared.buffer()))?;
+        let l = take(sysinfo::load(Endpoint::SYSINFO))?;
         Ok(Load { one: l.one, five: l.five, fifteen: l.fifteen, uptime_ms: l.uptime_ms, fast_ms: l.fast_ms, slow_ms: l.slow_ms, fast_count: l.fast_count, slow_count: l.slow_count })
     }
     fn now_ns(&self) -> u64 { mind::time::monotonic_ns() }

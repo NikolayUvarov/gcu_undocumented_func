@@ -1,0 +1,31 @@
+# 063 — File manager `fm`, read-only — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 054, 057, 062 · **Roadmap:** track G, tools plan §4.1
+
+Formerly tools-branch 043.
+
+## Problem
+
+There is no way to browse the disk interactively.
+
+## Plan
+
+- Two panels (brief/full/info/quick view), sort by name/extension/size/time, Tab to switch, Enter to open a directory or run an `.elf`, F3 view (built in), Alt+F1/F2 volume, Ctrl+R reread, Alt+F7 find by name mask, F9 menu, F10 quit.
+- Directory listing through VFS with attributes and times (VFS LIST v2 from 066 when available; today's LIST until then).
+
+## Acceptance criteria
+
+- QEMU suite `tools`: navigate into `EFI/BOOT`, back, view a file, start a program from the panel; screendumps.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) §4.1.
+
+## Resolution
+
+- `fm/`: `panel` (entries, sorting by name/extension/size/time with directories first, hidden filter, masks with `*`/`?`, marking, brief/full drawing, brief mode scrolling by columns) and `fm` (two panels, the built-in viewer sharing one 64 KiB window, quick view of the first 8 KiB, information, find from the current directory down with sorted results, F9 menu, F1 keys, volume dialog). The disk is a `Disk` trait: `vfs_server` in the program, memory in `tests/fm_host.rs`.
+- Keys as planned (Tab, Enter, Backspace, F3, Ins/+/-/*, Ctrl+F3–F6, Ctrl+H/R/U/L/Q, Alt+F1/F2/F7, F9, F10/Esc). F4 and F5–F8 say which issue brings them.
+- Programs start through the loader's launch session (`idl/loader.wit`, no grants: the standard set) and run in the background — focus is the shell's, so `fm` says which PID to bring forward with `FG`.
+- VFS `LIST` entries now carry attributes and the FAT modification time (`VFS_ENTRY_*`, `mind::fs::fat_time`); the full mode shows date and time. Long names are still ASCII (UTF-16 → UTF-8 comes with VFS v2, 066); there is one volume until the RAM disk (065); free space comes with `df` (068).
+- `Viewer::into_buffer` gives the window back when a file is closed.
+- Tests: `tests/fm_host.rs` (masks, paths, FAT time, sorting and cursor, marking, navigation with `..` focus, run, view, quick view, information, find, menu, mask dialog, read-only notice, volume, listing errors, brief columns, drawing from 20x6 to 240x67 in every state); QEMU `tools` suite (sizes and dates in the full panel, F3 on `docs/notes.txt` with Cyrillic, `..` back with the cursor on the directory, `EFI/BOOT` and back, `clock.elf` started from the panel runs and logs, reclaim).

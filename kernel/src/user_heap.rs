@@ -15,21 +15,13 @@ struct Block {
 pub struct Heap {
     blocks: [Option<Block>; HEAP_MAX_BLOCKS],
     bytes: usize,
+    pub retained: usize, // freed or detached blocks others still hold, charged until released
     shared: usize,
 }
 
 impl Heap {
     pub fn new() -> Self {
-        Self { blocks: core::array::from_fn(|_| None), bytes: 0, shared: 0 }
-    }
-
-    // Observation: private bytes, mapped foreign bytes, live blocks, and every block as (address, size, private, writable,
-    // device) without physical addresses.
-    pub fn bytes(&self) -> usize { self.bytes }
-    pub fn shared(&self) -> usize { self.shared }
-    pub fn blocks(&self) -> usize { self.blocks.iter().flatten().count() }
-    pub fn regions(&self) -> impl Iterator<Item = (usize, usize, bool, bool, bool)> + '_ {
-        self.blocks.iter().flatten().map(|b| (b.address, b.size, b.memory.is_some(), b.writable, b.device))
+        Self { blocks: core::array::from_fn(|_| None), bytes: 0, retained: 0, shared: 0 }
     }
 
     fn find_hole(&self, size: usize) -> Option<usize> {
@@ -47,7 +39,7 @@ impl Heap {
     pub fn allocate(&mut self, space: &mut Space, requested: usize) -> Option<usize> {
         if requested == 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
-        if size > HEAP_MAX_BYTES - self.bytes { return None; }
+        if size > HEAP_MAX_BYTES.saturating_sub(self.bytes + self.retained) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         let memory = Region::new(size, PAGE).ok()?;
@@ -71,8 +63,9 @@ impl Heap {
     }
 
     // Only the exact start of a heap block can be shared: this prevents handing out code, stack or foreign pages.
+    // Own blocks only: sharing a foreign mapping would mint a new root with rights the mapper never had.
     pub fn shareable(&self, address: usize, requested: usize) -> Option<(usize, usize)> {
-        let block = self.blocks.iter().flatten().find(|b| b.address == address)?;
+        let block = self.blocks.iter().flatten().find(|b| b.address == address && b.memory.is_some())?;
         let size = if requested == 0 { block.size } else { requested.checked_add(PAGE - 1)? & !(PAGE - 1) };
         (size <= block.size).then_some((block.physical, size))
     }
@@ -93,6 +86,17 @@ impl Heap {
         }
         any
     }
+
+    // Statistics (STAT): private bytes and blocks, mapped foreign bytes, and what a heap-window address belongs to.
+    pub fn bytes(&self) -> usize { self.bytes }
+    pub fn shared_bytes(&self) -> usize { self.shared }
+    pub fn block_count(&self) -> usize { self.blocks.iter().flatten().count() }
+    pub fn kind_at(&self, address: usize) -> Option<(bool, bool)> {
+        self.blocks.iter().flatten().find(|b| address >= b.address && address < b.address + b.size).map(|b| (b.memory.is_some(), b.device))
+    }
+
+    // Whether a foreign mapping was made from capability node `id`.
+    pub fn made_from(&self, id: u64) -> bool { self.blocks.iter().flatten().any(|b| b.memory.is_none() && b.node == id) }
 
     // Whether any writable mapping (own block or foreign) overlaps the physical range.
     pub fn writes(&self, physical: usize, size: usize) -> bool {
@@ -120,5 +124,61 @@ impl Heap {
         space.unmap(block.address, block.size);
         if block.memory.is_some() { self.bytes -= block.size; } else { self.shared -= block.size; }
         Some(block.memory)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holes_are_reused_and_frees_are_checked() {
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let a = heap.allocate(&mut space, 4096).unwrap();
+        let b = heap.allocate(&mut space, 8192).unwrap();
+        assert!(b > a && space.writable(a).is_some() && space.writable(b + 4096).is_some());
+        assert!(heap.free(&mut space, a).is_some());
+        assert!(space.readable(a).is_none());
+        assert!(heap.free(&mut space, a).is_none(), "double free");
+        assert!(heap.free(&mut space, b + 4096).is_none(), "not the start of a block");
+        assert_eq!(heap.allocate(&mut space, 4096), Some(a), "first fit reuses the hole");
+    }
+
+    #[test]
+    fn block_and_byte_limits_include_retained_memory() {
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let blocks: Vec<usize> = (0..HEAP_MAX_BLOCKS).map(|_| heap.allocate(&mut space, 4096).unwrap()).collect();
+        assert!(heap.allocate(&mut space, 4096).is_none(), "block limit");
+        for block in blocks { heap.free(&mut space, block); }
+        assert!(heap.allocate(&mut space, HEAP_MAX_BYTES + 1).is_none());
+        heap.retained = HEAP_MAX_BYTES - 4096;
+        assert!(heap.allocate(&mut space, 8192).is_none(), "retained blocks count against the quota");
+        assert!(heap.allocate(&mut space, 4096).is_some());
+    }
+
+    #[test]
+    fn only_own_blocks_are_shareable_and_revoke_unmaps_by_node() {
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let own = heap.allocate(&mut space, 4096).unwrap();
+        let foreign = Region::new(8192, PAGE).unwrap();
+        let mapped = heap.map_shared(&mut space, foreign.ptr() as usize, 8192, false, false, 7).unwrap();
+        assert!(heap.shareable(own, 0).is_some());
+        assert!(heap.shareable(mapped, 0).is_none(), "a mapping is not re-shareable");
+        assert!(space.readable(mapped).is_some() && space.writable(mapped).is_none(), "read-only mapping");
+        assert!(heap.made_from(7) && !heap.made_from(8));
+        assert!(!heap.revoke(&mut space, &[8], true));
+        assert!(heap.revoke(&mut space, &[7], false));
+        assert!(space.readable(mapped).is_none() && !heap.made_from(7));
+        assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, false, true, 9).is_some(), "shared quota returned");
+    }
+
+    #[test]
+    fn detach_leaves_the_address_space_and_the_quota() {
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let block = heap.allocate(&mut space, HEAP_MAX_BYTES).unwrap();
+        let region = heap.detach(&mut space, block).unwrap();
+        assert_eq!(region.len(), HEAP_MAX_BYTES);
+        assert!(space.readable(block).is_none() && heap.free(&mut space, block).is_none());
+        assert!(heap.allocate(&mut space, 4096).is_some());
     }
 }

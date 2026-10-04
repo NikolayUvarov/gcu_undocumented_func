@@ -22,12 +22,12 @@ use keys::{event, Key};
 use tui::{Cell, Grid, CLASSIC};
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
-fn code(code: u32) -> Key { Key(event(code, 0, 0)) }
-fn shift(code: u32) -> Key { Key(event(code, 0, KEY_MOD_SHIFT)) }
-fn ctrl_code(code: u32) -> Key { Key(event(code, 0, KEY_MOD_CTRL)) }
-fn f(n: u32) -> Key { code(KEY_F1 + n - 1) }
-fn fmod(n: u32, mods: u32) -> Key { Key(event(KEY_F1 + n - 1, 0, mods)) }
-fn ctrl(ch: char) -> Key { Key(event(0, ch as u32, KEY_MOD_CTRL)) }
+fn code(code: u16) -> Key { Key(event(code, 0, 0)) }
+fn shift(code: u16) -> Key { Key(event(code, 0, MOD_SHIFT)) }
+fn ctrl_code(code: u16) -> Key { Key(event(code, 0, MOD_CTRL)) }
+fn f(n: u16) -> Key { code(KEY_F1 + n - 1) }
+fn fmod(n: u16, mods: u8) -> Key { Key(event(KEY_F1 + n - 1, 0, mods)) }
+fn ctrl(ch: char) -> Key { Key(event(0, ch as u32, MOD_CTRL)) }
 fn enter() -> Key { Key(event(KEY_ENTER, '\n' as u32, 0)) }
 
 fn typed(editor: &mut Editor, text: &str) { for c in text.chars() { if c == '\n' { editor.key(enter()); } else { editor.key(chr(c)); } } }
@@ -140,7 +140,7 @@ fn undo_groups_and_the_save_point() {
     assert_eq!(text(&e), "hello world\nsecon!d");
     e.key(ctrl('u'));
     assert_eq!(text(&e), "hello world\nsecond");
-    e.key(Key(event(KEY_BACKSPACE, 8, KEY_MOD_ALT))); // Alt+Backspace undoes too
+    e.key(Key(event(KEY_BACKSPACE, 8, MOD_ALT))); // Alt+Backspace undoes too
     assert_eq!(text(&e), "hello world\n");
     e.key(ctrl('u'));
     assert_eq!(text(&e), "hello world");
@@ -268,7 +268,7 @@ fn editing_keys() {
     let long: String = (1..=100).map(|n| format!("line {}\n", n)).collect();
     let mut e = Editor::new(long.into_bytes(), "", false);
     draw(&mut e, 80, 25);
-    e.key(code(KEY_PGDN));
+    e.key(code(KEY_PAGE_DOWN));
     assert_eq!(e.line(), 22);
     e.key(ctrl_code(KEY_END));
     assert_eq!(e.line(), 100);
@@ -285,7 +285,7 @@ fn read_only_refuses_changes() {
     assert_eq!(text(&e), "boot file");
     assert!(e.notice.as_deref().unwrap().contains("Read-only"));
     // Save as elsewhere is allowed.
-    e.key(fmod(2, KEY_MOD_SHIFT));
+    e.key(fmod(2, MOD_SHIFT));
     assert!(e.status().contains("DIALOG=SAVEAS"));
     for _ in 0..20 { e.key(code(KEY_BACKSPACE)); }
     typed(&mut e, "ram:copy.elf");
@@ -351,10 +351,10 @@ fn find_replace_goto_and_menu() {
     typed(&mut e, "BETA");
     e.key(enter());
     assert_eq!(e.selection(), Some((6, 10)));
-    e.key(fmod(7, KEY_MOD_SHIFT));
+    e.key(fmod(7, MOD_SHIFT));
     let at = "alpha beta\nГамма ".len();
     assert_eq!(e.selection(), Some((at, at + 4)));
-    e.key(fmod(7, KEY_MOD_SHIFT));
+    e.key(fmod(7, MOD_SHIFT));
     assert_eq!(e.selection(), Some((6, 10))); // wrapped
     e.key(f(7));
     for _ in 0..10 { e.key(code(KEY_BACKSPACE)); }
@@ -362,7 +362,7 @@ fn find_replace_goto_and_menu() {
     e.key(enter());
     assert!(e.notice.as_deref().unwrap().contains("Not found"));
     // Ctrl+F7: replace all, one undo step.
-    e.key(fmod(7, KEY_MOD_CTRL));
+    e.key(fmod(7, MOD_CTRL));
     for _ in 0..10 { e.key(code(KEY_BACKSPACE)); }
     typed(&mut e, "гамма");
     e.key(enter());
@@ -373,11 +373,11 @@ fn find_replace_goto_and_menu() {
     e.key(ctrl('u'));
     assert_eq!(text(&e), "alpha beta\nГамма beta\nend");
     // Alt+F8: go to line.
-    e.key(fmod(8, KEY_MOD_ALT));
+    e.key(fmod(8, MOD_ALT));
     typed(&mut e, "3");
     e.key(enter());
     assert_eq!(e.line(), 2);
-    e.key(fmod(8, KEY_MOD_ALT));
+    e.key(fmod(8, MOD_ALT));
     typed(&mut e, "x");
     e.key(enter());
     assert!(e.notice.is_some());
@@ -444,8 +444,8 @@ fn draws_text_status_and_dialogs() {
     for (cols, rows) in [(20, 6), (40, 12), (80, 25), (160, 50)] {
         let mut e = Editor::new("text\n".as_bytes().to_vec(), "f.txt", false);
         typed(&mut e, "a");
-        for keys in [vec![f(1)], vec![f(7)], vec![fmod(7, KEY_MOD_CTRL)], vec![fmod(8, KEY_MOD_ALT)],
-                     vec![fmod(2, KEY_MOD_SHIFT)], vec![f(10)], vec![f(9), code(KEY_RIGHT), code(KEY_DOWN)]] {
+        for keys in [vec![f(1)], vec![f(7)], vec![fmod(7, MOD_CTRL)], vec![fmod(8, MOD_ALT)],
+                     vec![fmod(2, MOD_SHIFT)], vec![f(10)], vec![f(9), code(KEY_RIGHT), code(KEY_DOWN)]] {
             for key in keys { e.key(key); }
             let (screen, _, _) = draw(&mut e, cols, rows);
             assert_eq!(screen.len(), rows);

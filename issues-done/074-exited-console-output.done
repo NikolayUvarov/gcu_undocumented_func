@@ -1,0 +1,22 @@
+# 074 — Output of an exited console program stays readable — done
+
+**Type:** kernel · **Owner:** kernel track (`kernel/src/scheduler.rs`) · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
+
+## Problem
+
+The tools branch adds console programs: programs without a screen (`df`, `dmesg`, `svc`, `uptime`) whose output the shell shows while they run in the foreground, or reads later with `logs <id>` when they ran in the background. A screenless task cannot take the focus, and the kernel keeps the unread console output only of the last *focused* task that exited. Output a console program prints just before it exits is lost when the shell has not drained it yet.
+
+## Plan
+
+- When a task without a screen that is not a service exits with unread console output, keep that output as the kernel already does for the last focused task (one exited console queue, replaced by the next such exit).
+- `CONSOLE_READ` and `TASK_LOGS` of that PID drain it (a background program's console output equals its log).
+
+## Acceptance criteria
+
+- No change for focused tasks; all QEMU suites of `main` pass.
+- After the merge, the shell shows the full output of a foreground console program and `logs <id>` reads a finished background one (tools `tools` suite).
+
+## Resolution
+
+- `kernel/src/scheduler.rs`: `terminate` keeps the console queue of an exiting screenless non-service task with unread output; `TASK_LOGS` and `CONSOLE_READ` both read the kept queue. `kernel/src/input.rs`: `Queue::is_empty`. Comments in `common/abi.rs`, `docs/api`, `docs/profile/kernel-objects.md`.
+- Tests: all QEMU suites of `main` pass; console programs come with the merge (051), whose `tools` suite runs `uptime` in the foreground and in the background with `logs`.

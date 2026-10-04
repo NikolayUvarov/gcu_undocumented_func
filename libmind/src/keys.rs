@@ -1,35 +1,44 @@
 //! Key decoders shared by the keyboard driver and the shell (they run in ring 3; the kernel only queues events).
 //! `Ps2` turns PS/2 set 1 scan codes (as the i8042 translates them) into key events with modifiers and the US or
 //! Russian layout; `Vt` turns UART bytes from a VT100/xterm terminal (UTF-8 text, CSI/SS3 sequences) into the same
-//! events. The event word is described in `common/abi.rs` (KEY_*). This file builds on the host for tests.
+//! events. The event word is described in `common/abi.rs` (`input_event`: legacy byte, KEY_*, MOD_*, pressed,
+//! character); the decoders produce presses only, with the scan code or UART byte as the legacy byte. This file builds
+//! on the host for tests.
 use crate::abi::*;
 
 /// Which key: a plain character or a special key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Code { Char, Enter, Esc, Backspace, Tab, Up, Down, Left, Right, Home, End, PageUp, PageDown, Insert, Delete, F(u8), Unknown }
 
-/// One key press.
+/// One key press: an input event word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Key(pub u32);
+pub struct Key(pub usize);
+
+/// F12 (the function keys are KEY_F1..=KEY_F12).
+pub const KEY_F12: u16 = KEY_F1 + 11;
 
 impl Key {
+    /// The key press an event word describes; None for a release or an event that carries only a legacy byte.
+    pub fn from_event(word: usize) -> Option<Self> { (event_pressed(word) && event_key(word) != 0).then_some(Self(word)) }
     pub fn code(self) -> Code {
-        match (self.0 >> KEY_CODE_SHIFT) & KEY_CODE_MASK {
-            0 => Code::Char, KEY_ENTER => Code::Enter, KEY_ESC => Code::Esc, KEY_BACKSPACE => Code::Backspace, KEY_TAB => Code::Tab,
+        match event_key(self.0) {
+            KEY_CHAR => Code::Char, KEY_ENTER => Code::Enter, KEY_ESC => Code::Esc, KEY_BACKSPACE => Code::Backspace, KEY_TAB => Code::Tab,
             KEY_UP => Code::Up, KEY_DOWN => Code::Down, KEY_LEFT => Code::Left, KEY_RIGHT => Code::Right,
-            KEY_HOME => Code::Home, KEY_END => Code::End, KEY_PGUP => Code::PageUp, KEY_PGDN => Code::PageDown,
+            KEY_HOME => Code::Home, KEY_END => Code::End, KEY_PAGE_UP => Code::PageUp, KEY_PAGE_DOWN => Code::PageDown,
             KEY_INSERT => Code::Insert, KEY_DELETE => Code::Delete,
             code @ KEY_F1..=KEY_F12 => Code::F((code - KEY_F1 + 1) as u8),
             _ => Code::Unknown,
         }
     }
     /// The character the key produced (also '\n', '\t', Esc and Backspace for those keys).
-    pub fn char(self) -> Option<char> { match self.0 & KEY_CHAR_MASK { 0 => None, c => char::from_u32(c) } }
+    pub fn char(self) -> Option<char> { match event_char(self.0) { 0 => None, c => char::from_u32(c) } }
     /// A printable character typed without Ctrl or Alt.
     pub fn text(self) -> Option<char> { if self.code() == Code::Char && !self.ctrl() && !self.alt() { self.char().filter(|c| !c.is_control()) } else { None } }
-    pub fn shift(self) -> bool { self.0 & KEY_MOD_SHIFT != 0 }
-    pub fn ctrl(self) -> bool { self.0 & KEY_MOD_CTRL != 0 }
-    pub fn alt(self) -> bool { self.0 & KEY_MOD_ALT != 0 }
+    pub fn shift(self) -> bool { event_mods(self.0) & MOD_SHIFT != 0 }
+    pub fn ctrl(self) -> bool { event_mods(self.0) & MOD_CTRL != 0 }
+    pub fn alt(self) -> bool { event_mods(self.0) & MOD_ALT != 0 }
+    /// The legacy byte: the scan code or UART byte that completed the key.
+    pub fn byte(self) -> u8 { event_byte(self.0) }
     pub fn is_escape(self) -> bool { self.code() == Code::Esc }
     /// Ctrl + the given lower-case letter.
     pub fn is_ctrl(self, letter: char) -> bool { self.ctrl() && self.code() == Code::Char && self.char() == Some(letter) }
@@ -48,7 +57,7 @@ impl Key {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     /// A key press (an event word).
-    Key(u32),
+    Key(usize),
     /// The attention key (Ctrl+Z): focus goes back to the shell.
     Attention,
     /// The keyboard layout changed.
@@ -58,8 +67,10 @@ pub enum Event {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout { Us, Ru }
 
-/// Event word from its parts.
-pub const fn event(code: u32, ch: u32, mods: u32) -> u32 { ch & KEY_CHAR_MASK | code << KEY_CODE_SHIFT | mods }
+/// The event word of a key press from its parts; `code` 0 stands for a plain character (KEY_CHAR).
+pub const fn event(code: u16, ch: u32, mods: u8) -> usize { input_event(0, if code == 0 { KEY_CHAR } else { code }, mods, true, ch) }
+/// `word` with the legacy byte `byte`.
+pub const fn with_byte(word: usize, byte: u8) -> usize { word & !0xFF | byte as usize }
 
 // Scan codes 0x00..0x3A of the main block; 0 where the key has no character.
 const US: &[u8; 58] = b"\0\x1b1234567890-=\x08\tqwertyuiop[]\n\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
@@ -72,7 +83,7 @@ const RU_SHIFT: [char; 58] = ['\0', '\x1b', '!', '"', '№', ';', '%', ':', '?',
     'Й', 'Ц', 'У', 'К', 'Е', 'Н', 'Г', 'Ш', 'Щ', 'З', 'Х', 'Ъ', '\n', '\0', 'Ф', 'Ы', 'В', 'А', 'П', 'Р', 'О', 'Л', 'Д', 'Ж', 'Э', 'Ё', '\0', '/',
     'Я', 'Ч', 'С', 'М', 'И', 'Т', 'Ь', 'Б', 'Ю', ',', '\0', '*', '\0', ' '];
 // Keypad 0x47..0x53 with Num Lock off (navigation) and on (characters).
-const PAD_KEYS: [u32; 13] = [KEY_HOME, KEY_UP, KEY_PGUP, 0, KEY_LEFT, 0, KEY_RIGHT, 0, KEY_END, KEY_DOWN, KEY_PGDN, KEY_INSERT, KEY_DELETE];
+const PAD_KEYS: [u16; 13] = [KEY_HOME, KEY_UP, KEY_PAGE_UP, 0, KEY_LEFT, 0, KEY_RIGHT, 0, KEY_END, KEY_DOWN, KEY_PAGE_DOWN, KEY_INSERT, KEY_DELETE];
 const PAD_CHARS: &[u8; 13] = b"789-456+1230.";
 
 /// PS/2 scan code set 1 decoder with modifier state, Caps/Num Lock and the layout switch.
@@ -89,10 +100,14 @@ impl Ps2 {
     fn shift(&self) -> bool { self.shift[0] || self.shift[1] }
     fn ctrl(&self) -> bool { self.ctrl[0] || self.ctrl[1] }
     fn alt(&self) -> bool { self.alt[0] || self.alt[1] }
-    pub fn mods(&self) -> u32 { (self.shift() as u32 * KEY_MOD_SHIFT) | (self.ctrl() as u32 * KEY_MOD_CTRL) | (self.alt() as u32 * KEY_MOD_ALT) }
+    pub fn mods(&self) -> u8 { (self.shift() as u8 * MOD_SHIFT) | (self.ctrl() as u8 * MOD_CTRL) | (self.alt() as u8 * MOD_ALT) | (self.caps as u8 * MOD_CAPS) }
 
-    /// One byte from the controller.
+    /// One byte from the controller; a key press carries the scan code as its legacy byte.
     pub fn feed(&mut self, byte: u8) -> Option<Event> {
+        match self.decode(byte) { Some(Event::Key(word)) => Some(Event::Key(with_byte(word, byte))), other => other }
+    }
+
+    fn decode(&mut self, byte: u8) -> Option<Event> {
         if self.skip > 0 { self.skip -= 1; return None; }
         if byte == 0xE1 { self.skip = 5; return None; } // Pause: E1 1D 45 E1 9D C5
         if byte == 0xE0 { self.extended = true; return None; }
@@ -122,11 +137,11 @@ impl Ps2 {
         if released { return None; }
         self.chord = false;
         let mods = self.mods();
-        let key = |code: u32| Some(Event::Key(event(code, 0, mods)));
+        let key = |code: u16| Some(Event::Key(event(code, 0, mods)));
         if extended {
             return match code {
                 0x48 => key(KEY_UP), 0x50 => key(KEY_DOWN), 0x4B => key(KEY_LEFT), 0x4D => key(KEY_RIGHT),
-                0x47 => key(KEY_HOME), 0x4F => key(KEY_END), 0x49 => key(KEY_PGUP), 0x51 => key(KEY_PGDN),
+                0x47 => key(KEY_HOME), 0x4F => key(KEY_END), 0x49 => key(KEY_PAGE_UP), 0x51 => key(KEY_PAGE_DOWN),
                 0x52 => key(KEY_INSERT), 0x53 => key(KEY_DELETE),
                 0x1C => Some(Event::Key(event(KEY_ENTER, '\n' as u32, mods))),
                 0x35 => Some(Event::Key(event(0, '/' as u32, mods))),
@@ -137,8 +152,8 @@ impl Ps2 {
             0x3A => { self.caps = !self.caps; return None; }
             0x45 => { self.num = !self.num; return None; }
             0x46 => return None,
-            0x3B..=0x44 => return key(KEY_F1 + (code - 0x3B) as u32),
-            0x57 => return key(KEY_F11), 0x58 => return key(KEY_F12),
+            0x3B..=0x44 => return key(KEY_F1 + (code - 0x3B) as u16),
+            0x57 => return key(KEY_F1 + 10), 0x58 => return key(KEY_F12),
             0x47..=0x53 => {
                 let index = (code - 0x47) as usize;
                 if self.num || PAD_KEYS[index] == 0 { return Some(Event::Key(event(0, PAD_CHARS[index] as u32, mods))); }
@@ -188,9 +203,9 @@ impl Vt {
         self.state = VtState::Ground;
     }
 
-    /// One byte from the UART at time `now_ms`.
+    /// One byte from the UART at time `now_ms`; a key press carries the byte that completed it as its legacy byte.
     pub fn feed(&mut self, byte: u8, now_ms: u64, emit: &mut impl FnMut(Event)) {
-        self.step(byte, emit);
+        self.step(byte, &mut |event| emit(match event { Event::Key(word) => Event::Key(with_byte(word, byte)), other => other }));
         // An unfinished sequence (Esc, CSI, SS3, UTF-8) times out ESC_TIMEOUT_MS after its last byte.
         if self.state != VtState::Ground { self.since = now_ms; }
     }
@@ -213,7 +228,7 @@ impl Vt {
             },
             VtState::Ss3 => {
                 self.state = VtState::Ground;
-                let code = match byte { b'A' => KEY_UP, b'B' => KEY_DOWN, b'C' => KEY_RIGHT, b'D' => KEY_LEFT, b'H' => KEY_HOME, b'F' => KEY_END, b'P'..=b'S' => KEY_F1 + (byte - b'P') as u32, b'M' => KEY_ENTER, _ => 0 };
+                let code = match byte { b'A' => KEY_UP, b'B' => KEY_DOWN, b'C' => KEY_RIGHT, b'D' => KEY_LEFT, b'H' => KEY_HOME, b'F' => KEY_END, b'P'..=b'S' => KEY_F1 + (byte - b'P') as u16, b'M' => KEY_ENTER, _ => 0 };
                 if code == KEY_ENTER { emit(Event::Key(event(KEY_ENTER, '\n' as u32, 0))); } else if code != 0 { emit(Event::Key(event(code, 0, 0))); }
             }
             VtState::Csi => match byte {
@@ -222,15 +237,15 @@ impl Vt {
                 b'[' if self.count == 0 && self.params[0] == 0 => self.linux = true, // Linux console: CSI [ A..E = F1..F5
                 0x40..=0x7E => {
                     self.state = VtState::Ground;
-                    let mods = match self.params[1] { 0 | 1 => 0, m => { let bits = (m - 1) as u32; (bits & 1) * KEY_MOD_SHIFT | (bits >> 1 & 1) * KEY_MOD_ALT | (bits >> 2 & 1) * KEY_MOD_CTRL } };
-                    let code = if self.linux { match byte { b'A'..=b'E' => KEY_F1 + (byte - b'A') as u32, _ => 0 } } else { match byte {
+                    let mods = match self.params[1] { 0 | 1 => 0, m => { let bits = (m - 1) as u8; (bits & 1) * MOD_SHIFT | (bits >> 1 & 1) * MOD_ALT | (bits >> 2 & 1) * MOD_CTRL } };
+                    let code = if self.linux { match byte { b'A'..=b'E' => KEY_F1 + (byte - b'A') as u16, _ => 0 } } else { match byte {
                         b'A' => KEY_UP, b'B' => KEY_DOWN, b'C' => KEY_RIGHT, b'D' => KEY_LEFT, b'H' => KEY_HOME, b'F' => KEY_END,
-                        b'P'..=b'S' => KEY_F1 + (byte - b'P') as u32,
-                        b'Z' => { emit(Event::Key(event(KEY_TAB, '\t' as u32, KEY_MOD_SHIFT))); 0 }
+                        b'P'..=b'S' => KEY_F1 + (byte - b'P') as u16,
+                        b'Z' => { emit(Event::Key(event(KEY_TAB, '\t' as u32, MOD_SHIFT))); 0 }
                         b'~' => match self.params[0] {
-                            1 | 7 => KEY_HOME, 2 => KEY_INSERT, 3 => KEY_DELETE, 4 | 8 => KEY_END, 5 => KEY_PGUP, 6 => KEY_PGDN,
-                            11..=15 => KEY_F1 + (self.params[0] - 11) as u32, 17..=21 => KEY_F6 + (self.params[0] - 17) as u32,
-                            23 => KEY_F11, 24 => KEY_F12, _ => 0,
+                            1 | 7 => KEY_HOME, 2 => KEY_INSERT, 3 => KEY_DELETE, 4 | 8 => KEY_END, 5 => KEY_PAGE_UP, 6 => KEY_PAGE_DOWN,
+                            11..=15 => KEY_F1 + (self.params[0] - 11), 17..=21 => KEY_F1 + 5 + (self.params[0] - 17),
+                            23 => KEY_F1 + 10, 24 => KEY_F12, _ => 0,
                         },
                         _ => 0,
                     } };
@@ -243,7 +258,7 @@ impl Vt {
 
     fn ground(&mut self, byte: u8, emit: &mut impl FnMut(Event)) {
         let after_cr = core::mem::take(&mut self.cr);
-        let key = |code: u32, ch: u32| Event::Key(event(code, ch, 0));
+        let key = |code: u16, ch: u32| Event::Key(event(code, ch, 0));
         match byte {
             0x1B => self.state = VtState::Escape,
             b'\r' => { self.cr = true; emit(key(KEY_ENTER, '\n' as u32)); }
@@ -251,7 +266,7 @@ impl Vt {
             0x08 | 0x7F => emit(key(KEY_BACKSPACE, 0x08)),
             b'\t' => emit(key(KEY_TAB, '\t' as u32)),
             0x1A => emit(Event::Attention),
-            0x01..=0x19 => emit(Event::Key(event(0, (b'a' + byte - 1) as u32, KEY_MOD_CTRL))),
+            0x01..=0x19 => emit(Event::Key(event(0, (b'a' + byte - 1) as u32, MOD_CTRL))),
             0x20..=0x7E => emit(key(0, byte as u32)),
             0xC2..=0xDF => { self.state = VtState::Utf8; self.utf8 = (byte & 0x1F) as u32; self.need = 1; }
             0xE0..=0xEF => { self.state = VtState::Utf8; self.utf8 = (byte & 0x0F) as u32; self.need = 2; }

@@ -185,10 +185,6 @@ impl Space {
     pub fn root(&self) -> usize {
         self.tables[0].as_ref().unwrap().ptr() as usize
     }
-    // Page tables this space owns (observation).
-    pub fn table_count(&self) -> usize {
-        self.tables.iter().flatten().count()
-    }
 
     pub fn map(
         &mut self,
@@ -338,6 +334,29 @@ impl Space {
         }
         self.flush();
         // retired drops here, after invalidating paging-structure caches too.
+    }
+
+    // Mapped user ranges with equal attributes, coalesced: (start, size, writable, executable, device). Absent tables are
+    // skipped whole, so the walk is bounded by the number of tables (STAT VMAP).
+    pub fn regions(&self, mut emit: impl FnMut(usize, usize, bool, bool, bool)) {
+        let mut run: Option<(usize, usize, u64)> = None;
+        let mut address = USER_IMAGE;
+        while address < USER_END {
+            let mut table = self.root();
+            let mut leaf = None; let mut span = PAGE;
+            for shift in [39, 30, 21, 12] {
+                let value = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
+                if value & PRESENT == 0 { span = (1usize << shift) - (address & ((1usize << shift) - 1)); break; }
+                if shift == 12 { leaf = Some(value & (WRITE | NX | UNCACHED)); } else { table = (value & ADDRESS) as usize; }
+            }
+            match (run, leaf) {
+                (Some((start, size, flags)), Some(f)) if start + size == address && flags == f => run = Some((start, size + PAGE, flags)),
+                (_, Some(f)) => { if let Some((s, z, g)) = run { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); } run = Some((address, PAGE, f)); }
+                (_, None) => { if let Some((s, z, g)) = run.take() { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); } }
+            }
+            address = address.saturating_add(span);
+        }
+        if let Some((s, z, g)) = run { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); }
     }
 
     fn flush(&self) {

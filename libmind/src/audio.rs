@@ -1,8 +1,10 @@
-//! Client for the audio_gw audio gateway: 16-bit stereo 48 kHz PCM via a shared buffer, tones, microphone capture.
+//! Client for the audio_gw audio gateway (idl/audio.wit): 16-bit stereo 48 kHz PCM via a buffer lent per call, tones,
+//! microphone capture.
 use crate::abi::*;
-use crate::ipc::{Endpoint, Message};
+use crate::idl::audio as idl;
+use crate::ipc::Endpoint;
 use crate::mem::Pages;
-use crate::sys::{check, Error, Result};
+use crate::sys::{Error, Result};
 use core::cell::UnsafeCell;
 
 const CHUNK: usize = 16 * 1024;
@@ -18,22 +20,24 @@ fn channel() -> Result<&'static mut Channel> {
     Ok(slot.as_mut().unwrap())
 }
 
-fn request(message: Message) -> Result<[usize; 2]> {
-    let reply = Endpoint::AUDIO.call(&message, 0)?;
-    check(reply.data[0])?;
-    Ok(reply.data)
+// Lends the channel for one call (MC-2.6 LEASE): read-only for playback, writable for capture; revoked after the reply.
+fn lend<T>(channel: &Channel, writable: bool, call: impl FnOnce(usize) -> Result<T>) -> Result<T> {
+    let lent = crate::ipc::mint(channel.cap, if writable { CAP_READ | CAP_WRITE | CAP_GRANT } else { CAP_READ }, 0, 0)?;
+    let result = call(lent);
+    let _ = crate::ipc::revoke(channel.cap);
+    result
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Info { pub present: bool, pub rate: usize }
 
-pub fn info() -> Result<Info> { let [present, rate] = request(Message::new(AUDIO_INFO, 0))?; Ok(Info { present: present != 0, rate }) }
+pub fn info() -> Result<Info> { let rate = idl::device(Endpoint::AUDIO)?; Ok(Info { present: rate.is_some(), rate: rate.unwrap_or(AUDIO_RATE as u32) as usize }) }
 
 /// Queues a sine wave of `hz` lasting `ms`.
-pub fn tone(hz: usize, ms: usize) -> Result<()> { request(Message::new(AUDIO_TONE | hz << 8, ms)).map(drop) }
+pub fn tone(hz: usize, ms: usize) -> Result<()> { idl::tone(Endpoint::AUDIO, hz as u32, ms as u32).map(drop) }
 
 /// Flushes the playback queue.
-pub fn stop() -> Result<()> { request(Message::new(AUDIO_STOP, 0)).map(drop) }
+pub fn stop() -> Result<()> { idl::stop(Endpoint::AUDIO) }
 
 /// Submits part of the interleaved L/R samples; returns the number of samples accepted (0 means the queue is full).
 pub fn play(samples: &[i16]) -> Result<usize> {
@@ -41,12 +45,12 @@ pub fn play(samples: &[i16]) -> Result<usize> {
     let count = samples.len().min(CHUNK / 2) & !1;
     let bytes = channel.pages.as_mut_slice();
     for (i, sample) in samples[..count].iter().enumerate() { bytes[i * 2..i * 2 + 2].copy_from_slice(&sample.to_le_bytes()); }
-    let [accepted, _] = request(Message::new(AUDIO_PLAY | (count * 2) << 8, 0).with_cap(channel.cap, 0))?;
+    let accepted = lend(channel, false, |pcm| idl::play(Endpoint::AUDIO, (count * 2) as u32, pcm))? as usize;
     Ok(accepted / 2)
 }
 
 /// Waits until `buffers` 4 KiB buffers are free in the gateway's DMA ring (the reply comes on the AC97 interrupt).
-pub fn wait_space(buffers: usize) -> Result<usize> { request(Message::new(AUDIO_WAIT | buffers << 8, 0)).map(|[free, _]| free) }
+pub fn wait_space(buffers: usize) -> Result<usize> { idl::wait(Endpoint::AUDIO, buffers.min(255) as u8).map(|free| free as usize) }
 
 /// Plays the whole buffer, waiting for queue space via gateway notifications.
 pub fn play_all(mut samples: &[i16]) -> Result<()> {
@@ -78,7 +82,8 @@ impl Stream {
     pub fn flush(&mut self) -> Result<()> {
         while self.filled >= 2 {
             let channel = channel()?;
-            let [accepted, _] = request(Message::new(AUDIO_PLAY | (self.filled & !1) * 2 << 8, 0).with_cap(channel.cap, 0))?;
+            let bytes = ((self.filled & !1) * 2) as u32;
+            let accepted = lend(channel, false, |pcm| idl::play(Endpoint::AUDIO, bytes, pcm))? as usize;
             let taken = (accepted / 2).min(self.filled);
             if taken == 0 { if wait_space(CHUNK / 4096).is_err() { crate::time::sleep(20); } continue; }
             channel.pages.as_mut_slice().copy_within(taken * 2..self.filled * 2, 0);
@@ -90,19 +95,21 @@ impl Stream {
 }
 
 /// Starts microphone capture (48 kHz stereo); Err(NotFound) without a capture-capable device.
-pub fn record_start() -> Result<()> { request(Message::new(AUDIO_RECORD_START, 0)).map(drop) }
+pub fn record_start() -> Result<()> { idl::record_start(Endpoint::AUDIO) }
 
 /// Stops microphone capture.
-pub fn record_stop() -> Result<()> { request(Message::new(AUDIO_RECORD_STOP, 0)).map(drop) }
+pub fn record_stop() -> Result<()> { idl::record_stop(Endpoint::AUDIO) }
 
 /// Copies captured interleaved L/R samples into `out`; returns (samples, overflow). 0 samples means nothing new yet.
 pub fn record_read(out: &mut [i16]) -> Result<(usize, bool)> {
     let channel = channel()?;
     let capacity = (out.len() * 2).min(CHUNK) & !4095;
     if capacity == 0 { return Ok((0, false)); }
-    let [bytes, overflow] = request(Message::new(AUDIO_RECORD_READ | capacity << 8, 0).with_cap(channel.cap, 0))?;
+    let before = idl::overflows(Endpoint::AUDIO)?;
+    let bytes = lend(channel, true, |buffer| idl::record_read(Endpoint::AUDIO, capacity as u32, buffer))? as usize;
+    let overflow = idl::overflows(Endpoint::AUDIO)? != before;
     let samples = (bytes / 2).min(out.len());
     let data = channel.pages.as_slice();
     for (i, sample) in out[..samples].iter_mut().enumerate() { *sample = i16::from_le_bytes([data[i * 2], data[i * 2 + 1]]); }
-    Ok((samples, overflow != 0))
+    Ok((samples, overflow))
 }

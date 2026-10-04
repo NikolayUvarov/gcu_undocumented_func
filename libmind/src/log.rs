@@ -4,7 +4,7 @@
 //! source. Reading (`read`, `state`) needs the read badge, which only the shell's client carries; the shell lends it
 //! to programs that ask for the log (`REQUEST_LOG`, `dmesg`).
 use crate::abi::*;
-use crate::idl::{log, wire};
+use crate::idl::log;
 use crate::ipc::Endpoint;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -15,6 +15,9 @@ pub const DEBUG: u8 = 0;
 pub const INFO: u8 = 1;
 pub const WARN: u8 = 2;
 pub const ERROR: u8 = 3;
+
+/// Badge of the log client that may read (`read`, `state`); init mints it for the shell.
+pub const BADGE_READ: u16 = 1;
 
 /// Bytes of a line (longer lines are cut on a character boundary).
 pub const LINE: usize = 200;
@@ -29,11 +32,11 @@ static ENDPOINT: AtomicUsize = AtomicUsize::new(SLOT_LOG);
 static CAPTURE: AtomicBool = AtomicBool::new(true);
 static BUSY: AtomicBool = AtomicBool::new(false); // a line is being sent (no output from inside the sending)
 
-// The line being collected, lines kept until there is a log to send them to (init's first lines), the shared buffer.
-struct Client { line: [u8; LINE], len: usize, backlog: [u8; BACKLOG], kept: usize, shared: Option<wire::Shared> }
+// The line being collected, lines kept until there is a log to send them to (init's first lines).
+struct Client { line: [u8; LINE], len: usize, backlog: [u8; BACKLOG], kept: usize }
 struct Cell(UnsafeCell<Client>);
 unsafe impl Sync for Cell {} // processes are single-threaded
-static CLIENT: Cell = Cell(UnsafeCell::new(Client { line: [0; LINE], len: 0, backlog: [0; BACKLOG], kept: 0, shared: None }));
+static CLIENT: Cell = Cell(UnsafeCell::new(Client { line: [0; LINE], len: 0, backlog: [0; BACKLOG], kept: 0 }));
 
 fn client() -> &'static mut Client { unsafe { &mut *CLIENT.0.get() } }
 
@@ -50,17 +53,12 @@ fn valid(bytes: &[u8]) -> &str {
     match core::str::from_utf8(bytes) { Ok(s) => s, Err(e) => core::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or("") }
 }
 
-/// Creates the buffer for writing up front if the process holds a log client (called before `main`): services do not
-/// grow while they run.
-pub fn prepare() {
-    if endpoint().is_some() && client().shared.is_none() { client().shared = wire::Shared::new(4096).ok(); }
-}
+/// Looks once whether the process holds a log client (called before `main`). The generated calls allocate their buffer
+/// per request and free it before they return.
+pub fn prepare() { let _ = endpoint(); }
 
 fn send(endpoint: Endpoint, level: u8, text: &str) -> crate::sys::Result<()> {
-    let c = client();
-    if c.shared.is_none() { c.shared = Some(wire::Shared::new(4096)?); }
-    let shared = c.shared.as_mut().unwrap();
-    log::write(endpoint, shared.buffer(), level, text)?.map_err(|_| crate::sys::Error::Rights)
+    log::write(endpoint, level, text)?.map_err(|_| crate::sys::Error::Rights)
 }
 
 /// Adds a line with a level (`DEBUG`..`ERROR`) to the system log; nothing happens without a log client.
@@ -119,20 +117,13 @@ pub(crate) fn capture(bytes: &[u8]) {
 /// returns how many `visit` saw. Needs the read badge.
 pub fn read(from: u64, mut visit: impl FnMut(&Entry)) -> crate::sys::Result<usize> {
     let endpoint = endpoint().ok_or(crate::sys::Error::NotFound)?;
-    let c = client();
-    if c.shared.is_none() { c.shared = Some(wire::Shared::new(4096)?); }
-    let shared = c.shared.as_mut().unwrap();
-    let list = log::read(endpoint, shared.buffer(), from)?.map_err(|_| crate::sys::Error::Rights)?;
-    let mut count = 0;
-    for entry in list.iter() { visit(&entry); count += 1; }
-    Ok(count)
+    let list = log::read(endpoint, from)?.map_err(|_| crate::sys::Error::Rights)?;
+    for entry in list.as_slice() { visit(entry); }
+    Ok(list.len())
 }
 
 /// The state of the ring (oldest and next sequence numbers, dropped and refused records). Needs the read badge.
 pub fn state() -> crate::sys::Result<State> {
     let endpoint = endpoint().ok_or(crate::sys::Error::NotFound)?;
-    let c = client();
-    if c.shared.is_none() { c.shared = Some(wire::Shared::new(4096)?); }
-    let shared = c.shared.as_mut().unwrap();
-    log::state(endpoint, shared.buffer())?.map_err(|_| crate::sys::Error::Rights)
+    log::state(endpoint)?.map_err(|_| crate::sys::Error::Rights)
 }

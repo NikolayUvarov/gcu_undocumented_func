@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // Ring 3 compositor: copies changed pixels of the active screen into the GOP framebuffer.
-use mind::abi::{BootInfo, SLOT_MEM};
+use mind::abi::{pixel_to_device, BootInfo, PIXEL_BGR, SLOT_MEM};
 use mind::dev::{compositor_pull, Frame};
 use mind::mem::{Mapping, Pages};
 
@@ -16,6 +16,7 @@ fn main(info: &'static BootInfo) {
     let (gop, shadow) = (gop.as_ptr::<u32>(), shadow.as_mut_slice().as_mut_ptr() as *mut u32);
     let mut source: Option<Mapping> = None;
     let mut valid = false;
+    let native = info.pixel_format == PIXEL_BGR; // screens already hold the framebuffer's layout
     loop {
         let frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
         if frame == Frame::NewSource {
@@ -28,7 +29,8 @@ fn main(info: &'static BootInfo) {
             for i in 0..pixels {
                 let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
                 if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
-                    unsafe { core::ptr::write_volatile(gop.add(i), pixel); core::ptr::write(shadow.add(i), pixel); }
+                    let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+                    unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
                 }
             }
             valid = true;

@@ -14,7 +14,7 @@ use tui::widgets::{fkey_bar, message, Edit, History, InputLine, ListState, MenuA
 use tui::{Cell, Grid, Line, Rect, Style, CLASSIC};
 
 fn text(grid: &Grid, y: usize) -> String { (0..grid.cols).map(|x| grid.get(x, y).ch).collect::<String>() }
-fn k(code: u32) -> Key { Key(event(code, 0, 0)) }
+fn k(code: u16) -> Key { Key(event(code, 0, 0)) }
 fn c(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
 const S: Style = Style::new(1, 2);
 
@@ -68,7 +68,7 @@ fn list_state_scrolls_with_selection() {
     let mut state = ListState::default();
     for _ in 0..7 { state.key(k(KEY_DOWN), 20, 5); }
     assert_eq!((state.selected, state.top), (7, 3));
-    state.key(k(KEY_PGDN), 20, 5);
+    state.key(k(KEY_PAGE_DOWN), 20, 5);
     assert_eq!((state.selected, state.top), (11, 7));
     state.key(k(KEY_END), 20, 5);
     assert_eq!((state.selected, state.top), (19, 15));
@@ -85,15 +85,15 @@ fn input_line_edits_utf8_by_character_and_word() {
     assert_eq!(line.key(k(KEY_LEFT)), Edit::Moved);
     assert_eq!(line.key(k(KEY_BACKSPACE)), Edit::Changed);
     assert_eq!(line.as_str(), "run фал");
-    line.key(Key(event(KEY_LEFT, 0, KEY_MOD_CTRL)));
+    line.key(Key(event(KEY_LEFT, 0, MOD_CTRL)));
     assert_eq!(line.cursor_chars(), 4);
     line.key(k(KEY_DELETE));
     assert_eq!(line.as_str(), "run ал");
     line.key(k(KEY_END));
-    line.key(Key(event(KEY_BACKSPACE, 8, KEY_MOD_ALT)));
+    line.key(Key(event(KEY_BACKSPACE, 8, MOD_ALT)));
     assert_eq!(line.as_str(), "run ");
     assert_eq!(line.key(k(KEY_ENTER)), Edit::Submit);
-    assert_eq!(line.key(Key(event(0, 'q' as u32, KEY_MOD_CTRL))), Edit::Ignored, "shortcuts are not text");
+    assert_eq!(line.key(Key(event(0, 'q' as u32, MOD_CTRL))), Edit::Ignored, "shortcuts are not text");
     let mut cells = vec![Cell::BLANK; 4];
     let mut grid = Grid::new(&mut cells, 4, 1);
     line.set("abcdefgh");

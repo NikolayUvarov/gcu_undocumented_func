@@ -7,7 +7,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
    - slot 1: its own endpoint (created by the kernel, charged to init's quota), all rights;
    - slot 2: the **platform** privilege (`PLATFORM_CAP`, `DEVICE_FIND`, spawning boot images and services);
    - slot 3: the **spawn** privilege;
-   - the root quota: 23 tasks, 63 endpoints.
+   - the root quota: 31 tasks, 127 endpoints.
    Nothing else in the system holds the platform privilege unless `init` grants it (it does not).
 3. Endpoints have no numbers in the ABI. For each service `init` creates an endpoint with `ENDPOINT_CREATE` and keeps only a keeper capability (`CAP_KEEP | CAP_WRITE | CAP_GRANT`): it can mint a receive child for the server and write/grant children for clients but cannot receive itself, so a send to a service with no running server still fails with `ERR_PEER`. A restarted server receives a new child of the same endpoint.
 4. `init` starts the other boot images in `BOOT_SERVICES` order, `logd` first. For each it mints the needed capabilities and moves them into the service through the `SPAWN` grant list (`GRANT_MOVE`); plain client endpoints (no badge), DMA regions and its own endpoint it copies from what it keeps, narrowed to the rights the service gets, so it needs no slot of its own for them. Every service except `logd` gets a `logd` client in slot 12; `init` itself writes to `logd` through its keeper once `logd` runs (its earlier lines are kept and sent then).
@@ -33,7 +33,12 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 
 ## Where initial distribution ends
 
-The initial distribution is complete when `init` logs `[INIT] READY` (after starting `shell`). The boundary is **not** a reduction of authority: `init` keeps the platform and spawn privileges to restart services on request (`RUN <service> &`). This is recorded as a gap against the stage II exit criterion "boot authority is separated"; roadmap C6 replaces it with a supervisor that holds only what restarts need.
+The initial distribution ends when `init` logs `[INIT] PLATFORM PRIVILEGE DROPPED` and `[INIT] READY` (after starting `shell`). Before that, `init` mints a **restart** privilege (it can only spawn boot images and services) and drops the platform privilege (slot 2). From then on:
+- `init` restarts services only from the capabilities it handed out at the first start, which it keeps (copies go to each instance);
+- it stops and restarts their devices through the BAR capabilities it holds (`DEVICE_STATE`);
+- a service whose hardware was missing at boot cannot be started later.
+
+`init` remains the supervisor (roadmap C6, issue 032). If it ends, the kernel halts the system (MC-6.8).
 
 ## Kernel-side validation
 

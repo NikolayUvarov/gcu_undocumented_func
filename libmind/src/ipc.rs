@@ -15,15 +15,18 @@ impl Message {
     fn mask(&self) -> usize { self.rights as usize | if self.moved { CAP_TRANSFER_MOVE } else { 0 } }
 }
 
-/// Received message or reply. `badge` is the badge of the endpoint capability the sender used (0: none): a server
-/// tells its clients' rights apart by it.
+/// Received message or reply.
 #[derive(Clone, Copy, Debug)]
-pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub badge: u16 }
+pub struct Received { pub data: [usize; 2], pub sender: u64, pub badge: u16, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub exit: Option<Exit> }
+
+/// Exit notice of a watched task (`process::watch`): its PID, why it ended and how many notices the kernel had to drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exit { pub pid: u64, pub reason: usize, pub lost: usize }
 
 fn received(raw: crate::sys::Raw) -> Received {
     let irq = (raw.msg[1] & MSG_FLAG_IRQ != 0).then_some(raw.msg[2]);
-    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq,
-               badge: (raw.msg[1] >> MSG_BADGE_SHIFT & BADGE_MAX) as u16 }
+    let exit = (raw.msg[1] & MSG_FLAG_EXIT != 0).then_some(Exit { pid: raw.msg[2] as u64, reason: raw.msg[3] & 0xFFFF_FFFF, lost: raw.msg[3] >> 32 });
+    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, badge: raw.arg2 as u16, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq, exit }
 }
 
 /// IPC endpoint capability in a process slot.
@@ -73,10 +76,15 @@ impl Endpoint {
     fn word(&self, ms: u32) -> usize { self.0 | (ms as usize) << IPC_TIMEOUT_SHIFT }
 }
 
-// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again.
+// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again, within the caller's timeout.
 fn queued(number: usize, word: usize, receive: usize, message: &Message) -> crate::sys::Raw {
+    let (handle, ms) = (word & ((1 << IPC_TIMEOUT_SHIFT) - 1), word >> IPC_TIMEOUT_SHIFT);
+    let start = call(SYSCALL_UPTIME, 0, 0);
     loop {
-        let raw = syscall(number, word, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
+        let elapsed = call(SYSCALL_UPTIME, 0, 0).wrapping_sub(start);
+        if ms != 0 && elapsed >= ms { return crate::sys::Raw { result: ERR_TIMEOUT, arg1: 0, arg2: 0, msg: [0; 4] }; }
+        let left = if ms == 0 { 0 } else { ms - elapsed };
+        let raw = syscall(number, handle | left << IPC_TIMEOUT_SHIFT, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
         if raw.result != ERR_BUSY { return raw; }
         call(SYSCALL_WAIT, 10, 0);
     }
@@ -104,8 +112,8 @@ pub fn mint(handle: usize, mask: u8, offset: usize, length: usize) -> Result<usi
     check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [offset, length, 0, 0]).result)
 }
 
-/// Child of an unbadged endpoint capability with rights `mask` and `badge` (1..=0xFFFF), which the server sees with
-/// every message sent through it; copies keep it and it cannot be changed.
+/// Endpoint capability with narrower rights and a badge (1..=BADGE_MAX) the server sees in `Received::badge`; a badge
+/// is set once and kept by every child.
 pub fn mint_badged(handle: usize, mask: u8, badge: u16) -> Result<usize> {
     check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge as usize, 0]).result)
 }

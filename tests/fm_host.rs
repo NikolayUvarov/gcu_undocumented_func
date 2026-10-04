@@ -24,7 +24,7 @@ mod fm;
 use abi::*;
 use fm::{Disk, Failure, Fm, Outcome, Sink, VolumeInfo};
 use keys::{event, Key};
-use panel::{display, fat_time, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
+use panel::{VFS_ENTRY_HIDDEN, VFS_ENTRY_SYSTEM, display, fat_time, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use std::cell::{Cell as Counter, RefCell};
 use std::rc::Rc;
 use tui::viewer::Source;
@@ -152,10 +152,10 @@ impl Disk for Mem {
 }
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
-fn code(code: u32) -> Key { Key(event(code, 0, 0)) }
-fn f(n: u32) -> Key { code(KEY_F1 + n - 1) }
-fn ctrl(ch: char) -> Key { Key(event(0, ch as u32, KEY_MOD_CTRL)) }
-fn alt_f(n: u32) -> Key { Key(event(KEY_F1 + n - 1, 0, KEY_MOD_ALT)) }
+fn code(code: u16) -> Key { Key(event(code, 0, 0)) }
+fn f(n: u16) -> Key { code(KEY_F1 + n - 1) }
+fn ctrl(ch: char) -> Key { Key(event(0, ch as u32, MOD_CTRL)) }
+fn alt_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_ALT)) }
 
 fn draw(fm: &mut Fm, cols: usize, rows: usize) -> Vec<String> {
     let mut cells = vec![Cell::BLANK; cols * rows];
@@ -376,7 +376,7 @@ fn draws_on_any_screen() {
     let mut window = vec![0u8; 4096];
     let mut fm = Fm::new(&mut window, &mut disk);
     let keys = [code(KEY_DOWN), ctrl('q'), code(KEY_END), ctrl('l'), f(1), code(KEY_ESC), f(9), code(KEY_RIGHT), code(KEY_ESC), alt_f(7), code(KEY_ENTER), code(KEY_ESC),
-                code(KEY_HOME), code(KEY_ENTER), chr('+'), code(KEY_ESC), f(3), code(KEY_PGDN), code(KEY_ESC), code(KEY_TAB)];
+                code(KEY_HOME), code(KEY_ENTER), chr('+'), code(KEY_ESC), f(3), code(KEY_PAGE_DOWN), code(KEY_ESC), code(KEY_TAB)];
     for (cols, rows) in [(20, 6), (40, 12), (80, 25), (100, 37), (160, 50), (240, 67)] {
         for &key in &keys {
             let _ = fm.key(key, &mut disk);
@@ -385,7 +385,7 @@ fn draws_on_any_screen() {
     }
 }
 
-fn shift_f(n: u32) -> Key { Key(event(KEY_F1 + n - 1, 0, KEY_MOD_SHIFT)) }
+fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }
 fn alt_f2() -> Key { alt_f(2) }
 fn typed(fm: &mut Fm, disk: &mut Mem, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
 fn clear_line(fm: &mut Fm, disk: &mut Mem) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
@@ -596,7 +596,7 @@ fn built_in_editor() {
     assert!(fm.status().starts_with("EDITOR LINE=1 COL=1 BYTES=22 LINES=2 MODIFIED=0"), "{}", fm.status());
     let screen = draw(&mut fm, 100, 30);
     assert!(screen[1].starts_with("купить хлеб") && screen[0].contains("ram:notes/todo.txt"), "{:#?}", &screen[..2]);
-    fm.key(Key(event(KEY_END, 0, KEY_MOD_CTRL)), &mut disk);
+    fm.key(Key(event(KEY_END, 0, MOD_CTRL)), &mut disk);
     typed(&mut fm, &mut disk, "и молоко");
     fm.key(f(2), &mut disk);
     assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), "купить хлеб\nи молоко".as_bytes());

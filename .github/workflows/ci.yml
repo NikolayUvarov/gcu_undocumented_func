@@ -1,0 +1,91 @@
+# Build with the pinned toolchain, run host tests and the QEMU suites (issue 011).
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc -V
+      - name: Build
+        run: ./02_build.sh
+      - name: Clean tree after the build
+        run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
+      - name: FAT tools for the FAT host test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dosfstools mtools
+      - name: Host tests
+        run: |
+          rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests
+          rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests
+          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd; do
+            rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests"
+          done
+          python3 tests/idl_test.py
+          python3 tests/font_test.py
+
+  qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: boot, display, shell, memory, clock
+            args: --suites boot,display,normal,memory,dzen
+          - name: services, storage, audio
+            args: --suites services,ahci,audio,tts,listen
+          - name: scheduling, isolation, heap
+            args: --suites busy,smp,isolation,heap
+          - name: keys, shell, tools
+            args: --suites keys,shell,tools
+          - name: files and block writes
+            args: --suites vfs,edit,disk,block
+          - name: one CPU
+            args: --cpus 1 --suites smp,isolation,heap,services
+          - name: USB image
+            usb: true
+    name: QEMU (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v5
+      - name: QEMU, OVMF and FAT tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf dosfstools mtools
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Build
+        run: ./02_build.sh
+      - name: Test programs
+        run: |
+          for fixture in busy_app isolation_app heap_app block_app; do
+            rustc --edition=2021 --target x86_64-unknown-none --crate-type bin -C opt-level=3 -C panic=abort \
+              -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
+              "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
+          done
+          (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
+      - name: QEMU suites
+        if: ${{ !matrix.usb }}
+        run: |
+          python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd \
+            --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
+            --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
+            --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
+      - name: USB image
+        if: ${{ matrix.usb }}
+        run: |
+          python3 scripts/make_usb_image.py --no-build --force
+          python3 tests/usb_image_smoke.py --firmware /usr/share/ovmf/OVMF.fd
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-logs-${{ strategy.job-index }}
+          path: /tmp/mind-core-*

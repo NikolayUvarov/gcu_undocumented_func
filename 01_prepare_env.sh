@@ -7,13 +7,11 @@ if ! command -v rustup &> /dev/null; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     source "$HOME/.cargo/env"
 else
-    echo "Rust is installed; updating..."
-    rustup update
+    echo "Rust is installed."
 fi
 
-echo ">>> Setting up the toolchain (nightly) and targets..."
-rustup default nightly
-rustup target add x86_64-unknown-uefi x86_64-unknown-none
-rustup component add llvm-tools-preview
+echo ">>> Installing the pinned toolchain from rust-toolchain.toml..."
+cd "$(dirname "${BASH_SOURCE[0]}")"
+rustup toolchain install   # reads rust-toolchain.toml (rustup 1.28+)
 
 echo ">>> Environment is ready to build!"

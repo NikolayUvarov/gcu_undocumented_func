@@ -1,6 +1,6 @@
 // Volume sectors through a block driver over IPC: a cache of 64 sectors with read-ahead and write-back. A changed
 // sector stays in the cache until it is evicted or the volume is flushed; a flush writes the changed sectors in LBA
-// order (runs of neighbours together) and then asks the drive to empty its own cache.
+// order (runs of neighbours in one write) and then asks the drive to empty its own cache.
 use crate::fat::{Sectors, SECTOR};
 use mind::block::Device;
 use mind::mem::Pages;
@@ -65,7 +65,19 @@ impl Sectors for Disk {
         if self.device.read_only() { return true; } // nothing can have changed
         let mut order: [usize; LINES] = core::array::from_fn(|i| i);
         order.sort_unstable_by_key(|&i| self.tags[i]);
-        for index in order { if self.dirty[index] && !self.write_line(index) { return false; } }
+        // Changed lines of neighbouring sectors go to the drive in one write (each write carries a sealed copy).
+        let dirty: alloc::vec::Vec<usize> = order.iter().copied().filter(|&i| self.dirty[i]).collect();
+        let mut run = alloc::vec::Vec::with_capacity(LINES * SECTOR);
+        let mut at = 0;
+        while at < dirty.len() {
+            let mut end = at + 1;
+            while end < dirty.len() && self.tags[dirty[end]] == self.tags[dirty[end - 1]] + 1 { end += 1; }
+            run.clear();
+            for &index in &dirty[at..end] { run.extend_from_slice(self.line(index)); }
+            if self.device.write(self.tags[dirty[at]] as u64, &run) != Ok(end - at) { self.failed = true; return false; }
+            for &index in &dirty[at..end] { self.dirty[index] = false; }
+            at = end;
+        }
         !core::mem::take(&mut self.failed) && self.device.flush().is_ok()
     }
 

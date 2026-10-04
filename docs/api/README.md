@@ -1,0 +1,153 @@
+# MIND Core API
+
+**Version:** ABI 0.x (2026-10-04) · **Stability:** unstable, see [Stability](#stability)
+
+Programs reach MIND Core through three layers:
+
+| Layer | What it is | Reference |
+|---|---|---|
+| System call ABI | `int 0x80` with a per-task mailbox; the only interface of the kernel | this page; constants and records in [`common/abi.rs`](../../common/abi.rs) |
+| `libmind` (crate `mind`) | Rust library for ring-3 programs: system calls, IPC, memory, devices, generated service clients | [libmind modules](#libmind) |
+| Service interfaces | Typed, versioned requests to services (`vfs`, `audio`, `tts`, ...) described in MIND IDL | [docs/idl](../idl/README.md), files in [`idl/`](../../idl) |
+
+An application normally uses only `libmind` and the service clients; the raw ABI matters for other languages and for the kernel's tests.
+
+## Calling convention
+
+- Every task has a **mailbox** page (`SyscallMailbox` in `common/abi.rs`): `syscall_num`, `arg1`, `arg2`, `result`, `msg[4]`. The kernel enters the program at `_start(info, mailbox)` (System V calling convention: `rdi` = the read-only **info page** with `BootInfo` and the program arguments at `ARGS_OFFSET`, `rsi` = the mailbox; the info page is the page just below the mailbox).
+- A call: write `syscall_num`, `arg1`, `arg2`, `msg`, execute `int 0x80`, read `result` (and, for some calls, `arg1`, `arg2`, `msg`).
+- **Errors** are `result` values `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`, `ERR_BUSY`, `ERR_LIMIT`, `ERR_TIMEOUT`; everything from `ERR_FIRST` up is an error). `ALLOC` returns 0 on failure.
+- **Capabilities** are named by handles `slot | generation << 8`. Slots 1–15 are fixed by convention (generation 0; 10–12 carry the capabilities a launcher grants on request, 13–15 are reserved); the kernel hands out slots from 16 (`SLOT_DYNAMIC`). A stale handle is rejected. There are no global names: a task can use only what it was granted (Constitution MC-3.3).
+- The framebuffer is described in `BootInfo`: `stride` pixels per line, 4 bytes per pixel, `pixel_format` (`PIXEL_RGB`, `PIXEL_BGR`, `PIXEL_BITMASK` with `pixel_masks`). A task's screen always holds `0x00RRGGBB`; only the compositor writes the framebuffer and converts (`pixel_to_device`).
+- Application slots, filled by the loader: `SLOT_INIT` 1, `SLOT_RTC` 2, `SLOT_VFS` 3, `SLOT_AUDIO` 4, `SLOT_LOADER` 5, `SLOT_TTS` 6. A launcher fills more through a launch session (`idl/loader.wit` 1.1) when the program asks for them with `mind::request!` and the launcher agrees: `SLOT_FILE` 7 (a VFS client for `REQUEST_FILE` / `REQUEST_FILES`), `SLOT_SYSINFO` 10 (`sysmon`), `SLOT_LIFECYCLE` 11 (`init`'s lifecycle requests), `SLOT_LOG` 12 (reading the system log); `SLOT_INIT` 1 may carry an endpoint for a ping/pong pair.
+
+## System calls
+
+Required authority is in brackets; "none" means every task may call it.
+
+### Time, console, lifetime
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 1 | `RDTSC` | → time stamp counter [none] |
+| 6 | `UPTIME` | → milliseconds since boot [none] |
+| 44 | `CLOCK` | → monotonic ns; `arg2` = resolution ns, `msg[2]` = calibrated TSC Hz (0: tick clock) [none] |
+| 5 | `WAIT` | `arg1` = ms (10 ms granularity, at most 60 s; ends early on input) → uptime at the call [none] |
+| 3 | `LOG` | `arg1` = address, `arg2` = length (≤ 4096) → bytes written to the task's log and console [none] |
+| 7 | `EXIT` | ends the task [none] |
+| 2 | `READ_KEY` | → legacy byte of the next input event that has one, 0 if none [focused task] |
+| 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`), 0 if none [focused task] |
+
+### Memory
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block, 0 on failure (quota `HEAP_MAX_BYTES`, `HEAP_MAX_BLOCKS`) |
+| 9 | `FREE` | `arg1` = block address; memory still referenced elsewhere is kept until released and stays charged to the owner |
+| 15 | `MEM_SHARE` | `arg1` = address of an own heap block → handle of a memory capability (read, write, grant) |
+| 16 | `MEM_MAP` | `arg1` = memory, DMA or MMIO handle → mapped address; `arg2` = size. Read-only without `CAP_WRITE`; MMIO uncached |
+| 47 | `MEM_DETACH` | `arg1` = own heap block nobody else refers to → handle of a memory object (MOVE only, or minted read-only) |
+| 26 | `MEM_PHYS` | `arg1` = DMA handle → physical address for the device |
+
+Transfer modes (COPY, MOVE, SHARE_RO, LEASE) and the services' use of them: [profile, Memory transfers](../profile/README.md#memory-transfers-appendix-b2).
+
+### Capabilities
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 45 | `CAP_MINT` | `arg1` = handle, `arg2` = rights mask, `msg[0]` = offset, `msg[1]` = length (0: to the end), `msg[2]` = badge → child handle with no more authority |
+| 46 | `CAP_REVOKE` | `arg1` = handle → number of descendants removed from all tasks; returns after no CPU can use them |
+| 14 | `CAP_DROP` | `arg1` = handle; descendants stay revocable |
+| 29 | `CAP_INFO` | `arg1` = handle → kind (`CAP_KIND_*`); `arg2` = port base or memory rights; `msg[2]` = size, port count or endpoint rights; `msg[3]` = 1 if a memory range is sealed |
+
+Rights: `CAP_READ` 1, `CAP_WRITE` 2, `CAP_GRANT` 4, `CAP_KEEP` 8 (may mint receive rights, cannot receive).
+
+### IPC
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 12 | `ENDPOINT_CREATE` | → handle of a new endpoint with all rights (endpoint quota) |
+| 10 | `IPC_SEND` | `arg1` = endpoint handle \| timeout ms << 32; `msg[0]` = capability handle to transfer (0: none), `msg[1]` = rights mask \| `CAP_TRANSFER_MOVE`, `msg[2..4]` = data [write right] |
+| 22 | `IPC_CALL` | as `IPC_SEND`, `arg2` = slot for a capability in the reply; waits for the reply: `msg[2..4]` = reply data [write right] |
+| 11 | `IPC_RECV` | `arg1` = endpoint handle \| timeout ms << 32, `arg2` = slot for a received capability → `arg1` = sender PID, `arg2` = badge, `msg[0]` = 1 if a capability arrived, `msg[1]` = `MSG_FLAG_*`, `msg[2..4]` = data [read right] |
+| 23 | `IPC_REPLY` | answers the last received call; `msg` as for a send |
+| 31 | `IPC_SAVE_REPLY` | → handle of a one-time reply capability for the last call (answer later) |
+| — | reply through a saved capability | `IPC_REPLY` with `arg1` = the saved handle (`libmind::ipc::reply_saved`) |
+
+At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BUSY` (back-pressure). On timeout the call leaves no trace: `ERR_TIMEOUT`.
+
+### Tasks
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`, `SPAWN_*`, quotas) → PID [spawn privilege] |
+| 28 | `TASK_ALIVE` | `arg1` = PID → 1 if it exists [none] |
+| 48 | `TASK_WATCH` | `arg1` = PID of an own child, `arg2` = endpoint with read right; its exit arrives there as a `MSG_FLAG_EXIT` message |
+| 52 | `SCHED_SET` | `arg1` = PID, `arg2` = budget µs per period (0: none), `msg[0]` = period µs (≥ 10 000), `msg[1]` = band [lifecycle owner or process control] |
+
+### Drivers
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 17 | `PORT_IN` | `arg1` = port range handle, `arg2` = port, `msg[1]` = width 1/2/4 → value |
+| 18 | `PORT_OUT` | as `PORT_IN`, `msg[0]` = value |
+| 27 | `PORT_IN_BLOCK` | `arg1` = handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (≤ 2048) → words read |
+| 53 | `PORT_OUT_BLOCK` | as `PORT_IN_BLOCK`; the words are written from the buffer → words written |
+| 19 | `IRQ_WAIT` | `arg1` = IRQ handle; blocks until the line fires |
+| 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages |
+| 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
+| 20 | `INPUT_EVENT` | routes decoded input [input privilege] |
+| 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen → 0 unchanged, 1 dirty, 2 new screen (read-only capability) [display privilege] |
+
+### Platform (init only)
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel [platform privilege] |
+| 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match → device index |
+| 49 | `DEVICE_STATE` | `arg1` = device index, `arg2` = `DEVICE_STOP` / `DEVICE_START` [platform privilege or a BAR capability of the device] |
+
+### Observation and process control
+
+| No. | Name | Arguments → result |
+|---|---|---|
+| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS → records written (`StatHeader`, then records) [observe or process control] |
+| 34 | `TASK_LIST` | `arg1` = `TaskInfo` array, `arg2` = capacity → count [observe or process control] |
+| 40 | `FAULTS` | `arg1` = `FaultInfo` array, `arg2` = capacity → count [observe or process control] |
+| 41 | `CPU_INFO` | `arg1` = CPU index → APIC id; `arg2` = online, `msg[2]` = ticks [observe or process control] |
+| 42 | `KERNEL_HEAP` | → used bytes; `arg2` = free, `msg[2]` = 1 if a test allocation was released [observe or process control] |
+| 35 | `TASK_KILL` | `arg1` = PID [process control] |
+| 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
+| 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
+| 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
+| 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID sent to the background [process control] |
+| 43 | `HALT` | stops all CPUs [process control] |
+
+## libmind
+
+`libmind` (crate name `mind`, [`libmind/src`](../../libmind/src)) is `no_std`; a program declares `mind::entry!(main)` and gets `main(info: &'static BootInfo)`.
+
+| Module | Content |
+|---|---|
+| `sys` | `syscall`, `Error`, `Result`, `check` |
+| `ipc` | `Endpoint` (send, call, recv with timeouts), `Message`, `Received`, `mint`, `mint_badged`, `revoke`, `reply`, `save_reply` |
+| `mem` | `Pages` (own heap block: share, detach), `Mapping`, `sealed` |
+| `process` | `exit`, `spawn` (a launch session with one grant), `spawn_with_args`, `args`, `watch`, `alive`; `request!` and `REQUEST_*`: what a program asks its launcher for |
+| `time` | `sleep`, `uptime_ms`, `monotonic_ns` |
+| `input` | `KeyEvent`, `read_event`, `wait_event` |
+| `keys` | `Key`, `Code`, `Event`: key words for programs; PS/2 scan-code decoder with US/Russian layouts (`Ps2`), VT100/xterm and UTF-8 decoder for the serial line (`Vt`) |
+| `tui` | text UI on the 8×16 font: cell grid with diffs, frames, lists, tables, menus, dialogs, input lines, graphs |
+| `gfx` | `Screen`: pixels, text, rectangles on the task's screen |
+| `fs`, `audio`, `tts`, `rtc` | clients of the VFS (`File`; `Dir` with `list`, `rename`, `remove`, `volume`, `check`, `scope`; `list`), audio, speech and clock services |
+| `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |
+| `stat` | `STAT` records as typed slices (`read`, `one`) and their names |
+| `block`, `block_protocol` | block device client; the common driver loop with the write badge checks (`Driver`, `read`, `write`, `flush`) |
+| `control` | process control and statistics (`stat`, `records`, `sched_set`) |
+| `dev`, `platform` | ports, IRQ, MMIO, DMA, device state for drivers and init |
+| `util`, `font`, `font16` | fixed-capacity text buffers (`FixedBuf`), the 8×8 font, MIND Mono 16 (8×16 with Cyrillic and box drawing) |
+| `heap` (feature `alloc`) | the program heap behind `alloc` (`Vec`, `String`, `Box`): size classes in arenas taken with `ALLOC`, large blocks directly |
+| `idl` | generated MIND IDL bindings (`idl::vfs`, `idl::audio`, ...) and their codec |
+
+## Stability
+
+MIND Core is pre-1.0. The system call numbers, records and service interfaces can change between commits; a change is recorded in the commit, in `common/abi.rs` and here. Service interfaces carry a version: a change that breaks an existing function increments the major version and old clients get status 0x81 instead of misread data ([docs/idl, Evolution](../idl/README.md#evolution-mc-124)). A stable ABI is a goal of a later roadmap stage, not a current promise.

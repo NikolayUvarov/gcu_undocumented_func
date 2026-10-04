@@ -1,5 +1,4 @@
 //! A panel of the file manager: a directory listing, sorted and filtered, with the cursor and marked files.
-use crate::abi::*;
 use crate::keys::{Code, Key};
 use crate::tui::widgets::ListState;
 use crate::tui::{Grid, Line, Rect, Style, Theme};
@@ -7,6 +6,13 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
+
+/// Attribute bits of a directory entry (`mind::fs::ENTRY_*`, idl/vfs.wit `entry.attributes`).
+pub const VFS_ENTRY_DIR: u8 = 1;
+pub const VFS_ENTRY_HIDDEN: u8 = 2;
+pub const VFS_ENTRY_SYSTEM: u8 = 4;
+pub const VFS_ENTRY_READ_ONLY: u8 = 8;
+pub const VFS_ENTRY_ARCHIVE: u8 = 16;
 
 /// A directory entry as `vfs_server` lists it (`flags`: `VFS_ENTRY_*`; `modified`: FAT date << 16 | FAT time).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

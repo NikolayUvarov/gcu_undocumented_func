@@ -2,10 +2,13 @@
 #![no_main]
 // audio_gw: ring 3 audio gateway. AC97 driver: playback DMA ring of 32 buffers, capture ring of 16 (microphone);
 // interrupts arrive as IPC messages on the service endpoint, client PCM comes through their shared buffers.
-// Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to AUDIO_PLAY.
+// Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to `play` (idl/audio.wit).
 use mind::abi::*;
 use mind::dev::{Irq, Ports};
-use mind::ipc::{self, Endpoint, Message};
+use mind::idl::wire::{self, Call};
+use mind::idl::audio;
+use mind::ipc::Endpoint;
+use mind::sys::Error;
 use mind::mem::{self, Mapping};
 
 const RECEIVED_CAP: usize = 9;
@@ -168,10 +171,11 @@ impl Ac97 {
 // Clients waiting for ring space: saved reply capability and the number of free buffers needed.
 const WAITERS: usize = 8;
 
-fn release(device: &Option<Ac97>, waiters: &mut [Option<(usize, usize)>; WAITERS], all: bool) {
+// Answers deferred `wait` calls whose space is now free (or all of them on stop).
+fn release(device: &Option<Ac97>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
     let free = device.as_ref().map_or(BUFFERS - 1, |d| d.free());
     for waiter in waiters.iter_mut() {
-        if let Some((slot, want)) = *waiter { if all || free >= want { let _ = ipc::reply_saved(slot, &Message::new(free, 0)); *waiter = None; } }
+        if waiter.as_ref().is_some_and(|(_, want)| all || free >= *want as usize) { let (call, _) = waiter.take().unwrap(); let _ = audio::reply_wait(call, Ok(free as u32)); }
     }
 }
 
@@ -179,7 +183,8 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut device = Ac97::init();
     let irq = Irq(SLOT_IRQ);
-    let mut waiters: [Option<(usize, usize)>; WAITERS] = [None; WAITERS];
+    let mut waiters: [Option<(Call, u8)>; WAITERS] = [const { None }; WAITERS];
+    let mut overflows = 0u32;
     match &device {
         Some(_) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
         None => mind::println!("[AUDIO] NO AC97 DEVICE; GATEWAY ANSWERS WITHOUT OUTPUT"),
@@ -195,37 +200,42 @@ fn main(_info: &'static BootInfo) {
             release(&device, &mut waiters, false); // buffers finished playing: wake waiting clients
             continue;
         }
-        let (op, arg) = (request.data[0] & 0xFF, request.data[0] >> 8);
-        if op == AUDIO_WAIT && request.is_call {
-            let want = arg.clamp(1, BUFFERS - 1);
-            let free = device.as_ref().map_or(BUFFERS - 1, |d| d.free());
-            let parked = free < want && match (waiters.iter().position(Option::is_none), ipc::save_reply()) {
-                (Some(index), Ok(slot)) => { waiters[index] = Some((slot, want)); true }
-                (None, Ok(slot)) => { let _ = ipc::reply_saved(slot, &Message::new(ERR_NO_SLOT, 0)); true }
-                _ => false,
-            };
-            if !parked { let _ = ipc::reply(&Message::new(free, 0)); }
-            continue;
-        }
-        let reply = match (op, device.as_mut()) {
-            (AUDIO_INFO, d) => [d.is_some() as usize, AUDIO_RATE],
-            (_, None) => [ERR_NOT_FOUND, 0],
-            (AUDIO_TONE, Some(d)) => [0, d.tone(arg, request.data[1])],
-            (AUDIO_STOP, Some(d)) => { d.reset(); [0, 0] }
-            (AUDIO_RECORD_START, Some(d)) => if d.record_start() { [0, 0] } else { [ERR_NOT_FOUND, 0] },
-            (AUDIO_RECORD_STOP, Some(d)) => { d.record_stop(); [0, 0] }
-            (AUDIO_RECORD_READ, Some(d)) => match request.cap_received.then(|| Mapping::new(RECEIVED_CAP).ok()).flatten() {
-                Some(mut buffer) => { let len = arg.min(buffer.len()); let (bytes, overflow) = d.record_read(&mut buffer.as_mut_slice()[..len]); [bytes, overflow as usize] }
-                None => [ERR_INVALID, 0],
-            },
-            (AUDIO_PLAY, Some(d)) => match request.cap_received.then(|| Mapping::new(RECEIVED_CAP).ok()).flatten() {
-                Some(buffer) => { let len = arg.min(buffer.len()); [d.play(&buffer.as_slice()[..len]), 0] }
-                None => [ERR_INVALID, 0],
-            },
-            _ => [ERR_INVALID, 0],
+        // idl/audio.wit. PCM and capture travel in the client's lent buffer, mapped only for the call.
+        let (request, call) = match audio::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
+        let lent = |slot: usize| Mapping::new(slot).map_err(|_| Error::Invalid);
+        let _ = match (request, device.as_mut()) {
+            (audio::Request::Device, d) => audio::reply_device(call, d.is_some().then_some(AUDIO_RATE as u32)),
+            (audio::Request::Overflows, _) => audio::reply_overflows(call, overflows),
+            (audio::Request::Wait { buffers }, d) => {
+                let want = (buffers as usize).clamp(1, BUFFERS - 1) as u8;
+                let free = d.as_ref().map_or(BUFFERS - 1, |d| d.free());
+                if free >= want as usize { audio::reply_wait(call, Ok(free as u32)) } else {
+                    // Parked until the playback interrupt frees enough buffers.
+                    let mut call = call;
+                    match (waiters.iter().position(Option::is_none), call.defer()) {
+                        (Some(index), Ok(())) => { waiters[index] = Some((call, want)); Ok(()) }
+                        _ => audio::reply_wait(call, Err(Error::NoSlot)),
+                    }
+                }
+            }
+            (audio::Request::Tone { .. } , None) => audio::reply_tone(call, Err(Error::NotFound)),
+            (audio::Request::Stop, None) => audio::reply_stop(call, Err(Error::NotFound)),
+            (audio::Request::RecordStart, None) => audio::reply_record_start(call, Err(Error::NotFound)),
+            (audio::Request::RecordStop, None) => audio::reply_record_stop(call, Err(Error::NotFound)),
+            (audio::Request::Play { .. }, None) => audio::reply_play(call, Err(Error::NotFound)),
+            (audio::Request::RecordRead { .. }, None) => audio::reply_record_read(call, Err(Error::NotFound)),
+            (audio::Request::Tone { hz, ms }, Some(d)) => audio::reply_tone(call, Ok(d.tone(hz as usize, ms as usize) as u32)),
+            (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&device, &mut waiters, true); replied }
+            (audio::Request::RecordStart, Some(d)) => { overflows = 0; audio::reply_record_start(call, if d.record_start() { Ok(()) } else { Err(Error::NotFound) }) }
+            (audio::Request::RecordStop, Some(d)) => { d.record_stop(); audio::reply_record_stop(call, Ok(())) }
+            (audio::Request::RecordRead { capacity, buffer }, Some(d)) => {
+                let result = lent(buffer).map(|mut out| { let len = (capacity as usize).min(out.len()); let (bytes, lost) = d.record_read(&mut out.as_mut_slice()[..len]); overflows += lost as u32; bytes as u32 });
+                audio::reply_record_read(call, result)
+            }
+            (audio::Request::Play { bytes, pcm }, Some(d)) => {
+                let result = lent(pcm).map(|data| { let len = (bytes as usize).min(data.len()); d.play(&data.as_slice()[..len]) as u32 });
+                audio::reply_play(call, result)
+            }
         };
-        if op == AUDIO_STOP { release(&device, &mut waiters, true); }
-        if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
-        if request.is_call { let _ = ipc::reply(&Message::new(reply[0], reply[1])); }
     }
 }

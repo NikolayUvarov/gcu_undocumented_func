@@ -1,7 +1,6 @@
 # 013 — Multi-core support and hardware memory isolation — done
 
-- Status: done
-- Date: 2026-09-19
+- Status: done (2026-09-19)
 
 ## Task statement
 
@@ -86,3 +85,7 @@ Limits: 8 CPUs, 8 applications, 64 MiB runtime heap. No task migration, work ste
 lazy page allocation or AVX contexts. The kernel identity map is supervisor-only,
 but kernel text is not separately write-protected. Kernel/syscall work is serialized;
 applications run in parallel. Configurations with 1 and 4 CPUs were verified.
+
+## Audit (2026-10-04)
+
+Done. Correction: the scheduler-policy host tests no longer exist; host tests today cover ELF loading, relocations, paging, the user heap and dzen-clock.

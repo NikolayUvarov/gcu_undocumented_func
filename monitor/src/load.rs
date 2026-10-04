@@ -58,7 +58,7 @@ impl LoadView {
 
     /// The fixed top of a series' scale, or none (scaled to its maximum).
     fn limit(&self, series: Series) -> Option<u64> {
-        match series { Series::Cpu(_) | Series::CpuTotal => Some(1000), Series::Arena => Some(self.memory.arena.max(1)), Series::Tasks => Some(self.memory.tasks_limit.max(1) as u64), _ => None }
+        match series { Series::Cpu(_) | Series::CpuTotal => Some(1000), Series::Arena => Some(self.memory.arena.max(1)), Series::Tasks => Some(TASKS_LIMIT as u64), _ => None }
     }
 
     /// Title of a graph: the current, average and highest value.
@@ -72,7 +72,7 @@ impl LoadView {
                 format!("{}  {}%  avg {}%  max {}%", name, text::permille(now as u32), text::permille(avg as u32), text::permille(max as u32))
             }
             Series::Arena => format!("kernel arena  {} of {}  max {}", text::size(now), text::size(self.memory.arena), text::size(max)),
-            Series::Tasks => format!("tasks  {} of {}  max {}", now, self.memory.tasks_limit, max),
+            Series::Tasks => format!("tasks  {} of {}  max {}", now, TASKS_LIMIT, max),
             _ => {
                 let name = match series { Series::Interrupts => "interrupts", Series::Syscalls => "syscalls", Series::Messages => "IPC messages", _ => "context switches" };
                 format!("{}  {}/s  avg {}/s  max {}/s", name, text::count(now), text::count(avg), text::count(max))

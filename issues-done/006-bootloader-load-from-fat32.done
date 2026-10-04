@@ -29,3 +29,7 @@ Naturally done together with [002](002-elf-loader.done): read ELF directly.
 ## Resolution
 
 The bootloader opens the boot volume through UEFI SimpleFileSystem and reads the kernel and the service images (`BOOT_FILES`); applications are read later by the `loader` service through `vfs_server` (issue 015).
+
+## Audit (2026-10-04)
+
+Was partial: a missing file panicked into a silent loop. Fixed with 002: `read_file` reports `file not found`, a non-regular file and a file larger than the 4 MiB buffer (previously truncated silently). Evidence: `boot` suite (missing `rtc.elf`). The boot volume is the first `SimpleFileSystem` handle, not the image's own device.

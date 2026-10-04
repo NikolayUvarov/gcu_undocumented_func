@@ -28,3 +28,7 @@ Restore the rolled-back integration: `extern crate alloc`, `#[global_allocator]`
 ## Resolution
 
 `.bss` is zero-filled by the ELF loader; the bootloader reserves a 64 MiB kernel heap; the kernel shell uses `format!`. Programs have their own private heap (issue 014).
+
+## Audit (2026-10-04)
+
+Done. Correction: the kernel shell was removed in 021; `format!` is now used in `KERNEL_HEAP`.

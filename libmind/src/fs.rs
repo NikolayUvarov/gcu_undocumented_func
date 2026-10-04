@@ -1,16 +1,29 @@
-//! vfs_server client (idl/vfs.wit): files and directories through handles. A path may name a volume first (`ram:notes`);
-//! without one it is on the boot disk. Data travels in one buffer the process lends with every call. What a program may
-//! write depends on the badge of its VFS capability: applications read only; the shell writes on `ram:` and in `data/`.
+//! vfs_server client (idl/vfs.wit 2.x): files and directories through handles. A path may name a volume first
+//! (`ram:notes`); without one it is on the boot disk. What a program may write depends on the badge of its VFS
+//! capability: applications read only; the shell writes on `ram:` and in `data/`.
 use crate::abi::*;
 use crate::idl::vfs;
-use crate::idl::wire;
 use crate::ipc::Endpoint;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-/// Bytes moved per call.
+/// Bytes moved per call (`bytes<16384>` in idl/vfs.wit).
 pub const CHUNK: usize = 16 * 1024;
-const BUFFER: usize = CHUNK + 4096;
+
+/// `open` mode bits.
+pub const MODE_WRITE: u8 = 1;
+pub const MODE_CREATE: u8 = 2;
+pub const MODE_TRUNCATE: u8 = 4;
+pub const MODE_NEW: u8 = 8;
+/// Attributes of a directory entry (`DirEntry::flags`).
+pub const ENTRY_DIR: u8 = 1;
+pub const ENTRY_HIDDEN: u8 = 2;
+pub const ENTRY_SYSTEM: u8 = 4;
+pub const ENTRY_READ_ONLY: u8 = 8;
+pub const ENTRY_ARCHIVE: u8 = 16;
+/// Badge of the VFS client that may write on `ram` and in the boot disk's `data` directory (init gives it to the
+/// shell, Appendix B.6); unbadged clients only read.
+pub const BADGE_USER: u16 = 1;
 
 /// Why a file operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +54,7 @@ impl From<Error> for crate::sys::Error {
 // A generated call: the IPC failure and the service's error both become `Error`.
 fn call<T>(result: crate::sys::Result<core::result::Result<T, vfs::Error>>) -> Result<T> { result?.map_err(Error::from) }
 
-struct Client { shared: wire::Shared, roots: [(u32, bool); 2] } // root handles of "" and "ram", opened once
+struct Client { roots: [(u32, bool); 2] } // root handles of "" and "ram", opened once
 struct State(UnsafeCell<Option<Client>>);
 unsafe impl Sync for State {} // processes are single-threaded
 static STATE: State = State(UnsafeCell::new(None));
@@ -95,12 +108,12 @@ fn locate(path: &str) -> Result<(&str, &str)> {
 
 fn client() -> Result<&'static mut Client> {
     let slot = unsafe { &mut *STATE.0.get() };
-    if slot.is_none() { *slot = Some(Client { shared: wire::Shared::new(BUFFER).map_err(|_| Error::NoMemory)?, roots: [(0, false); 2] }); }
+    if slot.is_none() { *slot = Some(Client { roots: [(0, false); 2] }); }
     Ok(slot.as_mut().unwrap())
 }
 
-/// Creates the buffer up front (services do this at startup so they don't grow while running).
-pub fn prepare() -> Result<()> { client().map(drop) }
+/// Kept for callers that prepared a buffer at startup; the generated calls allocate one per request.
+pub fn prepare() -> Result<()> { Ok(()) }
 
 /// The volume and the path on it: `ram:docs/a` -> ("ram", "docs/a"); a path without a volume is on the boot disk.
 pub fn split(path: &str) -> (&str, &str) {
@@ -110,11 +123,11 @@ pub fn split(path: &str) -> (&str, &str) {
 fn root(volume: &str) -> Result<u32> {
     let index = if volume.is_empty() { 0 } else if volume.eq_ignore_ascii_case("ram") { 1 } else { return Err(Error::NotFound) };
     let c = client()?;
-    if !c.roots[index].1 { let handle = call(vfs::root(endpoint(), c.shared.buffer(), volume))?; c.roots[index] = (handle, true); }
+    if !c.roots[index].1 { let handle = call(vfs::root(endpoint(), volume))?; c.roots[index] = (handle, true); }
     Ok(c.roots[index].0)
 }
 
-/// What `metadata` and `File::metadata` report: size, FAT modification stamp (see `fat_time`), `VFS_ENTRY_*` bits.
+/// What `metadata` and `File::metadata` report: size, FAT modification stamp (see `fat_time`), `ENTRY_*` bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Metadata { pub size: u32, pub modified: u32, pub attributes: u8, pub is_dir: bool }
 
@@ -124,8 +137,7 @@ pub struct VolumeInfo { pub label: [u8; 11], pub fat_bits: u8, pub bytes: u64, p
 impl VolumeInfo { pub fn label(&self) -> &str { core::str::from_utf8(&self.label).unwrap_or("").trim_end() } }
 
 fn stat(handle: u32) -> Result<Metadata> {
-    let c = client()?;
-    let e = call(vfs::stat(endpoint(), c.shared.buffer(), handle))?;
+    let e = call(vfs::stat(endpoint(), handle))?;
     Ok(Metadata { size: e.size, modified: e.modified, attributes: e.attributes, is_dir: e.directory })
 }
 
@@ -144,13 +156,11 @@ impl Dir {
     /// A directory below this one.
     pub fn dir(&self, path: &str, create: bool) -> Result<Self> {
         if path.is_empty() { return Ok(Self { handle: self.handle, owned: false }); }
-        let c = client()?;
-        Ok(Self { handle: call(vfs::open_dir(endpoint(), c.shared.buffer(), self.handle, create, path))?, owned: true })
+        Ok(Self { handle: call(vfs::open_dir(endpoint(), self.handle, path, create))?, owned: true })
     }
-    /// A file below this one with `VFS_MODE_*` bits.
+    /// A file below this one with `MODE_*` bits.
     pub fn file(&self, path: &str, mode: u8) -> Result<File> {
-        let c = client()?;
-        let handle = call(vfs::open(endpoint(), c.shared.buffer(), self.handle, mode, path))?;
+        let handle = call(vfs::open(endpoint(), self.handle, path, mode))?;
         let size = stat(handle).map(|m| m.size as usize).unwrap_or(0);
         Ok(File { handle, size, position: 0 })
     }
@@ -158,35 +168,32 @@ impl Dir {
     pub fn list(&self, mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
         let mut start = 0u32;
         loop {
-            let c = client()?;
-            let entries = call(vfs::list(endpoint(), c.shared.buffer(), self.handle, start))?;
+            let entries = call(vfs::list(endpoint(), self.handle, start))?;
             if entries.is_empty() { return Ok(start as usize); }
-            for e in entries.iter() { visit(&DirEntry { name: e.name.as_bytes(), size: e.size, is_dir: e.directory, flags: e.attributes, modified: e.modified }); }
+            for e in entries.as_slice() { visit(&DirEntry { name: e.name.as_str().as_bytes(), size: e.size, is_dir: e.directory, flags: e.attributes, modified: e.modified }); }
             start += entries.len() as u32;
         }
     }
     /// Removes a file or an empty directory below this one.
-    pub fn remove(&self, path: &str) -> Result<()> { let c = client()?; call(vfs::remove(endpoint(), c.shared.buffer(), self.handle, path)) }
+    pub fn remove(&self, path: &str) -> Result<()> { call(vfs::remove(endpoint(), self.handle, path)) }
     /// Renames or moves `from` (below this directory) to `to` below `target` (the same volume).
-    pub fn rename(&self, from: &str, target: &Dir, to: &str) -> Result<()> { let c = client()?; call(vfs::rename(endpoint(), c.shared.buffer(), self.handle, target.handle, from, to)) }
+    pub fn rename(&self, from: &str, target: &Dir, to: &str) -> Result<()> { call(vfs::rename(endpoint(), self.handle, from, target.handle, to)) }
     pub fn metadata(&self) -> Result<Metadata> { stat(self.handle) }
     /// The volume this directory is on.
     pub fn volume(&self) -> Result<VolumeInfo> {
-        let c = client()?;
-        let v = call(vfs::volume(endpoint(), c.shared.buffer(), self.handle))?;
+        let v = call(vfs::volume(endpoint(), self.handle))?;
         let mut label = [b' '; 11];
-        for (i, b) in v.label.bytes().take(11).enumerate() { label[i] = b; }
+        for (i, b) in v.label.as_str().bytes().take(11).enumerate() { label[i] = b; }
         Ok(VolumeInfo { label, fat_bits: v.fat_bits, bytes: v.bytes, free: v.free, cluster: v.cluster, writable: v.writable })
     }
     /// Writes what is cached for this volume to the disk.
     pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
     /// A client confined to this directory (vfs.wit `scope`), received in the caller's fixed slot `receive`; it may
     /// change files only if `writable` and this handle may. For a launcher that gives a program one directory.
-    pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(endpoint(), self.handle, writable, receive)) }
+    pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(endpoint(), self.handle, writable, receive)).map(|()| receive) }
     /// Checks this directory's volume without changing it; `visit` sees the report (idl/vfs.wit `report`).
     pub fn check<T>(&self, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> {
-        let c = client()?;
-        Ok(visit(&call(vfs::check(endpoint(), c.shared.buffer(), self.handle))?))
+        Ok(visit(&call(vfs::check(endpoint(), self.handle))?))
     }
 }
 
@@ -199,8 +206,8 @@ impl File {
     /// Opens a file to read.
     pub fn open(path: &str) -> Result<Self> { Self::open_mode(path, 0) }
     /// Creates a file (or empties an existing one) to write.
-    pub fn create(path: &str) -> Result<Self> { Self::open_mode(path, VFS_MODE_WRITE | VFS_MODE_CREATE | VFS_MODE_TRUNCATE) }
-    /// Opens with `VFS_MODE_*` bits.
+    pub fn create(path: &str) -> Result<Self> { Self::open_mode(path, MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) }
+    /// Opens with `MODE_*` bits.
     pub fn open_mode(path: &str, mode: u8) -> Result<Self> { let (volume, rest) = locate(path)?; Dir::root(volume)?.file(rest, mode) }
     pub fn size(&self) -> usize { self.size }
     pub fn position(&self) -> usize { self.position }
@@ -210,11 +217,9 @@ impl File {
         let mut done = 0;
         while done < buffer.len() {
             let want = (buffer.len() - done).min(CHUNK);
-            let c = client()?;
-            let data = call(vfs::read(endpoint(), c.shared.buffer(), self.handle, (offset + done) as u32, want as u32))?;
-            buffer[done..done + data.len()].copy_from_slice(data);
-            done += data.len();
-            if data.len() < want { break; }
+            let got = call(vfs::read(endpoint(), self.handle, (offset + done) as u32, want as u32, &mut buffer[done..done + want]))?;
+            done += got;
+            if got < want { break; }
         }
         Ok(done)
     }
@@ -224,8 +229,9 @@ impl File {
         let mut done = 0;
         while done < data.len() {
             let n = (data.len() - done).min(CHUNK);
-            let c = client()?;
-            done += call(vfs::write(endpoint(), c.shared.buffer(), self.handle, (offset + done) as u32, &data[done..done + n]))? as usize;
+            let wrote = call(vfs::write(endpoint(), self.handle, (offset + done) as u32, &data[done..done + n]))? as usize;
+            if wrote == 0 { return Err(Error::NoSpace); }
+            done += wrote;
         }
         self.size = self.size.max(offset + done);
         Ok(done)
@@ -240,7 +246,7 @@ impl File {
 
 impl Drop for File { fn drop(&mut self) { close(self.handle); } }
 
-/// Directory entry: `flags` are `VFS_ENTRY_*`, `modified` is FAT date << 16 | FAT time (see `fat_time`).
+/// Directory entry: `flags` are `ENTRY_*`, `modified` is FAT date << 16 | FAT time (see `fat_time`).
 pub struct DirEntry<'a> { pub name: &'a [u8], pub size: u32, pub is_dir: bool, pub flags: u8, pub modified: u32 }
 
 impl DirEntry<'_> { pub fn name_str(&self) -> &str { core::str::from_utf8(self.name).unwrap_or("?") } }

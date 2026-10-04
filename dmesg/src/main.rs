@@ -30,7 +30,7 @@ fn parse(args: &str) -> Result<Options<'_>, &'static str> {
 }
 
 fn wanted(options: &Options, entry: &mind::log::Entry) -> bool {
-    entry.level >= options.level && options.source.is_none_or(|s| s.eq_ignore_ascii_case(entry.name) || s.parse::<u64>().is_ok_and(|pid| pid == entry.pid))
+    entry.level >= options.level && options.source.is_none_or(|s| s.eq_ignore_ascii_case(entry.name.as_str()) || s.parse::<u64>().is_ok_and(|pid| pid == entry.pid))
 }
 
 mind::entry!(main);

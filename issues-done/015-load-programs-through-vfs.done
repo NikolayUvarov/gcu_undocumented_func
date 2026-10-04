@@ -1,6 +1,6 @@
 # 015 — Loading programs through the VFS instead of the bootloader RAMFS — done
 
-- Type: feature · Priority: high · Status: done · Date: 2026-10-03
+- Type: feature · Priority: high · Status: done (2026-10-03)
 
 ## Problem
 The bootloader read all programs into memory before ExitBootServices; the kernel could launch them only from those images.
@@ -16,3 +16,7 @@ The bootloader read all programs into memory before ExitBootServices; the kernel
 - `services`: `LIST` shows the files on the disk; `hello` (a copy of clock.elf) and `extra/demo.elf`, which are not in any table, are launched; `kernel`, nonexistent and overly long names are rejected.
 - `isolation`: `SPAWN_IMAGE` and `LOADER_DONE` are forbidden without the privilege.
 - USB image: applications are loaded from a USB drive via xHCI.
+
+## Audit (2026-10-04)
+
+Done. `SPAWN_IMAGE` and the kernel-shell request page were replaced on purpose (020, 021).

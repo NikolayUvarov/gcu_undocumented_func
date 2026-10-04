@@ -2,7 +2,7 @@
 #![no_main]
 // ramdisk: a block device in the service's own memory (8 MiB) for scratch files: vfs_server formats it as FAT on first
 // mount and serves it as `ram:`. Its contents never outlive the boot. Writes need the write badge like any drive's.
-use mind::abi::{BootInfo, BLOCK_KIND_RAM, BLOCK_SECTOR};
+use mind::abi::{BootInfo, BLOCK_SECTOR};
 use mind::block::{self, Driver};
 use mind::mem::Pages;
 
@@ -32,5 +32,5 @@ fn main(_info: &'static BootInfo) {
         Some(_) => mind::println!("[RAMDISK] {} KB", BYTES / 1024),
         None => mind::println!("[RAMDISK] NO MEMORY"),
     }
-    block::serve(BLOCK_KIND_RAM, ram.as_mut().map(|r| r as &mut dyn Driver));
+    block::serve(block::KIND_RAM, ram.as_mut().map(|r| r as &mut dyn Driver));
 }

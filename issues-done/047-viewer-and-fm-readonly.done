@@ -1,0 +1,23 @@
+# 047 — Viewer `view` and file manager `fm`, read-only (tools T1) — superseded
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** superseded (2026-10-04) · **Roadmap:** track G, T1 · **Blocked by:** 042, 043
+
+## Problem
+
+There is no way to browse or read files except `files` and `list`.
+
+## Plan
+
+- `view`: text and hex view with scrolling and search. `fm`: two panels, navigation, view.
+
+## Acceptance criteria
+
+- QEMU suites `view`, `fm` (screendump checks).
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) §4.1, §4.3.
+
+## Resolution
+
+Superseded by the tools branch's records [057](057-viewer.done) and [063](063-file-manager-read-only.done), merged in [051](../issues/051-merge-main-into-tools.md): `view` and `fm`.

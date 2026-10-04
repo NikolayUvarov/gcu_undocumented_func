@@ -1,10 +1,10 @@
 # MIND IDL v0.2
 
-**Version:** 0.2 (2026-10-04; 0.1 the same day) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-2.3, MC-2.4, MC-2.12, MC-12.4, Appendix B.2 · **Roadmap:** [C5](../../ROADMAP.md)
+**Version:** 0.2 (2026-10-04) · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-2.3, MC-2.4, MC-2.12, MC-12.4, Appendix B.2 · **Roadmap:** [C5](../../ROADMAP.md)
 
 MIND IDL describes the interface of a service: functions, the types and size limits of their data, the capability a call may carry and the version. Interfaces are written in a subset of [WIT](https://component-model.bytecodealliance.org/design/wit.html), the baseline candidate named in Appendix B.2. `scripts/mind_idl.py` generates Rust bindings for client and server into `libmind/src/idl/`. The generated files are committed, and `tests/idl_test.py` fails if they are out of date.
 
-v0.2 covers the data representation and acceptance of a single request: scalars in the two message words and, since 0.2, strings, bytes, lists and records in a memory buffer lent with the call ([issue 038](../../issues-done/038-mind-idl-v0.2.done)). Message ordering, session state machines and composition (MC-2.10) are not part of it yet.
+v0.2 covers the data representation and the acceptance of a single request: integers in two message words, and records, strings and lists in a memory buffer. Its minor extension (merged from the tools branch, issue [051](../../issues/051-merge-main-into-tools.md)) adds enums, `bytes<N>`, enum errors and capability results; it changes nothing on the wire for interfaces that do not use them. Message ordering, session state machines and composition (MC-2.10) are not part of it yet.
 
 ## Syntax
 
@@ -22,49 +22,63 @@ interface rtc {
 - Functions: `name: func(params) -> result;`. There are 1–255 functions per interface, numbered in declaration order starting at 1.
 - Parameter types:
   - `bool`, `u8`, `u16`, `u32`, `u64`;
+  - enums declared in the interface: `enum name { case, ... }` (1–256 distinct cases, numbered from 0);
+  - `bytes<N>`: at most N bytes of binary data (1 ≤ N ≤ 65535), only as a parameter or a result, not in a record or a list;
+  - `string<N>`: UTF-8 text of at most N bytes;
+  - `list<T, N>`: at most N items; T is an integer, an enum, `string<N>` or a record;
+  - records declared in the interface: `record name { field: type, ... }` (one or several lines), with the same field types;
   - at most one capability: `own<memory>`, `own<endpoint>` (moved, `CAP_TRANSFER_MOVE`) or `borrow<memory>`, `borrow<endpoint>` (copied, so the client can revoke it: a lease).
-  - a result may be a capability, `result<own<K>, E>` or `result<borrow<K>, E>`: the reply carries it (moved, or copied so that the server can revoke it), and the generated client takes a `receive` argument, the caller's fixed slot where it lands, and checks its kind.
-- Result: none, an integer type, `option<integer>`, a bulk type (below) or `result<T, E>` where `T` is `_` (no value), a scalar or a bulk type and `E` is an enum.
-- Since 0.2, inside the interface:
-  - `enum name { a, b-c }` — 1..255 cases, carried as `u8`; an enum may be a parameter, a result, a record field, a list item or the error of `result<>`;
-  - `record name { field: type, ... }` — fields are integers, `bool`, enums, `string<N>`, `bytes<N>` or records declared earlier; no lists inside records.
-- Bulk types (since 0.2): `string<N>` (UTF-8, at most N bytes, N ≤ 65535), `bytes<N>` (N ≤ 1 MiB), `list<T, N>` (T an integer, enum or record; N ≤ 4096), records. A function that has bulk parameters or a bulk result must take exactly one `borrow<memory>` parameter: the buffer the bulk data travels in.
-- Anything else (variants, resources, lists of strings, several capabilities) is rejected by the generator, as are the reserved names `request`, `reject`, `status`, `buffer`, `result`.
+- Result: none; any of the data types above; `option<T>`; `result<T, error-code>` or `result<_, error-code>` (a system error code, `ERR_*`); `result<T, E>` or `result<_, E>` with an enum `E` declared in the interface; in a word call also a capability, alone or as the `T` of a result: `own<…>` (the server gives it away) or `borrow<…>` (the server keeps its source and can revoke it, as `vfs.wit` `scope` does when the task it was made for ends); it arrives in a slot the client names.
+- **Bounds are part of the type.** `string<N>` and `list<T, N>` are a MIND extension of WIT syntax: every value has a static maximum size, so every buffer is bounded.
+- Anything else is rejected by the generator: resources, variants, unbounded strings or lists, several capabilities, a capability in a function that also uses a buffer (its capability is the buffer), a capability in a record or an option, more than 64 KiB per request or reply.
 
 ## Wire format
 
-A message is the two data words and the optional capability of an IPC `CALL`.
+A function whose parameters and result are integers only (and at most one capability) is a **word call**: the two data words and the optional capability of an IPC `CALL`.
 
 | Word | Request | Reply |
 |---|---|---|
 | 0 | bits 0–7 method, 8–15 major version, 16–63 fields | bits 0–7 status, 16–63 result |
-| 1 | fields | result (if it does not fit in word 0) |
+| 1 | fields | result (if it does not fit in word 0), or the error code with status 2 |
 
-Fields are placed in declaration order. A field never straddles a word boundary, so the size limit of a call is 48 + 64 bits; the generator rejects interfaces that do not fit. A function with bulk parameters has an implicit first field `payload: u32`, the length of its encoded bulk arguments. Status values:
-- 0: ok; a bulk result's encoded length is in bits 16..48 of word 0;
+Fields are placed in declaration order. A field never straddles a word boundary, so the size limit of a word call is 48 + 64 bits.
+
+A function with a string, list or record anywhere is a **buffer call**:
+- The client encodes the parameters into a buffer of its own, at least as large as the declared maxima of request and reply. It sends `method | major << 8 | request length << 16` in word 0 and 0 in word 1, with the buffer as a (copied) memory capability.
+- The server writes the result into the same buffer and replies `status | reply length << 16`.
+- Before reading the reply, the client revokes the server's copy, which unmaps it everywhere (MC-2.6). The server cannot change the reply while it is being decoded.
+
+Encoding in the buffer, in declaration order, byte-packed, little-endian: integers in their size (`bool` one byte, 0 or 1), an enum as one byte, a string or `bytes<N>` as a u16 byte length and the bytes, a list as a u16 count and the items, a record as its fields. In a word call an enum is an 8-bit field.
+
+A capability result travels as the capability of the reply: the client's call names the slot it is received in (the generated function takes `receive`), and the server moves or copies it with the reply. A reply that should carry one and does not is rejected by the client.
+
+Status values:
+- 0: ok;
 - 1: `none` for an option result;
-- 2: the error of a `result<T, E>`: the enum value is in bits 16..24;
-- 3: the result does not fit the client's buffer (the client sees `ERR_LIMIT`);
+- 2: error of a `result<_, error-code>` (code in word 1) or of a `result<_, E>` with an enum (the case number in word 1, bits 8–63 of word 0 zero);
 - 0x80: the request failed the receiver's schema check;
 - 0x81: the receiver serves another major version.
 
-### Bulk data (0.2)
+## Receiver checks (MC-2.4, MC-2.11, MC-2.12)
 
-The client writes its bulk arguments, in declaration order, at the start of the buffer it lends (`borrow<memory>`, so it can revoke it), and the server writes a bulk result at the start of the same buffer. Encoding: integers little-endian at their width, `bool` as 0 or 1, enums as `u8`, `string<N>` as `u16` length + UTF-8, `bytes<N>` as `u32` length + bytes, `list<T, N>` as `u32` count + items, records as their fields in order. Nothing is aligned or padded.
-
-## Receiver checks (MC-2.4, MC-2.12)
-
-The generated `decode(request, cap_slot)` accepts a request only if all of the following hold:
+The generated `decode(request, cap_slot)` returns the request and a `Call` that the reply functions consume. It accepts a request only if all of the following hold:
 - it is a call;
 - the major version matches;
-- the method exists;
+- the method exists.
+
+For a word call, in addition:
 - every bit outside the declared fields is zero;
-- a capability is present exactly when the function declares one, and it is of the declared kind (`CAP_INFO`);
-- every enum value in the words is a declared case.
+- a capability is present exactly when the function declares one, and it is of the declared kind.
 
-Bulk arguments are checked by the generated `args_<function>(mapped buffer, payload)` once the server has mapped the buffer: the payload fits the buffer, every string is UTF-8 within its limit, every list within its count, every `bool` 0 or 1, every enum a declared case, and the payload is consumed exactly (no trailing bytes). The client checks a bulk result the same way (and that its length fits the buffer) before it returns a `wire::List` view or records that borrow from the buffer.
+For a buffer call, in addition:
+- a memory capability is present;
+- word 1 is zero;
+- the request length is within the declared maximum and the buffer;
+- the buffer can hold the largest reply.
 
-A capability that is not accepted is dropped at once. The server answers a rejected request with `wire::reject`. The kernel checks only rights and envelope limits; the schema check runs in the receiving service.
+The request is then **copied into the server's private memory** before it is decoded (the client could change its buffer meanwhile, MC-2.11). Decoding checks every length against its bound, booleans, enum cases, UTF-8, and that no bytes are left over.
+
+A capability that is not accepted is dropped at once. The server answers a rejected request with `wire::reject`. A server may answer later: `Call::defer` keeps the right to reply (`IPC_SAVE_REPLY`) while it receives other requests. The kernel checks only rights and envelope limits; the schema check runs in the receiving service.
 
 ## Evolution (MC-12.4)
 
@@ -72,15 +86,14 @@ A change that alters the meaning or layout of an existing function increments th
 
 ## Interfaces
 
-| File | Service | Since |
+| File | Service | Version |
 |---|---|---|
-| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.1.0 (`date` added) |
-| [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` | 1.0.0 |
-| [`idl/loader.wit`](../../idl/loader.wit) | `loader` (launch sessions) | 2.0.0 (1.1: `grant` also takes slot 12, the system log; 2.0: `needs` gains `files`) |
-| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` | 2.2.0 (2.0 replaced the numeric VFS protocol; 2.1 adds `check`, 2.2 `scope`) |
-| [`idl/log.wit`](../../idl/log.wit) | `logd` | 1.0.0 |
-| [`idl/lifecycle.wit`](../../idl/lifecycle.wit) | `init` | 1.0.0 (replaces the numeric start-by-name request) |
-
-`tests/idl/sample.wit` exercises every v0.2 type; its bindings (`tests/idl/sample.rs`) run in `tests/idl_host.rs` against a loopback of client and server, with malformed payloads.
-
-The other services (block, audio, TTS, init) and the loader's `LOADER_RUN`/`LOADER_LIST` still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8.
+| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times) | 1.1.0 |
+| [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
+| [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
+| [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
+| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result) | 2.2.0 |
+| [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`; 1.1 adds the lifecycle requests of `svc` and `top`) | 1.1.0 |
+| [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; 1.1 adds launch sessions: `begin`, `grant`, `commit`, `abort`, `inspect`) | 1.1.0 |
+| [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` (`STAT` records and load history for the monitors) | 1.0.0 |
+| [`idl/log.wit`](../../idl/log.wit) | `logd` (the system log; reading needs the read badge) | 1.0.0 |

@@ -1,8 +1,8 @@
 /// System log (`logd`, MC-10.6): a bounded ring of records with sequence numbers. The source of a record — the
 /// sender's PID and the task name the kernel reports for it — is stamped by the server from the IPC sender, never taken
 /// from the message. A reader sees a gap in the sequence numbers when the ring has dropped records it did not read.
-/// Services and `init` write (their `println!` lines go here too); reading needs the read badge, which only the
-/// shell's client carries (it lends it to `dmesg`).
+/// Services and `init` write (their `println!` lines go here too); reading needs the read badge
+/// (`mind::log::BADGE_READ`), which only the shell's client carries (it lends it to `dmesg`).
 package mind:log@1.0.0;
 
 interface log {
@@ -18,9 +18,9 @@ interface log {
     record state { first: u64, next: u64, dropped: u64, suppressed: u64 }
 
     /// Adds a record from the caller.
-    write: func(buffer: borrow<memory>, level: u8, text: string<200>) -> result<_, error>;
-    /// Records from sequence number `from` on (from the oldest kept if that is later), as many as fit.
-    read: func(buffer: borrow<memory>, from: u64) -> result<list<entry, 64>, error>;
+    write: func(level: u8, text: string<200>) -> result<_, error>;
+    /// Records from sequence number `from` on (from the oldest kept if that is later), at most 16.
+    read: func(from: u64) -> result<list<entry, 16>, error>;
     /// The state of the ring.
-    state: func(buffer: borrow<memory>) -> result<state, error>;
+    state: func() -> result<state, error>;
 }

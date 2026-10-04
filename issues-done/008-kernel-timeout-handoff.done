@@ -21,3 +21,7 @@ Handoff: the kernel "hands control to Userspace when the delay expires (or on a 
 ## Resolution
 
 Superseded: the kernel no longer hands control to a single application. It starts the system services and the shell; applications are started with `RUN`.
+
+## Audit (2026-10-04)
+
+Done (superseded). Correction: since 020 the kernel starts only `init`, which starts the services and the shell.

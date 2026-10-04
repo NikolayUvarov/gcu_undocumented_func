@@ -30,3 +30,7 @@ The kernel decides which services to start (`wanted`: AHCI and xHCI only if pres
 ## Resolution
 
 New ring-3 service `init/` (boot image 0). The kernel starts only it, with endpoint 10 and the platform and spawn privileges (`scheduler::spawn_init`). New system calls `PLATFORM_CAP` (validated legacy ports, IRQs, PCI BARs/IRQs from the kernel's enumeration, framebuffer, DMA, privileges, reserved endpoints) and `DEVICE_FIND`; `SPAWN` replaces `SPAWN_IMAGE` and takes an explicit grant list and flags. `kernel/src` no longer contains service names or a per-service capability table; `loader` grants the application client capabilities itself. A send to an endpoint nobody can receive from fails with `ERR_PEER`. Idle CPUs get a wake IPI (vector 0x32) when one of their tasks becomes ready — needed because services now run on all CPUs. Verified: all 11 QEMU suites, USB image smoke, host tests.
+
+## Audit (2026-10-04)
+
+Done. Corrections (027): init's endpoint is created by the kernel without a number, and `PLATFORM_CAP` no longer mints endpoints.

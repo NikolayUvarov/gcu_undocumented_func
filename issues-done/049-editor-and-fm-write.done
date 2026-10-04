@@ -1,0 +1,23 @@
+# 049 — Editor `edit`, `fm` write operations, `df`, `fsck` (tools T2) — superseded
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** superseded (2026-10-04) · **Roadmap:** track G, T2 · **Blocked by:** 046, 048
+
+## Problem
+
+No way to edit text or manage files.
+
+## Plan
+
+- `edit`: full-screen panel editor (undo on Ctrl+U/Alt+Backspace; Ctrl+Z is the attention key), save via `name.tmp` + rename. `fm`: copy, move, delete, mkdir. `df`, `fsck`.
+
+## Acceptance criteria
+
+- QEMU suite `edit`: edit, save, reread after reboot, `fsck.fat -n` clean.
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) §4.1, §4.2.
+
+## Resolution
+
+Superseded by the tools branch's records [067](067-editor.done) and [068](068-fm-write-df-fsck.done), merged in [051](../issues/051-merge-main-into-tools.md): `edit`, `fm` writes, `df` and `fsck`.

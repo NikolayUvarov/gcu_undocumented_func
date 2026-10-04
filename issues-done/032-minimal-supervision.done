@@ -1,0 +1,44 @@
+# 032 — Minimal supervision (roadmap C6)
+
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C6 · **Constitution:** MC-6.2, MC-6.4, MC-6.5, MC-6.8, MC-6.9, MC-6.12
+
+## Problem
+
+Nobody learns that a service died: `init` restarts one only when the operator types `RUN <service> &`. There is no restart budget. Senders queued on a dead server's endpoint are delivered to the next instance as if nothing happened (MC-6.4). If `init` itself dies, the system keeps running without its bootstrap authority and policy.
+
+## Plan
+
+- **Failure notification (kernel mechanism):** `TASK_WATCH(pid, endpoint)`. Only the task's lifecycle owner (its spawner) may register an endpoint it can receive on. When the task ends, the kernel queues a notice: a message with `MSG_FLAG_EXIT`, `data = [pid, reason]`, where the reason is exit, fault (with the vector) or kill. Notices are bounded (16); the oldest is never dropped silently, the count of lost notices is reported.
+- **Old instance (MC-6.4):** when the last task that can receive on an endpoint ends, every sender still queued on it fails with `ERR_PEER`. A message addressed to a dead instance is never delivered to the next one. Clients tell instances apart by the server PID in replies (`Received.sender`).
+- **Supervision policy (`init`):**
+  - `init` watches every service it starts and restarts a failed one automatically.
+  - Budget: 3 restarts per 60 s per service. When it is spent, the service is quarantined (`[INIT] <name> QUARANTINED`) and not restarted again automatically. An explicit `RUN <service> &` from the operator restarts it and resets the budget.
+  - `init` restarts services from its own reserved quota; the old instance's quota returns before the restart.
+- **Final recovery boundary (MC-6.8):** if `init` ends, the kernel logs `INIT EXITED` and halts all CPUs. No unsupervised state is left running.
+
+## Acceptance criteria
+
+- Services suite: a killed service comes back by itself and serves its existing clients again. After the budget is spent, it is quarantined and stays down until `RUN`.
+- A sender queued on a dead server fails with `ERR_PEER` instead of reaching the new instance.
+- All QEMU suites pass.
+
+## Related
+
+[027](027-no-ambient-endpoint-names.done), [030](030-ipc-bounds-and-cancellation.done), [ROADMAP](../ROADMAP.md) C6.
+
+## Resolution
+
+Kernel: `TASK_WATCH` (48) lets the spawner name an endpoint it can receive on. `terminate` takes a reason (`EXIT_NORMAL`, `EXIT_KILLED`, `EXIT_FAULT | vector << 8`) and posts the notice: it goes straight to a receiver waiting on that endpoint, otherwise into a queue of `EXIT_NOTICES_MAX` (16). Overflow is counted and reported in the next notice; notices for endpoints nobody holds are dropped in `reap`. When a task ends, every sender queued on an endpoint that no live task can receive from any more fails with `ERR_PEER`. If `init` (the only task without a parent) ends, the kernel prints `INIT EXITED: SYSTEM HALTED` and halts all CPUs. libmind: `Received.exit`, `process::watch`.
+
+`init` watches each service it starts and logs how it ended. It restarts the service unless 3 restarts already happened within 60 s; in that case it quarantines the service. An explicit `RUN` resets the budget. Clients keep their endpoint because `init` keeps the keeper (027).
+
+Tests:
+- services suite: kills `rtc` (restart reaches a client started before), kills it 3 more times (quarantined, stays down), `RUN rtc &` (client served again), kills `init` (halt).
+- isolation case `f`: a child queued in a send to its parent's endpoint gets `ERR_PEER` when the parent exits.
+- Harness: a stale-prompt race after `fg 0` is fixed.
+
+All 13 QEMU suites, the USB smoke, host and IDL tests pass.
+
+Not done (recorded in the profile): a supervisor separate from the bootstrap authority, DMA quiescing before a driver restart (MC-6.3), idempotency rules (MC-6.6), lifecycle owners for applications beyond loader's accounting.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): DMA quiescing before a driver restart, re-attachment of block clients and dropping the platform privilege after boot are done in 033.

@@ -2,6 +2,7 @@
 name = "disk"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 # Console tools for volumes through vfs_server: df (sizes and free space) and fsck (a read-only check).
 [[bin]]

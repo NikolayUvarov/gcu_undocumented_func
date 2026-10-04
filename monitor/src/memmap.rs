@@ -20,22 +20,22 @@ const GIB4: u64 = 4 << 30;
 pub fn kind_color(kind: u32) -> u32 {
     match kind {
         7 => 0x50C878, 3 | 4 => 0x3A9A9A, 1 | 2 => 0x7070E0, 5 | 6 => 0xE0A040, 9 | 10 => 0xE0E060, 11 | 12 => 0x9090A0,
-        PHYS_KERNEL => 0xFF6060, PHYS_HEAP => 0xF080C0, PHYS_BOOT_IMAGE => 0xC080FF, PHYS_FRAMEBUFFER => 0x60C0FF,
-        PHYS_TRAMPOLINE => 0xFFFFFF, PHYS_DEVICE => 0xC0C0C0, PHYS_DMA => 0xFFB000, _ => 0x905050,
+        PHYS_ARENA => 0xF080C0, PHYS_BOOT_IMAGE => 0xC080FF, PHYS_FRAMEBUFFER => 0x60C0FF,
+        PHYS_AP_TRAMPOLINE => 0xFFFFFF, PHYS_PCI_BAR => 0xC0C0C0, _ => 0x905050,
     }
 }
 
 /// Firmware ranges of the same kind that touch are merged; platform layout ranges stay as they are. The result is
 /// ordered by address, the layout after the firmware range it lies in.
 pub fn merge(ranges: &[Range]) -> Vec<Range> {
-    let mut firmware: Vec<Range> = ranges.iter().copied().filter(|r| r.kind < PHYS_LAYOUT).collect();
+    let mut firmware: Vec<Range> = ranges.iter().copied().filter(|r| r.kind < PHYS_PLATFORM).collect();
     firmware.sort_by_key(|r| r.start);
     let mut out: Vec<Range> = Vec::new();
     for r in firmware {
         match out.last_mut() { Some(last) if last.kind == r.kind && last.end() == r.start => last.bytes += r.bytes, _ => out.push(r) }
     }
-    out.extend(ranges.iter().copied().filter(|r| r.kind >= PHYS_LAYOUT));
-    out.sort_by(|a, b| a.start.cmp(&b.start).then((a.kind >= PHYS_LAYOUT).cmp(&(b.kind >= PHYS_LAYOUT))));
+    out.extend(ranges.iter().copied().filter(|r| r.kind >= PHYS_PLATFORM));
+    out.sort_by(|a, b| a.start.cmp(&b.start).then((a.kind >= PHYS_PLATFORM).cmp(&(b.kind >= PHYS_PLATFORM))));
     out
 }
 
@@ -44,7 +44,7 @@ pub fn merge(ranges: &[Range]) -> Vec<Range> {
 pub fn bar_kinds(ranges: &[Range], top: u64, cells: usize) -> Vec<Option<u32>> {
     (0..cells).map(|i| {
         let (a, b) = ((top as u128 * i as u128 / cells as u128) as u64, (top as u128 * (i as u128 + 1) / cells as u128) as u64);
-        let best = |layout: bool| ranges.iter().filter(|r| (r.kind >= PHYS_LAYOUT) == layout)
+        let best = |layout: bool| ranges.iter().filter(|r| (r.kind >= PHYS_PLATFORM) == layout)
             .map(|r| (r.end().min(b).saturating_sub(r.start.max(a)), r.kind)).filter(|&(overlap, _)| overlap > 0).max_by_key(|&(overlap, _)| overlap).map(|(_, kind)| kind);
         best(true).or_else(|| best(false))
     }).collect()
@@ -104,7 +104,7 @@ impl Memmap {
 
     fn physical(&mut self, grid: &mut Grid, theme: &Theme) {
         let (w, h) = (grid.cols, grid.rows);
-        let ram_top = self.ranges.iter().filter(|r| r.kind < PHYS_LAYOUT && matches!(r.kind, 1..=7)).map(|r| r.end()).max().unwrap_or(GIB4);
+        let ram_top = self.ranges.iter().filter(|r| r.kind < PHYS_PLATFORM && matches!(r.kind, 1..=7)).map(|r| r.end()).max().unwrap_or(GIB4);
         let top = if self.zoom { ram_top.max(1) } else { GIB4 };
         grid.text(1, 2, &format!("Physical address space 0–{} ({}; z: {})", text::size(top), if self.zoom { "RAM" } else { "first 4 GiB" }, if self.zoom { "0–4G" } else { "RAM only" }), theme.header);
         let cells = w.saturating_sub(2);
@@ -144,26 +144,26 @@ impl Memmap {
         self.list.scroll(shown.len(), self.height);
         for (i, r) in shown.iter().enumerate().skip(self.list.top).take(self.height) {
             let row = head + 1 + i - self.list.top;
-            let style = if i == self.list.selected { theme.selected } else if r.kind >= PHYS_LAYOUT { theme.accent } else { theme.panel };
+            let style = if i == self.list.selected { theme.selected } else if r.kind >= PHYS_PLATFORM { theme.accent } else { theme.panel };
             grid.fill(Rect::new(0, row, w, 1), ' ', style);
             grid.put(1, row, '█', if i == self.list.selected { style } else { Style::new(kind_color(r.kind), style.bg) });
-            let detail = match r.kind { PHYS_BOOT_IMAGE => format!(" (image {})", r.detail), PHYS_DEVICE => format!(" (device {})", r.detail), _ => String::new() };
+            let detail = match r.kind { PHYS_BOOT_IMAGE => format!(" (image {})", r.detail), PHYS_PCI_BAR => format!(" (device {})", r.detail), _ => String::new() };
             grid.text(3, row, &format!("{:#014x} {:#014x} {:>9}  {}{}", r.start, r.end().saturating_sub(1), text::size(r.bytes), text::phys_kind(r.kind), detail), style);
         }
     }
 
     /// Kernel arena categories: name, bytes, colour, limit (0: none).
-    pub fn categories(m: &Memory) -> [(&'static str, u64, u32, u64); 9] {
+    pub fn categories(m: &Memory) -> [(&'static str, u64, u32, u64); 8] {
         [("task images", m.images, 0xC080FF, 0), ("task stacks", m.stacks, 0x80D0FF, 0), ("screens", m.screens, 0x60C0FF, 0), ("program heaps", m.heaps, 0x50C878, 0),
-         ("task kernel pages", m.task_kernel, 0xE0A040, 0), ("page tables", m.page_tables, 0xE0E060, 0), ("memory objects", m.objects, 0xF080C0, m.objects_limit),
-         ("DMA buffers", m.dma, 0xFFB000, m.dma_limit), ("other kernel", m.other, 0x9090A0, 0)]
+         ("task kernel pages", m.task_pages, 0xE0A040, 0), ("memory objects", m.objects, 0xF080C0, m.objects_limit),
+         ("DMA buffers", m.dma, 0xFFB000, m.dma_limit), ("other kernel", m.other(), 0x9090A0, 0)]
     }
 
     fn arena(&self, grid: &mut Grid, theme: &Theme) {
         let w = grid.cols;
         let m = &self.memory;
         let percent = if m.arena == 0 { 0 } else { m.used * 1000 / m.arena } as u32;
-        grid.text(1, 2, &format!("Kernel arena {}: used {} ({}%), free {}, largest free block {}", text::size(m.arena), text::size(m.used), text::permille(percent), text::size(m.free), text::size(m.largest_free)), theme.header);
+        grid.text(1, 2, &format!("Kernel arena {}: used {} ({}%), free {}", text::size(m.arena), text::size(m.used), text::permille(percent), text::size(m.free)), theme.header);
         // A stacked bar of the categories; the rest is free.
         let cells = w.saturating_sub(2) as u64;
         let mut x = 1;
@@ -192,9 +192,7 @@ impl Memmap {
         grid.text_right(36, y, &text::size(m.free), theme.panel);
         grid.text_right(46, y, &format!("{}%", text::permille((m.free * 1000 / m.arena.max(1)) as u32)), theme.panel);
         y += 2;
-        // Program memory is physically contiguous: free memory outside the largest block cannot hold a large image.
-        grid.text(1, y, &format!("Free outside the largest block: {} (fragmentation)", text::size(m.free.saturating_sub(m.largest_free))), theme.panel);
-        grid.text(1, y + 1, &format!("Tasks {}/{}, endpoints {}/{}, shared mappings {} (memory objects mapped by tasks)", m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit, text::size(m.mapped)), theme.panel);
+        grid.text(1, y, &format!("Tasks {}/{}, endpoints {}/{}", m.tasks, TASKS_LIMIT, m.endpoints, ENDPOINTS_LIMIT), theme.panel);
     }
 
     fn process(&mut self, grid: &mut Grid, theme: &Theme) {
@@ -214,16 +212,15 @@ impl Memmap {
         grid.text(x + 1, 3, "START                   SIZE  RIGHTS KIND", theme.menu);
         let mut y = 4;
         for r in self.regions.iter().take(h.saturating_sub(8)) {
-            let style = if r.kind == VM_GUARD { theme.dim } else if matches!(r.kind, VM_SHARED | VM_DEVICE) { theme.accent } else { theme.panel };
+            let style = if matches!(r.kind, REGION_SHARED | REGION_DEVICE) { theme.accent } else { theme.panel };
             grid.text(x + 1, y, &format!("{:#018x} {:>9}  {}    {}", r.start, text::size(r.bytes), text::rights(r.flags), text::region_kind(r.kind)), style);
             y += 1;
         }
         if self.regions.len() > h.saturating_sub(8) { grid.text(x + 1, y, &format!("… {} more", self.regions.len() - h.saturating_sub(8)), theme.dim); y += 1; }
-        let mapped: u64 = self.regions.iter().filter(|r| r.kind != VM_GUARD).map(|r| r.bytes).sum();
-        let heap: u64 = self.regions.iter().filter(|r| r.kind == VM_HEAP).map(|r| r.bytes).sum();
-        let shared: u64 = self.regions.iter().filter(|r| r.kind == VM_SHARED).map(|r| r.bytes).sum();
-        let guards = self.regions.iter().filter(|r| r.kind == VM_GUARD).count();
-        grid.text(x + 1, y + 1, &format!("mapped {}, {} guard pages", text::size(mapped), guards), theme.panel);
+        let mapped: u64 = self.regions.iter().map(|r| r.bytes).sum();
+        let heap: u64 = self.regions.iter().filter(|r| r.kind == REGION_HEAP).map(|r| r.bytes).sum();
+        let shared: u64 = self.regions.iter().filter(|r| r.kind == REGION_SHARED).map(|r| r.bytes).sum();
+        grid.text(x + 1, y + 1, &format!("mapped {}", text::size(mapped)), theme.panel);
         grid.text(x + 1, y + 2, &format!("heap {} of {} in {}/{} blocks; shared {} of {}", text::size(heap), text::size(HEAP_MAX_BYTES as u64), task.heap_blocks, HEAP_MAX_BLOCKS,
                                           text::size(shared), text::size(SHARED_MAX_BYTES as u64)), theme.panel);
     }

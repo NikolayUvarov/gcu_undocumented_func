@@ -1,0 +1,34 @@
+# 009 — Honour `PixelFormat` and select a GOP mode — done
+
+**Type:** bug/robustness · **Priority:** medium · **Status:** done (2026-10-04)
+**Affects:** `bootloader/src/main.rs:35-45`, `kernel/`, `app/`
+
+## Problem
+
+The bootloader takes `current_mode_info()` and passes only `width/height/stride`. The kernel and app write bytes in `B, G, R, X` order (`kernel/src/main.rs:51-54`), i.e. they assume `PixelFormat::Bgr` and 32 bpp. GOP may return:
+- `PixelFormat::Rgb` — colours get swapped (not critical, but wrong);
+- `PixelFormat::Bitmask` — arbitrary masks;
+- `PixelFormat::BltOnly` — there is **no** linear framebuffer; writing to `fb_ptr` is UB/a hang. On real hardware with some firmware this is a real case.
+
+`stride` is passed in pixels — the kernel correctly multiplies by 4, but the contract is not documented anywhere.
+
+## Plan
+
+1. Add `pixel_format: u32` (0=Rgb, 1=Bgr, 2=Bitmask, 3=BltOnly) and the masks for Bitmask to `BootInfo`; on `BltOnly` — iterate over `gop.modes()` and pick a mode with a linear buffer, otherwise report it and halt.
+2. Mode selection: prefer the maximum resolution with `Rgb|Bgr`, or a target one (1024×768) for predictable performance of per-pixel rendering.
+3. In kernel/app — a format-aware `put_pixel` (see [007](007-kernel-font-and-primitives.done)).
+4. Document: `stride` is in pixels, 4 bytes per pixel.
+
+## Acceptance criteria
+
+- Running QEMU with `-vga std` and `-vga virtio` (and `-device ramfb`) gives correct colours.
+- On `BltOnly` there is a message on screen/serial instead of a hang.
+
+## Resolution
+
+- `BootInfo` gains `pixel_format` (`PIXEL_RGB`, `PIXEL_BGR`, `PIXEL_BITMASK`) and `pixel_masks` (red, green, blue); `common/abi.rs` documents that `stride` is in pixels with 4 bytes per pixel and that task screens always hold `0x00RRGGBB`.
+- Bootloader (`select_display`): keeps the firmware's mode when it has a linear framebuffer with 32-bit pixels (RGB, BGR, or a bit mask reaching above bit 24); otherwise sets the largest such mode up to 1920×1200. Without one (only `BltOnly` modes) it stops with `BOOT ERROR: display: no mode with a linear framebuffer (BltOnly)` on serial and screen instead of writing to a missing buffer.
+- Since issue 021 only the compositor writes the framebuffer; it converts each changed pixel with `pixel_to_device` (no conversion for BGR, the QEMU case). The kernel and applications draw only into their own screens.
+- Tests: `tests/runtime.rs` `pixels_reach_every_framebuffer_format` (RGB swap, 8:8:8 and 10:10:10 masks, 5:6:5 scaling); QEMU suite `display` checks cyan and red at the screen centre with `-vga std`, `-vga virtio` and `-vga none -device ramfb`, and runs in CI.
+
+Not tested: the RGB, bit-mask and BltOnly paths on real firmware (every QEMU adapter reports BGR).

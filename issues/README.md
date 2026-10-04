@@ -13,11 +13,12 @@
 
 ## Open tasks
 
-| № | Task | Type | Priority | Blocked by | Roadmap |
+Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+
+| № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
-| [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
-| [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
+| [051](051-merge-main-into-tools.md) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | tools / infra | P0 | — | track G |
+| [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge | kernel | P3 | — | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
 
@@ -31,13 +32,16 @@
 | [006](../issues-done/006-bootloader-load-from-fat32.done) | Bootloader reads images from FAT | done (2026-10-03) |
 | [007](../issues-done/007-kernel-font-and-primitives.done) | Font, primitives, console | done; panic diagnostics split into 018 (2026-10-03) |
 | [008](../issues-done/008-kernel-timeout-handoff.done) | Handoff to userspace on timeout | superseded (2026-10-03) |
+| [009](../issues-done/009-gop-pixel-format.done) | Honour `PixelFormat` and select a GOP mode | done (2026-10-04) |
 | [010](../issues-done/010-docs-sync.done) | Sync README/handoff with the code | done (2026-10-03) |
+| [011](../issues-done/011-reproducible-toolchain.done) | Reproducible build: pinned toolchain, lock files, CI | done (2026-10-04) |
 | [012](../issues-done/012-multitasking-and-program-instances.done) | Multitasking, instances, `ps`/`kill`/`fg` | done (2026-09-18) |
 | [013](../issues-done/013-smp-and-memory-isolation.done) | SMP, ring 3, memory isolation | done (2026-09-19) |
 | [014](../issues-done/014-private-program-heap.done) | Private program heap | done (2026-09-19) |
 | [015](../issues-done/015-load-programs-through-vfs.done) | Loading programs through the VFS | done (2026-10-03) |
 | [016](../issues-done/016-storage-drivers.done) | ATA / AHCI / USB storage drivers | done (2026-10-03) |
 | [017](../issues-done/017-tts-on-audio-gateway.done) | Text to speech over the audio gateway | done (2026-10-03) |
+| [018](../issues-done/018-kernel-panic-diagnostics.done) | Kernel panic prints message, location, CPU and task | done (2026-10-04) |
 | [019](../issues-done/019-platform-profile-x86-64-qemu-0.done) | Platform profile `x86-64/QEMU-0` | done (2026-10-03) |
 | [020](../issues-done/020-init-bootstrap-authority.done) | `init`: bootstrap authority, driver policy out of the kernel | done (2026-10-03) |
 | [021](../issues-done/021-shell-in-ring-3.done) | Shell in ring 3, input/focus policy out of the kernel | done (2026-10-03) |
@@ -51,25 +55,47 @@
 | [029](../issues-done/029-memory-objects-move-seal.done) | Memory objects: MOVE and sealed SHARE_RO | done (2026-10-04) |
 | [030](../issues-done/030-ipc-bounds-and-cancellation.done) | IPC bounds, timeouts and cancellation | done (2026-10-04) |
 | [031](../issues-done/031-mind-idl-v0.done) | MIND IDL v0: WIT subset, generated bindings, receiver checks (`rtc`) | done (2026-10-04) |
-| [032](../issues-done/032-program-heap.done) | Program heap `mind::alloc` | done (2026-10-04) |
-| [033](../issues-done/033-font-8x16.done) | 8×16 font with Cyrillic and box drawing | done (2026-10-04) |
-| [035](../issues-done/035-key-events.done) | Key events: E0 keys, modifiers, layouts, VT100 | done (2026-10-04) |
-| [034](../issues-done/034-tui-library.done) | Text UI library `mind::tui` | done (2026-10-04) |
-| [036](../issues-done/036-shell-line-editing.done) | Shell: line editing, history, Cyrillic | done (2026-10-04) |
-| [037](../issues-done/037-viewer.done) | Viewer `view` | done (2026-10-04) |
-| [038](../issues-done/038-mind-idl-v0.2.done) | MIND IDL v0.2: records, strings, lists | done (2026-10-04) |
-| [039](../issues-done/039-observation-abi.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04) |
-| [040](../issues-done/040-sysmon.done) | `sysmon` service | done (2026-10-04) |
-| [042](../issues-done/042-loader-v1-launch-grants.done) | Loader v1: launch with granted capabilities | launch sessions (`idl/loader.wit`), `mind::request!`, console programs, `uptime` program |
-| [041](../issues-done/041-top-memmap-load-hw.done) | `top`, `memmap`, `load`, `hw` | `monitor/`: `top`, `memmap`, `load`, `hw` on sysmon; `Key::latin` |
-| [043](../issues-done/043-file-manager-read-only.done) | File manager `fm`, read-only | `fm`: two panels, viewer, quick view, info, find, run; VFS LIST with attributes and times |
-| [044](../issues-done/044-endpoint-badges-block-write.done) | Endpoint badges and block write | endpoint badges in the kernel; BLOCK_WRITE/FLUSH for the write badge; ATA/AHCI/USB write; `block` suite |
-| [045](../issues-done/045-ramdisk.done) | `ramdisk` block service | 8 MiB RAM disk service, formatted FAT16 and mounted as ram: |
-| [046](../issues-done/046-vfs-v2-fat-write.done) | `vfs_server` v2: directory handles, FAT write | vfs.wit 2.0 with handles and zones; FAT12/16/32 writer with long names; write-back cache; shell file commands |
-| [047](../issues-done/047-editor.done) | Editor `edit` | edit: piece table with undo, search/replace, menu and dialogs; saves via name.tmp; REQUEST_FILE lends the user's VFS client |
-| [048](../issues-done/048-fm-write-df-fsck.done) | `fm` write operations, `df`, `fsck` | fm: copy/move/mkdir/delete jobs on A: and ram:, built-in editor; df; fsck (vfs.wit 2.1 check) |
-| [049](../issues-done/049-logd-dmesg.done) | `logd` and `dmesg` | logd: ring with stamped sources, rate limit, read badge; println lines of services go there; dmesg; logger |
-| [050](../issues-done/050-svc-lifecycle.done) | `svc` and lifecycle control | lifecycle.wit served by init; svc; top stops and restarts |
-| [051](../issues-done/051-scoped-file-grants.done) | Scoped file grants for launched programs | vfs.wit scope: the editor's client is confined to its file's directory and revoked on exit; REQUEST_FILES for fm |
+| [032](../issues-done/032-minimal-supervision.done) | Minimal supervision: exit notices, restart budget, quarantine, fencing | done (2026-10-04) |
+| [033](../issues-done/033-audit-and-supervision-follow-ups.done) | Follow-ups: multi-process tests, device stop, platform privilege dropped, quotas | done (2026-10-04) |
+| [034](../issues-done/034-key-events-input-queue.done) | Key events in the per-task input queue | done (2026-10-04) |
+| [035](../issues-done/035-observe-and-stat.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04) |
+| [036](../issues-done/036-endpoint-badges.done) | Endpoint badges | done (2026-10-04) |
+| [037](../issues-done/037-task-limit.done) | Task limit 32, 127 endpoints | done (2026-10-04) |
+| [038](../issues-done/038-scheduling-budgets.done) | Scheduling budgets and bands (C7) | done (2026-10-04) |
+| [039](../issues-done/039-port-services.done) | Port the services to MIND IDL and the C4 memory modes (C8) | done (2026-10-04) |
+| [040](../issues-done/040-program-heap.done) | Program heap `mind::alloc` | superseded by 052 (2026-10-04) |
+| [041](../issues-done/041-font-8x16.done) | 8×16 font with Cyrillic and box drawing | superseded by 053 (2026-10-04) |
+| [042](../issues-done/042-tui-library.done) | TUI library `mind::tui` | superseded by 054 (2026-10-04) |
+| [043](../issues-done/043-keyboard-decoding-and-line-editing.done) | Keyboard decoding, layouts, VT100 input, shell line editing | superseded by 055, 056 (2026-10-04) |
+| [044](../issues-done/044-idl-v02-records-strings.done) | MIND IDL v0.2: records, strings, lists in buffers; `loader.wit` | done (2026-10-04) |
+| [045](../issues-done/045-sysmon-and-monitors.done) | `sysmon` and `top`, `memmap`, `load`, `hw` | superseded by 060, 061 (2026-10-04) |
+| [046](../issues-done/046-loader-sessions.done) | Loader v1: launch sessions with granted capabilities | superseded by 062 (2026-10-04) |
+| [047](../issues-done/047-viewer-and-fm-readonly.done) | Viewer `view`, file manager `fm` read-only | superseded by 057, 063 (2026-10-04) |
+| [048](../issues-done/048-write-path-ramdisk-vfs2.done) | Block write, `ramdisk`, VFS v2 with directory handles | superseded by 064–066 (2026-10-04) |
+| [049](../issues-done/049-editor-and-fm-write.done) | Editor `edit`, `fm` write operations, `df`, `fsck` | superseded by 067, 068 (2026-10-04) |
+| [050](../issues-done/050-logd-dmesg-svc.done) | `logd`, `dmesg`, `svc` | superseded by 069, 070 (2026-10-04) |
+| [052](../issues-done/052-program-heap.done) | Program heap `mind::alloc` | done (2026-10-04) |
+| [053](../issues-done/053-font-8x16.done) | 8×16 font with Cyrillic and box drawing | done (2026-10-04) |
+| [054](../issues-done/054-tui-library.done) | Text UI library `mind::tui` | done (2026-10-04) |
+| [055](../issues-done/055-key-events.done) | Key events: E0 keys, modifiers, layouts, VT100 | done (2026-10-04); on the event words of 034 after the merge |
+| [056](../issues-done/056-shell-line-editing.done) | Shell: line editing, history, Cyrillic | done (2026-10-04) |
+| [057](../issues-done/057-viewer.done) | Viewer `view` | done (2026-10-04) |
+| [058](../issues-done/058-mind-idl-v0.2.done) | MIND IDL v0.2: records, strings, lists | done (2026-10-04); after the merge 044 is the base, enums, `bytes<N>` and capability results are its minor extension |
+| [059](../issues-done/059-observation-abi.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04); after the merge the `STAT` of 035 is used, lost fields in 075 |
+| [060](../issues-done/060-sysmon.done) | `sysmon` service | done (2026-10-04) |
+| [061](../issues-done/061-top-memmap-load-hw.done) | `top`, `memmap`, `load`, `hw` | `monitor/`: `top`, `memmap`, `load`, `hw` on sysmon; `Key::latin` |
+| [062](../issues-done/062-loader-v1-launch-grants.done) | Loader v1: launch with granted capabilities | launch sessions (`idl/loader.wit` 1.1), `mind::request!`, console programs, `uptime` program |
+| [063](../issues-done/063-file-manager-read-only.done) | File manager `fm`, read-only | `fm`: two panels, viewer, quick view, info, find, run; VFS LIST with attributes and times |
+| [064](../issues-done/064-endpoint-badges-block-write.done) | Endpoint badges and block write | BLOCK_WRITE/FLUSH for the write badge (`idl/block.wit` 1.1 after the merge, badges of 036); ATA/AHCI/USB write; `block` suite |
+| [065](../issues-done/065-ramdisk.done) | `ramdisk` block service | 8 MiB RAM disk service, formatted FAT16 and mounted as ram: |
+| [066](../issues-done/066-vfs-v2-fat-write.done) | `vfs_server` v2: directory handles, FAT write | vfs.wit 2.x with handles and zones; FAT12/16/32 writer with long names; write-back cache; shell file commands |
+| [067](../issues-done/067-editor.done) | Editor `edit` | edit: piece table with undo, search/replace, menu and dialogs; saves via name.tmp; REQUEST_FILE lends the user's VFS client |
+| [068](../issues-done/068-fm-write-df-fsck.done) | `fm` write operations, `df`, `fsck` | fm: copy/move/mkdir/delete jobs on A: and ram:, built-in editor; df; fsck (vfs.wit 2.1 check) |
+| [069](../issues-done/069-logd-dmesg.done) | `logd` and `dmesg` | logd: ring with stamped sources, rate limit, read badge; println lines of services go there; dmesg; logger |
+| [070](../issues-done/070-svc-lifecycle.done) | `svc` and lifecycle control | lifecycle requests served by init (`idl/init.wit` 1.1 after the merge); svc; top stops and restarts |
+| [071](../issues-done/071-scoped-file-grants.done) | Scoped file grants for launched programs | vfs.wit scope: the editor's client is confined to its file's directory and revoked on exit; REQUEST_FILES for fm |
+| [072](../issues-done/072-fixed-grant-slots.done) | Fixed capability slots for launcher grants (`SLOT_DYNAMIC` 16) | done (2026-10-04) |
+| [073](../issues-done/073-port-out-block.done) | `PORT_OUT_BLOCK`: block writes of 16-bit words to a port | done (2026-10-04) |
+| [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
 
-Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
+Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](051-merge-main-into-tools.md) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

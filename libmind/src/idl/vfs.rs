@@ -3,537 +3,492 @@
 //! to a directory handle and cannot leave it (`..` is refused). A handle belongs to the client that opened it (PID and
 //! endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 //! from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
-//! the shell (Appendix B.6); boot files are never writable.
-#![allow(clippy::all, unused_imports, unused_variables, unused_mut, dead_code)]
+//! the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files are never writable. Major version 2: directory
+//! handles change the meaning of `open` and `list` of 1.0.
+#![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
-use crate::ipc::{self, Received};
+use crate::ipc::{Endpoint, Received};
+use crate::mem::Pages;
 use crate::sys::{Error as SysError, Result};
-use super::wire::{self, Reject};
+use super::codec::{self, List, Reader, Text, Wire, Writer};
+use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
 pub const VERSION: (u8, u8, u8) = (2, 2, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11 }
+pub enum Error { #[default] NotFound = 0, Exists = 1, NotEmpty = 2, Invalid = 3, Denied = 4, NoSpace = 5, ReadOnly = 6, Io = 7, Handles = 8, Name = 9, NotDirectory = 10, IsDirectory = 11 }
 impl Error {
-    pub fn from_u8(value: u8) -> Option<Self> { match value { 0 => Some(Self::NotFound), 1 => Some(Self::Exists), 2 => Some(Self::NotEmpty), 3 => Some(Self::Invalid), 4 => Some(Self::Denied), 5 => Some(Self::NoSpace), 6 => Some(Self::ReadOnly), 7 => Some(Self::Io), 8 => Some(Self::Handles), 9 => Some(Self::Name), 10 => Some(Self::NotDirectory), 11 => Some(Self::IsDirectory), _ => None } }
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Exists), 2 => Some(Self::NotEmpty), 3 => Some(Self::Invalid), 4 => Some(Self::Denied), 5 => Some(Self::NoSpace), 6 => Some(Self::ReadOnly), 7 => Some(Self::Io), 8 => Some(Self::Handles), 9 => Some(Self::Name), 10 => Some(Self::NotDirectory), 11 => Some(Self::IsDirectory), _ => None } }
 }
-impl<'a> wire::Item<'a> for Error {
-    fn encode(&self, w: &mut wire::Writer) -> Result<()> { w.u8(*self as u8) }
-    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Self::from_u8(r.u8()?) }
+impl Wire for Error {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
 /// An entry of a directory, or what `stat` reports. `modified` is FAT date << 16 | FAT time; `attributes` are
-/// `VFS_ENTRY_*` bits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry<'a> { pub name: &'a str, pub size: u32, pub modified: u32, pub attributes: u8, pub directory: bool }
-impl<'a> wire::Item<'a> for Entry<'a> {
-    fn encode(&self, w: &mut wire::Writer) -> Result<()> {
-        w.str(self.name, 255)?;
-        w.u32(self.size)?;
-        w.u32(self.modified)?;
-        w.u8(self.attributes)?;
-        w.bool(self.directory)?;
-        Ok(())
-    }
-    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { name: r.str(255)?, size: r.u32()?, modified: r.u32()?, attributes: r.u8()?, directory: r.bool()? }) }
+/// `mind::fs::ENTRY_*` bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Entry { pub name: Text<255>, pub size: u32, pub modified: u32, pub attributes: u8, pub directory: bool }
+impl Wire for Entry {
+    const MAX: usize = <Text<255> as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.size.encode(w)?; self.modified.encode(w)?; self.attributes.encode(w)?; self.directory.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, size: Wire::decode(r)?, modified: Wire::decode(r)?, attributes: Wire::decode(r)?, directory: Wire::decode(r)? }) }
 }
 
 /// A mounted volume: its name (empty for the boot disk, `ram`), FAT label and type, size and free space.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Volume<'a> { pub name: &'a str, pub label: &'a str, pub fat_bits: u8, pub bytes: u64, pub free: u64, pub cluster: u32, pub writable: bool }
-impl<'a> wire::Item<'a> for Volume<'a> {
-    fn encode(&self, w: &mut wire::Writer) -> Result<()> {
-        w.str(self.name, 16)?;
-        w.str(self.label, 11)?;
-        w.u8(self.fat_bits)?;
-        w.u64(self.bytes)?;
-        w.u64(self.free)?;
-        w.u32(self.cluster)?;
-        w.bool(self.writable)?;
-        Ok(())
-    }
-    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { name: r.str(16)?, label: r.str(11)?, fat_bits: r.u8()?, bytes: r.u64()?, free: r.u64()?, cluster: r.u32()?, writable: r.bool()? }) }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Volume { pub name: Text<16>, pub label: Text<11>, pub fat_bits: u8, pub bytes: u64, pub free: u64, pub cluster: u32, pub writable: bool }
+impl Wire for Volume {
+    const MAX: usize = <Text<16> as Wire>::MAX + <Text<11> as Wire>::MAX + <u8 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.label.encode(w)?; self.fat_bits.encode(w)?; self.bytes.encode(w)?; self.free.encode(w)?; self.cluster.encode(w)?; self.writable.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, label: Wire::decode(r)?, fat_bits: Wire::decode(r)?, bytes: Wire::decode(r)?, free: Wire::decode(r)?, cluster: Wire::decode(r)?, writable: Wire::decode(r)? }) }
 }
 
 /// What a check of a volume found (nothing is changed): `used` clusters are reached from the directory tree, `lost`
 /// ones are in use but reached by nothing (forming `lost-chains` chains), `cross-linked` ones are reached twice;
 /// `bad-chains` run into a free or invalid cluster; `sizes` counts files whose size does not match their chain,
 /// `bad-entries` invalid directory entries; `dirty`: not flushed since a change; `first`: the first problem found.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Report<'a> { pub files: u32, pub directories: u32, pub used: u32, pub free: u32, pub lost: u32, pub lost_chains: u32, pub cross_linked: u32, pub bad_chains: u32, pub sizes: u32, pub bad_entries: u32, pub dirty: bool, pub first: &'a str }
-impl<'a> wire::Item<'a> for Report<'a> {
-    fn encode(&self, w: &mut wire::Writer) -> Result<()> {
-        w.u32(self.files)?;
-        w.u32(self.directories)?;
-        w.u32(self.used)?;
-        w.u32(self.free)?;
-        w.u32(self.lost)?;
-        w.u32(self.lost_chains)?;
-        w.u32(self.cross_linked)?;
-        w.u32(self.bad_chains)?;
-        w.u32(self.sizes)?;
-        w.u32(self.bad_entries)?;
-        w.bool(self.dirty)?;
-        w.str(self.first, 255)?;
-        Ok(())
-    }
-    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { files: r.u32()?, directories: r.u32()?, used: r.u32()?, free: r.u32()?, lost: r.u32()?, lost_chains: r.u32()?, cross_linked: r.u32()?, bad_chains: r.u32()?, sizes: r.u32()?, bad_entries: r.u32()?, dirty: r.bool()?, first: r.str(255)? }) }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Report { pub files: u32, pub directories: u32, pub used: u32, pub free: u32, pub lost: u32, pub lost_chains: u32, pub cross_linked: u32, pub bad_chains: u32, pub sizes: u32, pub bad_entries: u32, pub dirty: bool, pub first: Text<255> }
+impl Wire for Report {
+    const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <bool as Wire>::MAX + <Text<255> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.files.encode(w)?; self.directories.encode(w)?; self.used.encode(w)?; self.free.encode(w)?; self.lost.encode(w)?; self.lost_chains.encode(w)?; self.cross_linked.encode(w)?; self.bad_chains.encode(w)?; self.sizes.encode(w)?; self.bad_entries.encode(w)?; self.dirty.encode(w)?; self.first.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { files: Wire::decode(r)?, directories: Wire::decode(r)?, used: Wire::decode(r)?, free: Wire::decode(r)?, lost: Wire::decode(r)?, lost_chains: Wire::decode(r)?, cross_linked: Wire::decode(r)?, bad_chains: Wire::decode(r)?, sizes: Wire::decode(r)?, bad_entries: Wire::decode(r)?, dirty: Wire::decode(r)?, first: Wire::decode(r)? }) }
 }
 
 /// The root directory of volume `name`.
-pub fn root<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, name: &'_ str) -> Result<core::result::Result<u32, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.str(name, 16)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [1 | MAJOR << 8 | ((payload) as usize) << 16, 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+pub fn root(endpoint: Endpoint, name: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// A directory below `dir`; with `create` it is made if missing.
-pub fn open_dir<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, dir: u32, create: bool, path: &'_ str) -> Result<core::result::Result<u32, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.str(path, 255)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [2 | MAJOR << 8 | ((payload) as usize) << 16, ((dir) as usize) << 0 | ((create) as usize) << 32];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+pub fn open_dir(endpoint: Endpoint, dir: u32, path: &str, create: bool) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        dir.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<255>(path, &mut w).ok_or(SysError::Invalid)?;
+        create.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// A file below `dir`. `mode` bits: 1 write, 2 create, 4 truncate, 8 refuse an existing file.
-pub fn open<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, dir: u32, mode: u8, path: &'_ str) -> Result<core::result::Result<u32, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.str(path, 255)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [3 | MAJOR << 8 | ((payload) as usize) << 16, ((dir) as usize) << 0 | ((mode) as usize) << 32];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+/// A file below `dir`. `mode` bits (`mind::fs::MODE_*`): 1 write, 2 create, 4 truncate, 8 refuse an existing file.
+pub fn open(endpoint: Endpoint, dir: u32, path: &str, mode: u8) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        dir.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<255>(path, &mut w).ok_or(SysError::Invalid)?;
+        mode.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Up to `length` bytes from `offset` (fewer at the end of the file).
-pub fn read<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, file: u32, offset: u32, length: u32) -> Result<core::result::Result<&'b [u8], Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [4 | MAJOR << 8 | ((file) as usize) << 16, ((offset) as usize) << 0 | ((length) as usize) << 32];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    let len = wire::field(&reply, 0, 16, 32);
-    if len > bytes.len() { return Err(SysError::Invalid); }
-    let bytes: &'b [u8] = bytes;
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = r.bytes(65536)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
-    Ok(Ok(value))
+pub fn read(endpoint: Endpoint, file: u32, offset: u32, length: u32, out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
+    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        file.encode(&mut w).ok_or(SysError::Invalid)?;
+        offset.encode(&mut w).ok_or(SysError::Invalid)?;
+        length.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 16386, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<16384>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
 /// Writes `data` at `offset`; the file grows (a gap reads as zeros). Returns the bytes written.
-pub fn write<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, file: u32, offset: u32, data: &'_ [u8]) -> Result<core::result::Result<u32, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.bytes(data, 65536)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [5 | MAJOR << 8 | ((payload) as usize) << 16, ((file) as usize) << 0 | ((offset) as usize) << 32];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+pub fn write(endpoint: Endpoint, file: u32, offset: u32, data: &[u8]) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        file.encode(&mut w).ok_or(SysError::Invalid)?;
+        offset.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<16384>(data, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Sets the size of a file: clusters past it are freed, a longer file reads zeros.
-pub fn truncate(endpoint: ipc::Endpoint, file: u32, size: u32) -> Result<core::result::Result<(), Error>> {
+pub fn truncate(endpoint: Endpoint, file: u32, size: u32) -> Result<core::result::Result<(), Error>> {
     let words = [6 | MAJOR << 8 | ((file) as usize) << 16, ((size) as usize) << 0];
     let reply = wire::call(endpoint, words, None)?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
     Ok(Ok(()))
 }
 
 /// The entry of an open file or directory.
-pub fn stat<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, handle: u32) -> Result<core::result::Result<Entry<'b>, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [7 | MAJOR << 8 | ((handle) as usize) << 16, 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    let len = wire::field(&reply, 0, 16, 32);
-    if len > bytes.len() { return Err(SysError::Invalid); }
-    let bytes: &'b [u8] = bytes;
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = <Entry<'b> as wire::Item>::decode(r)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
-    Ok(Ok(value))
+pub fn stat(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Entry, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        handle.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 267, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Entry as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// Entries of `dir` from index `start`, as many as fit the buffer (an empty list: the end).
-pub fn list<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, dir: u32, start: u32) -> Result<core::result::Result<wire::List<'b, Entry<'b>>, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [8 | MAJOR << 8 | ((dir) as usize) << 16, ((start) as usize) << 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    let len = wire::field(&reply, 0, 16, 32);
-    if len > bytes.len() { return Err(SysError::Invalid); }
-    let bytes: &'b [u8] = bytes;
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = wire::List::read(r, 256)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
-    Ok(Ok(value))
+/// Entries of `dir` from index `start`, at most 16 (an empty list: the end).
+pub fn list(endpoint: Endpoint, dir: u32, start: u32) -> Result<core::result::Result<List<Entry, 16>, Error>> {
+    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        dir.encode(&mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4274, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Entry, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Removes a file or an empty directory below `dir`.
-pub fn remove<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, dir: u32, path: &'_ str) -> Result<core::result::Result<(), Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.str(path, 255)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [9 | MAJOR << 8 | ((payload) as usize) << 16, ((dir) as usize) << 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+pub fn remove(endpoint: Endpoint, dir: u32, path: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        dir.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<255>(path, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
     Ok(Ok(()))
 }
 
 /// Renames or moves `from` (below `dir`) to `to` (below `target`, on the same volume).
-pub fn rename<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, dir: u32, target: u32, from: &'_ str, to: &'_ str) -> Result<core::result::Result<(), Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    {
-        let w = &mut writer;
-        w.str(from, 255)?;
-        w.str(to, 255)?;
-    }
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [10 | MAJOR << 8 | ((payload) as usize) << 16, ((dir) as usize) << 0 | ((target) as usize) << 32];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+pub fn rename(endpoint: Endpoint, dir: u32, from: &str, target: u32, to: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        dir.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<255>(from, &mut w).ok_or(SysError::Invalid)?;
+        target.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<255>(to, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
     Ok(Ok(()))
 }
 
 /// The volume a handle is on.
-pub fn volume<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, handle: u32) -> Result<core::result::Result<Volume<'b>, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [11 | MAJOR << 8 | ((handle) as usize) << 16, 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    let len = wire::field(&reply, 0, 16, 32);
-    if len > bytes.len() { return Err(SysError::Invalid); }
-    let bytes: &'b [u8] = bytes;
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = <Volume<'b> as wire::Item>::decode(r)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
-    Ok(Ok(value))
+pub fn volume(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Volume, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        handle.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 53, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Volume as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Writes what is cached for the volume of `handle` to the disk.
-pub fn flush(endpoint: ipc::Endpoint, handle: u32) -> Result<core::result::Result<(), Error>> {
+pub fn flush(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<(), Error>> {
     let words = [12 | MAJOR << 8 | ((handle) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
     Ok(Ok(()))
 }
 
-pub fn close(endpoint: ipc::Endpoint, handle: u32) -> Result<core::result::Result<(), Error>> {
+pub fn close(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<(), Error>> {
     let words = [13 | MAJOR << 8 | ((handle) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
     Ok(Ok(()))
 }
 
-/// Checks the volume of `handle` without changing it (version 2.1).
-pub fn check<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, handle: u32) -> Result<core::result::Result<Report<'b>, Error>> {
-    let wire::Buffer { cap, bytes } = buffer;
-    let mut writer = wire::Writer::new(bytes);
-    let payload = writer.len();
-    let bytes = writer.into_inner();
-    let words = [14 | MAJOR << 8 | ((handle) as usize) << 16, 0];
-    let reply = wire::call(endpoint, words, Some((cap, false)))?;
-    let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    let len = wire::field(&reply, 0, 16, 32);
-    if len > bytes.len() { return Err(SysError::Invalid); }
-    let bytes: &'b [u8] = bytes;
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'b>| -> Option<_> { let value = <Report<'b> as wire::Item>::decode(r)?; r.end().then_some(value) })(&mut reader).ok_or(SysError::Invalid)?;
-    Ok(Ok(value))
+/// Checks the volume of `handle` without changing it (2.1).
+pub fn check(endpoint: Endpoint, handle: u32) -> Result<core::result::Result<Report, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        handle.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 298, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Report as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// A client confined to directory `dir` (a handle of the caller), lands in the caller's fixed slot `receive`: its
+/// A client confined to directory `dir` (a handle of the caller), placed in the caller's fixed slot `receive`: its
 /// `root` of the directory's volume is that directory, every other root is refused, and it may change files there
 /// only if `writable` and the caller may (never more than `dir`, MC-3.4). It works for the first task that uses it
-/// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory
-/// (version 2.2).
-pub fn scope(endpoint: ipc::Endpoint, dir: u32, writable: bool, receive: usize) -> Result<core::result::Result<usize, Error>> {
+/// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory (2.2).
+pub fn scope(endpoint: Endpoint, dir: u32, writable: bool, receive: usize) -> Result<core::result::Result<(), Error>> {
     let words = [15 | MAJOR << 8 | ((dir) as usize) << 16 | ((writable) as usize) << 48, 0];
     let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
-    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
-    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
-    if !received || crate::dev::cap_info(receive).0 != CAP_KIND_ENDPOINT { return Err(SysError::Invalid); }
-    Ok(Ok(receive))
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
 }
+
+/// Size of the scratch buffer `decode` copies a request into (the largest request).
+pub const REQUEST_MAX: usize = 16394;
 
 /// A request to the `vfs` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Request {
-    Root { payload: u32, buffer: usize },
-    OpenDir { payload: u32, buffer: usize, dir: u32, create: bool },
-    Open { payload: u32, buffer: usize, dir: u32, mode: u8 },
-    Read { buffer: usize, file: u32, offset: u32, length: u32 },
-    Write { payload: u32, buffer: usize, file: u32, offset: u32 },
+pub enum Request<'a> {
+    Root { name: Text<16> },
+    OpenDir { dir: u32, path: Text<255>, create: bool },
+    Open { dir: u32, path: Text<255>, mode: u8 },
+    Read { file: u32, offset: u32, length: u32 },
+    Write { file: u32, offset: u32, data: &'a [u8] },
     Truncate { file: u32, size: u32 },
-    Stat { buffer: usize, handle: u32 },
-    List { buffer: usize, dir: u32, start: u32 },
-    Remove { payload: u32, buffer: usize, dir: u32 },
-    Rename { payload: u32, buffer: usize, dir: u32, target: u32 },
-    Volume { buffer: usize, handle: u32 },
+    Stat { handle: u32 },
+    List { dir: u32, start: u32 },
+    Remove { dir: u32, path: Text<255> },
+    Rename { dir: u32, from: Text<255>, target: u32, to: Text<255> },
+    Volume { handle: u32 },
     Flush { handle: u32 },
     Close { handle: u32 },
-    Check { buffer: usize, handle: u32 },
+    Check { handle: u32 },
     Scope { dir: u32, writable: bool },
 }
 
-/// Checks a received message against the schema (MC-2.4): method, major version, unused bits, enum values, capability
-/// kind. `cap` is the slot passed to `recv`; an unexpected capability is dropped (MC-2.12). Bulk arguments are checked
-/// by `args_<function>` once the server has mapped the buffer.
-pub fn decode(request: &Received, cap: usize) -> core::result::Result<Request, Reject> {
+/// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
+/// for buffer calls every length and value of a private copy of the request (MC-2.11). `cap` is the slot passed to
+/// `recv`; an unexpected capability is dropped (MC-2.12). The `Call` is what the reply functions need.
+/// The private copy is `scratch`, which the `bytes` of the request borrow.
+pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_MAX]) -> core::result::Result<(Request<'a>, Call), Reject> {
     let words = request.data;
     wire::header(request, cap, MAJOR)?;
     match words[0] & 0xFF {
         1 => {
-            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Root { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap })
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Root { name }, call))
         }
         2 => {
-            wire::body(request, cap, [0xffffffff0000, 0x1ffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::OpenDir { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap, dir: wire::field(&words, 1, 0, 32) as u32, create: wire::field(&words, 1, 32, 1) != 0 })
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let dir = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let path = <Text<255> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let create = <bool as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::OpenDir { dir, path, create }, call))
         }
         3 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Open { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap, dir: wire::field(&words, 1, 0, 32) as u32, mode: wire::field(&words, 1, 32, 8) as u8 })
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let dir = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let path = <Text<255> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let mode = <u8 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Open { dir, path, mode }, call))
         }
         4 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Read { buffer: cap, file: wire::field(&words, 0, 16, 32) as u32, offset: wire::field(&words, 1, 0, 32) as u32, length: wire::field(&words, 1, 32, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 16386, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let offset = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let length = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Read { file, offset, length }, call))
         }
         5 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Write { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap, file: wire::field(&words, 1, 0, 32) as u32, offset: wire::field(&words, 1, 32, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let offset = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let data = codec::decode_bytes::<16384>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Write { file, offset, data }, call))
         }
         6 => {
             wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_NONE, false)?;
-            Ok(Request::Truncate { file: wire::field(&words, 0, 16, 32) as u32, size: wire::field(&words, 1, 0, 32) as u32 })
+            Ok((Request::Truncate { file: wire::field(&words, 0, 16, 32) as u32, size: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
         }
         7 => {
-            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Stat { buffer: cap, handle: wire::field(&words, 0, 16, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 267, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Stat { handle }, call))
         }
         8 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::List { buffer: cap, dir: wire::field(&words, 0, 16, 32) as u32, start: wire::field(&words, 1, 0, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 4274, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let dir = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::List { dir, start }, call))
         }
         9 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Remove { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap, dir: wire::field(&words, 1, 0, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let dir = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let path = <Text<255> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Remove { dir, path }, call))
         }
         10 => {
-            wire::body(request, cap, [0xffffffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Rename { payload: wire::field(&words, 0, 16, 32) as u32, buffer: cap, dir: wire::field(&words, 1, 0, 32) as u32, target: wire::field(&words, 1, 32, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let dir = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let from = <Text<255> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let target = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let to = <Text<255> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Rename { dir, from, target, to }, call))
         }
         11 => {
-            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Volume { buffer: cap, handle: wire::field(&words, 0, 16, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 53, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Volume { handle }, call))
         }
         12 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
-            Ok(Request::Flush { handle: wire::field(&words, 0, 16, 32) as u32 })
+            Ok((Request::Flush { handle: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
         13 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
-            Ok(Request::Close { handle: wire::field(&words, 0, 16, 32) as u32 })
+            Ok((Request::Close { handle: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
         14 => {
-            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
-            Ok(Request::Check { buffer: cap, handle: wire::field(&words, 0, 16, 32) as u32 })
+            let (call, length) = wire::take_buffer(request, cap, 298, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let handle = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Check { handle }, call))
         }
         15 => {
             wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
-            Ok(Request::Scope { dir: wire::field(&words, 0, 16, 32) as u32, writable: wire::field(&words, 0, 48, 1) != 0 })
+            Ok((Request::Scope { dir: wire::field(&words, 0, 16, 32) as u32, writable: wire::field(&words, 0, 48, 1) != 0 }, Call::words(request, cap)))
         }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
 
-/// Bulk arguments of `root` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_root<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<&'a str, Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = r.str(16)?; r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_root(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-
-/// Bulk arguments of `open_dir` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_open_dir<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<&'a str, Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = r.str(255)?; r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_open_dir(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-
-/// Bulk arguments of `open` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_open<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<&'a str, Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = r.str(255)?; r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_open(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-
-/// Bulk arguments of `write` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_write<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<&'a [u8], Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = r.bytes(65536)?; r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_read(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_bytes::<16384>(value, w))
 }
-
-/// Bulk arguments of `remove` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_remove<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<&'a str, Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = r.str(255)?; r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_write(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-
-/// Bulk arguments of `rename` from the mapped buffer: exactly `payload` bytes, every limit checked.
-pub fn args_rename<'a>(bytes: &'a [u8], payload: u32) -> core::result::Result<(&'a str, &'a str), Reject> {
-    let len = payload as usize;
-    if len > bytes.len() { return Err(Reject::Invalid); }
-    let mut reader = wire::Reader::new(&bytes[..len]);
-    let value = (|r: &mut wire::Reader<'a>| -> Option<_> { let value = (r.str(255)?, r.str(255)?); r.end().then_some(value) })(&mut reader);
-    value.ok_or(Reject::Invalid)
+pub fn reply_truncate(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }
-
-pub fn reply_root(value: core::result::Result<u32, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([((value) as usize) << 16, 0])
+pub fn reply_stat(call: Call, value: core::result::Result<&Entry, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_open_dir(value: core::result::Result<u32, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([((value) as usize) << 16, 0])
+pub fn reply_list(call: Call, value: core::result::Result<&[Entry], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Entry, 16>(value, w))
 }
-pub fn reply_open(value: core::result::Result<u32, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([((value) as usize) << 16, 0])
+pub fn reply_remove(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }
-pub fn reply_read(bytes: &mut [u8], value: core::result::Result<&'_ [u8], Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    let mut writer = wire::Writer::new(bytes);
-    let encoded = (|w: &mut wire::Writer| -> Result<()> { w.bytes(value, 65536)?; Ok(()) })(&mut writer);
-    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
-    wire::reply([(writer.len() as usize) << 16, 0])
+pub fn reply_rename(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }
-pub fn reply_write(value: core::result::Result<u32, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([((value) as usize) << 16, 0])
+pub fn reply_volume(call: Call, value: core::result::Result<&Volume, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_truncate(value: core::result::Result<(), Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([0, 0])
+pub fn reply_flush(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }
-pub fn reply_stat(bytes: &mut [u8], value: core::result::Result<Entry<'_>, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    let mut writer = wire::Writer::new(bytes);
-    let encoded = (|w: &mut wire::Writer| -> Result<()> { wire::Item::encode(&value, w)?; Ok(()) })(&mut writer);
-    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
-    wire::reply([(writer.len() as usize) << 16, 0])
+pub fn reply_close(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }
-pub fn reply_list(bytes: &mut [u8], value: core::result::Result<&'_ [Entry<'_>], Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    let mut writer = wire::Writer::new(bytes);
-    let encoded = (|w: &mut wire::Writer| -> Result<()> { w.list(value, 256)?; Ok(()) })(&mut writer);
-    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
-    wire::reply([(writer.len() as usize) << 16, 0])
+pub fn reply_check(call: Call, value: core::result::Result<&Report, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_remove(value: core::result::Result<(), Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([0, 0])
-}
-pub fn reply_rename(value: core::result::Result<(), Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([0, 0])
-}
-pub fn reply_volume(bytes: &mut [u8], value: core::result::Result<Volume<'_>, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    let mut writer = wire::Writer::new(bytes);
-    let encoded = (|w: &mut wire::Writer| -> Result<()> { wire::Item::encode(&value, w)?; Ok(()) })(&mut writer);
-    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
-    wire::reply([(writer.len() as usize) << 16, 0])
-}
-pub fn reply_flush(value: core::result::Result<(), Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([0, 0])
-}
-pub fn reply_close(value: core::result::Result<(), Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply([0, 0])
-}
-pub fn reply_check(bytes: &mut [u8], value: core::result::Result<Report<'_>, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    let mut writer = wire::Writer::new(bytes);
-    let encoded = (|w: &mut wire::Writer| -> Result<()> { wire::Item::encode(&value, w)?; Ok(()) })(&mut writer);
-    if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
-    wire::reply([(writer.len() as usize) << 16, 0])
-}
-pub fn reply_scope(value: core::result::Result<usize, Error>) -> Result<()> {
-    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
-    wire::reply_cap([0, 0], value, false)
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_scope(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
 }

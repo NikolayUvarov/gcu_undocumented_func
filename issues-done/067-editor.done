@@ -1,0 +1,33 @@
+# 067 — Editor `edit` — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 054, 062, 066 · **Roadmap:** track G, tools plan §4.2
+
+Formerly tools-branch 047.
+
+## Problem
+
+No way to create or change a text file inside the system.
+
+## Plan
+
+- Piece table with a line index (first limit 8 MiB), UTF-8, line endings preserved, invalid bytes kept.
+- Screen: menu bar (F9), text, status line, F-key bar. Keys: arrows, Home/End, PgUp/PgDn, Ctrl+Home/End, Ctrl+←/→, Shift selects, Ctrl+C/X/V, Del/Backspace, Tab, F2 save, Shift+F2 save as, F7 search, Ctrl+F7 replace, Alt+F8 go to line, Ctrl+U / Alt+Backspace undo, Ctrl+Y redo, F10 quit with unsaved-changes dialog.
+- Save: write `name.tmp`, flush, rename over the original (best effort on FAT).
+- Read-only mode when started with a read-only handle; editor core tested on the host.
+
+## Acceptance criteria
+
+- Host tests of the buffer, undo, search/replace.
+- QEMU suite `edit`: open, type Cyrillic and Latin text, save on `ram:` and on a FAT disk, reread, `fsck.fat -n` clean.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) §4.2.
+
+## Resolution
+
+- `edit/`: `buffer.rs` — piece table over the original file and an append buffer with a line index, undo/redo of grouped changes (typing merges until the cursor moves; replacing a selection, paste and replace all are one step each), the save point, case-insensitive search with wrap-around (Unicode lower case), 8 MiB limit; bytes are kept as they are (LF/CRLF, invalid UTF-8). `editor.rs` — cursor, selection, keys of docs/tools §4.2 (Home to the indentation, Enter keeps it, CR LF is one step for arrows, Backspace and Delete, a new line follows the file's line ending), menu (F9), find/replace/go-to/save-as dialogs, the unsaved-changes dialog, read-only mode, status line, F-key bar. `main.rs` — loads the file (a missing one is new), saves through `name.tmp` + flush + rename + volume flush, logs its state after every key.
+- File access: the program asks for `REQUEST_FILE`; the shell lends its own VFS client in the new `SLOT_FILE` (7) and `mind::fs::use_endpoint` sends the editor's calls through it. Without it (or for a boot file) the file opens read-only and can be saved elsewhere with Shift+F2.
+- `mind::tui::widgets::message` no longer underflows on a grid narrower than its buttons.
+- Deviations: the lent client writes anywhere on `ram:` and in `data/`, not only the named file — split into issue 071 (scoped file grants); no hex mode (use `view`).
+- Tests: `tests/edit_host.rs` (piece table against a byte vector over 3000 random edits with undo/redo, undo groups and the save point, search and replace with Cyrillic, editing keys, read-only, saving and quit dialogs, find/replace/go-to/menu, drawing on grids from 20×6 to 160×50); QEMU suite `edit` (raw FAT disk: Latin and Cyrillic text typed and saved on `ram:` and in `data/` with F2 and from the unsaved-changes dialog, read back with `cat`, a CRLF file extended, a boot file read-only and saved as a copy on `ram:`; the host runs `fsck.fat -n` and compares the files with `mtype` byte for byte, no `.tmp` left).
