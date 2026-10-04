@@ -13,11 +13,25 @@
 
 ## Open tasks
 
-Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** (077–099) builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`); the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| — | None open; the next tools in the plan are `ipc` and `caps` (P1, [docs/tools](../docs/tools/README.md) §2.2) | | | | |
+| [077](077-voice-audio-front-end.md) | Voice V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` | tools | P1 | — | track G |
+| [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | 077 | track G |
+| [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
+| [080](080-ipc-tool.md) | `ipc`: endpoints, holders, wait-for graph | tools | P1 | — | track G, T3 |
+| [081](081-caps-tool.md) | `caps`: capabilities and the derivation tree | tools | P1 | 151 | track G, T3 |
+| [082](082-find-and-grep.md) | `find` and `grep` | tools | P2 | — | track G, T3 |
+| [083](083-format.md) | `format` for the RAM disk (`vfs.wit` 2.3) | tools | P2 | — | track G, T3 |
+| [084](084-reboot.md) | `reboot` | tools | P2 | 152 | track G, T3 |
+| [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | 151 | track G, T3 |
+| [086](086-screenshot.md) | `screenshot` | tools | P2 | 151 | track G, T3 |
+| [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
+| [151](151-shell-grant-slots-13-15.md) | Shell grant slots 13–15: authority view, keyboard control, screen capture | kernel | P2 | — | track G |
+| [152](152-reboot-system-call.md) | `REBOOT` system call | kernel | P2 | — | track G |
+| [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
+| [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
 
 ## Finished tasks (`issues-done/`)
 

@@ -291,6 +291,8 @@ Opened on 2026-10-04 on the tools branch as 032–050, renumbered [052–071](..
 
 The merge kept `main`'s kernel, ABI, IDL wire format, `STAT` records, input event words and badges, and ported the tools to them: enums, `bytes<N>` and capability results are a minor extension of main's IDL v0.2; block write and flush are `block.wit` 1.1 with the data as sealed read-only memory; VFS v2 is `vfs.wit` 2.x; launch sessions replaced the loader's legacy adapter. The kernel changes the tools needed went through kernel-track issues 072 (fixed grant slots), 073 (`PORT_OUT_BLOCK`) and 074 (output of an exited console program); the `STAT` fields the monitors lost are [075](../../issues-done/075-stat-fields-for-the-monitors.done).
 
+The remaining tools of the catalogue are issues [080–086](../../issues/README.md): `ipc` (080), `find`/`grep` (082) and `format` (083) need nothing from the kernel; `caps` (081), `keymap` (085) and `screenshot` (086) wait for the shell's grant slots 13–15 (kernel issue 151), `reboot` (084) for the `REBOOT` system call (152).
+
 ## 8. Decisions (accepted 2026-10-04)
 
 1. **FAT writing** is accepted as an export/compatibility path with a separate write right; the native store stays track B.
