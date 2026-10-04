@@ -105,14 +105,15 @@ class VM:
             except queue.Empty:
                 return
 
-    def expect(self, text, timeout=8):
+    def expect(self, text, timeout=8, after=None):
+        """Waits for `text` (after the first `after`, when given) in the output since the last match."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.collect()
             clean = to_ordinal(ANSI.sub("", self.output).replace("\r", ""))
             if "KERNEL EXCEPTION" in clean or "KERNEL PANIC" in clean:
                 raise AssertionError(clean)
-            if text in clean:
+            if text in (clean if after is None else clean.partition(after)[2]):
                 self.output = ""
                 return clean
             if self.process.poll() is not None:
@@ -138,7 +139,8 @@ class VM:
 
     def command(self, text, raw=False):
         self.send(text + "\n", raw)
-        return self.expect("MIND> ")
+        # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
+        return self.expect("MIND> ", after=to_ordinal(text if raw or self.monitor else to_real(text)) + "\n")
 
     def hmp(self, command):
         if not self.monitor:
