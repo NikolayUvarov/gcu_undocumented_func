@@ -2601,6 +2601,8 @@ def net_suite(args, disk):
             time.sleep(.25)
         else:
             raise AssertionError("no ping answer after the driver restart")
+        # The new driver instance had no frame ring: the stack lent it a fresh one (issue 107).
+        require(vm.command("dmesg -s netstack"), "[NETSTACK] CARD 0: DRIVER WITHOUT OUR RING, ATTACHING AGAIN")
     finally:
         vm.close()
         web.shutdown(); dns.close()
@@ -2846,7 +2848,9 @@ def netbench_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", backend, "-device", "virtio-net-pci,netdev=n0"])
     try:
         require(vm.service_logs("netstack", "10.0.2.15/24"), "STATIC 10.0.2.15/24" if args.tap else "DHCP 10.0.2.15/24")
-        offers = "[NETSTACK] CARD 0 READY (CHECKSUM OFFLOAD AVAILABLE)" in vm.command("dmesg -s netstack")
+        log = vm.command("dmesg -s netstack")
+        require(log, "[NETSTACK] CARD 0 READY (FRAME RING)")
+        offers = "(CHECKSUM OFFLOAD AVAILABLE)" in log
         assert offers == bool(args.tap), "checksum offload offered only with the tap backend"
         for offload in ("off", "on"):
             require(vm.command(f"ip offload {offload}"), f"CHECKSUM OFFLOAD {offload.upper()}: {int(offers and offload == 'on')} CARD(S)")

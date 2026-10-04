@@ -18,7 +18,7 @@ VirtIO devices can compute and verify checksums (`VIRTIO_NET_F_CSUM`, `GUEST_CSU
 
 ## Related
 
-[101](101-network-stack.done), [104](104-virtio-modern-msix.done)., [107](../issues/107-batched-frame-path.md).
+[101](101-network-stack.done), [104](104-virtio-modern-msix.done), [107](107-batched-frame-path.done).
 
 ## Resolution
 
@@ -27,7 +27,7 @@ VirtIO devices can compute and verify checksums (`VIRTIO_NET_F_CSUM`, `GUEST_CSU
   - the software checksum on its own;
   - over QEMU user networking and over a tap backend (`--tap`; CI job "network benchmark").
   - The results and the decision are in [docs/profile/network.md](../docs/profile/network.md).
-- **Finding:** checksums are about 0.3 % of the stack's CPU time (about 1 ms per MiB against about 300 ms). The cost is per frame (about 275 µs in `netstack`, 210 µs in the driver), in the IDL call that carries each frame. Follow-up: [107](../issues/107-batched-frame-path.md).
+- **Finding:** checksums are about 0.3 % of the stack's CPU time (about 1 ms per MiB against about 300 ms). The cost is per frame (about 275 µs in `netstack`, 210 µs in the driver), in the IDL call that carries each frame. Follow-up: [107](107-batched-frame-path.done).
   - QEMU's user networking offers no offloads at all (no virtio-net header in the backend).
 - **Transmit checksum offload, implemented and off by default** (no gain beyond the noise: about 3–4 % of the stack's CPU on upload):
   - `virtio_net` negotiates `VIRTIO_NET_F_CSUM` on the modern interface;

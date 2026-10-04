@@ -17,7 +17,9 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
 use mind::idl::codec::List;
 use mind::idl::{net, socket, wire};
-use mind::ipc::Endpoint;
+use mind::ipc::{self, Endpoint};
+use mind::mem::Pages;
+use mind::netring::{self, Ring};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium};
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
@@ -49,10 +51,41 @@ static SENT: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 
 // A driver's frames as a smoltcp device: one IDL call per frame.
-// `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on).
-struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX] }
+// `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on). `ring`: the frame ring shared
+// with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
+// without one, every frame is a call.
+struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64 }
+struct Shared { _pages: Pages, cap: usize, ring: Ring }
 struct Rx<'a>(&'a [u8]);
-struct Tx(Endpoint, usize, bool);
+struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool> }
+
+impl Card {
+    // Lends the driver a fresh frame ring (at start, and after a driver restart lost the old one).
+    fn attach(&mut self) {
+        if let Some(old) = self.ring.take() { let _ = ipc::revoke(old.cap); let _ = ipc::drop_cap(old.cap); }
+        let Some(pages) = Pages::new(netring::BYTES) else { return };
+        let ring = unsafe { Ring::new(pages.address() as *mut u8) };
+        ring.reset();
+        let Ok(cap) = pages.share() else { return };
+        match net::attach(self.endpoint, cap) {
+            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = now_ms(); }
+            _ => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
+        }
+    }
+
+    // Wakes the driver for queued frames, and at least every 300 ms so it keeps serving the ring.
+    fn kick(&mut self) {
+        let Some(shared) = self.ring.as_ref() else { return };
+        let now = now_ms();
+        if !self.queued && !shared.ring.sending() && now - self.kicked < 300 { return; }
+        self.queued = false; self.kicked = now;
+        match net::kick(self.endpoint) {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => { mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
+            Err(_) => {} // the driver is restarting
+        }
+    }
+}
 
 // For an IPv4 TCP or UDP frame (not a fragment): puts the pseudo-header sum in its checksum field and returns where the
 // summed bytes start, where the field is from there (virtio_net_hdr `csum_start`, `csum_offset`) and where the IP
@@ -84,32 +117,51 @@ fn complete(frame: &mut [u8], start: usize, field: usize, end: usize) {
 impl smoltcp::phy::RxToken for Rx<'_> {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R { f(self.0) }
 }
-impl smoltcp::phy::TxToken for Tx {
+impl smoltcp::phy::TxToken for Tx<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let mut frame = [0u8; FRAME_MAX];
         let len = len.min(FRAME_MAX);
         let result = f(&mut frame[..len]);
+        if let Some(ring) = self.ring {
+            // Through the shared ring: the checksum is left to the card with offload, else finished here. A full ring
+            // drops the frame (TCP sends it again).
+            let (start, field) = match partial(&mut frame[..len]) {
+                Some((start, field, _)) if self.offload => (start as u16, field as u16),
+                Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); (0, 0) }
+                None => (0, 0),
+            };
+            if ring.send(&frame[..len], start, field) { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
+            if let Some(queued) = self.queued { *queued = true; }
+            return result;
+        }
         // TCP and UDP checksums are finished here: by the card with offload, else in software (smoltcp leaves them).
         let offloaded = match partial(&mut frame[..len]) {
-            Some((start, field, _)) if self.2 && matches!(net::send_partial(self.0, &frame[..len], start as u16, field as u16), Ok(Ok(()))) => Some(true),
+            Some((start, field, _)) if self.offload && matches!(net::send_partial(self.endpoint, &frame[..len], start as u16, field as u16), Ok(Ok(()))) => Some(true),
             Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); None }
             None => None,
         };
-        let sent = offloaded.unwrap_or_else(|| matches!(net::send(self.0, &frame[..len]), Ok(Ok(()))));
-        if sent { SENT[self.1].fetch_add(1, Ordering::Relaxed); }
+        let sent = offloaded.unwrap_or_else(|| matches!(net::send(self.endpoint, &frame[..len]), Ok(Ok(()))));
+        if sent { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
         result
     }
 }
 impl Device for Card {
     type RxToken<'a> = Rx<'a>;
-    type TxToken<'a> = Tx;
-    fn receive(&mut self, _: Instant) -> Option<(Rx<'_>, Tx)> {
-        match net::receive(self.endpoint, &mut self.frame) {
-            Ok(Ok(len)) => { RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed); Some((Rx(&self.frame[..len.min(FRAME_MAX)]), Tx(self.endpoint, self.index, self.offload))) }
-            _ => None,
-        }
+    type TxToken<'a> = Tx<'a>;
+    fn receive(&mut self, _: Instant) -> Option<(Rx<'_>, Tx<'_>)> {
+        let ring = self.ring.as_ref().map(|shared| shared.ring);
+        let len = match ring {
+            // From the shared ring: no call (a slot the driver filled wrongly comes back empty and is skipped).
+            Some(ring) => loop { match ring.receive(&mut self.frame) { Some(frame) if frame.len == 0 => continue, Some(frame) => break frame.len, None => return None } },
+            None => match net::receive(self.endpoint, &mut self.frame) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
+        };
+        RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed);
+        Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) }))
     }
-    fn transmit(&mut self, _: Instant) -> Option<Tx> { Some(Tx(self.endpoint, self.index, self.offload)) }
+    fn transmit(&mut self, _: Instant) -> Option<Tx<'_>> {
+        let ring = self.ring.as_ref().map(|shared| shared.ring);
+        Some(Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) })
+    }
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet; caps.max_transmission_unit = FRAME_MAX;
@@ -156,7 +208,8 @@ impl Link {
         let info = match net::info(endpoint) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
         let offers = net::offloads(endpoint).is_ok_and(|o| o & 1 != 0);
-        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX] };
+        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0 };
+        card.attach();
         let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])));
         config.random_seed = mind::time::rdtsc();
         let iface = Interface::new(config, &mut card, instant());
@@ -166,7 +219,7 @@ impl Link {
                                          icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 8], vec![0; 4096]));
         let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
         let icmp = sockets.add(echo);
-        mind::println!("[NETSTACK] CARD {} READY{}, WAITING FOR DHCP", index, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
+        mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, if card.ring.is_some() { " (FRAME RING)" } else { "" }, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms() })
     }
 
@@ -187,6 +240,7 @@ impl Link {
     // Runs the interface and applies DHCP results.
     fn poll(&mut self) {
         let _ = self.iface.poll(instant(), &mut self.card, &mut self.sockets);
+        self.card.kick();
         let event = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).poll().map(|event| match event {
             dhcpv4::Event::Configured(config) => Some((config.address, config.router, config.dns_servers.first().copied())),
             dhcpv4::Event::Deconfigured => None,
