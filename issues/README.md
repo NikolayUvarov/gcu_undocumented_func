@@ -25,7 +25,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
 | [042](042-tui-library.md) | TUI library `mind::tui` | tools | P1 | 040, 041 | track G, T0 |
 | [043](043-keyboard-decoding-and-line-editing.md) | Keyboard decoding, layouts, VT100 input, shell line editing | tools | P1 | — | track G, T0 |
-| [044](044-idl-v02-records-strings.md) | MIND IDL v0.2: records, strings, lists in buffers | tools | P1 | — | track G, C8 |
+| [044](044-idl-v02-records-strings.md) | MIND IDL v0.2: records, strings, lists in buffers | kernel | P1 | — | track G, C8 |
 | [045](045-sysmon-and-monitors.md) | `sysmon` and `top`, `memmap`, `load`, `hw` | tools | P2 | 042, 044 | track G, T1 |
 | [046](046-loader-sessions.md) | Loader v1: launch sessions with granted capabilities | tools | P2 | 044 | track G, T1 |
 | [047](047-viewer-and-fm-readonly.md) | Viewer `view`, file manager `fm` read-only | tools | P2 | 042, 043 | track G, T1 |
