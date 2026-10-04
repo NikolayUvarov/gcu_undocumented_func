@@ -93,3 +93,12 @@ fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
     let image = elf::Image::parse(&data).unwrap();
     assert!(image.load(&mut [0; 16], 0x100000).is_err());
 }
+
+#[test]
+fn input_event_words_round_trip() {
+    let word = abi::input_event(0x1E, abi::KEY_CHAR, abi::MOD_SHIFT | abi::MOD_CTRL, true, 'Ж' as u32);
+    assert_eq!((abi::event_byte(word), abi::event_key(word), abi::event_mods(word), abi::event_pressed(word), abi::event_char(word)), (0x1E, abi::KEY_CHAR, 3, true, 'Ж' as u32));
+    let release = abi::input_event(0, abi::KEY_F1 + 11, 0, false, 0);
+    assert_eq!((abi::event_byte(release), abi::event_key(release), abi::event_pressed(release), abi::event_char(release)), (0, abi::KEY_F1 + 11, false, 0));
+    assert_eq!(abi::event_char(abi::input_event(0, abi::KEY_CHAR, 0, true, 0x10FFFF)), 0x10FFFF);
+}

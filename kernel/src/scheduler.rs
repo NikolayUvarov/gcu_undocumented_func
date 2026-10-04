@@ -1,5 +1,5 @@
 use crate::abi::*;
-use crate::input::Queue;
+use crate::input::{Events, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
 use crate::{context, cpu, elf, interrupts, outb, paging, pci, serial_write_byte};
@@ -53,7 +53,7 @@ struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Queue<128>, log: Queue<4096>, console: Queue<4096>, dirty: bool,
+    input: Events<INPUT_QUEUE>, log: Queue<4096>, console: Queue<4096>, dirty: bool,
     cspace: [Option<Capability>; CAP_SLOTS], generations: [u32; CAP_SLOTS], // generation of each kernel-allocated slot
     nodes: [Node; CAP_SLOTS],
     pending_cap: Option<Pending>, pending_call: bool, send_seq: u64, // send waiting for a receiver
@@ -150,7 +150,7 @@ impl Scheduler {
     fn push_notice(&mut self, value: usize) { if self.notice_count < self.notices.len() { self.notices[self.notice_count] = value; self.notice_count += 1; } }
     // Input event: the focus owner gets the `owner` byte, any other focused task the `app` byte; an attention key
     // (Ctrl+Z) takes the focus back to the owner.
-    fn route_key(&mut self, app: u8, owner: u8, attention: bool) {
+    fn route_key(&mut self, app: usize, owner: usize, attention: bool) {
         let target = self.foreground;
         if attention {
             if target != self.focus_owner && self.live(target) && self.live(self.focus_owner) {
@@ -159,8 +159,8 @@ impl Scheduler {
             return;
         }
         if !self.live(target) { return; }
-        let byte = if target == self.focus_owner { owner } else { app };
-        let task = self.tasks[target].as_mut().unwrap(); task.input.push(byte);
+        let event = if target == self.focus_owner { owner } else { app };
+        let task = self.tasks[target].as_mut().unwrap(); task.input.push(event);
         if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
     }
 
@@ -350,7 +350,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Events::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -662,7 +662,9 @@ impl Scheduler {
         let tasks = self.tasks.as_mut_ptr(); let task = (*tasks.add(slot)).as_mut().unwrap(); task.calls += 1;
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC => { let lo: u32; let hi: u32; asm!("rdtsc", out("eax") lo, out("edx") hi); Ok((((hi as u64) << 32) | lo as u64) as usize) }
-            SYSCALL_READ_KEY => Ok(task.input.pop().unwrap_or(0) as usize),
+            // The legacy byte of the next event that has one (events without a byte are skipped).
+            SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 => break event_byte(event) as usize, Some(_) => {} } }),
+            SYSCALL_READ_INPUT => Ok(task.input.pop().unwrap_or(0)),
             SYSCALL_LOG => {
                 // Kept twice: LOGS drains `log`, the focus owner mirrors `console` of the focused task.
                 let length = request.arg2.min(4096);
@@ -810,7 +812,10 @@ impl Scheduler {
             SYSCALL_IRQ_ACK => match self.cap(slot, request.arg1) { Some(Capability::Interrupt(irq)) => { interrupts::set_irq_masked(irq, false); Ok(0) } _ => Err(ERR_RIGHTS) },
             SYSCALL_INPUT_EVENT => {
                 // Only a holder of the input capability (keyboard driver, shell for the UART) may inject input.
-                if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else { self.route_key(request.arg1 as u8, request.arg2 as u8, request.msg[0] != 0); Ok(0) }
+                if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else {
+                    let word = |full: usize, byte: usize| if full != 0 { full } else if byte as u8 != 0 { input_event(byte as u8, 0, 0, true, 0) } else { 0 };
+                    self.route_key(word(request.msg[1], request.arg1), word(request.msg[2], request.arg2), request.msg[0] != 0); Ok(0)
+                }
             }
             SYSCALL_COMPOSITOR_PULL => {
                 if !self.holds(slot, Capability::Display) || !(1..SLOT_DYNAMIC).contains(&request.arg1) { Err(ERR_RIGHTS) } else {

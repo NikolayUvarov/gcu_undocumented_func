@@ -181,6 +181,11 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'k' => {
+                // Input arrives as event words: the UART newline typed after the key is an undecoded press carrying
+                // its byte; READ_KEY and READ_INPUT drain the same queue.
+                let mut event = 0;
+                for _ in 0..20 { event = call(mb, abi::SYSCALL_READ_INPUT, 0, 0); if event != 0 { break; } call(mb, abi::SYSCALL_WAIT, 10, 0); }
+                if !matches!(abi::event_byte(event), b'\n' | b'\r') || !abi::event_pressed(event) || abi::event_key(event) != 0 || call(mb, abi::SYSCALL_READ_KEY, 0, 0) != 0 { fail(); }
                 // A regular application cannot use others' privileges without capabilities.
                 let image = _start as *const () as usize;
                 let checks = [

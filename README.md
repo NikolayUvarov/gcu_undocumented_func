@@ -456,7 +456,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | # | Name | Arguments → result |
 |---|---|---|
 | 1 | RDTSC | → time stamp counter |
-| 2 | READ_KEY | → next key of the calling (focused) task or 0 |
+| 2 | READ_KEY | → legacy byte of the next input event of the calling (focused) task or 0 |
 | 3 | LOG | buffer, length → bytes logged |
 | 5 | WAIT | milliseconds (10 ms steps, ≤ 60 s) → uptime at sleep |
 | 6 | UPTIME | → milliseconds since boot |
@@ -481,7 +481,8 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
 | 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
-| 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z) — needs the input capability |
+| 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z), msg[1]/msg[2] = full event words (0: byte only) — needs the input capability |
+| 50 | READ_INPUT | → next input event word of the focused task (key, modifiers, pressed, character, legacy byte; see `common/abi.rs`), 0 if none |
 | 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |

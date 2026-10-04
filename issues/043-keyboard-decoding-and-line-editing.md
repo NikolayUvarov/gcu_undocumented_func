@@ -1,6 +1,6 @@
 # 043 — Keyboard decoding, layouts, VT100 input and shell line editing (tools F4, ring 3)
 
-**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Roadmap:** track G, T0 · **Blocked by:** 034
+**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Roadmap:** track G, T0 · **Blocked by:** — (034 done)
 
 ## Problem
 

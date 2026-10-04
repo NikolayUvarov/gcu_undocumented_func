@@ -11,7 +11,7 @@
 | Memory object | Objects and freed-but-referenced blocks: 16 MiB in total for `MEM_DETACH` | `MEM_DETACH`; `FREE` of a block others still hold | Charged to the detaching or freeing task's heap quota while it lives; after it exits, to nobody |
 | DMA region | 8 MiB in total, 64 KiB aligned; kept for the platform's lifetime | `PLATFORM_CAP(PLATFORM_DMA)` (init) | Kernel heap |
 | IRQ binding | One endpoint per line 1–15 (not 2) | `IRQ_BIND` | Fixed table |
-| Input queue | 128 bytes per task, oldest dropped | `INPUT_EVENT` | Per task |
+| Input queue | 64 event words per task (key, modifiers, press/release, character, legacy byte), oldest dropped | `INPUT_EVENT` | Per task |
 | Log and console queues | 4096 bytes each per task, oldest dropped | `LOG` | Per task |
 | Fault records | 16, ring buffer | User exceptions | Global |
 | Notices for the focus owner | 8, further ones dropped | Focused task exits, attention key | Global |

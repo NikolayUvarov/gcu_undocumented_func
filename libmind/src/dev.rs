@@ -47,6 +47,12 @@ pub fn input_event(app: u8, shell: u8, background: bool) -> Result<()> {
     check(syscall(SYSCALL_INPUT_EVENT, app as usize, shell as usize, [background as usize, 0, 0, 0]).result).map(drop)
 }
 
+/// Decoded key event (see `mind::input::KeyEvent`) for the focused application and for the focus owner; `attention`
+/// returns the focus to the owner instead.
+pub fn input_key(app: usize, owner: usize, attention: bool) -> Result<()> {
+    check(syscall(SYSCALL_INPUT_EVENT, 0, 0, [attention as usize, app, owner, 0]).result).map(drop)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Frame { Unchanged, Dirty, NewSource }
 

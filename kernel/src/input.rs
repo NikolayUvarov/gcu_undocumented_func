@@ -36,7 +36,21 @@ impl<const N: usize> Queue<N> {
         self.head = 0;
         self.len = 0;
     }
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
+}
+
+// Bounded queue of input event words; the oldest event is dropped when full.
+pub struct Events<const N: usize> { words: [usize; N], head: usize, len: usize }
+impl<const N: usize> Events<N> {
+    pub const fn new() -> Self { Self { words: [0; N], head: 0, len: 0 } }
+    pub fn push(&mut self, event: usize) {
+        if event == 0 { return; }
+        if self.len == N { self.head = (self.head + 1) % N; self.len -= 1; }
+        self.words[(self.head + self.len) % N] = event; self.len += 1;
     }
+    pub fn pop(&mut self) -> Option<usize> {
+        if self.len == 0 { return None; }
+        let event = self.words[self.head]; self.head = (self.head + 1) % N; self.len -= 1; Some(event)
+    }
+    pub fn clear(&mut self) { self.head = 0; self.len = 0; }
+    pub fn is_empty(&self) -> bool { self.len == 0 }
 }

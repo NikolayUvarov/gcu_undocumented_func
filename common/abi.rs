@@ -33,6 +33,9 @@ pub const SYSCALL_PORT_IN: usize = 17;
 pub const SYSCALL_PORT_OUT: usize = 18;
 pub const SYSCALL_IRQ_WAIT: usize = 19;
 pub const SYSCALL_INPUT_EVENT: usize = 20;
+// READ_INPUT: next input event word of the calling (focused) task, 0 if none. READ_KEY returns only the legacy byte
+// of the next event that has one.
+pub const SYSCALL_READ_INPUT: usize = 50;
 pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 pub const SYSCALL_IPC_CALL: usize = 22;
 pub const SYSCALL_IPC_REPLY: usize = 23;
@@ -226,6 +229,30 @@ pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _C
 // The caller becomes the focus owner: focus returns to it when the focused task exits or on an attention key.
 // NOTICE: 0 if none, else PID | NOTICE_EXITED (the focused task exited) or PID (sent to the background).
 pub const NOTICE_EXITED: usize = 1 << 63;
+
+// Input events: one word per key press or release, queued per task (64, oldest dropped). The kernel stores and routes
+// them; decoding and layouts live in ring 3 (ps2_kbd, the shell's UART decoder).
+// bits 0-7: legacy byte for READ_KEY (raw scancode or UART byte; 0: none) · 8-23: key (KEY_*; 0: not decoded) ·
+// 24-31: modifiers (MOD_*) · 32: pressed · 40-63: Unicode character from the active layout (0: none).
+// INPUT_EVENT: arg1/arg2 = legacy bytes for an application / the focus owner, msg[0] = attention, msg[1]/msg[2] = full
+// event words for them (0: an event carrying only the byte).
+pub const KEY_CHAR: u16 = 1; // a key that produced `ch`
+pub const KEY_ENTER: u16 = 2; pub const KEY_ESC: u16 = 3; pub const KEY_TAB: u16 = 4; pub const KEY_BACKSPACE: u16 = 5;
+pub const KEY_UP: u16 = 6; pub const KEY_DOWN: u16 = 7; pub const KEY_LEFT: u16 = 8; pub const KEY_RIGHT: u16 = 9;
+pub const KEY_HOME: u16 = 10; pub const KEY_END: u16 = 11; pub const KEY_PAGE_UP: u16 = 12; pub const KEY_PAGE_DOWN: u16 = 13;
+pub const KEY_INSERT: u16 = 14; pub const KEY_DELETE: u16 = 15;
+pub const KEY_F1: u16 = 16; // F1..F12 = 16..27
+pub const KEY_SHIFT: u16 = 28; pub const KEY_CTRL: u16 = 29; pub const KEY_ALT: u16 = 30; pub const KEY_CAPS_LOCK: u16 = 31;
+pub const MOD_SHIFT: u8 = 1; pub const MOD_CTRL: u8 = 2; pub const MOD_ALT: u8 = 4; pub const MOD_CAPS: u8 = 8;
+pub const INPUT_QUEUE: usize = 64;
+pub const fn input_event(byte: u8, key: u16, mods: u8, pressed: bool, ch: u32) -> usize {
+    byte as usize | (key as usize) << 8 | (mods as usize) << 24 | (pressed as usize) << 32 | ((ch & 0xFF_FFFF) as usize) << 40
+}
+pub const fn event_byte(event: usize) -> u8 { event as u8 }
+pub const fn event_key(event: usize) -> u16 { (event >> 8) as u16 }
+pub const fn event_mods(event: usize) -> u8 { (event >> 24) as u8 }
+pub const fn event_pressed(event: usize) -> bool { event >> 32 & 1 != 0 }
+pub const fn event_char(event: usize) -> u32 { (event >> 40) as u32 }
 // CONSOLE_READ / TASK_LOGS: arg1 = PID, msg[0] = buffer address, msg[1] = length; drains and returns the byte count.
 // CPU_INFO: arg1 = CPU index; result = APIC id, arg2 = online, msg[2] = timer ticks. KERNEL_HEAP: result = used,
 // arg2 = free, msg[2] = 1 if a test allocation was fully released.
