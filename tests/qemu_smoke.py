@@ -849,6 +849,37 @@ def vfs_check(vm):
     require(vm.command("cat data/n.txt"), "hello")
     require(vm.command("ls data"), "n.txt")
     print("PASS: files: RAM disk with Cyrillic names and text, mkdir with parents, move, remove; boot files and the disk outside data/ are not writable, .. is refused", flush=True)
+    search_check(vm)
+
+
+def search_check(vm):
+    """find and grep (issue 082): console programs over the application's read-only file client."""
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    def lines(output):
+        skip = ("MIND>", "find ", "grep ", "STARTED PID=")
+        return [l.strip() for l in output.replace("\r", "").split("\n") if l.strip() and not l.startswith(skip) and "EXITED. SHELL RESUMED" not in l]
+    require(vm.command("write ram:a.txt hello world"), "WROTE")
+    require(vm.command("mkdir ram:docs"), "OK")
+    require(utf8("write ram:docs/заметки.txt Привет, мир"), "WROTE")
+    require(vm.command("write ram:docs/b.md # title"), "WROTE")
+    assert lines(vm.command("find ram:")) == ["ram:a.txt", "ram:docs/", "ram:docs/b.md", "ram:docs/заметки.txt"], vm.output
+    assert lines(vm.command("find ram: -name *.txt -type f")) == ["ram:a.txt", "ram:docs/заметки.txt"]
+    assert lines(vm.command("find ram: -size +12")) == ["ram:docs/заметки.txt"], "20 bytes of Cyrillic text"
+    assert lines(vm.command("find A: -name kernel.elf")) == ["kernel.elf"]
+    assert lines(utf8("grep -rn привет ram:")) == [], "case matters without -i"
+    assert lines(utf8("grep -rin привет ram:")) == ["ram:docs/заметки.txt:1:Привет, мир"]
+    assert lines(utf8("grep -l o ram:a.txt ram:docs/заметки.txt ram:docs/b.md")) == ["ram:a.txt"]
+    assert lines(vm.command("grep -c ^# ram:docs/b.md")) == ["1"]
+    assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
+    require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
+    require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
+    for path in ("ram:docs/b.md", "ram:a.txt"):
+        require(vm.command(f"rm {path}"), "OK")
+    require(utf8("rm ram:docs/заметки.txt"), "OK")
+    require(vm.command("rm ram:docs"), "OK")
+    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file", flush=True)
 
 
 def busy_suite(vm):

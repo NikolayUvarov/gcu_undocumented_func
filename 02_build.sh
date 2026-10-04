@@ -81,6 +81,8 @@ USER_CRATES=(
     "edit:edit:edit.elf"
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
+    "search:find:find.elf"
+    "search:grep:grep.elf"
     "dmesg:dmesg:dmesg.elf"
     "svc:svc:svc.elf"
     "beep:beep:beep.elf"
