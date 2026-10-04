@@ -248,6 +248,7 @@ An application, not a service.
 - **Windows outlive the manager.** A program in a window owns its surface and input endpoint and registers them with the window broker `windows` (issue 157), a small service that keeps the windows and their layout.
 - **Two ways out.** *Detach* (also what a crash does): `wm` ends and its programs keep running hidden; the next `wm`, or a graphical manager later on the same protocol, shows them where they were. *Close all*: the programs get a close event.
 - **Authority:** `wm` lends a program only what it holds itself and the program asks for (MC-3.11).
+- `clock` and `dzen-clock` also get text faces for text windows and consoles (issue 089).
 - Full-screen consoles switched with Alt+F1…F4 are issue 155.
 
 

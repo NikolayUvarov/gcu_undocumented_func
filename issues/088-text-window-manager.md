@@ -52,4 +52,4 @@ QEMU suite (keys over the UART and `sendkey`, the mouse with `mouse_move`/`mouse
 
 ## Related
 
-[157](157-window-broker.md), [156](156-ps2-mouse.md), [155](155-virtual-consoles.md) (full-screen consoles with Alt+F1…F4, which complement windows), [063](../issues-done/063-file-manager-read-only.done), [054](../issues-done/054-tui-library.done), [docs/tools](../docs/tools/README.md).
+[157](157-window-broker.md), [089](089-text-clock-faces.md) (text faces of `clock` and `dzen-clock`), [156](156-ps2-mouse.md), [155](155-virtual-consoles.md) (full-screen consoles with Alt+F1…F4, which complement windows), [063](../issues-done/063-file-manager-read-only.done), [054](../issues-done/054-tui-library.done), [docs/tools](../docs/tools/README.md).
