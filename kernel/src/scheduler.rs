@@ -23,6 +23,7 @@ const MSI_FIRST: usize = 16; const MSI_VECTORS: usize = 16; const LINES: usize =
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 // Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
 // The PIC, PIT and PCI configuration ports stay with the kernel.
+// LEGACY: ISA devices of the platform profile (docs/legacy.md).
 const LEGACY_PORTS: [(u16, u16); 6] = [(0x60, 1), (0x64, 1), (0x70, 2), (0x1F0, 8), (0x3F6, 1), (0x3F8, 8)];
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
@@ -341,6 +342,9 @@ impl Scheduler {
         self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
         self.endpoints = used;
     }
+
+    // The PCI function with a BAR covering physical (or port) address `base`.
+    fn device_at(&self, base: u64) -> Option<&pci::Device> { self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)) }
 
     // Capability over a platform resource the kernel has validated (PLATFORM_CAP).
     fn platform_cap(&mut self, kind: usize, a: usize, b: usize) -> Result<Capability, usize> {
@@ -723,6 +727,7 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => cpu::halt_all(),
+            SYSCALL_REBOOT => crate::acpi::reboot(),
             _ => Err(ERR_INVALID),
         }
     }
@@ -811,10 +816,15 @@ impl Scheduler {
                     self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask && (request.msg[1] == 0 || d.id == request.msg[1] as u32)).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
-            // Configuration space, read only, of the PCI function one of whose BARs the capability covers.
+            // Configuration space, read only, of the PCI function one of whose BARs the capability covers; with the
+            // platform privilege, of any device by index (msg[0]), without enabling it.
             SYSCALL_DEVICE_CONFIG => {
-                let base = match self.cap(slot, request.arg1) { Some(Capability::Mmio(base, _)) => Some(base as u64), Some(Capability::IoPorts(base, _)) => Some(base as u64), _ => None };
-                let device = base.and_then(|base| self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)));
+                let device = match self.cap(slot, request.arg1) {
+                    Some(Capability::Mmio(base, _)) => self.device_at(base as u64),
+                    Some(Capability::IoPorts(base, _)) => self.device_at(base as u64),
+                    Some(Capability::Platform) => self.devices.get(request.msg[0]),
+                    _ => None,
+                };
                 match device { Some(device) if request.arg2 < 256 => Ok(unsafe { pci::config(device, request.arg2 as u8) } as usize), Some(_) => Err(ERR_INVALID), None => Err(ERR_RIGHTS) }
             }
             SYSCALL_SCHED_SET => match self.find(request.arg1 as u64) {
@@ -969,7 +979,7 @@ impl Scheduler {
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_STAT => {
+            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_REBOOT | SYSCALL_STAT => {
                 let result = self.control(slot, ptr, &request);
                 // KILL of the caller itself or of the task it waits on is handled like an exit.
                 if self.tasks[slot].as_ref().unwrap().state == State::Exited { return self.select(sp, cpu); }

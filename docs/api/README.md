@@ -19,7 +19,7 @@ An application normally uses only `libmind` and the service clients; the raw ABI
 - **Errors** are `result` values `usize::MAX - n` (`ERR_INVALID`, `ERR_NO_SLOT`, `ERR_RIGHTS`, `ERR_NOT_FOUND`, `ERR_PEER`, `ERR_NO_MEMORY`, `ERR_BUSY`, `ERR_LIMIT`, `ERR_TIMEOUT`; everything from `ERR_FIRST` up is an error). `ALLOC` returns 0 on failure.
 - **Capabilities** are named by handles `slot | generation << 8`. Slots 1–15 are fixed by convention (generation 0; 10–12 carry the capabilities a launcher grants on request, 13–15 are reserved); the kernel hands out slots from 16 (`SLOT_DYNAMIC`). A stale handle is rejected. There are no global names: a task can use only what it was granted (Constitution MC-3.3).
 - The framebuffer is described in `BootInfo`: `stride` pixels per line, 4 bytes per pixel, `pixel_format` (`PIXEL_RGB`, `PIXEL_BGR`, `PIXEL_BITMASK` with `pixel_masks`). A task's screen always holds `0x00RRGGBB`; only the compositor writes the framebuffer and converts (`pixel_to_device`).
-- Application slots, filled by the loader: `SLOT_INIT` 1, `SLOT_RTC` 2, `SLOT_VFS` 3, `SLOT_AUDIO` 4, `SLOT_LOADER` 5, `SLOT_TTS` 6. A launcher fills more through a launch session (`idl/loader.wit` 1.1) when the program asks for them with `mind::request!` and the launcher agrees: `SLOT_FILE` 7 (a VFS client for `REQUEST_FILE` / `REQUEST_FILES`), `SLOT_SYSINFO` 10 (`sysmon`), `SLOT_LIFECYCLE` 11 (`init`'s lifecycle requests), `SLOT_LOG` 12 (reading the system log); `SLOT_INIT` 1 may carry an endpoint for a ping/pong pair.
+- Application slots, filled by the loader: `SLOT_INIT` 1, `SLOT_RTC` 2, `SLOT_VFS` 3, `SLOT_AUDIO` 4, `SLOT_LOADER` 5, `SLOT_TTS` 6. A launcher fills more through a launch session (`idl/loader.wit` 1.1) when the program asks for them with `mind::request!` and the launcher agrees: `SLOT_FILE` 7 (a VFS client for `REQUEST_FILE` / `REQUEST_FILES`), `SLOT_SYSINFO` 10 (`sysmon`), `SLOT_LIFECYCLE` 11 (`init`'s lifecycle requests), `SLOT_LOG` 12 (reading the system log); `SLOT_INIT` 1 may carry an endpoint for a ping/pong pair. Slots 13–15 are the shell's further clients for such grants: `SLOT_AUTHORITY` 13 (`sysmon` with `mind::stat::BADGE_AUTHORITY`), `SLOT_KEYBOARD` 14 (`ps2_kbd`), `SLOT_DISPLAY` 15 (`compositor`); 16–17 are the shell's network clients (`SLOT_NET`, `SLOT_SOCKET`), 18–19 are reserved, and the kernel hands out slots from `SLOT_DYNAMIC` 20.
 
 ## System calls
 
@@ -105,7 +105,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 |---|---|---|
 | 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel; `PLATFORM_DEVICE_MSIX` (device, table entry) gives an interrupt line 16–31 whose MSI-X entry the kernel programs [platform privilege] |
 | 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match, `msg[1]` = PCI vendor \| device << 16 (0: any) → device index |
-| 54 | `DEVICE_CONFIG` | `arg1` = MMIO or port capability over a BAR of a PCI function, `arg2` = offset (< 256) → that function's configuration dword (read only; drivers find their capabilities) |
+| 54 | `DEVICE_CONFIG` | `arg1` = MMIO or port capability over a BAR of a PCI function, `arg2` = offset (< 256) → that function's configuration dword (read only; drivers find their capabilities); with the platform privilege as `arg1`, `msg[0]` = device index: any device, without enabling it |
 | 49 | `DEVICE_STATE` | `arg1` = device index, `arg2` = `DEVICE_STOP` / `DEVICE_START` [platform privilege or a BAR capability of the device] |
 
 ### Observation and process control
@@ -123,6 +123,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
 | 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs [process control] |
+| 55 | `REBOOT` | resets the machine: the ACPI FADT reset register, else port 0xCF9, else the 8042 controller, else a triple fault; does not return [process control] |
 
 ## libmind
 

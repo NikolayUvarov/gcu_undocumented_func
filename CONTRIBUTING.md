@@ -29,6 +29,7 @@ A change is ready when the suites it touches pass; a kernel change runs all QEMU
 - **Profile:** a change that alters a statement in `docs/profile` updates it in the same commit.
 - **Issues:** a finished task moves from `issues/` to `issues-done/` with a Resolution section (rules in [issues/README.md](issues/README.md)).
 - **Founding documents** (constitution, RFC, roadmap) exist in English and Russian and carry versions; change both.
+- **Legacy hardware:** code that exists only for a superseded interface is marked `LEGACY:`, isolated so that removing it is a deletion, and listed in [docs/legacy.md](docs/legacy.md); `init` reports at boot which legacy devices it found.
 
 ## Licence of contributions
 

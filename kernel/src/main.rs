@@ -27,6 +27,7 @@ unsafe impl GlobalAlloc for IrqAllocator {
 }
 #[path = "../../common/abi.rs"]
 mod abi;
+mod acpi;
 use abi::BootInfo;
 mod clock;
 mod context;
@@ -118,6 +119,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
     unsafe {
         asm!("cli");
         init_serial();
+        acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");

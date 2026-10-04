@@ -1,6 +1,6 @@
 # 085 — `keymap`: keyboard layout and switch key
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** [151](151-shell-grant-slots-13-15.md) · **Roadmap:** track G, T3
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3
 
 ## Problem
 
@@ -18,4 +18,4 @@ The PS/2 layouts (US, Russian ЙЦУКЕН) and the switch (Ctrl+Shift or Alt+Sh
 
 ## Related
 
-[151](151-shell-grant-slots-13-15.md), [055](../issues-done/055-key-events.done).
+[151](../issues-done/151-shell-grant-slots-13-15.done), [055](../issues-done/055-key-events.done).

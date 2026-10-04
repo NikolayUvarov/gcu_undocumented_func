@@ -49,6 +49,7 @@ mod tests {
             memory_map_len: 0,
             pixel_format: PIXEL_BGR,
             pixel_masks: [0; 3],
+            acpi_rsdp: 0,
         };
         let view = View::new(&info);
         view.clear();

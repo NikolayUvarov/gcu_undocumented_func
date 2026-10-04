@@ -28,7 +28,7 @@ const fn channel(value: u32, mask: u32) -> u32 {
     let scaled = if width >= 8 { value << (width - 8) } else { value >> (8 - width) };
     (scaled << shift) & mask
 }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], }
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -174,17 +174,22 @@ pub const SLOT_SERIAL: usize = 9;
 // Capabilities a launcher grants an application that asks for them (loader launch sessions): its own VFS client for
 // files the user may change (7: applications hold no process control), system information from sysmon (10),
 // lifecycle control, a client of init (11), and the system log, logd (12; services hold their log client there too).
-// Slots 13..15 are reserved for further grants.
+// Slots 13..15: further clients the shell holds and lends (issue 151): the authority view of sysmon (13, badged
+// mind::stat::BADGE_AUTHORITY), the keyboard driver (14) and the compositor (15).
 pub const SLOT_FILE: usize = 7;
 pub const SLOT_SYSINFO: usize = 10;
 pub const SLOT_LIFECYCLE: usize = 11;
 pub const SLOT_LOG: usize = 12;
+pub const SLOT_AUTHORITY: usize = 13;
+pub const SLOT_KEYBOARD: usize = 14;
+pub const SLOT_DISPLAY: usize = 15;
 // The shell's client of the network card driver (idl/net.wit), for the `net` diagnostics.
-pub const SLOT_NET: usize = 13;
+pub const SLOT_NET: usize = 16;
 // The shell's client of the network stack (idl/socket.wit): ip, ping, nslookup, fetch.
-pub const SLOT_SOCKET: usize = 14;
+pub const SLOT_SOCKET: usize = 17;
+// 18..19 are reserved for further fixed grants.
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 16;
+pub const SLOT_DYNAMIC: usize = 20;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots.
@@ -307,7 +312,11 @@ pub const SYSCALL_STAT: usize = 51;
 pub const SYSCALL_SCHED_SET: usize = 52;
 // DEVICE_CONFIG: arg1 = an MMIO or port capability over a BAR of a PCI function, arg2 = offset (< 256) -> the
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
+// With the platform privilege as arg1, msg[0] = device index: any device, without enabling it (init's inventory).
 pub const SYSCALL_DEVICE_CONFIG: usize = 54;
+// REBOOT (process control): stops all CPUs and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
+// else the 8042 controller, else a triple fault. No arguments; it does not return.
+pub const SYSCALL_REBOOT: usize = 55;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
 pub const BAND_KEEP: usize = 0xFF;

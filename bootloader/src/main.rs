@@ -136,11 +136,13 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         (PixelFormat::Bitmask, Some(m)) => (PIXEL_BITMASK, [m.red, m.green, m.blue]),
         _ => (PIXEL_BGR, [0; 3]),
     };
+    // The ACPI 2.0 root pointer (or the 1.0 one), for the kernel's reset register.
+    let acpi_rsdp = system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI2_GUID).or_else(|| system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI_GUID)).map_or(0, |e| e.address as u64);
     let (boot_info, kernel_stack) = {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize; let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24; if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() { let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap(); for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } } }
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
     };
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.

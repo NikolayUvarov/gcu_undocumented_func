@@ -1,6 +1,6 @@
 # 081 — `caps`: capabilities of a task and the derivation tree
 
-**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** [151](151-shell-grant-slots-13-15.md) · **Roadmap:** track G, T3 · **Constitution:** MC-3.4–3.6, MC-10.2
+**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3 · **Constitution:** MC-3.4–3.6, MC-10.2
 
 ## Problem
 
@@ -18,4 +18,4 @@ The plan's `caps` tool ([docs/tools](../docs/tools/README.md) §2.2, §4.7) show
 
 ## Related
 
-[151](151-shell-grant-slots-13-15.md), [080](../issues-done/080-ipc-tool.done).
+[151](../issues-done/151-shell-grant-slots-13-15.done), [080](../issues-done/080-ipc-tool.done).

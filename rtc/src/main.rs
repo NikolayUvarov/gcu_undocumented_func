@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+// LEGACY: the whole driver: the CMOS RTC on ISA ports (docs/legacy.md).
 // Ring 3 CMOS RTC driver: answers CALL with the time since midnight and the date (idl/rtc.wit).
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::Ports;

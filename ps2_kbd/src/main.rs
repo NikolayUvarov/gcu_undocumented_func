@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+// LEGACY: the whole driver: the PS/2 keyboard controller on ISA ports (docs/legacy.md).
 // Ring 3 PS/2 keyboard driver: IRQ1 -> scan codes -> key events (mind::keys: modifiers, US/Russian layout) for the
 // focused task. Ctrl+Z is the attention key; Ctrl+Shift or Alt+Shift switches the layout.
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ};

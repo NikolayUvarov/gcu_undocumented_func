@@ -5,7 +5,7 @@ use mind::gfx::Screen;
 use mind::mem::Pages;
 use mind::tui::{Style, Terminal};
 
-pub const COM1: u16 = 0x3F8;
+pub const COM1: u16 = 0x3F8; // LEGACY: the COM1 UART (docs/legacy.md)
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
 const SCROLLBACK: usize = 400; // lines kept for Shift+PgUp

@@ -1,0 +1,32 @@
+# 151 — Shell grant slots 13–15: authority view, keyboard control, screen capture — done
+
+**Type:** kernel · **Owner:** kernel track (`common/abi.rs`, `init`) · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T3 · **Constitution:** MC-3.3, MC-3.11
+
+## Problem
+
+Three planned tools need a client the shell does not have, in a fixed slot that only the kernel track may name (`common/abi.rs` reserves 13–15):
+
+- `caps` (081) needs a `sysmon` client with an authority badge, separate from the plain `SLOT_SYSINFO` client the shell lends to monitors;
+- `keymap` (085) needs a client of `ps2_kbd`, which has no service endpoint;
+- `screenshot` (086) needs a client of `compositor`, which has no service endpoint either.
+
+## Plan
+
+- `common/abi.rs`: `SLOT_AUTHORITY` 13, `SLOT_KEYBOARD` 14, `SLOT_DISPLAY` 15 (shell grants; the comment on 13–15 updated).
+- `init`: endpoints for `ps2_kbd` and `compositor` (`SLOT_SERVICE` receive children, keepers kept across restarts like the other services); the shell gets a `sysmon` client badged `mind::stat::BADGE_AUTHORITY` (1) in 13, a `ps2_kbd` client in 14 and a `compositor` client in 15.
+- The services keep working while nobody calls them (the tools issues add the request handling); `docs/profile/bootstrap.md` lists the new grants.
+
+## Acceptance criteria
+
+- `stat caps <shell>` shows endpoint capabilities in slots 13–15 with the authority badge on 13; `ps2_kbd` and `compositor` are servers of their endpoints in `endpoints`; all suites pass.
+
+## Related
+
+[081](../issues/081-caps-tool.md), [085](../issues/085-keymap.md), [086](../issues/086-screenshot.md).
+
+## Resolution
+
+- `common/abi.rs`: `SLOT_AUTHORITY` 13, `SLOT_KEYBOARD` 14, `SLOT_DISPLAY` 15; `mind::stat::BADGE_AUTHORITY` = 1. The network track's shell clients moved from 13–14 to `SLOT_NET` 16 and `SLOT_SOCKET` 17, so `SLOT_DYNAMIC` is now 20 (18–19 reserved).
+- `init`: `ps2_kbd` and `compositor` get a server endpoint in `SLOT_SERVICE` (keepers kept across restarts); the shell gets a `sysmon` client with the authority badge in 13, a `ps2_kbd` client in 14 and a `compositor` client in 15. The two services do not receive on it yet (085, 086 add that); a caller should use a timeout until then.
+- The shell now receives 16 grants, the `SPAWN_GRANTS_MAX` limit: a further shell grant needs that limit raised.
+- Test: the `services` suite reads `stat caps` of the shell: slots 13–15 are endpoint capabilities with the authority badge on 13, and their endpoints are served by `sysmon`, `ps2_kbd` and `compositor` (`endpoints`).

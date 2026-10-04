@@ -19,6 +19,8 @@ jobs:
         run: rustup toolchain install && rustc -V
       - name: Build
         run: ./02_build.sh
+      - name: Network driver without legacy support
+        run: cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only
       - name: Clean tree after the build
         run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
       - name: FAT tools for the FAT host test

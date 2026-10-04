@@ -67,6 +67,8 @@ pub fn compositor_pull(slot: usize) -> Result<Frame> {
 
 /// A dword of the PCI configuration space of the function whose BAR capability is `slot` (read only, offset < 256).
 pub fn device_config(slot: usize, offset: usize) -> Result<u32> { check(call(SYSCALL_DEVICE_CONFIG, slot, offset)).map(|v| v as u32) }
+/// The same for device `index`, through the platform privilege in `slot` (init).
+pub fn device_config_at(slot: usize, index: usize, offset: usize) -> Result<u32> { check(syscall(SYSCALL_DEVICE_CONFIG, slot, offset, [index, 0, 0, 0]).result).map(|v| v as u32) }
 
 /// Device registers (MMIO), mapped uncached; accessed by offset.
 pub struct Mmio { map: crate::mem::Mapping }

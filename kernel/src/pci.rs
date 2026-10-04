@@ -1,6 +1,7 @@
 use crate::{inl, outl};
 
 // Minimal PCI configuration access (mechanism #1) for handing devices to ring 3 drivers.
+// LEGACY: ports 0xCF8/0xCFC; ECAM (ACPI MCFG) replaces them (docs/legacy.md).
 unsafe fn read(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     outl(0xCF8, 0x8000_0000 | (bus as u32) << 16 | (device as u32) << 11 | (function as u32) << 8 | (offset as u32 & 0xFC));
     inl(0xCFC)

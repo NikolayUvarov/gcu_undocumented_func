@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+// LEGACY: AC97 is the only audio device driven so far (docs/legacy.md).
 // audio_gw: ring 3 audio gateway. AC97 driver: playback DMA ring of 32 buffers, capture ring of 16 (microphone);
 // interrupts arrive as IPC messages on the service endpoint, client PCM comes through their shared buffers.
 // Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to `play` (idl/audio.wit).

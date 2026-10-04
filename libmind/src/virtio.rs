@@ -23,8 +23,9 @@ pub struct Layout { pub common: Region, pub notify: Region, pub isr: Region, pub
 
 impl Layout {
     /// Reads the vendor capabilities through `bar_slot`, any BAR capability of the device.
-    pub fn read(bar_slot: usize) -> Option<Self> {
-        let config = |offset: usize| device_config(bar_slot, offset).ok();
+    pub fn read(bar_slot: usize) -> Option<Self> { Self::read_with(|offset| device_config(bar_slot, offset).ok()) }
+    /// Reads them through any reader of the device's configuration dwords.
+    pub fn read_with(config: impl Fn(usize) -> Option<u32>) -> Option<Self> {
         if config(0x04)? >> 16 & 0x10 == 0 { return None; }
         let (mut layout, mut found, mut at) = (Self::default(), 0u8, (config(0x34)? & 0xFC) as usize);
         for _ in 0..48 {

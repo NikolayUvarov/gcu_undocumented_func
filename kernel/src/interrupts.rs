@@ -103,6 +103,7 @@ pub unsafe fn init() {
     IDT[0x80].type_attr = 0xee;
     load();
 
+    // LEGACY: the 8259 PIC (device lines 1..15) and the PIT timer below (docs/legacy.md).
     // Timer, keyboard and the IRQ2 cascade are unmasked; drivers unmask the other lines.
     for (port, value) in [
         (0x20, 0x11),

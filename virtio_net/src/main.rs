@@ -1,28 +1,26 @@
 #![no_std]
 #![no_main]
 // Ring 3 VirtIO network driver: the modern interface (configuration structures in a memory BAR, MSI-X, or the legacy
-// line when MSI-X cannot be used) or the legacy one (registers in I/O BAR0, legacy line); a receive and a transmit
+// line when MSI-X cannot be used) or, with the `legacy` feature, the legacy one (legacy.rs); a receive and a transmit
 // virtqueue and frame buffers in its own DMA region. Serves idl/net.wit; holds nothing but its device (Appendix B.6:
 // the driver neither parses nor routes frames).
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::{BootInfo, CAP_KIND_IRQ, CAP_KIND_MMIO, CAP_KIND_PORTS, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
-use mind::dev::{cap_info, Dma, Irq, Mmio, Ports};
+use mind::dev::{cap_info, Dma, Irq, Mmio};
 use mind::virtio::{Layout, Modern, NO_VECTOR};
+
+// LEGACY: the legacy VirtIO interface (cargo feature `legacy`, docs/legacy.md).
+#[cfg(feature = "legacy")]
+mod legacy;
 use mind::idl::{net, wire};
 use mind::ipc::Endpoint;
 use mind::mem::Pages;
 
-// Legacy register offsets from BAR0; device-specific configuration follows at 0x14 (no MSI-X).
-const FEATURES: u16 = 0x00; const GUEST_FEATURES: u16 = 0x04; const QUEUE_PFN: u16 = 0x08; const QUEUE_SIZE: u16 = 0x0C;
-const QUEUE_SELECT: u16 = 0x0E; const QUEUE_NOTIFY: u16 = 0x10; const STATUS: u16 = 0x12; const ISR: u16 = 0x13;
-const CONFIG_MAC: u16 = 0x14; const CONFIG_STATUS: u16 = 0x1A;
-const STATUS_ACK: u8 = 1; const STATUS_DRIVER: u8 = 2; const STATUS_DRIVER_OK: u8 = 4; const STATUS_FAILED: u8 = 128;
 const F_MAC: u32 = 1 << 5; const F_STATUS: u32 = 1 << 16;
 const DESC_WRITE: u16 = 2;
 const RX: usize = 0; const TX: usize = 1;
 // DMA layout: the two virtqueues in the first 64 KiB (up to 1024 entries each), then receive and transmit buffers.
 const QUEUES_BYTES: usize = 64 * 1024; const BUFFER: usize = 2048; const RX_BUFFERS: usize = 32; const TX_BUFFERS: usize = 16;
-const HEADER_LEGACY: usize = 10; // struct virtio_net_hdr without mergeable buffers
 const HEADER_MODERN: usize = 12; // VERSION_1 always carries num_buffers
 const QUEUE_MAX: u16 = 256;
 const FRAME_MAX: usize = 1514;
@@ -45,7 +43,11 @@ impl Queue {
 }
 
 // How the device is reached: legacy I/O registers, or the modern structures (notification offsets per queue).
-enum Transport { Legacy { ports: Ports, io: u16 }, Modern { modern: Modern, notify: [usize; 2], msix: bool } }
+enum Transport {
+    #[cfg(feature = "legacy")]
+    Legacy(legacy::Legacy), // LEGACY:
+    Modern { modern: Modern, notify: [usize; 2], msix: bool },
+}
 
 struct Device {
     transport: Transport, header: usize, dma: Dma, memory: *mut u8, queues: [Queue; 2], mac: u64, features: u32,
@@ -67,44 +69,28 @@ impl Device {
         let memory = dma.bytes(0, 1).as_mut_ptr();
         let (transport, queues, mac, features) = match cap_info(SLOT_DEV0).0 {
             CAP_KIND_MMIO => Self::modern(&dma)?,
-            CAP_KIND_PORTS => Self::legacy(&dma)?,
+            #[cfg(feature = "legacy")]
+            CAP_KIND_PORTS => { let (l, queues, mac, features) = legacy::Legacy::setup(&dma)?; (Transport::Legacy(l), queues, mac, features) } // LEGACY:
+            #[cfg(not(feature = "legacy"))]
+            CAP_KIND_PORTS => { mind::println!("[VIRTIO_NET] LEGACY INTERFACE ONLY: NOT SUPPORTED IN THIS BUILD"); return None; }
             _ => return None,
         };
-        let header = if matches!(transport, Transport::Modern { .. }) { HEADER_MODERN } else { HEADER_LEGACY };
+        let header = match &transport {
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(_) => legacy::HEADER,
+            Transport::Modern { .. } => HEADER_MODERN,
+        };
         let pending = Pages::new(PENDING * FRAME_MAX)?;
         let device = Self { transport, header, dma, memory, queues, mac, features, tx_free: [true; TX_BUFFERS], pending,
                             lengths: [0; PENDING], head: 0, count: 0, counters: net::Counters::default() };
         for id in 0..RX_BUFFERS { device.offer_rx(id as u16); }
         match &device.transport {
-            Transport::Legacy { ports, io } => ports.out8(io + STATUS, STATUS_ACK | STATUS_DRIVER | STATUS_DRIVER_OK),
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(l) => l.ready(),
             Transport::Modern { modern, .. } => modern.ready(),
         }
         device.notify(RX);
         Some(device)
-    }
-
-    // Legacy interface: reset, features, queues at page frame numbers (the size is the device's).
-    fn legacy(dma: &Dma) -> Option<(Transport, [Queue; 2], u64, u32)> {
-        let ports = Ports(SLOT_DEV0);
-        let (io, count) = ports.range()?;
-        if count < 0x20 { return None; }
-        ports.out8(io + STATUS, 0);
-        ports.out8(io + STATUS, STATUS_ACK);
-        ports.out8(io + STATUS, STATUS_ACK | STATUS_DRIVER);
-        let features = ports.in32(io + FEATURES) & (F_MAC | F_STATUS);
-        ports.out32(io + GUEST_FEATURES, features);
-        let mut queues = [Queue::new(0, 0), Queue::new(0, 0)];
-        let mut base = 0;
-        for (index, queue) in queues.iter_mut().enumerate() {
-            ports.out16(io + QUEUE_SELECT, index as u16);
-            let size = ports.in16(io + QUEUE_SIZE) as usize;
-            if size < RX_BUFFERS || base + Queue::bytes(size) > QUEUES_BYTES { ports.out8(io + STATUS, STATUS_FAILED); return None; }
-            *queue = Queue::new(size, base);
-            ports.out32(io + QUEUE_PFN, (dma.physical(base) >> 12) as u32);
-            base += Queue::bytes(size);
-        }
-        let mac = if features & F_MAC != 0 { (0..6).fold(0u64, |mac, i| mac << 8 | ports.in8(io + CONFIG_MAC + i) as u64) } else { 0 };
-        Some((Transport::Legacy { ports, io }, queues, mac, features))
     }
 
     // Modern interface: VERSION_1, queues of our size at three addresses each, MSI-X entry 0 for both queues and
@@ -149,13 +135,29 @@ impl Device {
     }
     fn offer_rx(&self, id: u16) { self.offer(RX, id, self.rx_buffer(id as usize), BUFFER, DESC_WRITE); }
     fn notify(&self, q: usize) {
-        match &self.transport { Transport::Legacy { ports, io } => ports.out16(io + QUEUE_NOTIFY, q as u16), Transport::Modern { modern, notify, .. } => modern.notify(notify[q], q as u16) }
+        match &self.transport {
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(l) => l.notify(q),
+            Transport::Modern { modern, notify, .. } => modern.notify(notify[q], q as u16),
+        }
     }
     // Acknowledges a legacy-line interrupt (reading the ISR); MSI-X messages need no acknowledgement.
     fn acknowledge(&self) {
-        match &self.transport { Transport::Legacy { ports, io } => { let _ = ports.in8(io + ISR); } Transport::Modern { modern, msix: false, .. } => { let _ = modern.isr(); } _ => {} }
+        match &self.transport {
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(l) => l.acknowledge(),
+            Transport::Modern { modern, msix: false, .. } => { let _ = modern.isr(); }
+            _ => {}
+        }
     }
-    fn mode(&self) -> &'static str { match &self.transport { Transport::Legacy { .. } => "LEGACY INTX", Transport::Modern { msix: true, .. } => "MODERN MSI-X", Transport::Modern { .. } => "MODERN INTX" } }
+    fn mode(&self) -> &'static str {
+        match &self.transport {
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(_) => "LEGACY INTX",
+            Transport::Modern { msix: true, .. } => "MODERN MSI-X",
+            Transport::Modern { .. } => "MODERN INTX",
+        }
+    }
 
     // Takes finished receive buffers into the pending frames and gives them back to the device; frees sent buffers.
     fn service(&mut self) {
@@ -212,7 +214,11 @@ impl Device {
     }
 
     fn link(&self) -> bool {
-        self.features & F_STATUS == 0 || match &self.transport { Transport::Legacy { ports, io } => ports.in16(io + CONFIG_STATUS) & 1 != 0, Transport::Modern { modern, .. } => modern.device16(6) & 1 != 0 }
+        self.features & F_STATUS == 0 || match &self.transport {
+            #[cfg(feature = "legacy")]
+            Transport::Legacy(l) => l.link(),
+            Transport::Modern { modern, .. } => modern.device16(6) & 1 != 0,
+        }
     }
     fn info(&self) -> net::Info { net::Info { mac: self.mac, mtu: (FRAME_MAX - 14) as u16, link: self.link() } }
 }

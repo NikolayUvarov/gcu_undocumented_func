@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+// LEGACY: the whole driver: primary IDE channel by PIO on ISA ports (docs/legacy.md).
 // Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server: READ SECTORS,
 // WRITE SECTORS and FLUSH CACHE (writes only for clients with the write badge, see mind::block_protocol).
 use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
