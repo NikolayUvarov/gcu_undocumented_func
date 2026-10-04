@@ -9,6 +9,7 @@ pub mod loader;
 pub mod log;
 pub mod net;
 pub mod rtc;
+pub mod socket;
 pub mod sysinfo;
 pub mod tts;
 pub mod vfs;

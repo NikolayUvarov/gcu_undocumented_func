@@ -92,6 +92,7 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt) | 1.0.0 |
+| [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
 | [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result) | 2.2.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`; 1.1 adds the lifecycle requests of `svc` and `top`) | 1.1.0 |

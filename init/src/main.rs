@@ -20,7 +20,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "network card ports and IRQ; 160 KiB DMA", "observe privilege", "screen; process control; input; COM1"];
+    "an audio client", "network card ports and IRQ; 160 KiB DMA", "a client of the network card driver", "observe privilege", "screen; process control; input; COM1"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -178,6 +178,8 @@ impl Init {
                 }
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
+            // The stack holds only a client of the card driver (B.6): frames, no device.
+            "netstack" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL); self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; }
             "virtio_net" => {
                 // VirtIO network card, legacy interface (vendor 1AF4, device 1000, class 02:00): ports in BAR0 and the IRQ line.
                 let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0)?; self.devices[index] = Some(device);
@@ -199,6 +201,7 @@ impl Init {
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
+                self.lend(&mut grants, SLOT_SOCKET, "netstack")?;
             }
             _ => return Err(Error::NotFound),
         }

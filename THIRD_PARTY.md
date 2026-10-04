@@ -18,6 +18,9 @@ Everything else was written for this project, including the 8×8 bitmap font in 
 |---|---|---|
 | `uefi` 0.27, `uefi-raw`, `uefi-macros` | `bootloader` | MPL-2.0 |
 | `linked_list_allocator` 0.10, `spinning_top`, `lock_api`, `scopeguard` | `kernel` | MIT OR Apache-2.0 |
+| `smoltcp` 0.14 (TCP/IP), `managed` 0.8 | `netstack` | 0BSD |
+| `heapless`, `hash32`, `stable_deref_trait`, `cfg-if`, `bitflags` 1.3 | `netstack` (through `smoltcp`) | MIT OR Apache-2.0 |
+| `byteorder` | `netstack` (through `smoltcp`) | Unlicense OR MIT |
 | `ucs2` 0.3 | `bootloader` (through `uefi`) | MPL-2.0 |
 | `log`, `bitflags`, `uguid`, `bit_field`, `ptr_meta` (MIT only) | `bootloader` (through `uefi`) | MIT OR Apache-2.0 |
 | `syn`, `quote`, `proc-macro2`, `unicode-ident` (also Unicode-3.0) | build time only (procedural macros of `uefi`) | MIT OR Apache-2.0 |

@@ -62,3 +62,109 @@ fn arp(out: &mut impl Write, endpoint: Endpoint, own: [u8; 6], target: [u8; 4]) 
     }
     let _ = writeln!(out, "ARP {}.{}.{}.{}: NO ANSWER", target[0], target[1], target[2], target[3]);
 }
+
+// Commands over the network stack (idl/socket.wit): ip, ping, nslookup, fetch.
+use mind::abi::SLOT_SOCKET;
+use mind::idl::socket::{self, Error};
+
+const STACK: Endpoint = Endpoint(SLOT_SOCKET);
+
+fn dotted(out: &mut impl Write, address: u32) { let b = address.to_be_bytes(); let _ = write!(out, "{}.{}.{}.{}", b[0], b[1], b[2], b[3]); }
+fn failed(out: &mut impl Write, what: &str, error: Error) { let _ = writeln!(out, "{}: {:?}", what, error); }
+fn stack_failed(out: &mut impl Write) { let _ = writeln!(out, "NET: NO NETWORK STACK"); }
+
+// An address from `a.b.c.d` or a name looked up through the configured DNS server.
+fn address(out: &mut impl Write, host: &str) -> Option<u32> {
+    if let Some(ip) = ipv4(host) { return Some(u32::from_be_bytes(ip)); }
+    match socket::resolve(STACK, host, 0, 0, 3000) {
+        Ok(Ok(address)) => Some(address),
+        Ok(Err(error)) => { failed(out, host, error); None }
+        Err(_) => { stack_failed(out); None }
+    }
+}
+
+pub fn ip(out: &mut impl Write) {
+    match socket::config(STACK) {
+        Ok(Ok(c)) => {
+            let _ = write!(out, "IP "); dotted(out, c.address); let _ = write!(out, "/{} GATEWAY ", c.prefix); dotted(out, c.gateway);
+            let _ = write!(out, " DNS "); dotted(out, c.dns); let _ = writeln!(out, " ({})", if c.dhcp { "DHCP" } else { "STATIC" });
+        }
+        Ok(Err(error)) => failed(out, "IP", error),
+        Err(_) => stack_failed(out),
+    }
+}
+
+pub fn ping(out: &mut impl Write, args: &[u8]) {
+    let Some(host) = core::str::from_utf8(args).ok().and_then(|t| t.split_whitespace().next()) else { let _ = writeln!(out, "PING <HOST>"); return };
+    let Some(target) = address(out, host) else { return };
+    let mut received = 0;
+    for _ in 0..3 {
+        match socket::ping(STACK, target, 1000) {
+            Ok(Ok(us)) => { received += 1; let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us); }
+            Ok(Err(error)) => failed(out, "PING", error),
+            Err(_) => { stack_failed(out); return; }
+        }
+    }
+    let _ = writeln!(out, "PING: 3 SENT, {} RECEIVED", received);
+}
+
+pub fn nslookup(out: &mut impl Write, args: &[u8]) {
+    let text = core::str::from_utf8(args).unwrap_or("");
+    let mut words = text.split_whitespace();
+    let Some(name) = words.next() else { let _ = writeln!(out, "NSLOOKUP <NAME> [SERVER[:PORT]]"); return };
+    let (server, port) = match words.next() {
+        None => (0, 0),
+        Some(server) => {
+            let (host, port) = server.split_once(':').unwrap_or((server, "53"));
+            match (ipv4(host), port.parse::<u16>()) { (Some(ip), Ok(port)) => (u32::from_be_bytes(ip), port), _ => { let _ = writeln!(out, "NSLOOKUP: BAD SERVER"); return } }
+        }
+    };
+    match socket::resolve(STACK, name, server, port, 3000) {
+        Ok(Ok(address)) => { let _ = write!(out, "NAME {} ADDRESS ", name); dotted(out, address); let _ = writeln!(out); }
+        Ok(Err(error)) => failed(out, name, error),
+        Err(_) => stack_failed(out),
+    }
+}
+
+// fetch <host>[:port] [path]: HTTP/1.0 GET; prints the response (up to 2 KiB) and its size.
+pub fn fetch(out: &mut impl Write, args: &[u8]) {
+    let text = core::str::from_utf8(args).unwrap_or("");
+    let mut words = text.split_whitespace();
+    let Some(target) = words.next() else { let _ = writeln!(out, "FETCH <HOST>[:PORT] [PATH]"); return };
+    let path = words.next().unwrap_or("/");
+    let (host, port) = target.split_once(':').unwrap_or((target, "80"));
+    let Ok(port) = port.parse::<u16>() else { let _ = writeln!(out, "FETCH: BAD PORT"); return };
+    let Some(address) = address(out, host) else { return };
+    let handle = match socket::tcp_connect(STACK, address, port, 5000) {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(error)) => { failed(out, "FETCH", error); return }
+        Err(_) => { stack_failed(out); return }
+    };
+    let mut request = mind::util::FixedBuf::<512>::new();
+    let _ = write!(request, "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: mind-core\r\n\r\n", path, host);
+    let mut sent = 0;
+    while sent < request.as_bytes().len() {
+        match socket::tcp_send(STACK, handle, &request.as_bytes()[sent..]) {
+            Ok(Ok(n)) => { sent += n as usize; if n == 0 { mind::time::sleep(10); } }
+            _ => { let _ = writeln!(out, "FETCH: SEND FAILED"); let _ = socket::close(STACK, handle); return }
+        }
+    }
+    let (mut total, mut shown) = (0usize, 0usize);
+    let mut buffer = [0u8; 4096];
+    let deadline = mind::time::uptime_ms() + 10_000;
+    loop {
+        match socket::tcp_receive(STACK, handle, 4096, &mut buffer) {
+            Ok(Ok(n)) => {
+                let show = n.min(2048 - shown);
+                for &byte in &buffer[..show] { let _ = out.write_char(if byte == b'\n' || (0x20..0x7F).contains(&byte) { byte as char } else if byte == b'\r' { continue } else { '.' }); }
+                shown += show; total += n;
+            }
+            Ok(Err(Error::Again)) if mind::time::uptime_ms() < deadline => { mind::time::sleep(10); }
+            Ok(Err(Error::Closed)) => break,
+            Ok(Err(error)) => { failed(out, "FETCH", error); break }
+            Err(_) => { stack_failed(out); break }
+        }
+    }
+    let _ = socket::close(STACK, handle);
+    let _ = writeln!(out, "\nFETCH: {} BYTES", total);
+}

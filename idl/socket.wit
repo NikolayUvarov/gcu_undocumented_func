@@ -1,0 +1,37 @@
+/// Network stack (`netstack`): IPv4 over the network card driver, with DHCP, ICMP echo, a DNS resolver, UDP and TCP.
+/// Addresses are IPv4 in a u32 (a.b.c.d is a << 24 | b << 16 | c << 8 | d). A socket handle belongs to the client that
+/// opened it (PID and endpoint badge); a client has at most 8 sockets, the stack 32, each with bounded buffers.
+/// Calls that wait for the network (`ping`, `resolve`, `tcp-connect`) are answered later, when the answer arrives or
+/// the timeout passes; the other calls never block (error `again`: try later).
+package mind:socket@1.0.0;
+
+interface socket {
+    /// Why a request failed.
+    enum error { no-network, no-socket, closed, again, refused, timeout, invalid, limit, unreachable, not-found }
+
+    /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
+    /// configured it (or the static fallback did).
+    record config { address: u32, prefix: u8, gateway: u32, dns: u32, mac: u64, dhcp: bool }
+
+    /// A UDP datagram and where it came from.
+    record datagram { address: u32, port: u16, data: list<u8, 1472> }
+
+    config: func() -> result<config, error>;
+    /// ICMP echo to `address`; returns the round trip in microseconds.
+    ping: func(address: u32, timeout-ms: u32) -> result<u32, error>;
+    /// IPv4 address of `name` from DNS server `server` (0: the configured one) on `port` (0: 53).
+    resolve: func(name: string<253>, server: u32, port: u16, timeout-ms: u32) -> result<u32, error>;
+    /// A UDP socket on local `port` (0: any free port).
+    udp-open: func(port: u16) -> result<u32, error>;
+    udp-send: func(socket: u32, address: u32, port: u16, data: bytes<1472>) -> result<_, error>;
+    /// The oldest datagram received on the socket. Error again: none is waiting.
+    udp-receive: func(socket: u32) -> result<datagram, error>;
+    /// A TCP connection to `address` and `port`, answered once it is established (or refused, or timed out).
+    tcp-connect: func(address: u32, port: u16, timeout-ms: u32) -> result<u32, error>;
+    /// Queues data; returns how many bytes were taken (0 with a full send buffer).
+    tcp-send: func(socket: u32, data: bytes<4096>) -> result<u32, error>;
+    /// Up to `length` received bytes. Error again: nothing yet; closed: the peer closed and everything was read.
+    tcp-receive: func(socket: u32, length: u32) -> result<bytes<4096>, error>;
+    /// Closes a socket (TCP: after the queued data is sent) and frees its handle.
+    close: func(socket: u32) -> result<_, error>;
+}
