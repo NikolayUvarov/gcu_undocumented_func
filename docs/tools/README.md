@@ -240,7 +240,7 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 
 Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab completion of program names (loader `LIST`) and paths; lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
 
-### 4.9 `wm` — window manager (planned, issues 088 and 157)
+### 4.9 `wm` — window manager (planned, issues 088 and 157; the broker and the mouse are done)
 
 An application, not a service.
 - **Windows:** on the cell grid of its own screen, with text frames and titles. They are moved and resized with the keyboard and, with the PS/2 mouse (issue 156), by dragging. Windows snap to the screen's edges (halves) and corners (quarters).

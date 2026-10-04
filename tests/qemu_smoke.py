@@ -26,7 +26,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -437,6 +437,18 @@ def keys_suite(vm):
             at += 1
         assert at < len(got), (line, got)
         at += 1
+    # The PS/2 mouse (issue 156): movement, a button, the wheel reach the focused program that asked for them.
+    start = len(vm.log)
+    for command in ("mouse_move 10 5", "mouse_button 1", "mouse_button 0", "mouse_move 0 0 1"):
+        vm.hmp(command)
+        time.sleep(.1)
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    got = re.findall(r"\[KEYS\] (pointer [^\r\n]*)", vm.log[start:])
+    assert "pointer buttons=0 dx=10 dy=5 wheel=0" in got, got
+    assert any(line.startswith("pointer buttons=1 ") for line in got), got
+    assert any(line.endswith("wheel=1") or line.endswith("wheel=-1") for line in got), got
     vm.output = ""
     # The text UI (mind::tui) on the real screen: frame, title, the latest event, the key bar.
     screen = screen_text(vm)
@@ -448,7 +460,8 @@ def keys_suite(vm):
     vm.send_bytes(b"\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
-    require(vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN"), "[KBD] LAYOUT RU")
+    log = vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN")
+    require(log, "[KBD] LAYOUT RU"); require(log, "[KBD] MOUSE ON THE AUXILIARY PORT WITH A WHEEL")
     assert task_rows(vm) == {}
     assert heap_used(vm) == baseline
     # keymap (issue 085): the layout and its switch through the shell's keyboard client (idl/keyboard.wit).
@@ -456,8 +469,12 @@ def keys_suite(vm):
     require(vm.command("keymap ru"), "LAYOUT: RU  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
     require(vm.command("keymap --switch caps"), "LAYOUT: RU  SWITCH: CAPS LOCK")
     require(vm.command("keymap --switch sideways"), "USAGE: KEYMAP")
+    # Pointer events while the shell has the focus (it did not ask for them) are dropped, not kept for the next program.
+    vm.hmp("mouse_move 7 7"); vm.serial(); time.sleep(.2)
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
+    time.sleep(.3); vm.collect()
+    assert "pointer" not in vm.log[vm.log.rindex("[KEYS] READY"):], vm.log[-500:]
     start = len(vm.log)
     # Russian at once; Ctrl+Shift no longer switches; Caps Lock switches (and locks no capitals).
     for key in ("q", "ctrl-shift", "q", "caps_lock", "q"):
@@ -2903,6 +2920,57 @@ def netbench_suite(args, disk):
           "upload, UDP round trips, CPU time of netstack and the drivers, offload off and on", flush=True)
 
 
+def windows_suite(vm):
+    # Window broker (issue 157): windows outlive their manager; a new manager gets them back where they were; one
+    # manager at a time; close all ends the programs; a plain client cannot act as manager or read others' windows.
+    pids = [int(re.search(r"PID=(\d+) NAME=wintest", vm.command(f"run wintest show {title} 120 &"))[1]) for title in ("ALPHA", "BETA")]
+    time.sleep(1)
+    first = vm.command("winmgr manage 0")
+    for title in ("ALPHA", "BETA"):
+        assert re.search(fr'WINDOW \d+ "{title}" Text 24X2 PLACE 0,0 ROW "{title} TICK \d+"', first), first
+    require(vm.command("dmesg -s windows"), "MANAGER PID")
+    time.sleep(1.2)  # the broker sees the manager has ended
+    require(vm.command("dmesg -s windows"), "ENDED: 2 WINDOWS KEPT")
+    for pid in pids:
+        log = vm.command(f"logs {pid}")
+        for line in ("STATE SHOWN", "EVENT CHAR k", "STATE HIDDEN"):
+            require(log, line)
+    ticks = [int(re.findall(r"TICK (\d+)", vm.command("winmgr manage 0"))[-1])]
+    second = vm.command("winmgr manage 0")
+    assert re.search(r'WINDOW (\d+) "ALPHA" Text 24X2 PLACE (\d+),(\d+)', second), second
+    window, x, y = map(int, re.search(r'WINDOW (\d+) "ALPHA" Text 24X2 PLACE (\d+),(\d+)', second).groups())
+    assert (x, y) == (2 * window, window), second  # the place the previous manager saved
+    assert int(re.findall(r"TICK (\d+)", second)[-1]) > ticks[0], second  # the programs kept drawing
+    # One manager at a time; a plain client is neither manager nor reader of other windows.
+    holder = int(re.search(r"PID=(\d+) NAME=winmgr", vm.command("run winmgr manage 5 &"))[1])
+    time.sleep(1)
+    require(vm.command("winmgr second"), "SECOND MANAGER: Ok(Err(Busy))")
+    intruder = vm.command("wintest intrude")
+    require(intruder, "INTRUDER ATTACH: Ok(Err(Denied))")
+    require(intruder, "INTRUDER LIST: Ok(Err(Denied))")
+    assert "Ok(Ok(" not in intruder.split("INTRUDER SURFACE")[1], intruder
+    for _ in range(40):
+        if "MANAGER LEAVES" in vm.command(f"logs {holder}"):
+            break
+        time.sleep(.25)
+    time.sleep(1.2)
+    # Close all: every program is asked to end and its window goes.
+    require(vm.command("winmgr closeall"), "CLOSE ALL: Ok(Ok(2))")
+    seen = ""  # `logs` drains, and an ended program's buffer goes with it: keep what each call returned
+    for _ in range(40):
+        seen += "".join(vm.command(f"logs {pid}") for pid in pids)
+        if "wintest" not in vm.command("ps"):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(seen)
+    require(seen, "CLOSED AFTER")
+    time.sleep(1.2)
+    require(vm.command("dmesg -s windows"), "ENDED WITH PID")
+    print("PASS: window broker: windows outlive their manager (hidden, still drawn), a new manager gets them at their "
+          "saved places, one manager at a time, plain clients refused, close all ends the programs", flush=True)
+
+
 def display_suite(args, disk):
     # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
@@ -2980,13 +3048,13 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3070,7 +3138,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

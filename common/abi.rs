@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 20;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 21;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
@@ -57,6 +57,9 @@ pub const SYSCALL_INPUT_EVENT: usize = 20;
 // READ_INPUT: next input event word of the calling (focused) task, 0 if none. READ_KEY returns only the legacy byte
 // of the next event that has one.
 pub const SYSCALL_READ_INPUT: usize = 50;
+// INPUT_POINTER: arg1 = 1 to receive pointer events (KEY_POINTER), 0 to stop; for the calling task only. Without it
+// the kernel drops pointer events instead of queueing them (issue 156).
+pub const SYSCALL_INPUT_POINTER: usize = 56;
 pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 pub const SYSCALL_IPC_CALL: usize = 22;
 pub const SYSCALL_IPC_REPLY: usize = 23;
@@ -196,8 +199,14 @@ pub const SLOT_NETWORK: usize = 18;
 pub const SLOT_NETPOLICY: usize = 19;
 // The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls.
 pub const SLOT_TLS: usize = 20;
+// The shell's clients of the window broker (idl/window.wit, issue 157): a program's (lent for REQUEST_WINDOW) and the
+// manager's, with mind::window::BADGE_MANAGER (lent for REQUEST_WINDOW_MANAGER). Both go to the program's SLOT_WINDOW.
+pub const SLOT_WINDOWS: usize = 21;
+pub const SLOT_WINDOW_MANAGER: usize = 22;
+// In an application: its client of the window broker (8 is the input privilege only in the shell).
+pub const SLOT_WINDOW: usize = 8;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 21;
+pub const SLOT_DYNAMIC: usize = 23;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots.
@@ -286,6 +295,20 @@ pub const KEY_HOME: u16 = 10; pub const KEY_END: u16 = 11; pub const KEY_PAGE_UP
 pub const KEY_INSERT: u16 = 14; pub const KEY_DELETE: u16 = 15;
 pub const KEY_F1: u16 = 16; // F1..F12 = 16..27
 pub const KEY_SHIFT: u16 = 28; pub const KEY_CTRL: u16 = 29; pub const KEY_ALT: u16 = 30; pub const KEY_CAPS_LOCK: u16 = 31;
+// A pointer event (issue 156): the modifier byte holds the buttons (POINTER_*), the character field the movement:
+// bits 0-8 dx, 9-17 dy (both signed, dy grows downwards), 18-21 the wheel (signed, positive: towards the user).
+pub const KEY_POINTER: u16 = 32;
+pub const POINTER_LEFT: u8 = 1; pub const POINTER_RIGHT: u8 = 2; pub const POINTER_MIDDLE: u8 = 4;
+pub fn pointer_event(buttons: u8, dx: i32, dy: i32, wheel: i32) -> usize {
+    let field = (dx.clamp(-256, 255) as u32 & 0x1FF) | (dy.clamp(-256, 255) as u32 & 0x1FF) << 9 | (wheel.clamp(-8, 7) as u32 & 0xF) << 18;
+    input_event(0, KEY_POINTER, buttons, true, field)
+}
+/// (buttons, dx, dy, wheel) of a pointer event.
+pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
+    let field = event_char(event);
+    let signed = |value: u32, bits: u32| ((value << (32 - bits)) as i32) >> (32 - bits);
+    (event_mods(event), signed(field & 0x1FF, 9), signed(field >> 9 & 0x1FF, 9), signed(field >> 18 & 0xF, 4))
+}
 pub const MOD_SHIFT: u8 = 1; pub const MOD_CTRL: u8 = 2; pub const MOD_ALT: u8 = 4; pub const MOD_CAPS: u8 = 8;
 pub const INPUT_QUEUE: usize = 64;
 pub const fn input_event(byte: u8, key: u16, mods: u8, pressed: bool, ch: u32) -> usize {

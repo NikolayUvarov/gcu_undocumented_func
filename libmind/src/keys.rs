@@ -22,10 +22,10 @@ pub const KEY_F12: u16 = KEY_F1 + 11;
 pub const fn is_modifier(key: u16) -> bool { matches!(key, KEY_SHIFT | KEY_CTRL | KEY_ALT | KEY_CAPS_LOCK) }
 
 impl Key {
-    /// The key press an event word describes; None for a release, a modifier going down or up, or an event that
+    /// The key press an event word describes; None for a release, a modifier going down or up, a pointer event, or an event that
     /// carries only a legacy byte.
     pub fn from_event(word: usize) -> Option<Self> {
-        (event_pressed(word) && event_key(word) != 0 && !is_modifier(event_key(word))).then_some(Self(word))
+        (event_pressed(word) && event_key(word) != 0 && event_key(word) != KEY_POINTER && !is_modifier(event_key(word))).then_some(Self(word))
     }
     pub fn code(self) -> Code {
         match event_key(self.0) {

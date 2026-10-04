@@ -157,6 +157,9 @@ impl Shell {
         // Requests `needs` has no field for (loader.wit 1.2): the network (issue 102), the authority client (issue 081).
         let requests = loader::inspect_requests(Endpoint::LOADER, name)?.map_err(failed)?;
         let authority = requests & mind::process::REQUEST_AUTHORITY != 0;
+        // A window manager gets the window broker's manager client, a program in a window a plain client (issue 157).
+        let window_manager = requests & mind::process::REQUEST_WINDOW_MANAGER != 0;
+        let window = requests & mind::process::REQUEST_WINDOW != 0 && !window_manager;
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -170,7 +173,7 @@ impl Shell {
         }
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
-                      (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)];
+                      (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now

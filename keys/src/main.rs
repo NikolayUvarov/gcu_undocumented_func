@@ -1,10 +1,11 @@
 #![no_std]
 #![no_main]
-// keys: shows every key event the program receives (key code, modifiers, character), like showkey. Esc exits.
+// keys: shows every key event the program receives (key code, modifiers, character), like showkey, and pointer
+// events (buttons, movement, wheel; issue 156). Esc exits.
 use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
-use mind::input::{Code, Key};
+use mind::input::{Code, Input, Key};
 use mind::tui::{Line, Rect, Terminal, DARK};
 use mind::util::FixedBuf;
 
@@ -53,9 +54,22 @@ fn main(info: &'static BootInfo) {
     let mut term = Screen::new(info).and_then(Terminal::new);
     let mut lines = Lines { text: core::array::from_fn(|_| FixedBuf::new()), count: 0 };
     if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
+    mind::input::pointer(true); // mouse events too (issue 156)
     mind::println!("[KEYS] READY");
     loop {
-        let Some(key) = mind::input::wait_key(1000) else { continue };
+        let key = match mind::input::read_input() {
+            None => { mind::time::sleep(1000); continue } // input ends the sleep early
+            Some(Input::Pointer(p)) => {
+                let line = &mut lines.text[lines.count % HISTORY];
+                line.clear();
+                let _ = write!(line, "pointer buttons={} dx={} dy={} wheel={}", p.buttons, p.dx, p.dy, p.wheel);
+                lines.count += 1;
+                mind::println!("[KEYS] {}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+                if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
+                continue;
+            }
+            Some(Input::Key(event)) => match mind::input::Key::from_event(event.to_word()) { Some(key) => key, None => continue },
+        };
         let line = &mut lines.text[lines.count % HISTORY];
         line.clear();
         describe(key, line);

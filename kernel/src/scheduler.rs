@@ -68,7 +68,7 @@ struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Events<INPUT_QUEUE>, log: Queue<4096>, console: Queue<4096>, dirty: bool,
+    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, dirty: bool,
     cspace: [Option<Capability>; CAP_SLOTS], generations: [u32; CAP_SLOTS], // generation of each kernel-allocated slot
     nodes: [Node; CAP_SLOTS],
     pending_cap: Option<Pending>, pending_call: bool, pending_badge: u16, send_seq: u64, // send waiting for a receiver
@@ -198,7 +198,9 @@ impl Scheduler {
         }
         if !self.live(target) { return; }
         let event = if target == self.focus_owner { owner } else { app };
-        let task = self.tasks[target].as_mut().unwrap(); task.input.push(event);
+        let task = self.tasks[target].as_mut().unwrap();
+        if event_key(event) == KEY_POINTER && !task.pointer { return; } // only tasks that asked for the pointer (INPUT_POINTER)
+        task.input.push(event);
         if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
     }
 
@@ -414,7 +416,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -741,6 +743,7 @@ impl Scheduler {
             // The legacy byte of the next event that has one (events without a byte are skipped).
             SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 => break event_byte(event) as usize, Some(_) => {} } }),
             SYSCALL_READ_INPUT => Ok(task.input.pop().unwrap_or(0)),
+            SYSCALL_INPUT_POINTER => { task.pointer = request.arg1 != 0; Ok(0) }
             SYSCALL_LOG => {
                 // Kept twice: LOGS drains `log`, the focus owner mirrors `console` of the focused task.
                 let length = request.arg2.min(4096);
