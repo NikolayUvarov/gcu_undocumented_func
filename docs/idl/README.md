@@ -74,7 +74,7 @@ For a buffer call, in addition:
 
 The request is then **copied into the server's private memory** before it is decoded (the client could change its buffer meanwhile, MC-2.11). Decoding checks every length against its bound, booleans, UTF-8, and that no bytes are left over.
 
-A capability that is not accepted is dropped at once. The server answers a rejected request with `wire::reject`. The kernel checks only rights and envelope limits; the schema check runs in the receiving service.
+A capability that is not accepted is dropped at once. The server answers a rejected request with `wire::reject`. A server may answer later: `Call::defer` keeps the right to reply (`IPC_SAVE_REPLY`) while it receives other requests. The kernel checks only rights and envelope limits; the schema check runs in the receiving service.
 
 ## Evolution (MC-12.4)
 
@@ -86,8 +86,9 @@ A change that alters the meaning or layout of an existing function increments th
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.0.0 |
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
+| [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage` (client: `vfs_server`) | 1.0.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`) | 1.0.0 |
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; the start with an endpoint for the child is a legacy adapter until loader v1, issue 046) | 1.0.0 |
 
-The other services (VFS, audio) still use the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8 (issue 039).
+VFS still uses the numeric conventions in `common/abi.rs`; moving them to MIND IDL is roadmap C8 (issue 039).

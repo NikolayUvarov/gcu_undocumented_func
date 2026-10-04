@@ -257,17 +257,7 @@ pub const fn event_char(event: usize) -> u32 { (event >> 40) as u32 }
 // Block device protocol: idl/block.wit (bindings in mind::idl::block).
 pub const BLOCK_SECTOR: usize = 512;
 pub const BLOCK_MAX_SECTORS: usize = 128;
-// Audio protocol: msg[2]=op|argument<<8, msg[3]=second argument.
-pub const AUDIO_INFO: usize = 1;
-pub const AUDIO_PLAY: usize = 2;
-pub const AUDIO_TONE: usize = 3;
-pub const AUDIO_STOP: usize = 4;
-pub const AUDIO_WAIT: usize = 5; // the reply is deferred until the argument's number of buffers is free in the DMA ring
-// Microphone (AC97 PCM in, 48 kHz stereo S16): START begins capture; READ copies completed buffers into the passed
-// memory capability (argument = capacity in bytes), reply msg[2] = bytes, msg[3] = 1 if the ring overflowed; STOP ends it.
-pub const AUDIO_RECORD_START: usize = 6;
-pub const AUDIO_RECORD_READ: usize = 7;
-pub const AUDIO_RECORD_STOP: usize = 8;
+// Audio protocol: idl/audio.wit (bindings in mind::idl::audio).
 // Speech synthesis: idl/tts.wit. init: idl/init.wit.
 pub const AUDIO_RATE: usize = 48_000;
 

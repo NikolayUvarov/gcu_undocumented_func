@@ -43,5 +43,5 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
 
 pub fn reply_now(call: Call, value: Option<u32>) -> Result<()> {
     let Some(value) = value else { return wire::reply_none(call) };
-    drop(call); wire::reply([((value) as usize) << 16, 0])
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

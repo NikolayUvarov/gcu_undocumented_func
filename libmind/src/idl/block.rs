@@ -86,16 +86,16 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
 
 pub fn reply_sectors(call: Call, value: Result<u64>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
-    drop(call); wire::reply([0, ((value) as usize) << 0])
+    wire::finish(call, [0, ((value) as usize) << 0])
 }
 pub fn reply_kind(call: Call, value: u8) -> Result<()> {
-    drop(call); wire::reply([((value) as usize) << 16, 0])
+    wire::finish(call, [((value) as usize) << 16, 0])
 }
 pub fn reply_attach(call: Call, value: Result<()>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
-    drop(call); wire::reply([0, 0])
+    wire::finish(call, [0, 0])
 }
 pub fn reply_read(call: Call, value: Result<u16>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
-    drop(call); wire::reply([((value) as usize) << 16, 0])
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

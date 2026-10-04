@@ -92,9 +92,17 @@ pub fn buffer_reply(reply: &[usize; 2], max: usize, optional: bool, fallible: bo
 
 /// What a server needs to answer one request: the client's buffer (mapped) for buffer calls. Dropping it unmaps the
 /// buffer and frees the received capability.
-pub struct Call { mapping: Option<Mapping>, cap: usize, received: bool }
+pub struct Call { mapping: Option<Mapping>, cap: usize, received: bool, reply: usize }
 impl Call {
-    pub fn words(request: &Received, cap: usize) -> Self { Self { mapping: None, cap, received: request.cap_received } }
+    pub fn words(request: &Received, cap: usize) -> Self { Self { mapping: None, cap, received: request.cap_received, reply: 0 } }
+    /// Keeps the right to answer this call later (IPC_SAVE_REPLY), so the server can receive other requests meanwhile.
+    pub fn defer(&mut self) -> Result<()> { if self.reply == 0 { self.reply = ipc::save_reply()?; } Ok(()) }
+}
+
+/// Sends the reply words to the caller of `call` (the last caller, or the saved one of a deferred call).
+pub fn finish(call: Call, words: [usize; 2]) -> Result<()> {
+    let saved = call.reply; drop(call);
+    if saved == 0 { reply(words) } else { ipc::reply_saved(saved, &Message::new(words[0], words[1])) }
 }
 impl Drop for Call {
     fn drop(&mut self) { drop(self.mapping.take()); if self.received { let _ = ipc::drop_cap(self.cap); } }
@@ -103,7 +111,7 @@ impl Drop for Call {
 /// Server side of a buffer call: checks the header and the buffer, then copies the request into private memory before
 /// anything is decoded (the client could change its buffer meanwhile, MC-2.11). Returns the call and the copy length.
 pub fn take_buffer<const M: usize>(request: &Received, cap: usize, max_reply: usize, copy: &mut [u8; M]) -> core::result::Result<(Call, usize), Reject> {
-    let mut call = Call { mapping: None, cap, received: request.cap_received };
+    let mut call = Call { mapping: None, cap, received: request.cap_received, reply: 0 };
     let length = request.data[0] >> 16;
     if request.data[1] != 0 || length > M || length >> 32 != 0 || !request.cap_received || crate::dev::cap_info(cap).0 != CAP_KIND_MEMORY { return Err(Reject::Invalid); }
     let mapping = Mapping::new(cap).map_err(|_| Reject::Invalid)?;
@@ -115,11 +123,12 @@ pub fn take_buffer<const M: usize>(request: &Received, cap: usize, max_reply: us
 
 /// Answers a buffer call: `encode` writes the result into the client's buffer.
 pub fn reply_buffer(mut call: Call, encode: impl FnOnce(&mut super::codec::Writer) -> Option<()>) -> Result<()> {
-    let Some(mapping) = call.mapping.as_mut() else { return reply([STATUS_INVALID, 0]) };
+    let Some(mapping) = call.mapping.as_mut() else { return finish(call, [STATUS_INVALID, 0]) };
     let mut writer = super::codec::Writer::new(mapping.as_mut_slice());
-    match encode(&mut writer) { Some(()) => { let length = writer.len(); reply([length << 16, 0]) } None => reply([STATUS_ERROR, crate::abi::ERR_NO_MEMORY]) }
+    let words = match encode(&mut writer) { Some(()) => [writer.len() << 16, 0], None => [STATUS_ERROR, crate::abi::ERR_NO_MEMORY] };
+    finish(call, words)
 }
 /// Answers with an empty option.
-pub fn reply_none(call: Call) -> Result<()> { drop(call); reply([STATUS_NONE, 0]) }
+pub fn reply_none(call: Call) -> Result<()> { finish(call, [STATUS_NONE, 0]) }
 /// Answers a fallible function with its error.
-pub fn reply_error(call: Call, error: Error) -> Result<()> { drop(call); reply([STATUS_ERROR, error.code()]) }
+pub fn reply_error(call: Call, error: Error) -> Result<()> { finish(call, [STATUS_ERROR, error.code()]) }

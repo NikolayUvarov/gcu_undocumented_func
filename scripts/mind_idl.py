@@ -485,12 +485,12 @@ def generate_reply(w, f):
         else:
             w(f"    wire::reply_buffer(call, |w| {encode_expr(inner, body_value)})")
     elif inner is None:
-        w("    drop(call); wire::reply([0, 0])")
+        w("    wire::finish(call, [0, 0])")
     else:
         rf = f.result_field
         words = ["0", "0"]
         words[rf.word] = word_encode(rf, body_value)
-        w(f"    drop(call); wire::reply([{words[0]}, {words[1]}])")
+        w(f"    wire::finish(call, [{words[0]}, {words[1]}])")
     w("}")
 
 
