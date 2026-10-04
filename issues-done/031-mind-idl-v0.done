@@ -1,0 +1,27 @@
+# 031 — MIND IDL v0 (roadmap C5)
+
+**Type:** architecture · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C5 · **Constitution:** MC-2.3, MC-2.4, MC-2.12, MC-12.4, Appendix B.2
+
+## Problem
+
+Service protocols are numeric conventions in `common/abi.rs` (`op | fd << 8 | length << 16` …): no types, no versions, no declared size limits or capability kinds, and every service decodes its messages by hand.
+
+## Plan
+
+- Interfaces in `idl/*.wit`, a WIT subset: integer and bool parameters, at most one `own<…>`/`borrow<…>` capability (memory or endpoint), an integer or `option<integer>` result, a package version.
+- Wire format inside the existing two data words: method and major version in the low 16 bits, fields packed after them, never straddling a word; the generator rejects what does not fit.
+- `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks method, version, unused bits and capability kind, drops unaccepted capabilities and answers rejections with a status.
+- Port `rtc` as the first service; the others are C8.
+
+## Acceptance criteria
+
+- `rtc` and `mind::rtc` use the generated bindings; malformed requests are rejected with a status.
+- Generator tests and a freshness check; all QEMU suites pass.
+
+## Related
+
+[docs/idl](../docs/idl/README.md), [ROADMAP](../ROADMAP.md) C5, C8.
+
+## Resolution
+
+Specification in `docs/idl/README.md` (v0.1). The generator (`scripts/mind_idl.py`) writes `libmind/src/idl/<interface>.rs`; the hand-written `libmind/src/idl/wire.rs` holds the wire helpers (`call`, `check_reply`, `header`, `body`, `discard`, `reply`, `reject`). `idl/rtc.wit` (`mind:rtc@1.0.0`, `now: func() -> option<u32>`) replaces the old reply convention; `rtc` decodes every request and `mind::rtc` calls the generated client. `tests/idl_test.py` covers layout, limits, unsupported syntax and freshness; the isolation fixture shows `rtc` answering a wrong version with 0x81 and an unknown method or stray bits with 0x80. All QEMU suites, the USB smoke and the host tests pass.

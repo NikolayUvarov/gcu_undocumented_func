@@ -1,9 +1,10 @@
 #![no_std]
 #![no_main]
 // Ring 3 CMOS RTC driver: answers CALL with the time since midnight.
-use mind::abi::{BootInfo, RTC_UNAVAILABLE, SLOT_DEV0};
+use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::Ports;
-use mind::ipc::{self, Endpoint, Message};
+use mind::idl::{rtc, wire};
+use mind::ipc::Endpoint;
 
 const SECONDS: u8 = 0x00; const MINUTES: u8 = 0x02; const HOURS: u8 = 0x04;
 const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80;
@@ -36,9 +37,12 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let cmos = Ports(SLOT_DEV0);
     loop {
-        // The reply goes via CALL/REPLY: the client no longer needs its own endpoint for the reply.
+        // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
-        if !request.is_call { continue; }
-        let _ = ipc::reply(&Message::new(read_time(cmos).unwrap_or(RTC_UNAVAILABLE), 0));
+        let _ = match rtc::decode(&request, 0) {
+            Ok(rtc::Request::Now) => rtc::reply_now(read_time(cmos).map(|seconds| seconds as u32)),
+            Err(reason) if request.is_call => wire::reject(reason),
+            Err(_) => Ok(()),
+        };
     }
 }

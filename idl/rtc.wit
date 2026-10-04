@@ -1,0 +1,7 @@
+/// Calendar time from the CMOS RTC, a service separate from the monotonic clock (MC-5.6).
+package mind:rtc@1.0.0;
+
+interface rtc {
+    /// Seconds since midnight; none if the RTC cannot be read.
+    now: func() -> option<u32>;
+}

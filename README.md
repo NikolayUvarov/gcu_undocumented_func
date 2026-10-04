@@ -38,7 +38,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | Service | Capabilities (granted by init) | Role |
 |---|---|---|
 | `init` | own endpoint, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
-| `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; answers `CALL` with seconds since midnight |
+| `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight) |
 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the focused task |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer |
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
@@ -487,6 +487,10 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 
 This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later subdivide these blocks. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
+### Interfaces (MIND IDL)
+
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` is the first service on MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
+
 ### Runtime checks
 
 After building, run the host tests for real ELF images, independent `.bss`/relocations, malformed ELF rejection, private mappings and dzen-clock logic:
@@ -494,6 +498,7 @@ After building, run the host tests for real ELF images, independent `.bss`/reloc
 ```bash
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
+python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 ```
 
 The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):

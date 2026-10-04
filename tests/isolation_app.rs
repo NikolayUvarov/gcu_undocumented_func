@@ -135,6 +135,11 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                         asm!("ud2", options(noreturn));
                     }
                 }
+                // MIND IDL: the rtc service checks requests against idl/rtc.wit (status 0x81 version, 0x80 invalid).
+                let rtc = |word: usize| { let raw = mb; (*raw).msg = [0, 0, word, 0]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_RTC, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
+                if rtc(1 | 2 << 8) != 0x81 || rtc(9 | 1 << 8) != 0x80 || rtc(1 | 1 << 8 | 1 << 40) != 0x80 || rtc(1 | 1 << 8) > 1 {
+                    asm!("ud2", options(noreturn));
+                }
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
                 let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg[0] = offset; (*mb).msg[1] = length; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
                 let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };

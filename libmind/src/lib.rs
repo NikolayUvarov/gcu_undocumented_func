@@ -12,6 +12,7 @@ pub mod control;
 pub mod dev;
 pub mod fs;
 pub mod gfx;
+pub mod idl;
 pub mod input;
 pub mod ipc;
 pub mod mem;

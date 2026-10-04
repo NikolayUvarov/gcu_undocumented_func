@@ -159,7 +159,7 @@ pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; p
 // Separate quota for mapped foreign memory (frame, IPC buffers).
 pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 
-// RTC protocol: CALL with no data, reply msg[2]=seconds since midnight or RTC_UNAVAILABLE.
+// RTC protocol: idl/rtc.wit (MIND IDL, bindings in mind::idl::rtc).
 // VFS protocol: msg[2]=op|fd<<8|length<<16, msg[3]=offset; the buffer is passed as a memory capability.
 pub const VFS_OPEN: usize = 1;
 pub const VFS_READ: usize = 2;
