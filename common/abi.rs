@@ -76,6 +76,7 @@ pub const SYSCALL_MEM_DETACH: usize = 47;
 // process-control privilege. Records describe kernel objects; they never contain memory contents or physical addresses
 // of task memory, and nothing in them can be used as an authority.
 pub const SYSCALL_STAT: usize = 48;
+pub const SYSCALL_PORT_OUT_BLOCK: usize = 49; // as PORT_IN_BLOCK, words from the process buffer to the port
 pub const DETACHED_MAX_BYTES: usize = 16 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 
 // CAP_INFO reply: result=capability kind, arg2=port base or memory rights, msg[2]=size/port count/endpoint rights.
@@ -178,7 +179,11 @@ pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
 pub const IPC_TIMEOUT_SHIFT: usize = 32;
 // Senders waiting on one endpoint; one more fails with ERR_BUSY at once (back-pressure).
 pub const ENDPOINT_QUEUE: usize = 8;
-// At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
+// At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags | the badge of the endpoint
+// capability the sender used << MSG_BADGE_SHIFT. CAP_MINT of an endpoint with msg[2] != 0 sets that 16-bit badge on a
+// child of an unbadged capability (a badged one cannot be re-badged); copies keep it; CAP_INFO and STAT_CAPS report it.
+pub const MSG_BADGE_SHIFT: usize = 16;
+pub const BADGE_MAX: usize = 0xFFFF;
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
 
@@ -283,7 +288,7 @@ pub struct VmRegion { pub start: u64, pub bytes: u64, pub kind: u32, pub flags: 
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)]
 pub struct CapStat {
     pub node: u64, pub parent: u64, pub size: u64, // memory/DMA/MMIO bytes or port count
-    pub base: u64, // port base or IRQ line; never a physical address
+    pub base: u64, // port base, IRQ line or endpoint badge; never a physical address
     pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub endpoint: u32, pub reserved: u32,
 }
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)]
@@ -305,10 +310,17 @@ pub const NOTICE_EXITED: usize = 1 << 63;
 // CPU_INFO: arg1 = CPU index; result = APIC id, arg2 = online, msg[2] = timer ticks. KERNEL_HEAP: result = used,
 // arg2 = free, msg[2] = 1 if a test allocation was fully released.
 // Block device protocol: msg[2]=op|sector count<<8, msg[3]=LBA.
-// ATTACH passes the client's buffer capability (up to BLOCK_MAX_SECTORS sectors), READ fills it.
+// ATTACH passes the client's buffer capability (up to BLOCK_MAX_SECTORS sectors), READ fills it, WRITE writes from it
+// and FLUSH empties the drive's write cache. WRITE and FLUSH need BLOCK_BADGE_WRITE in the badge of the client's
+// capability (Appendix B.6: init gives it to vfs_server only). INFO: [sectors, kind | BLOCK_INFO_READ_ONLY if the
+// medium is write-protected].
 pub const BLOCK_INFO: usize = 1;
 pub const BLOCK_ATTACH: usize = 2;
 pub const BLOCK_READ: usize = 3;
+pub const BLOCK_WRITE: usize = 4;
+pub const BLOCK_FLUSH: usize = 5;
+pub const BLOCK_BADGE_WRITE: u16 = 1;
+pub const BLOCK_INFO_READ_ONLY: usize = 1 << 8;
 pub const BLOCK_SECTOR: usize = 512;
 pub const BLOCK_MAX_SECTORS: usize = 128;
 // Audio protocol: msg[2]=op|argument<<8, msg[3]=second argument.

@@ -29,6 +29,12 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
         if cs & 3 != 3 || flags & 0x3000 != 0 {
             asm!("ud2", options(noreturn));
         }
+        if call(mb, abi::SYSCALL_CAP_INFO, abi::SLOT_INIT, 0) == abi::CAP_KIND_ENDPOINT {
+            // Started by the 'k' case with a badged endpoint: one message through it, then exit.
+            (*mb).msg = [0, 0, 0xBAD6E, 0];
+            call(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0);
+            return;
+        }
         print(mb, b"RING3 IOPL0 READY\r\n");
         let mode = loop {
             let key = call(mb, 2, 0, 0) as u8;
@@ -49,7 +55,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             }
             b'm' | b'v' => {
                 // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
-                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
+                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; (*mb).msg[2] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
                 let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
                 let lease = mint(memory, if mode == b'm' { abi::CAP_READ } else { abi::CAP_READ | abi::CAP_WRITE });
                 let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
@@ -145,7 +151,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     asm!("ud2", options(noreturn));
                 }
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
-                let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg[0] = offset; (*mb).msg[1] = length; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
+                let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg[0] = offset; (*mb).msg[1] = length; (*mb).msg[2] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
                 let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };
                 let writer = mint(abi::SLOT_RTC, abi::CAP_WRITE as usize, 0, 0);
                 let wider = mint(writer, (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT) as usize, 0, 0);
@@ -209,6 +215,28 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     || call(mb, abi::SYSCALL_IPC_RECV, keeper, 0) != abi::ERR_RIGHTS {
                     asm!("ud2", options(noreturn));
                 }
+                // Endpoint badges: set once on a child of an unbadged capability, kept by its children, reported by
+                // CAP_INFO and delivered with every message sent through it.
+                let badge_mint = |handle: usize, mask: usize, badge: usize| { (*mb).msg = [0, 0, badge, 0]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
+                let badge_of = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).arg2 } else { usize::MAX } };
+                let endpoint = endpoints[2];
+                let badged = badge_mint(endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 0x1234);
+                let inherited = badge_mint(badged, abi::CAP_WRITE as usize, 0);
+                if endpoint >= abi::ERR_FIRST || badged >= abi::ERR_FIRST || inherited >= abi::ERR_FIRST || badge_of(endpoint) != 0 || badge_of(badged) != 0x1234 || badge_of(inherited) != 0x1234
+                    || badge_mint(badged, abi::CAP_WRITE as usize, 0x5678) != abi::ERR_INVALID // a badge cannot be changed
+                    || badge_mint(endpoint, abi::CAP_WRITE as usize, 0x10000) != abi::ERR_INVALID { // 16 bits
+                    asm!("ud2", options(noreturn));
+                }
+                // A copy of this program gets the badged endpoint in its INIT slot from the loader and sends through it.
+                let mut name = [0u8; 16]; name[..4].copy_from_slice(b"app2");
+                (*mb).msg = [badged, abi::CAP_WRITE as usize, usize::from_le_bytes(name[..8].try_into().unwrap()), 0];
+                let child = if call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0) == 0 { (*mb).msg[2] } else { usize::MAX };
+                let received = call(mb, abi::SYSCALL_IPC_RECV, endpoint | 3000 << abi::IPC_TIMEOUT_SHIFT, 0);
+                if child >= abi::ERR_FIRST || received != 0 || (*mb).arg1 != child || (*mb).msg[2] != 0xBAD6E
+                    || (*mb).msg[1] >> abi::MSG_BADGE_SHIFT & abi::BADGE_MAX != 0x1234 {
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, badged, 0); call(mb, abi::SYSCALL_CAP_DROP, inherited, 0);
                 call(mb, abi::SYSCALL_CAP_DROP, reader, 0); call(mb, abi::SYSCALL_CAP_DROP, keeper, 0);
                 for handle in endpoints { call(mb, abi::SYSCALL_CAP_DROP, handle, 0); }
                 // A dropped handle stays dead when its slot is reused: same slot, new generation.

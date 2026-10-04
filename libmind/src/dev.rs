@@ -3,7 +3,8 @@ use crate::abi::*;
 use crate::ipc::Endpoint;
 use crate::sys::{call, check, syscall, Result};
 
-/// What a capability slot holds: (CAP_KIND_* kind, base, size).
+/// What a capability slot holds: (CAP_KIND_* kind, base, size). Ports give their base and count, an IRQ its line, an
+/// endpoint its badge and rights.
 pub fn cap_info(slot: usize) -> (usize, usize, usize) { let raw = syscall(SYSCALL_CAP_INFO, slot, 0, [0; 4]); (raw.result, raw.arg2, raw.msg[2]) }
 
 /// I/O port range in a capability slot (port numbers are absolute).
@@ -26,6 +27,10 @@ impl Ports {
     /// Bulk read of 16-bit words (ATA data) directly into a buffer.
     pub fn read_words(&self, port: u16, buffer: &mut [u16]) -> Result<usize> {
         check(syscall(SYSCALL_PORT_IN_BLOCK, self.0, port as usize, [0, 0, buffer.as_mut_ptr() as usize, buffer.len()]).result)
+    }
+    /// Bulk write of 16-bit words (ATA data) from a buffer.
+    pub fn write_words(&self, port: u16, buffer: &[u16]) -> Result<usize> {
+        check(syscall(SYSCALL_PORT_OUT_BLOCK, self.0, port as usize, [0, 0, buffer.as_ptr() as usize, buffer.len()]).result)
     }
 }
 

@@ -9,6 +9,7 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 | Capability confinement of applications | Kernel; `loader` (decides which client capabilities an application gets); `init` (decides what `loader` holds). |
 | Capability confinement of services | Kernel; `init`. |
 | Correct program images | Boot disk contents (not authenticated), `ata`/`ahci`/`usb_storage`, `vfs_server`, `loader`, kernel ELF loader. |
+| Integrity of disk contents (writes) | Kernel (badges); `init` (gives the write-badged block clients to `vfs_server` only); `ata`/`ahci`/`usb_storage` (check the badge, write the medium); `vfs_server` (the only writer). |
 | Process control (kill, focus, logs) used only as the user intends | Kernel; `init` (grants the control privilege); `shell`. |
 | Keyboard input reaches only the focused task | Kernel; `ps2_kbd` and `shell` (both hold the input privilege and can inject arbitrary input). |
 | Screen shows the focused task | Kernel; `compositor` (display privilege, framebuffer). |

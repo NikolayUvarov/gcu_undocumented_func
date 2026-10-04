@@ -13,6 +13,7 @@ from pathlib import Path
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import threading
@@ -37,18 +38,21 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True):
+        # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
+        # `snapshot` writes reach the image.
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
-        storage = (["-drive", f"format=raw,file={filename},if=none,id=usbdisk",
+        source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
+        storage = (["-drive", f"{source},if=none,id=usbdisk",
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
-                   if usb else ["-drive", f"format=raw,file=fat:{filename},if=none,id=sata",
+                   if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
-                   if ahci else ["-drive", f"format=raw,file=fat:{filename}"])
+                   if ahci else ["-drive", source])
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
-             "-snapshot", "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
+             *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot",
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -881,7 +885,7 @@ def isolation_suite(vm):
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; fault containment and reclaim", flush=True)
+    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim", flush=True)
 
 
 def memory_suite(vm):
@@ -1321,6 +1325,68 @@ def services_suite(vm):
     print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs", flush=True)
 
 
+BLOCK_IMAGE_MB, BLOCK_FS_MB = 64, 60
+
+
+def block_pattern(kind, sector):
+    # tests/block_app.rs: pattern(kind, s)
+    data = bytearray((j ^ sector * 31 ^ kind * 77) & 0xFF for j in range(512))
+    header = b"MIND BLOCK WRITE TEST KIND=" + bytes([ord("0") + kind, ord(" "), ord("0") + sector])
+    data[:len(header)] = header
+    return bytes(data)
+
+
+def block_suite(args, block_elf):
+    """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
+    stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
+    gives it, flushes and reads them back; the image is then checked on the host."""
+    if not (shutil.which("mkfs.fat") and shutil.which("mcopy")):
+        print("SKIP: block suite needs mkfs.fat and mcopy (dosfstools, mtools)", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / "usb_root") as temp:
+        image = Path(temp) / "disk.img"
+        start, fs_sectors = 2048, (BLOCK_FS_MB << 20) // 512
+        with image.open("wb") as f:
+            f.truncate(BLOCK_IMAGE_MB << 20)
+            # MBR with one EFI system partition: what OVMF boots from a fixed disk.
+            mbr = bytearray(512)
+            mbr[446:462] = struct.pack("<B3sB3sII", 0x80, b"\xfe\xff\xff", 0xEF, b"\xfe\xff\xff", start, fs_sectors)
+            mbr[510:512] = b"\x55\xaa"
+            f.write(mbr)
+        subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
+        files = Path(temp) / "files"
+        (files / "EFI/BOOT").mkdir(parents=True)
+        for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
+            shutil.copyfile(ROOT / "usb_root" / name, files / name)
+        shutil.copyfile(block_elf, files / "vfs_server.elf")
+        env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+        subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=env, capture_output=True)
+        sectors = (BLOCK_IMAGE_MB << 20) // 512
+        for kind, name, options in [(1, "ATA", {}), (2, "AHCI", {"ahci": True}), (3, "USB", {"usb": True})]:
+            # OVMF keeps its variables (boot entries of the previous controller) in NvVars on the disk.
+            subprocess.run(["mdel", "-i", f"{image}@@{start * 512}", "::/NvVars"], env=env, capture_output=True)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, **options)
+            try:
+                output = vm.service_logs("vfs_server", "[BLOCKTEST] DONE")
+                line = next((l for l in output.splitlines() if f"KIND={kind} " in l), None)
+                assert line and "BADGE=1 " in line and "WRITABLE" in line and f"SECTORS={sectors} " in line, output
+                assert "ATTACH=OK WRITE=OK FLUSH=OK READBACK=OK" in line, line
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-block-{name.lower()}-{args.cpus}cpu.log").write_text(vm.log)
+            with image.open("rb") as f:
+                f.seek((sectors - 8 * kind) * 512)
+                written = f.read(8 * 512)
+            assert written == b"".join(block_pattern(kind, s) for s in range(8)), f"{name}: the image does not hold the written sectors"
+        volume = Path(temp) / "volume.img"
+        with image.open("rb") as f:
+            f.seek(start * 512)
+            volume.write_bytes(f.read(fs_sectors * 512))
+        check = subprocess.run(["fsck.fat", "-n", str(volume)], capture_output=True, text=True) if shutil.which("fsck.fat") else None
+        assert check is None or check.returncode == 0, check.stdout + check.stderr
+    print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
+
+
 def audio_suite(vm, wav):
     require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
     output = ""
@@ -1449,7 +1515,8 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,busy,smp,isolation,heap")
+    parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
     suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools"] + (["busy", "smp"] if args.busy_elf else [])
@@ -1457,9 +1524,14 @@ def main():
         suites.append("isolation")
     if args.heap_elf:
         suites.append("heap")
+    if args.block_elf:
+        suites.append("block")
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
+        if suite == "block":
+            block_suite(args, args.block_elf)
+            continue
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)
             (disk / "EFI/BOOT").mkdir(parents=True)

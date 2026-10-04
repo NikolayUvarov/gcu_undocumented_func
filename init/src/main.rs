@@ -32,6 +32,12 @@ impl Minted {
         self.slots[self.count] = slot; self.count += 1;
         Ok(slot)
     }
+    // A client endpoint with a badge the server checks (the write right of a block device).
+    fn badged(&mut self, keeper: usize, rights: u8, badge: u16) -> Result<usize> {
+        let slot = ipc::mint_badged(keeper, rights, badge)?;
+        self.slots[self.count] = slot; self.count += 1;
+        Ok(slot)
+    }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
 }
@@ -110,11 +116,11 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
             "vfs_server" => {
-                // VFS sees only block devices whose drivers are actually running.
+                // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
                 for driver in ["ata", "ahci", "usb_storage"] {
-                    if self.running(service_index(driver)) { grants.add(slot, self.client(&mut minted, driver)?, CLIENT); slot += 1; }
+                    if self.running(service_index(driver)) { let keeper = self.keeper(driver)?; grants.add(slot, minted.badged(keeper, CLIENT, BLOCK_BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
             }
             "loader" => {

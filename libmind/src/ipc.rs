@@ -15,13 +15,15 @@ impl Message {
     fn mask(&self) -> usize { self.rights as usize | if self.moved { CAP_TRANSFER_MOVE } else { 0 } }
 }
 
-/// Received message or reply.
+/// Received message or reply. `badge` is the badge of the endpoint capability the sender used (0: none): a server
+/// tells its clients' rights apart by it.
 #[derive(Clone, Copy, Debug)]
-pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize> }
+pub struct Received { pub data: [usize; 2], pub sender: u64, pub cap_received: bool, pub is_call: bool, pub irq: Option<usize>, pub badge: u16 }
 
 fn received(raw: crate::sys::Raw) -> Received {
     let irq = (raw.msg[1] & MSG_FLAG_IRQ != 0).then_some(raw.msg[2]);
-    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq }
+    Received { data: [raw.msg[2], raw.msg[3]], sender: raw.arg1 as u64, cap_received: raw.msg[0] != 0, is_call: raw.msg[1] & MSG_FLAG_CALL != 0, irq,
+               badge: (raw.msg[1] >> MSG_BADGE_SHIFT & BADGE_MAX) as u16 }
 }
 
 /// IPC endpoint capability in a process slot.
@@ -100,6 +102,12 @@ pub fn drop_cap(slot: usize) -> Result<()> { check(call(SYSCALL_CAP_DROP, slot, 
 /// of a port range or a page-aligned memory/DMA/MMIO range. Returns its handle.
 pub fn mint(handle: usize, mask: u8, offset: usize, length: usize) -> Result<usize> {
     check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [offset, length, 0, 0]).result)
+}
+
+/// Child of an unbadged endpoint capability with rights `mask` and `badge` (1..=0xFFFF), which the server sees with
+/// every message sent through it; copies keep it and it cannot be changed.
+pub fn mint_badged(handle: usize, mask: u8, badge: u16) -> Result<usize> {
+    check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge as usize, 0]).result)
 }
 
 /// Removes every capability derived from `handle` (copies, mints and their descendants) from all tasks; the capability

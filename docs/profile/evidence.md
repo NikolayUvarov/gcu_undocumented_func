@@ -20,6 +20,8 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |
 | Drivers with MMIO and DMA capabilities work (AHCI, xHCI) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
+| Endpoint badges are set once, kept by children, reported by `CAP_INFO` and delivered with each message | `isolation` suite, case `k` |
+| Block writes need the write badge and a writable medium; ATA, AHCI and USB write, flush and read back, the raw image holds the sectors and its file system stays consistent | `tests/block_host.rs`; `block` suite (`tests/block_app.rs` as `vfs_server`, host check of the image, `fsck.fat -n`) |
 | Audio gateway (AC97 DMA, IRQ over IPC) and text to speech | `audio`, `tts` suites |
 | ELF images: fresh `.bss`, relocations, malformed images rejected; user page tables | Host tests `tests/runtime.rs` |
 

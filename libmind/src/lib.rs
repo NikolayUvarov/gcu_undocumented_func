@@ -10,6 +10,7 @@ pub mod font16;
 
 pub mod audio;
 pub mod block;
+pub mod block_protocol;
 pub mod control;
 pub mod dev;
 pub mod fs;

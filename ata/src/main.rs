@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
-// Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server.
+// Ring 3 primary-channel ATA driver: PIO LBA28 without interrupts (nIEN), block protocol for vfs_server: READ SECTORS,
+// WRITE SECTORS and FLUSH CACHE (writes only for clients with the write badge, see mind::block_protocol).
 use mind::abi::{BootInfo, BLOCK_KIND_ATA, SLOT_DEV0, SLOT_DEV1};
 use mind::block::{self, Driver};
 use mind::dev::Ports;
@@ -30,6 +31,24 @@ impl Ata {
         (disk.sectors != 0).then_some(disk)
     }
 
+    // Not busy: the command finished (or the drive is ready for the next); false on an error.
+    fn wait_ready(&self) -> bool {
+        for _ in 0..4 { self.control.in8(CONTROL); }
+        for _ in 0..10_000_000 {
+            let status = self.io.in8(COMMAND);
+            if status & BSY == 0 { return status & ERR == 0; }
+        }
+        false
+    }
+
+    fn command(&self, lba: u64, count: usize, command: u8) {
+        while self.io.in8(COMMAND) & BSY != 0 {}
+        self.io.out8(DRIVE, 0xE0 | ((lba >> 24) & 0x0F) as u8);
+        self.io.out8(COUNT, count as u8);
+        self.io.out8(LBA0, lba as u8); self.io.out8(LBA1, (lba >> 8) as u8); self.io.out8(LBA2, (lba >> 16) as u8);
+        self.io.out8(COMMAND, command);
+    }
+
     fn wait_data(&self) -> Option<()> {
         for _ in 0..4 { self.control.in8(CONTROL); } // 400 ns delay via the alternate status register
         for _ in 0..1_000_000 {
@@ -46,11 +65,7 @@ impl Driver for Ata {
     fn sectors(&self) -> u64 { self.sectors }
     // Batches of up to 256 sectors per READ SECTORS command; each sector is a separate DRQ.
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
-        while self.io.in8(COMMAND) & BSY != 0 {}
-        self.io.out8(DRIVE, 0xE0 | ((lba >> 24) & 0x0F) as u8);
-        self.io.out8(COUNT, count as u8);
-        self.io.out8(LBA0, lba as u8); self.io.out8(LBA1, (lba >> 8) as u8); self.io.out8(LBA2, (lba >> 16) as u8);
-        self.io.out8(COMMAND, 0x20);
+        self.command(lba, count, 0x20);
         let mut words = [0u16; 256];
         for sector in out.chunks_exact_mut(512).take(count) {
             if self.wait_data().is_none() || self.io.read_words(DATA, &mut words).is_err() { return false; }
@@ -58,6 +73,24 @@ impl Driver for Ata {
         }
         true
     }
+    // WRITE SECTORS: each sector is a DRQ block; the drive is done when BSY clears after the last one.
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool {
+        self.command(lba, count, 0x30);
+        let mut words = [0u16; 256];
+        for sector in data.chunks_exact(512).take(count) {
+            for (i, word) in words.iter_mut().enumerate() { *word = u16::from_le_bytes([sector[i * 2], sector[i * 2 + 1]]); }
+            if self.wait_data().is_none() || self.io.write_words(DATA, &words).is_err() { return false; }
+        }
+        self.wait_ready()
+    }
+    // FLUSH CACHE.
+    fn flush(&mut self) -> bool {
+        while self.io.in8(COMMAND) & BSY != 0 {}
+        self.io.out8(DRIVE, 0xE0);
+        self.io.out8(COMMAND, 0xE7);
+        self.wait_ready()
+    }
+    fn read_only(&self) -> bool { false }
 }
 
 mind::entry!(main);

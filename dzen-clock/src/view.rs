@@ -45,6 +45,8 @@ mod tests {
             ap_trampoline: 0,
             cpu_count: 0,
             apic_ids: [0; 8],
+            memory_map: core::ptr::null(),
+            memory_map_len: 0,
         };
         let view = View::new(&info);
         view.clear();

@@ -12,6 +12,8 @@ impl Disk {
         Some(Self { device, tags: [u32::MAX; LINES], cache: Pages::new(LINES * 512)?, next: 0 })
     }
     pub fn kind(&self) -> usize { self.device.kind() }
+    /// The driver refuses writes (protected medium, or no write badge on our capability).
+    pub fn read_only(&self) -> bool { self.device.read_only() }
 
     fn line(&self, index: usize) -> &[u8; 512] { self.cache.as_slice()[index * 512..index * 512 + 512].try_into().unwrap() }
 

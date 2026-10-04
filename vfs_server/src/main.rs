@@ -85,7 +85,8 @@ fn main(_info: &'static BootInfo) {
         .filter_map(disk::Disk::new)
         .find_map(fat::Volume::mount);
     match &volume {
-        Some(v) => mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}", v.bits(), match v.kind() { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", _ => "?" }, v.start()),
+        Some(v) => mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}{}", v.bits(), match v.kind() { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", _ => "?" }, v.start(),
+                                  if v.read_only() { " (READ-ONLY DEVICE)" } else { " (DEVICE WRITABLE)" }),
         None => mind::println!("[VFS] NO FAT VOLUME ON ANY BLOCK DEVICE; REQUESTS WILL FAIL"),
     }
     let mut server = Server { volume, open: [None; MAX_OPEN] };

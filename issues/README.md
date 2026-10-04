@@ -18,7 +18,6 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [044](044-endpoint-badges-block-write.md) | Endpoint badges and block write | architecture | P0 | — | G (tools F8), C8 |
 | [045](045-ramdisk.md) | `ramdisk` block service | feature | P1 | 044 | G (tools F8) |
 | [046](046-vfs-v2-fat-write.md) | `vfs_server` v2: directory handles, FAT write | architecture | P0 | 038, 044 | C8 (tools F8) |
 | [047](047-editor.md) | Editor `edit` | feature | P0 | 034, 042, 046 | G |
@@ -70,5 +69,6 @@
 | [042](../issues-done/042-loader-v1-launch-grants.done) | Loader v1: launch with granted capabilities | launch sessions (`idl/loader.wit`), `mind::request!`, console programs, `uptime` program |
 | [041](../issues-done/041-top-memmap-load-hw.done) | `top`, `memmap`, `load`, `hw` | `monitor/`: `top`, `memmap`, `load`, `hw` on sysmon; `Key::latin` |
 | [043](../issues-done/043-file-manager-read-only.done) | File manager `fm`, read-only | `fm`: two panels, viewer, quick view, info, find, run; VFS LIST with attributes and times |
+| [044](../issues-done/044-endpoint-badges-block-write.done) | Endpoint badges and block write | endpoint badges in the kernel; BLOCK_WRITE/FLUSH for the write badge; ATA/AHCI/USB write; `block` suite |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

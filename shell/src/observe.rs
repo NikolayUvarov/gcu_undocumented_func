@@ -96,7 +96,10 @@ pub fn caps(out: &mut impl Write, pid: u64) {
         let rights = [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k')].map(|(bit, ch)| if c.rights as u8 & bit != 0 { ch } else { '-' });
         let _ = write!(out, "SLOT={} GEN={} {} NODE={} PARENT={}", c.slot, c.generation, stat::cap_name(c.kind), c.node, c.parent);
         match c.kind as usize {
-            CAP_KIND_ENDPOINT => { let _ = write!(out, " EP={} RIGHTS={}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3]); }
+            CAP_KIND_ENDPOINT => {
+                let _ = write!(out, " EP={} RIGHTS={}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3]);
+                if c.base != 0 { let _ = write!(out, " BADGE={:#x}", c.base); }
+            }
             CAP_KIND_MEMORY => { let _ = write!(out, " BYTES={} RIGHTS={}{}{}", c.size, rights[0], rights[1], rights[2]); }
             CAP_KIND_DMA | CAP_KIND_MMIO => { let _ = write!(out, " BYTES={}", c.size); }
             CAP_KIND_PORTS => { let _ = write!(out, " PORTS={:#x}+{}", c.base, c.size); }

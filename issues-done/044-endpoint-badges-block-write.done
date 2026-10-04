@@ -1,0 +1,32 @@
+# 044 — Endpoint badges and block write — done
+
+**Type:** architecture · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G (tools plan F8), C8 · **Constitution:** MC-1.1, MC-3.4, Appendix B.6
+
+## Problem
+
+Block drivers serve only reads; writing must be a separate right (B.6). A server cannot tell through which capability a request came, so one endpoint cannot serve read-only and read-write clients differently.
+
+## Plan
+
+- **Badges:** `CAP_MINT` of an endpoint may set a 16-bit badge (`msg[2]`) on a child that has none; `IPC_RECV` reports the badge of the capability the sender used (`msg[1]` bits 16–31). Badges are inherited by copies and cannot be changed. `CAP_INFO` reports the badge.
+- **Block protocol:** `BLOCK_WRITE` (sectors from the attached buffer) and `BLOCK_FLUSH`, accepted only from clients whose badge has the write bit; `BLOCK_INFO` reports write protection.
+- Drivers: `ata` WRITE SECTORS (0x30) + FLUSH CACHE (0xE7); `ahci` WRITE DMA EXT (0x35) + FLUSH CACHE EXT (0xEA); `usb_storage` SCSI WRITE(10) (0x2A) + SYNCHRONIZE CACHE(10) (0x35), write protect from MODE SENSE(6).
+- `init` gives `vfs_server` write-badged clients; nobody else gets them.
+
+## Acceptance criteria
+
+- Isolation fixture: a client without the write badge gets `ERR_RIGHTS` on `BLOCK_WRITE`; badges cannot be changed by minting again.
+- QEMU: written sectors read back on ATA, AHCI and USB (raw image disks), host check of the image.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F8.
+
+## Resolution
+
+- Kernel: endpoint capabilities carry a 16-bit badge. `CAP_MINT` with `msg[2] != 0` sets it on a child of an unbadged capability (a badged one cannot be re-badged; more than 16 bits is refused); copies, transfers and children keep it; `IPC_RECV` reports it in `msg[1]` bits 16–31 (`MSG_BADGE_SHIFT`), `CAP_INFO` in `arg2`, `STAT_CAPS` in `base` (the shell's `caps` shows `BADGE=`). libmind: `ipc::mint_badged`, `Received::badge`.
+- Block protocol: `BLOCK_WRITE` (from the attached buffer) and `BLOCK_FLUSH`, served only when the client's badge has `BLOCK_BADGE_WRITE` and the medium is writable; `BLOCK_INFO` sets `BLOCK_INFO_READ_ONLY` when this client cannot write. The rule lives in `libmind/src/block_protocol.rs` (host-tested); `Device::write`, `flush`, `read_only` on the client side.
+- Drivers: `ata` WRITE SECTORS + FLUSH CACHE (with a new `PORT_OUT_BLOCK` system call, 49, the counterpart of `PORT_IN_BLOCK`), `ahci` WRITE DMA EXT + FLUSH CACHE EXT, `usb_storage` WRITE(10) + SYNCHRONIZE CACHE(10) with write protection from MODE SENSE(6).
+- `init` gives `vfs_server` write-badged clients and nobody else gets block endpoints; `vfs_server` reports whether its device is writable. It does not write yet (046).
+- Tests: `tests/block_host.rs` (no badge or another badge → `ERR_RIGHTS`, protected medium, read-only driver, INFO flag, clipping, errors); isolation fixture case `k` (badge set once, inherited, 16 bits, `CAP_INFO`, delivered to the receiver from a copy of the fixture started with the badged endpoint); QEMU `block` suite (`tests/block_app.rs` stands in for `vfs_server` on a raw MBR/FAT16 image booted over IDE, AHCI and USB: write, flush, read back through each driver; the host finds the sectors in the image; `fsck.fat -n` is clean).
+- Also: `tests/runtime.rs` built again (a test in `dzen-clock/src/view.rs` lacked the `BootInfo` memory-map fields added in 039).

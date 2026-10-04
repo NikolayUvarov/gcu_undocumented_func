@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
-// Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region.
+// Ring 3 AHCI (SATA) driver: HBA registers via an MMIO capability, commands and data in its own DMA region. READ DMA
+// EXT, WRITE DMA EXT and FLUSH CACHE EXT (writes only for clients with the write badge, see mind::block_protocol).
 use mind::abi::{BootInfo, BLOCK_KIND_AHCI, SLOT_DEV0, SLOT_MEM};
 use mind::block::{self, Driver};
 use mind::dev::{Dma, Mmio};
@@ -55,21 +56,27 @@ impl Ahci {
         wait(|| self.reg(TFD) & 0x88 == 0).then_some(())
     }
 
-    // One command in slot 0: H2D FIS + one PRDT entry for the data buffer; the result is copied to `out`.
-    fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8]) -> Option<()> {
-        let bytes = out.len();
+    // One command in slot 0: H2D FIS and, with data, one PRDT entry for the data buffer; `write` sends the buffer.
+    fn issue(&mut self, command: u8, lba: u64, count: usize, bytes: usize, write: bool) -> Option<()> {
         let table = self.dma.physical(TABLE); let data = self.dma.physical(DATA);
         self.dma.zero(TABLE, 0x100);
         let fis = self.dma.bytes(TABLE, 20);
         fis[0] = 0x27; fis[1] = 0x80; fis[2] = command; fis[7] = 0x40;
         for i in 0..3 { fis[4 + i] = (lba >> (8 * i)) as u8; fis[8 + i] = (lba >> (24 + 8 * i)) as u8; }
         fis[12] = count as u8; fis[13] = (count >> 8) as u8;
-        self.dma.write64(TABLE + 0x80, data); self.dma.write32(TABLE + 0x8C, bytes as u32 - 1);
-        self.dma.write32(LIST, 5 | 1 << 16); self.dma.write32(LIST + 4, 0); self.dma.write64(LIST + 8, table);
+        let entries = if bytes > 0 { self.dma.write64(TABLE + 0x80, data); self.dma.write32(TABLE + 0x8C, bytes as u32 - 1); 1 } else { 0 };
+        // Header: FIS length 5 dwords, W (bit 6) for host-to-device data, PRDT entries.
+        self.dma.write32(LIST, 5 | if write { 1 << 6 } else { 0 } | entries << 16); self.dma.write32(LIST + 4, 0); self.dma.write64(LIST + 8, table);
         self.set(IS, u32::MAX);
         self.set(CI, 1);
         let finished = wait(|| self.reg(CI) & 1 == 0 || self.reg(IS) & IS_TFES != 0);
-        if !finished || self.reg(IS) & IS_TFES != 0 || self.reg(TFD) & 1 != 0 { return None; }
+        (finished && self.reg(IS) & IS_TFES == 0 && self.reg(TFD) & 1 == 0).then_some(())
+    }
+
+    // A command that reads into `out`.
+    fn command(&mut self, command: u8, lba: u64, count: usize, out: &mut [u8]) -> Option<()> {
+        let bytes = out.len();
+        self.issue(command, lba, count, bytes, false)?;
         out.copy_from_slice(self.dma.bytes(DATA, bytes));
         Some(())
     }
@@ -78,6 +85,13 @@ impl Ahci {
 impl Driver for Ahci {
     fn sectors(&self) -> u64 { self.sectors }
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool { self.command(0x25, lba, count, &mut out[..count * 512]).is_some() } // READ DMA EXT
+    fn write(&mut self, lba: u64, count: usize, data: &[u8]) -> bool { // WRITE DMA EXT
+        let bytes = count * 512;
+        self.dma.bytes(DATA, bytes).copy_from_slice(&data[..bytes]);
+        self.issue(0x35, lba, count, bytes, true).is_some()
+    }
+    fn flush(&mut self) -> bool { self.issue(0xEA, 0, 0, 0, false).is_some() } // FLUSH CACHE EXT
+    fn read_only(&self) -> bool { false }
 }
 
 mind::entry!(main);

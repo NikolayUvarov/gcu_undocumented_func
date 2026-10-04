@@ -34,6 +34,7 @@ impl Volume {
     }
     pub fn bits(&self) -> u8 { self.bits }
     pub fn kind(&self) -> usize { self.disk.kind() }
+    pub fn read_only(&self) -> bool { self.disk.read_only() }
     pub fn start(&self) -> u32 { self.start }
 
     fn cluster_bytes(&self) -> usize { self.sectors_per_cluster as usize * 512 }

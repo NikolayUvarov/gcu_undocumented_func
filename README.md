@@ -138,6 +138,8 @@ let n = file.read(&mut chunk)?;
 mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
 ```
 
+The block drivers read and write (ATA WRITE SECTORS and FLUSH CACHE, AHCI WRITE DMA EXT and FLUSH CACHE EXT, USB SCSI WRITE(10) and SYNCHRONIZE CACHE(10), write protection from MODE SENSE(6)); `BLOCK_WRITE` and `BLOCK_FLUSH` are served only to a client whose endpoint capability carries the write badge, which `init` gives to `vfs_server` alone (Appendix B.6). An endpoint capability can carry a 16-bit **badge**, set once by `CAP_MINT` (`mind::ipc::mint_badged`); the server sees it with every message sent through that capability (`Received::badge`), so one endpoint serves clients with different rights. `vfs_server` itself does not write yet (VFS v2).
+
 Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. A listing gives each entry's size, attributes (`VFS_ENTRY_*`: directory, hidden, system, read-only, archive) and FAT modification time (`mind::fs::fat_time`). Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
 
 ### Audio gateway
@@ -486,7 +488,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 7 | EXIT | — |
 | 8 / 9 | ALLOC / FREE | bytes → address / address → 0 |
 | 10 / 22 | IPC_SEND / IPC_CALL | endpoint handle \| timeout ms << 32, reply-capability slot; msg = [cap slot, rights mask, data, data] |
-| 11 | IPC_RECV | endpoint handle \| timeout ms << 32, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
+| 11 | IPC_RECV | endpoint handle \| timeout ms << 32, slot for a received capability → arg1 = sender PID, msg = [cap received, flags \| badge << 16, data, data] |
 | 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
 | 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights; `ERR_LIMIT` past the endpoint quota |
@@ -495,12 +497,13 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 33 | DEVICE_FIND | PCI class, mask; msg[0] = n-th match → device index — platform privilege |
 | 34–43 | TASK_LIST, TASK_KILL, FOCUS, TASK_LOGS, CONSOLE_READ, NOTICE, FAULTS, CPU_INFO, KERNEL_HEAP, HALT | process control for the shell (see `common/abi.rs`) — control privilege |
 | 14 | CAP_DROP | slot |
-| 45 | CAP_MINT | slot, rights mask; msg[0] = offset, msg[1] = length (0: to the end) → slot of a narrower child |
+| 45 | CAP_MINT | slot, rights mask; msg[0] = offset, msg[1] = length (0: to the end), msg[2] = badge of an endpoint child (once, 16 bits) → slot of a narrower child |
 | 46 | CAP_REVOKE | slot → number of descendants removed; their mappings are gone everywhere when it returns |
 | 47 | MEM_DETACH | heap block address → slot of a move-only memory object; `ERR_BUSY` if the block is shared |
 | 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
 | 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
+| 49 | PORT_OUT_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words written from it |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
 | 20 | INPUT_EVENT | key event word, msg[0] = attention (Ctrl+Z) — needs the input capability |
 | 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
@@ -509,7 +512,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 28 | TASK_ALIVE | PID → 1/0 |
 | 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: 10 ms tick) |
 | 48 | STAT | class (`STAT_*`), argument (PID); msg[0] = buffer, msg[1] = capacity → records after a `StatHeader`: tasks, CPUs, kernel memory, physical map, address space, capabilities, endpoints, IRQs, devices — observe or control privilege |
-| 29 | CAP_INFO | slot → kind, arg2 = port base or memory rights, msg[2] = size/count/endpoint rights, msg[3] = 1 if the memory is sealed |
+| 29 | CAP_INFO | slot → kind, arg2 = port base, memory rights or endpoint badge, msg[2] = size/count/endpoint rights, msg[3] = 1 if the memory is sealed |
 
 This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for programs: objects up to 2 KiB come from power-of-two size classes carved out of single pages, objects up to 256 KiB are runs of pages in 1 MiB arenas (at most 12), larger ones get their own block; allocation failure ends in the panic handler, which logs and exits the task. Services keep static memory. `tests/heap_host.rs` checks alignment, disjointness, reuse and exhaustion on the host. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 
@@ -535,14 +538,15 @@ rustc --edition=2021 --test tests/rtc_host.rs -o /tmp/mind-core-rtc-tests && /tm
 rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests && /tmp/mind-core-sysmon-tests
 rustc --edition=2021 --test tests/monitor_host.rs -o /tmp/mind-core-monitor-tests && /tmp/mind-core-monitor-tests   # top, memmap, load, hw on a fake sysmon
 rustc --edition=2021 --test tests/fm_host.rs -o /tmp/mind-core-fm-tests && /tmp/mind-core-fm-tests   # the file manager on a disk in memory
+rustc --edition=2021 --test tests/block_host.rs -o /tmp/mind-core-block-tests && /tmp/mind-core-block-tests   # block protocol: the write badge
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
 
-The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):
+The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized), the audio gateway (AC97 output captured to a WAV file and checked for the expected tones) and block writes (`block` suite, with `mkfs.fat` and `mtools`: a raw FAT image boots three times — IDE, AHCI, USB — with `tests/block_app.rs` standing in for `vfs_server`; it writes, flushes and reads back sectors through the write-badged clients and the harness checks the image and runs `fsck.fat -n`):
 
 ```bash
-for fixture in busy_app isolation_app heap_app; do
+for fixture in busy_app isolation_app heap_app block_app; do
   rustc --edition=2021 --target x86_64-unknown-none --crate-type bin \
     -C opt-level=3 -C panic=abort -C relocation-model=pic \
     -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
@@ -550,7 +554,8 @@ for fixture in busy_app isolation_app heap_app; do
 done
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 \
   --firmware OVMF.fd --busy-elf /tmp/mind-core-busy_app.elf \
-  --isolation-elf /tmp/mind-core-isolation_app.elf --heap-elf /tmp/mind-core-heap_app.elf
+  --isolation-elf /tmp/mind-core-isolation_app.elf --heap-elf /tmp/mind-core-heap_app.elf \
+  --block-elf /tmp/mind-core-block_app.elf
 # Repeat SMP/fault/heap handling on a single CPU:
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --cpus 1 \
   --busy-elf /tmp/mind-core-busy_app.elf \
