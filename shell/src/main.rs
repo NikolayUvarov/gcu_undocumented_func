@@ -110,7 +110,8 @@ impl Shell {
 
     // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
-    // client for `REQUEST_SYSINFO`. Nothing is granted by program name.
+    // client for `REQUEST_SYSINFO`, its own VFS client (writes on `ram:` and in `data/`) for `REQUEST_FILE`. Nothing is
+    // granted by program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
@@ -126,8 +127,11 @@ impl Shell {
         let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
         let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
-        let granted = if needs.sysinfo { loader::grant(Endpoint::LOADER, session, SLOT_SYSINFO as u8, SLOT_SYSINFO).map(|r| r.map_err(failed)) } else { Ok(Ok(())) };
-        if let Err(error) | Ok(Err(error)) = granted { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
+        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS)] {
+            if !asked { continue; }
+            if let Err(error) | Ok(Err(error)) = lend(slot, cap) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        }
         loader::commit(Endpoint::LOADER, session)?.map_err(failed)
     }
 

@@ -144,6 +144,9 @@ pub const SLOT_SERIAL: usize = 9;
 // from sysmon, and (later) service lifecycle control.
 pub const SLOT_SYSINFO: usize = 10;
 pub const SLOT_LIFECYCLE: usize = 11;
+// For `REQUEST_FILE`: the launcher's own VFS client (the shell's may write on `ram:` and in `data/`), so a program
+// such as the editor can save where the user can.
+pub const SLOT_FILE: usize = 7;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 12;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with

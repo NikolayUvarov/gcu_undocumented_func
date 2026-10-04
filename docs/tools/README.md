@@ -195,6 +195,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Modes:** read-only (opened with a read-only handle) and hex (shared with `view`).
 - **Later:** syntax highlighting (Rust, TOML, WIT, Markdown), column selection.
 - The core (buffer, cursor, search, undo) is a `no_std` module that also builds on the host and is tested there, like `tests/tts_host.rs`.
+- Done in issue 047 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Deviations: the editor gets the shell's own VFS client for `REQUEST_FILE` (writes on `ram:` and in `data/`) instead of a handle for one file — narrowed in issue 051; no hex mode yet (use `view`).
 
 ### 4.3 `view` — viewer
 

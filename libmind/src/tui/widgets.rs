@@ -253,7 +253,7 @@ pub fn message(grid: &mut Grid, title: &str, lines: &[&str], buttons: &[&str], s
     let w = text_w.max(buttons_w).max(title.chars().count() + 4) + 6;
     let inner = dialog(grid, title, w, lines.len() + 4, theme);
     for (row, line) in lines.iter().enumerate() { grid.text_centered(inner, inner.y + row, line, theme.dialog); }
-    let mut x = inner.x + (inner.w - buttons_w) / 2;
+    let mut x = inner.x + inner.w.saturating_sub(buttons_w) / 2;
     for (index, button) in buttons.iter().enumerate() {
         let style = if index == selected { theme.selected } else { theme.dialog };
         grid.text(x, inner.bottom() - 1, "[ ", style);

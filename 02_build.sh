@@ -76,6 +76,7 @@ USER_CRATES=(
     "monitor:load:load.elf"
     "monitor:hw:hw.elf"
     "fm:fm:fm.elf"
+    "edit:edit:edit.elf"
     "beep:beep:beep.elf"
 )
 

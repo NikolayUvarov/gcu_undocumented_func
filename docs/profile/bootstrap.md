@@ -28,7 +28,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `sysmon` | server endpoint, observe privilege (read-only statistics; nobody else gets it) |
 | `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10); process-control and input privileges; ports 0x3F8–0x3FF |
 
-5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–11 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it; a program that asks for the console starts without a screen.
+5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–11 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it, and its own VFS client (slot 7, the user's badge) to one that asks for a file (`REQUEST_FILE`, the editor); a program that asks for the console starts without a screen.
 
 ## Where initial distribution ends
 

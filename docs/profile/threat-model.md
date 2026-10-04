@@ -14,7 +14,7 @@
 |---|---|---|
 | Malicious application | Any code in ring 3 with the standard client capabilities (RTC, VFS, audio, loader, TTS endpoints, its INIT slot) | Cannot read or write kernel memory or other tasks' private memory, cannot use privileged system calls, cannot obtain device access. Faults terminate only it. |
 | Compromised service without DMA | Everything its capabilities allow (e.g. `rtc`: CMOS ports; `vfs_server`: block endpoints; `shell`: kill, focus, logs, input injection) | Damage is limited to those capabilities and what transitively reaches through them (MC-1.6, MC-3.9). |
-| Malicious application and files | Writing files | An application's file client reads only; the shell's (the user's badge) writes on `ram:` and in `data/` of the boot disk; boot files and the rest of the disk are not writable through any client, and only `vfs_server` holds write-badged block clients (Appendix B.6). |
+| Malicious application and files | Writing files | An application's file client reads only; the shell's (the user's badge) writes on `ram:` and in `data/` of the boot disk, and the shell lends it to a program that asks for a file (`REQUEST_FILE`: the editor) — that program can then change any file there, not only the one it was started with; boot files and the rest of the disk are not writable through any client, and only `vfs_server` holds write-badged block clients (Appendix B.6). |
 | Malicious file content | Crafted FAT structures and ELF files on the boot disk | FAT parsing happens in `vfs_server` (ring 3, block endpoints only). ELF images of applications are parsed by the kernel's ELF loader with bounds checks; the loader rejects malformed images. Program origin is **not** authenticated. |
 
 ## Out of scope (not claimed)

@@ -18,10 +18,10 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [047](047-editor.md) | Editor `edit` | feature | P0 | 034, 042, 046 | G |
 | [048](048-fm-write-df-fsck.md) | `fm` write operations, `df`, `fsck` | feature | P1 | 043, 046, 047 | G |
 | [049](049-logd-dmesg.md) | `logd` and `dmesg` | feature | P1 | 038 | G (tools F10) |
 | [050](050-svc-lifecycle.md) | `svc` and lifecycle control | feature | P1 | 038; C6 | G, C6 |
+| [051](051-scoped-file-grants.md) | Scoped file grants for launched programs | security/architecture | P1 | — | G (tools F7) |
 
 ## Finished tasks (`issues-done/`)
 
@@ -70,5 +70,6 @@
 | [044](../issues-done/044-endpoint-badges-block-write.done) | Endpoint badges and block write | endpoint badges in the kernel; BLOCK_WRITE/FLUSH for the write badge; ATA/AHCI/USB write; `block` suite |
 | [045](../issues-done/045-ramdisk.done) | `ramdisk` block service | 8 MiB RAM disk service, formatted FAT16 and mounted as ram: |
 | [046](../issues-done/046-vfs-v2-fat-write.done) | `vfs_server` v2: directory handles, FAT write | vfs.wit 2.0 with handles and zones; FAT12/16/32 writer with long names; write-back cache; shell file commands |
+| [047](../issues-done/047-editor.done) | Editor `edit` | edit: piece table with undo, search/replace, menu and dialogs; saves via name.tmp; REQUEST_FILE lends the user's VFS client |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

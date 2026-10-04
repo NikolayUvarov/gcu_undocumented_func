@@ -1445,6 +1445,113 @@ def vfs_suite(args):
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it", flush=True)
 
 
+def edit_check(vm):
+    """The editor on the raw disk: new files on ram: and in data/ typed in Latin and Cyrillic, saved with F2 and from
+    the unsaved-changes dialog, read back; a CRLF file; a boot file opens read-only and is saved elsewhere."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    def utf8(line):
+        vm.send_bytes((line + "\n").encode())
+        return vm.expect("MIND> ")
+    def start(path):
+        vm.send_bytes(f"edit {path}\n".encode())
+        return status_line(vm, "[EDIT] READY")
+    def leave(data, text):
+        vm.send_bytes(data)
+        require(vm.expect("EXITED. SHELL RESUMED."), text)
+        time.sleep(.1); vm.collect(); vm.output = ""
+    f2, shift_f2, f10, ctrl_end = b"\x1bOQ", b"\x1b[12;2~", b"\x1b[21~", b"\x1b[1;5F"
+    # A new file on the RAM disk.
+    line = start("ram:hello.txt")
+    assert "LINE=1 COL=1 BYTES=0 LINES=1 MODIFIED=0 DIALOG=NONE MENU=0 RO=0" in line, line
+    keys("Hello, ".encode(), "BYTES=7 ")
+    keys("мир".encode(), "BYTES=13 ")
+    keys(b"\r", "LINE=2 COL=1 BYTES=14 ")
+    keys("строка 2".encode(), "LINE=2 COL=9 BYTES=28 LINES=2 MODIFIED=1")
+    # The keys (F1) open over the text; the Enter that leaving the QEMU monitor sends closes them.
+    keys(b"\x1bOP", "DIALOG=HELP")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    keys(b"\x1b[15~", "DIALOG=NONE")  # F5 is bound to nothing: a fresh state line (serial() may drop the last one)
+    assert canon("ram:hello.txt") in screen[0] and canon("Ln 2 Col 9") in screen[0] and canon("INS") in screen[0], screen[0]
+    assert screen[1].startswith(canon("Hello, мир")) and screen[2].startswith(canon("строка 2")), screen[1:3]
+    assert canon("2Save") in screen[-1] and canon("10Quit") in screen[-1], screen[-1]
+    assert any(canon("Ctrl+U or Alt+Backspace: undo") in row for row in screen), screen
+    keys(f2, "[EDIT] SAVED 28 BYTES TO ram:hello.txt")
+    leave(f10, "[EDIT] DONE")
+    output = utf8("cat ram:hello.txt")
+    require(output, "Hello, мир")
+    require(output, "строка 2")
+    # Reopened: a change, then F10 and Save in the dialog.
+    assert "BYTES=28 LINES=2 MODIFIED=0" in start("ram:hello.txt")
+    keys(ctrl_end, "LINE=2 COL=9 ")
+    keys(b"!", "BYTES=29 ")
+    keys(f10, "DIALOG=UNSAVED")
+    leave(b"\r", "[EDIT] SAVED 29 BYTES TO ram:hello.txt")
+    require(utf8("cat ram:hello.txt"), "строка 2!")
+    # A new file in data/ of the boot disk.
+    assert "BYTES=0 " in start("data/edit.txt")
+    keys(b"Line one", "BYTES=8 ")
+    keys(b"\r", "BYTES=9 ")
+    keys("Вторая строка".encode(), "BYTES=34 ")
+    keys(b"\r", "LINE=3 COL=1 BYTES=35 ")
+    keys(f2, "[EDIT] SAVED 35 BYTES TO data/edit.txt")
+    leave(f10, "[EDIT] DONE")
+    # A file with CR LF line endings keeps them; a new line gets one too.
+    assert "BYTES=15 LINES=3 MODIFIED=0" in start("data/crlf.txt")
+    keys(ctrl_end, "LINE=3 COL=1 ")
+    keys("три".encode(), "BYTES=21 ")
+    keys(b"\r", "LINE=4 COL=1 BYTES=23 ")
+    keys(b"4", "BYTES=24 ")
+    keys(f2, "[EDIT] SAVED 24 BYTES TO data/crlf.txt")
+    leave(f10, "[EDIT] DONE")
+    # A boot file opens read-only: typing changes nothing; Shift+F2 saves a copy on ram:, which may be changed.
+    assert "BYTES=33 LINES=2 MODIFIED=0 DIALOG=NONE MENU=0 RO=1" in start("readme.txt")
+    keys(b"x", "BYTES=33 LINES=2 MODIFIED=0")
+    keys(shift_f2, "DIALOG=SAVEAS")
+    keys(b"\x7f" * 10, "DIALOG=SAVEAS")
+    keys(b"ram:copy.txt", "DIALOG=SAVEAS")
+    keys(b"\r", "[EDIT] SAVED 33 BYTES TO ram:copy.txt")
+    keys(b"x", "BYTES=34 ")
+    keys(f10, "DIALOG=UNSAVED")
+    keys(b"\x1b[C", "DIALOG=UNSAVED")  # Right: Don't save
+    leave(b"\r", "[EDIT] DONE")
+    require(utf8("cat ram:copy.txt"), "Только для чтения")
+    require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only and is saved elsewhere", flush=True)
+
+
+def edit_suite(args):
+    """The editor on a raw FAT disk; the host then checks the image with fsck.fat and reads the files with mtools."""
+    if not raw_tools():
+        print("SKIP: edit suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / "usb_root") as temp:
+        readme, crlf = Path(temp) / "readme.txt", Path(temp) / "crlf.txt"
+        readme.write_bytes("Только для чтения\n".encode())
+        crlf.write_bytes("один\r\ntwo\r\n".encode())
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"readme.txt": readme})
+        part = f"{image}@@{start * 512}"
+        mtools = lambda *command: subprocess.run(list(command), env=MTOOLS_ENV, check=True, capture_output=True).stdout
+        mtools("mmd", "-i", part, "::/data")
+        mtools("mcopy", "-i", part, str(crlf), "::/data/crlf.txt")
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            edit_check(vm)
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-edit-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        assert mtools("mtype", "-i", part, "::/data/edit.txt") == "Line one\nВторая строка\n".encode()
+        assert mtools("mtype", "-i", part, "::/data/crlf.txt") == "один\r\ntwo\r\nтри\r\n4".encode()
+        assert mtools("mtype", "-i", part, "::/readme.txt") == readme.read_bytes()
+        names = mtools("mdir", "-b", "-i", part, "::/data").decode().split()
+        assert sorted(n.rsplit("/", 1)[-1] for n in names) == ["crlf.txt", "edit.txt"], names
+    print("PASS: edit image: fsck.fat clean; mtools reads the saved files byte for byte; no temporary files left", flush=True)
+
+
 def block_suite(args, block_elf):
     """Block write through each driver: a raw FAT image (the file system in its first 60 MiB) boots with the test
     stand-in for vfs_server, which writes 8 sectors near the end of the disk through the write-badged client init
@@ -1605,10 +1712,10 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1623,6 +1730,9 @@ def main():
             continue
         if suite == "vfs":
             vfs_suite(args)
+            continue
+        if suite == "edit":
+            edit_suite(args)
             continue
         with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
             disk = Path(temp)
