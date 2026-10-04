@@ -20,10 +20,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
+| [088](088-text-window-manager.md) | `wm`: text window manager (windows, dragging, snapping to edges and corners, programs in windows) | tools | P2 | — (mouse: 156) | track G |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
 | [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell + kernel | P2 | — (extends 154) | track G |
+| [156](156-ps2-mouse.md) | PS/2 mouse: pointer events for the focused program | kernel | P2 | — | track G (for 088) |
 
 ## Finished tasks (`issues-done/`)
 
