@@ -18,3 +18,4 @@ pub mod sysinfo;
 pub mod tls;
 pub mod tts;
 pub mod vfs;
+pub mod voice;

@@ -182,7 +182,8 @@ fn bounds(samples: &[i16]) -> (usize, usize) {
     (first * 5 * MS, ((last + 1) * 5 * MS).min(samples.len()))
 }
 
-const PHRASES: [&str; 4] = ["открой файлы", "который час?", "покажи процессы", "hello world"];
+// Short answers too: «да» is a quarter of a second of sound (a confirmation, issue 079).
+const PHRASES: [&str; 6] = ["открой файлы", "да", "который час?", "нет", "покажи процессы", "hello world"];
 
 /// The phrases with silence between them: the signal and each phrase's bounds in it.
 fn compose(phrases: &[&str], gap_ms: usize) -> (Vec<i16>, Vec<(usize, usize)>) {
@@ -410,6 +411,21 @@ fn rejects_phrases_outside_the_grammar() {
     let accepted: Vec<_> = results.iter().filter(|(_, p)| p.is_some()).collect();
     println!("accepted {} of {}: {:?}", accepted.len(), results.len(), accepted);
     assert!(accepted.len() * 10 <= OUTSIDE.len(), "at most 10 % accepted: {:?}", accepted);
+}
+
+#[test]
+fn a_confirmation_hears_only_yes_or_no() {
+    // The shell's questions (issue 079) take a closed grammar — yes, no, cancel — and a command is no answer.
+    let r = recognizer();
+    let closed = |p: &grammar::Phrase| matches!(p.intent.as_str(), "yes" | "no" | "cancel");
+    for (i, (text, intent)) in [("да", "yes"), ("нет", "no"), ("конечно", "yes"), ("yes", "yes"), ("no", "no"), ("отмена", "cancel")].into_iter().enumerate() {
+        let heard = r.recognize_where(&noisy(text, [95, 122, 150][i % 3], 100, 70 + i as u64), &closed).unwrap();
+        assert_eq!(heard.phrase().map(|p| r.grammar.phrases[p].intent.as_str()), Some(intent), "{}", text);
+    }
+    for (i, text) in ["открой файлы", "который час", "останови службу rtc", "what time is it", "сегодня хорошая погода"].into_iter().enumerate() {
+        let heard = r.recognize_where(&noisy(text, 122, 100, 80 + i as u64), &closed).unwrap();
+        assert_eq!(heard.phrase().map(|p| r.grammar.phrases[p].text.as_str()), None, "{} is no answer", text);
+    }
 }
 
 #[test]

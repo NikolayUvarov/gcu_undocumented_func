@@ -90,7 +90,8 @@ A change that alters the meaning or layout of an existing function increments th
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times) | 1.1.0 |
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
-| [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
+| [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`; 1.1: the microphone has one owner at a time, others get `busy`) | 1.1.0 |
+| [`idl/voice.wit`](../../idl/voice.wit) | the shell, for the `voice` program it starts (voice control: `next` reports what was heard and is answered with the next order — at once, or at push-to-talk: `Call::defer`) | 1.0.0 |
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt) | 1.0.0 |
 | [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge) | 2.0.0 |
 | [`idl/netpolicy.wit`](../../idl/netpolicy.wit) | `netpolicy` (a grant is handed over by a word call, `take`, which carries the capability) | 1.0.0 |

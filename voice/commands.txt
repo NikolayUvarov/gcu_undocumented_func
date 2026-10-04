@@ -6,6 +6,12 @@
 slot tool: файлы = fm, файловый менеджер = fm, редактор = edit, процессы = top, задачи = top, память = memmap, загрузку = load, оборудование = hw, журнал = dmesg, службы = svc, files = fm, file manager = fm, editor = edit, processes = top, tasks = top, memory = memmap, load = load, hardware = hw, log = dmesg, services = svc
 
 open: открой {tool} | запусти {tool} | покажи {tool} | open {tool} | start {tool} | show {tool}
+slot service: rtc = rtc, часов = rtc, clock = rtc, сети = netstack, network = netstack, мониторинга = sysmon, monitor = sysmon
+stop: останови службу {service} | stop the service {service}
+restart: перезапусти службу {service} | restart the service {service}
+memory: сколько свободной памяти | how much memory is free
+slot file: заметки = docs/notes.txt, notes = docs/notes.txt
+read: прочитай {file} | read the {file}
 time: который час | сколько времени | what time is it
 date: какое сегодня число | какой сегодня день | what is the date | what day is it
 help: что ты умеешь | помощь | what can you do | help

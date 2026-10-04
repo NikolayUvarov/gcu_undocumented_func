@@ -186,6 +186,7 @@ fn main(_info: &'static BootInfo) {
     let irq = Irq(SLOT_IRQ);
     let mut waiters: [Option<(Call, u8)>; WAITERS] = [const { None }; WAITERS];
     let mut overflows = 0u32;
+    let mut owner: Option<u64> = None; // the task that owns the microphone capture
     match &device {
         Some(_) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
         None => mind::println!("[AUDIO] NO AC97 DEVICE; GATEWAY ANSWERS WITHOUT OUTPUT"),
@@ -202,6 +203,10 @@ fn main(_info: &'static BootInfo) {
             continue;
         }
         // idl/audio.wit. PCM and capture travel in the client's lent buffer, mapped only for the call.
+        let sender = request.sender;
+        // The capture has one owner (1.1); a task that ended owns nothing.
+        if owner.is_some_and(|pid| pid != sender && !mind::process::alive(pid)) { owner = None; }
+        let foreign = owner.is_some_and(|pid| pid != sender);
         let (request, call) = match audio::decode(&request, RECEIVED_CAP) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
         let lent = |slot: usize| Mapping::new(slot).map_err(|_| Error::Invalid);
         let _ = match (request, device.as_mut()) {
@@ -227,8 +232,17 @@ fn main(_info: &'static BootInfo) {
             (audio::Request::RecordRead { .. }, None) => audio::reply_record_read(call, Err(Error::NotFound)),
             (audio::Request::Tone { hz, ms }, Some(d)) => audio::reply_tone(call, Ok(d.tone(hz as usize, ms as usize) as u32)),
             (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&device, &mut waiters, true); replied }
-            (audio::Request::RecordStart, Some(d)) => { overflows = 0; audio::reply_record_start(call, if d.record_start() { Ok(()) } else { Err(Error::NotFound) }) }
-            (audio::Request::RecordStop, Some(d)) => { d.record_stop(); audio::reply_record_stop(call, Ok(())) }
+            (audio::Request::RecordStart, Some(_)) if foreign => audio::reply_record_start(call, Err(Error::Other(ERR_BUSY))),
+            (audio::Request::RecordStop, Some(_)) if foreign => audio::reply_record_stop(call, Err(Error::Other(ERR_BUSY))),
+            (audio::Request::RecordRead { .. }, Some(_)) if foreign => audio::reply_record_read(call, Err(Error::Other(ERR_BUSY))),
+            (audio::Request::RecordStart, Some(d)) => {
+                overflows = 0;
+                if owner.is_none() { d.record_stop(); } // a capture left by a task that ended starts afresh
+                let started = d.record_start();
+                if started { owner = Some(sender); }
+                audio::reply_record_start(call, if started { Ok(()) } else { Err(Error::NotFound) })
+            }
+            (audio::Request::RecordStop, Some(d)) => { d.record_stop(); owner = None; audio::reply_record_stop(call, Ok(())) }
             (audio::Request::RecordRead { capacity, buffer }, Some(d)) => {
                 let result = lent(buffer).map(|mut out| { let len = (capacity as usize).min(out.len()); let (bytes, lost) = d.record_read(&mut out.as_mut_slice()[..len]); overflows += lost as u32; bytes as u32 });
                 audio::reply_record_read(call, result)

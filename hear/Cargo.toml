@@ -5,7 +5,19 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
-# Offline voice command recognizer (docs/voice V1, issue 078): mind::voice with the phonetics shared with tts.
+# Offline voice command recognizer (docs/voice V1, issue 078) and the voice side of voice control (V2, issue 079):
+# mind::voice with the phonetics shared with tts.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hear"
+path = "src/main.rs"
+
+[[bin]]
+name = "voice"
+path = "src/bin/voice.rs"
+
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
 phonetics = { path = "../phonetics" }

@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
-# Licences travel with the image: tts.elf and hear.elf embed third-party dictionaries, the text programs the MIND Mono
+# Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font (THIRD_PARTY.md).
 LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", "LICENSES/CC-BY-SA-4.0.txt", "LICENSES/CMUdict-BSD.txt",
             "LICENSES/OFL-1.1.txt")
-# The voice recognizer's model and grammar (hear, issue 078).
+# The voice recognizer's model and grammar (hear and voice, issues 078-079).
 VOICE = ("voice/model.bin", "voice/commands.txt")
 FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE)
 SECTOR = 512

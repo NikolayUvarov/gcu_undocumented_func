@@ -2189,6 +2189,8 @@ def audio_suite(vm, wav):
 SPEECH = ("открой файлы", "который час", "hello world")
 # For `hear` (issue 078): two commands and a phrase outside the grammar.
 COMMANDS = ("открой файлы", "what time is it", "сегодня хорошая погода")
+# For voice control (issue 079): what is said at each push-to-talk, the answers to the shell's questions included.
+DIALOGUE = ("открой файлы", "который час", "останови службу rtc", "нет", "останови службу rtc", "да", "прочитай заметки", "сегодня хорошая погода")
 
 
 def speech_wav(phrases=SPEECH):
@@ -2293,10 +2295,94 @@ def listen_suite(vm, starts):
     require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "NOTHING HEARD")
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
     require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] | HEAR --wav FILE")
+    # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does.
+    pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen 10 &"))[1]
+    vm.send("hear 1\n")
+    require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "HEAR: THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)")
+    vm.command(f"kill {pid}")
+    voice_control(vm)
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in), playback, program arguments, run by name, "
+    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
-          "voice commands recognized by hear", flush=True)
+          "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
+          "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
+
+
+def voice_control(vm):
+    """Voice control (issue 079): the shell starts voice with a WAV file standing in for the microphone; each
+    push-to-talk takes the file's next utterance, and the shell's questions take the one after."""
+    output = vm.command("voice on --wav voice.wav")
+    require(output, "VOICE CONTROL ON. F12 OR VOICE LISTEN")
+    pid = re.search(r"STARTED PID=(\d+) NAME=voice BACKGROUND", output)[1]
+    log = ""
+    for _ in range(240):
+        log += vm.command(f"logs {pid}")
+        if "[VOICE] READY" in log:
+            break
+        time.sleep(.25)
+    require(log, f"UTTERANCES FROM voice.wav")
+    assert f"{len(DIALOGUE)} UTTERANCES FROM voice.wav" in log, log
+    require(vm.command("voice on"), "ERROR: VOICE CONTROL IS ALREADY ON")
+    require(vm.command("voice"), f"VOICE CONTROL ON PID={pid}")
+    # Least authority: the line to the shell (SLOT_INIT), the read-only file, audio and tts clients; no clock, no loader.
+    caps = vm.command(f"caps {pid}")
+    endpoints = sorted(int(slot) for slot in re.findall(r"^SLOT=(\d+) GEN=\d+ endpoint ", caps, re.M))
+    assert endpoints == [1, 3, 4, 6], caps
+    assert not re.search(r"^SLOT=\d+ GEN=\d+ (?!endpoint|memory)", caps, re.M), caps
+
+    def turn(until, key=False):
+        # Push-to-talk (F12, or the command) and what the shell made of the utterance.
+        vm.send("\x1b[24~" if key else "voice listen\n", raw=key)
+        return vm.expect(until, timeout=180)
+    # "открой файлы" starts fm in the foreground, with the shell's spoken answer.
+    output = turn("NAME=fm FOREGROUND")
+    require(output, 'VOICE: "открой файлы" (')
+    require(output, ") -> Запускаю файловый менеджер")
+    require(output, "VOICE: RUN fm")
+    fm = re.search(r"STARTED PID=(\d+) NAME=fm FOREGROUND", output)[1]
+    vm.background(fm)
+    vm.command(f"kill {fm}")
+    # "который час": the time in words (the synthesizer would read digits one by one).
+    output = turn(" минут", key=True)
+    require(output, "VOICE: LISTENING")
+    assert re.search(r'VOICE: "который час" \(\d+\) -> Сейчас [а-я ]+ (час|часа|часов) [а-я ]+ минут', output), output
+    # A service is stopped only after yes: "нет" cancels, "да" stops it.
+    output = turn("-> Отменено")
+    require(output, 'VOICE: "останови службу rtc" (')
+    require(output, "-> Остановить службу rtc?")
+    require(output, 'VOICE: "нет" (')
+    assert "VOICE: STOPPED" not in output and "rtc" in vm.services(), output
+    output = turn("VOICE: STOPPED rtc")
+    require(output, 'VOICE: "да" (')
+    require(output, "-> Останавливаю службу rtc")
+    assert "rtc" not in vm.services()
+    require(vm.command("date"), "RTC NOT AVAILABLE")
+    require(vm.command("run rtc &"), "NAME=rtc")
+    # A file read aloud: its first lines.
+    output = turn("VOICE: READ docs/notes.txt")
+    require(output, 'VOICE: "прочитай заметки" (')
+    # A phrase outside the grammar is answered and runs nothing; then the file has nothing more to say.
+    output = turn("-> Не понял")
+    require(output, "VOICE: NOT UNDERSTOOD (CLOSEST")
+    assert "VOICE: RUN" not in output and "STARTED PID=" not in output, output
+    require(turn("VOICE: NOTHING HEARD"), "VOICE: LISTENING")
+    time.sleep(1)
+    log = vm.command(f"logs {pid}")
+    for line in ("[VOICE] SAY Запускаю файловый менеджер", "[VOICE] SAY Сейчас", "[VOICE] SAY Остановить службу rtc?", "[VOICE] SAY Отменено",
+                 "[VOICE] SAY Останавливаю службу rtc", "[VOICE] SAY Строка 1: съешь же ещё этих мягких французских булок, да выпей чаю. Line 1.\n",
+                 "[VOICE] SAY Не понял", '[VOICE] HEARD "да" INTENT=yes', "[VOICE] NOTHING HEARD"):
+        require(log, line)
+    # voice waits for the next push-to-talk: `voice off` answers its call with quit.
+    require(vm.command("voice off"), "VOICE CONTROL OFF")
+    for _ in range(40):
+        if not re.search(r"^\d+ voice ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("voice did not quit")
+    require(vm.command("voice"), "VOICE CONTROL OFF")
+    require(vm.command("voice listen"), "ERROR: VOICE CONTROL IS OFF (VOICE ON)")
+    require(vm.command("voice x"), "USAGE: VOICE ON [--wav FILE] [SECONDS] | VOICE OFF | VOICE LISTEN")
 
 
 def tts_suite(vm, wav, asr_model=None):
@@ -2755,6 +2841,9 @@ def main():
                 speech, starts = speech_wav()
                 (disk / "speech.wav").write_bytes(speech)
                 (disk / "commands.wav").write_bytes(speech_wav(COMMANDS)[0])
+                (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
+                (disk / "docs").mkdir()
+                (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
             if suite == "tools":
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())

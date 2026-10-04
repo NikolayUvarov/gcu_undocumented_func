@@ -75,6 +75,7 @@ USER_CRATES=(
     "say:say:say.elf"
     "listen:listen:listen.elf"
     "hear:hear:hear.elf"
+    "hear:voice:voice.elf"
     "files:files:files.elf"
     "keys:keys:keys.elf"
     "view:view:view.elf"
@@ -122,7 +123,7 @@ for entry in "${USER_CRATES[@]}"; do
     cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
-# Licences travel with the image: tts.elf and hear.elf embed third-party dictionaries, the text programs the MIND Mono
+# Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font, tls.elf and keystore.elf BSD and ISC licensed crypto crates (THIRD_PARTY.md). The voice recognizer reads its
 # model and grammar from voice/ (issue 078).
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"

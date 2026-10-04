@@ -19,7 +19,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | — (078 done) | track G |
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
 | [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | benchmark | track D |
@@ -109,6 +108,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [076](../issues-done/076-monitors-show-restored-stat-fields.done) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0) | done (2026-10-04) |
 | [077](../issues-done/077-voice-audio-front-end.done) | Voice V0: audio front end (`mind::voice`, `listen --vad/--wav`) | done (2026-10-04) |
 | [078](../issues-done/078-voice-command-recognizer.done) | Voice V1: offline command recognizer (`hear`, `mind::voice` model and grammar) | done (2026-10-04) |
+| [079](../issues-done/079-voice-control-in-the-shell.done) | Voice V2: voice control in the shell (`voice`, `idl/voice.wit`, confirmations, spoken replies, `audio.wit` 1.1) | done (2026-10-04) |
 | [080](../issues-done/080-ipc-tool.done) | `ipc`: endpoints, holders, wait-for graph | done (2026-10-04) |
 | [081](../issues-done/081-caps-tool.done) | `caps`: capabilities and the derivation tree (`sysinfo.wit` 3.0 authority) | done (2026-10-04) |
 | [082](../issues-done/082-find-and-grep.done) | `find` and `grep` | done (2026-10-04) |

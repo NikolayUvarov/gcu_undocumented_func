@@ -233,7 +233,7 @@ pub const HOP: usize = 160;
 pub const START_FRAMES: usize = 3;
 /// Frames below the threshold that end it (200 ms).
 pub const HANGOVER_FRAMES: usize = 20;
-pub const MIN_MS: u64 = 300;
+pub const MIN_MS: u64 = 200;
 pub const MAX_MS: u64 = 8_000;
 /// How far the bounds of an utterance may grow over quieter frames before its first and after its last voiced frame
 /// (a breathy «х», a fading vowel).

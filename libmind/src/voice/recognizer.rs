@@ -3,7 +3,7 @@
 //! the model's `accept`) and clearly better than the best phrase meaning something else (`margin`). Host tests include
 //! this file.
 use super::features::{normalize, Features};
-use super::grammar::{Decoded, Grammar};
+use super::grammar::{Decoded, Grammar, Phrase};
 use super::model::Model;
 
 pub struct Recognizer { pub features: Features, pub model: Model, pub grammar: Grammar, silence: u16 }
@@ -25,11 +25,14 @@ impl Recognizer {
     }
 
     /// Recognizes 16 kHz mono speech (an utterance, with or without silence around it).
-    pub fn recognize(&self, samples: &[i16]) -> Option<Recognition> {
+    pub fn recognize(&self, samples: &[i16]) -> Option<Recognition> { self.recognize_where(samples, &|_| true) }
+
+    /// `recognize` among the phrases `keep` chooses (for instance only yes and no).
+    pub fn recognize_where(&self, samples: &[i16], keep: &dyn Fn(&Phrase) -> bool) -> Option<Recognition> {
         let mut features = self.features.log_mel(samples);
         normalize(&mut features);
         let scores = self.model.scores(&features);
-        let decoded = self.grammar.decode(&scores, self.model.classes.len(), self.silence)?;
+        let decoded = self.grammar.decode_where(&scores, self.model.classes.len(), self.silence, keep)?;
         Some(Recognition { decoded, accepted: decoded.deficit() <= self.model.accept && decoded.margin() >= self.model.margin })
     }
 }

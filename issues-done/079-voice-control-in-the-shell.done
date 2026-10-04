@@ -1,0 +1,37 @@
+# 079 — Voice V2: voice control in the shell — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — (078 done) · **Roadmap:** track G · **Constitution:** Art. 8.1–8.2, 11.5, MC-3.7, MC-3.11
+
+## Problem
+
+With a recognizer (078) the system can hear commands but cannot act on them or answer. The voice path must propose, and the shell — the user's agent — must decide, with the same rules as typed commands ([docs/voice](../docs/voice/README.md) §2–3, V2).
+
+## Plan
+
+- `voice` (console program): the shell starts it in a launch session and lends the audio client, the `tts` client and an endpoint back to the shell (`SLOT_INIT`, the ping/pong slot). It records an utterance on request, recognizes it, sends `intent { verb, object, arguments, confidence, text }` to the shell, and speaks the shell's reply. It holds nothing else.
+- Shell: push-to-talk with F12 (press: listen for one utterance; Esc cancels); the intent appears as `voice: открой файлы` and becomes a command line through the shell's own command table. Stop, kill, delete, format and reboot ask for confirmation, answered by voice (closed yes/no grammar) or Enter/Esc. The shell answers through `tts` ("Запускаю файловый менеджер", "Не понял").
+- Commands: open and close the tools (`fm`, `edit <file>`, `view <file>`, `top`, `memmap`, `load`, `hw`, `dmesg`, `svc`), time and date, free memory, read a file aloud (`say` of its first lines), stop or restart a service (confirmed).
+- `audio_gw`: one capture owner at a time — `record-start` fails with `busy` while another client records (`idl/audio.wit` 1.1), so `listen`, `hear` and `voice` never mix streams.
+- Push-to-talk works while the shell has the focus; a key that works over any program is kernel issue [154](../issues/154-push-to-talk-routing.md).
+
+## Acceptance criteria
+
+- QEMU with a WAV source standing in for the microphone: "открой файлы" starts `fm`; "который час" makes the shell speak the time; "останови службу rtc" asks for confirmation and stops `rtc` only after "да"; an out-of-grammar phrase is answered "Не понял" and runs nothing.
+- `voice` holds no capability besides the audio and `tts` clients, its file client and the endpoint to the shell (checked with `caps`).
+- README, `docs/voice` (EN/RU) and the shell's `help` describe voice control.
+
+## Resolution
+
+- **The line** `idl/voice.wit` (`mind:voice` 1.0, generated `libmind/src/idl/voice.rs`): `voice` calls `next` with what it heard (nothing; a refused utterance and its closest phrase; or the phrase, intent, slots and confidence) and gets an order — a text to speak, then `wait`, `listen`, `listen-yes-no` or `quit`. The shell serves it on an endpoint of its own (init gives the shell a quota of one endpoint) and defers the call (`Call::defer`) until push-to-talk, in its main loop instead of the 10 ms sleep (`recv_timeout`).
+- **`voice`** (`hear/src/bin/voice.rs`; `hear` became a library plus two programs sharing the model loading and utterance code, `hear/src/lib.rs`): a console program the shell starts in a launch session with the client in `SLOT_INIT`; it drops the clock and loader clients at start, so it holds the line to the shell and the audio, `tts` and read-only file clients — checked with `caps` in the QEMU test (endpoints in slots 1, 3, 4, 6; the call buffer besides). `voice [--wav FILE] [SECONDS]`: one utterance from the microphone per push-to-talk (default 6 s), or the next utterance of a WAV file. Yes/no questions are recognized with a closed grammar (`Recognizer::recognize_where`, `Grammar::decode_where`). After speaking it waits for the speech to end (`tts` answers when the speech is queued), so it does not hear itself and the shell may reboot at its next call.
+- **The shell** (`shell/src/voicectl.rs`): `voice on [--wav FILE] [SECONDS]`, `voice off`, `voice listen`, `voice`; F12 is push-to-talk while the shell has the focus (154 for any focus), Esc cancels; Enter (on an empty line) and Esc answer a pending question. The dialogue answers in the phrase's language: open a tool (`fm`, `edit`, `top`, `memmap`, `load`, `hw`, `dmesg`, `svc`, started like a typed command through `start`) and close the last one, the time and date in words, free memory, read `docs/notes.txt` aloud, stop or restart `rtc`, `netstack`, `sysmon` and reboot (asked back, only yes goes ahead), help, repeat; "Не понял" / "I did not understand" otherwise. Each phrase shows as `VOICE: "который час" (973) -> Сейчас восемнадцать часов четыре минуты`, and the action as `VOICE: RUN fm`, `VOICE: STOPPED rtc`. `start_with` lends extra capabilities in a launch session.
+- **Grammar** (`voice/commands.txt`): stop/restart a service, free memory, read a file; the model retrained (181 phrases; 1086/1086 recognized in the host test, 0 of 50 outside phrases accepted).
+- **Short answers:** «да» (≈ 250 ms of sound) was dropped by the detector's 300 ms minimum — now 200 ms; «нет» was refused because the detector's tight bounds cut its final «т» — utterances now reach the recognizer with up to 200 ms of the stream around them (`hear::CONTEXT_MS`), as the model was trained.
+- **`audio_gw`** (`idl/audio.wit` 1.1): one capture owner; `record-start/read/stop` answer `busy` to others while the owner lives (`hear`: `THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)`).
+- **Tests:** `tests/voice_host.rs` — closed yes/no grammar (answers taken, commands refused), «да» and «нет» detected as utterances; QEMU `listen` suite — capture busy for a second recorder; `voice on --wav` with eight utterances: «открой файлы» starts `fm`, «который час» answered with the time (F12), «останови службу rtc» asked back and «нет» cancels with `rtc` still running, asked again «да» stops it (`date`: RTC NOT AVAILABLE), «прочитай заметки» speaks the first line of `docs/notes.txt`, «сегодня хорошая погода» answered «Не понял» with nothing run, an empty queue NOTHING HEARD, `voice off` ends it; `voice` holds only its four clients.
+- **Docs:** README (`voice` command, capture owner), [docs/voice](../docs/voice/README.md) V2 (EN/RU), [docs/idl](../docs/idl/README.md) (voice.wit, audio.wit 1.1), the shell's `help`.
+- **Not done here:** `view <file>` and `edit <file>` by voice (no file names in the grammar yet), "say what is on the screen line"; push-to-talk over other programs is kernel issue [154](../issues/154-push-to-talk-routing.md).
+
+## Related
+
+[078](078-voice-command-recognizer.done), [154](../issues/154-push-to-talk-routing.md), [docs/voice](../docs/voice/README.md).

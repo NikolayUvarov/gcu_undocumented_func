@@ -17,4 +17,4 @@ Input events go to the focused task; only the attention key (Ctrl+Z) reaches the
 
 ## Related
 
-[079](079-voice-control-in-the-shell.md), [docs/voice](../docs/voice/README.md).
+[079](../issues-done/079-voice-control-in-the-shell.done), [docs/voice](../docs/voice/README.md).

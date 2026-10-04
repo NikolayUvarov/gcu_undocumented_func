@@ -98,10 +98,13 @@ impl Grammar {
 
     /// Decodes an utterance: `scores` holds `classes` scores per frame (0 for each frame's best class, see
     /// `Model::scores`), `silence` is the silence class. None without frames or phrases.
-    pub fn decode(&self, scores: &[i32], classes: usize, silence: u16) -> Option<Decoded> {
+    pub fn decode(&self, scores: &[i32], classes: usize, silence: u16) -> Option<Decoded> { self.decode_where(scores, classes, silence, &|_| true) }
+
+    /// `decode` among the phrases `keep` chooses (a closed grammar, such as yes or no for a confirmation).
+    pub fn decode_where(&self, scores: &[i32], classes: usize, silence: u16, keep: &dyn Fn(&Phrase) -> bool) -> Option<Decoded> {
         let frames = scores.len() / classes;
-        if frames == 0 || self.phrases.is_empty() { return None; }
-        let mut results: Vec<(usize, i32)> = self.phrases.iter().enumerate().map(|(i, p)| (i, viterbi(&states(&p.tokens, silence), scores, classes, frames))).collect();
+        let mut results: Vec<(usize, i32)> = self.phrases.iter().enumerate().filter(|(_, p)| keep(p)).map(|(i, p)| (i, viterbi(&states(&p.tokens, silence), scores, classes, frames))).collect();
+        if frames == 0 || results.is_empty() { return None; }
         results.sort_by(|a, b| b.1.cmp(&a.1));
         let (best, score) = results[0];
         let same = |i: usize| self.phrases[i].intent == self.phrases[best].intent && self.phrases[i].slots == self.phrases[best].slots;

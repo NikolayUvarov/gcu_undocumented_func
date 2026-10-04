@@ -1,0 +1,16 @@
+/// Voice control (docs/voice V2, issue 079): the line from the `voice` program to the shell. The shell starts `voice` and
+/// lends it a client of this interface in SLOT_INIT; `voice` hears and recognizes, the shell — the user's agent —
+/// decides what a phrase does and what to answer, with the same rules as for typed commands (Art. 8.1–8.2, MC-3.11).
+package mind:voice@1.0.0;
+
+interface voice {
+    /// What `voice` does after speaking the order's text: wait for the next push-to-talk, listen at once (for a
+    /// question the shell asked), listen for yes or no only (a confirmation), or end.
+    enum action { wait, listen, listen-yes-no, quit }
+    /// Speak `say` (nothing if empty), then do `action`.
+    record order { say: string<240>, action: action }
+    /// What the last utterance was — `heard` false at the start, after `wait` and when nothing was heard; `understood`
+    /// false when the recognizer refused it — and the next order. The shell answers when it has one: at push-to-talk,
+    /// or at once with its reply.
+    next: func(heard: bool, understood: bool, text: string<120>, intent: string<16>, slots: string<120>, confidence: u16) -> order;
+}

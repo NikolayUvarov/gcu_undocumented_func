@@ -10,6 +10,7 @@ mod net;
 mod observe;
 mod power;
 mod screenshot;
+mod voicectl;
 
 use console::{Console, Position, COM1};
 use core::fmt::Write;
@@ -25,7 +26,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 45] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "tls", "write"];
+const COMMANDS: [&str; 46] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "tls", "voice", "write"];
 const NAMES: usize = 64;
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -35,6 +36,7 @@ struct Shell {
     term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
     console: Option<u64>, // console program running in the shell
     names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
+    voice: voicectl::Voice,
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -146,7 +148,10 @@ impl Shell {
     // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`,
     // its sysmon client with the authority badge (who holds what) for `REQUEST_AUTHORITY`, in SLOT_SYSINFO in place of
     // the plain one. Nothing is granted by program name.
-    fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
+    fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> { self.start_with(name, args, service, &[]) }
+
+    // `start`, lending `extra` (slot in the program, capability here) too.
+    fn start_with(&mut self, name: &[u8], args: &[u8], service: bool, extra: &[(usize, usize)]) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
             let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
@@ -176,7 +181,8 @@ impl Shell {
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)];
-        let lent = wanted.iter().filter(|w| w.0).try_for_each(|&(_, slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
+        let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
+            .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         // A program that asks for the network gets what the policy broker grants it, or runs without (issue 102).
@@ -293,7 +299,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -328,6 +334,8 @@ impl Shell {
             self.term.clear();
         } else if is(b"reboot") {
             power::reboot(&mut self.term, args);
+        } else if is(b"voice") {
+            self.voice_command(args);
         } else if is(b"keymap") {
             keymap::command(&mut self.term, args);
         } else if is(b"screenshot") {
@@ -469,6 +477,8 @@ impl Shell {
             if key.is_escape() || key.is_ctrl('c') { if control::kill(pid).is_ok() { let _ = write!(self.term, "^C"); } }
             return;
         }
+        // F12: push-to-talk; Esc or Enter answers a question voice control asked (issue 079).
+        if self.voice_key(key) { return; }
         if key.shift() && matches!(key.code(), Code::PageUp | Code::PageDown) { self.term.scroll(key.code() == Code::PageUp); return; }
         self.term.unscroll();
         if key.is_ctrl('l') { self.term.clear(); let _ = write!(self.term, "MIND> "); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
@@ -528,7 +538,7 @@ fn main(info: &'static BootInfo) {
     let own = control::focus(0, false).unwrap_or(0);
     let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
-                            names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0 };
+                            names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default() };
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
@@ -559,7 +569,14 @@ fn main(info: &'static BootInfo) {
         while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } }
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         shell.term.render(cursor);
-        mind::time::sleep(10);
+        // Wait for the next tick, or for the voice program's call.
+        match shell.voice.endpoint {
+            Some(endpoint) => {
+                if let Ok(request) = endpoint.recv_timeout(voicectl::VOICE_RECEIVE, 10) { shell.voice_message(&request); }
+                shell.voice_check();
+            }
+            None => { let _ = mind::time::sleep(10); }
+        }
     }
 }
 

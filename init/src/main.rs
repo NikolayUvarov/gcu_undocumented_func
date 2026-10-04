@@ -247,8 +247,13 @@ impl Init {
         // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
         if name == "shell" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
-        // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each.
-        let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
+        // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each; the shell
+        // serves voice control on one endpoint of its own (issue 079).
+        let quota = match name {
+            "loader" => Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 },
+            "shell" => Quota { tasks: 0, endpoints: 1 },
+            _ => Quota::default(),
+        };
         let plan = Plan { grants, flags, quota };
         let pid = self.spawn(index, plan)?;
         minted.count = 0; // kept for restarts
