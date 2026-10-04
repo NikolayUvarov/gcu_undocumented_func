@@ -510,7 +510,7 @@ def shell_suite(vm):
             time.sleep(.01)
         raise AssertionError(f"Timeout waiting for {fragment!r} and a prompt: {vm.output[-3000:]}")
     # Edit in the middle: type "ist", go Home, insert "l", go End, Enter -> "list".
-    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK:")
+    keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
     keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
     vm.command("clock")
@@ -1546,6 +1546,18 @@ def services_suite(vm):
     for name in ("clock", "dzen-clock", "hello", "files"):
         require(listing, f"  {name} ")
     assert "kernel " not in listing
+    # Sorted down the columns and short enough for the screen (one per line, fm scrolled off the top); the services
+    # on their own line; -l says what each program does.
+    rows = [line for line in listing.splitlines() if line.startswith("  ")]
+    count = int(re.search(r"PROGRAMS ON DISK \((\d+)\)", listing)[1])
+    names = [name for row in rows for name in row.split()]
+    assert len(names) == count and "fm" in names and "vfs_server" not in names and len(rows) < 20, listing
+    assert sorted(names) == [rows[r].split()[c] for c in range(len(rows[0].split())) for r in range(len(rows)) if c < len(rows[r].split())], listing
+    require(listing, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): init logd rtc")
+    detailed = vm.command("list -l")
+    assert re.search(r"^  fm +\d+ KB  file manager: two panels", detailed, re.M), detailed
+    assert re.search(r"^  hello +\d+ KB *$", detailed, re.M), detailed  # a program the shell does not know: its size
+    require(vm.command("list x"), "USAGE: LIST [-L]")
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
