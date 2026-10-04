@@ -17,7 +17,8 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge | kernel | P3 | — | track G, T1 |
+| [075](075-stat-fields-for-the-monitors.md) | `STAT` fields the monitors lost in the merge: PCI location, guard page, the driver as holder, limits, kernel memory | kernel | P2 | — | track G, T1 |
+| [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | 075 | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
 
