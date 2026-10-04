@@ -56,7 +56,7 @@ The shell runs in ring 3. It reads the UART itself, forwards bytes to the focuse
 
 ### IPC
 
-Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used; with `CAP_TRANSFER_MOVE` in the rights word the capability is moved, not copied). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`; a send to an endpoint that no live task can receive from fails with `ERR_PEER` at once. A server can keep a client waiting: `IPC_SAVE_REPLY` moves the pending reply into a one-time capability (it cannot be transferred), the server goes on receiving other requests and later answers with `IPC_REPLY` naming that slot.
+Endpoints are rendezvous points. `IPC_SEND` blocks until a receiver takes the message; several senders queue in arrival order. `IPC_CALL` sends and then waits for the server's `IPC_REPLY`, so a client needs no reply endpoint of its own. A message carries two data words and, optionally, one capability from the sender's slot (endpoint rights can be narrowed; transfer requires the grant right on the endpoint used; with `CAP_TRANSFER_MOVE` in the rights word the capability is moved, not copied). The receiver learns the sender's PID. If a server dies while a client waits for its reply, the client is woken with `ERR_PEER`; a send to an endpoint that no live task can receive from fails with `ERR_PEER` at once. At most eight senders wait on one endpoint; another send fails with `ERR_BUSY` (libmind waits a tick and retries). The endpoint word may carry a timeout in milliseconds (`IPC_TIMEOUT_SHIFT`, `call_timeout`, `recv_timeout`, `send_timeout`): when it passes, the operation fails with `ERR_TIMEOUT`, a queued send is withdrawn with its capability, and a server's late reply to an abandoned call fails with `ERR_PEER`. A server can keep a client waiting: `IPC_SAVE_REPLY` moves the pending reply into a one-time capability (it cannot be transferred), the server goes on receiving other requests and later answers with `IPC_REPLY` naming that slot.
 
 A driver can bind its interrupt line to its endpoint (`IRQ_BIND`): the interrupt then arrives as a message with the IRQ flag, so one loop serves both clients and hardware. The kernel masks the line when it fires; the driver reopens it with `IRQ_ACK` (or `IRQ_WAIT` for drivers that only wait for interrupts).
 
@@ -460,8 +460,8 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 6 | UPTIME | → milliseconds since boot |
 | 7 | EXIT | — |
 | 8 / 9 | ALLOC / FREE | bytes → address / address → 0 |
-| 10 / 22 | IPC_SEND / IPC_CALL | endpoint slot, reply-capability slot; msg = [cap slot, rights mask, data, data] |
-| 11 | IPC_RECV | endpoint slot, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
+| 10 / 22 | IPC_SEND / IPC_CALL | endpoint handle \| timeout ms << 32, reply-capability slot; msg = [cap slot, rights mask, data, data] |
+| 11 | IPC_RECV | endpoint handle \| timeout ms << 32, slot for a received capability → arg1 = sender PID, msg = [cap received, flags, data, data] |
 | 23 | IPC_REPLY | arg1 = saved reply slot or 0 for the last caller; msg = [cap slot, rights mask, data, data] |
 | 31 | IPC_SAVE_REPLY | → slot of a one-time reply capability for the last caller |
 | 12 | ENDPOINT_CREATE | → slot of a new endpoint with all rights; `ERR_LIMIT` past the endpoint quota |

@@ -41,20 +41,40 @@ impl Endpoint {
     pub fn create() -> Result<Self> { check(call(SYSCALL_ENDPOINT_CREATE, 0, 0)).map(Self) }
 
     /// Blocks until a receiver arrives; multiple senders are queued.
-    pub fn send(&self, message: &Message) -> Result<()> {
-        check(syscall(SYSCALL_IPC_SEND, self.0, 0, [message.cap, message.mask(), message.data[0], message.data[1]]).result).map(drop)
+    pub fn send(&self, message: &Message) -> Result<()> { self.send_timeout(message, 0) }
+
+    /// `send` that fails with `ERR_TIMEOUT` after `ms` milliseconds (0: no limit).
+    pub fn send_timeout(&self, message: &Message, ms: u32) -> Result<()> {
+        check(queued(SYSCALL_IPC_SEND, self.word(ms), 0, message).result).map(drop)
     }
 
     /// Sends and waits for the server's reply; a capability in the reply lands in slot `receive` (0 means don't accept).
-    pub fn call(&self, message: &Message, receive: usize) -> Result<Received> {
-        let raw = syscall(SYSCALL_IPC_CALL, self.0, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
+    pub fn call(&self, message: &Message, receive: usize) -> Result<Received> { self.call_timeout(message, receive, 0) }
+
+    /// `call` that gives up after `ms` milliseconds (0: no limit); a later reply from the server is discarded.
+    pub fn call_timeout(&self, message: &Message, receive: usize, ms: u32) -> Result<Received> {
+        let raw = queued(SYSCALL_IPC_CALL, self.word(ms), receive, message);
         check(raw.result).map(|_| received(raw))
     }
 
     /// Waits for a message or IRQ notification; a transferred capability is placed in slot `receive`.
-    pub fn recv(&self, receive: usize) -> Result<Received> {
-        let raw = syscall(SYSCALL_IPC_RECV, self.0, receive, [0; 4]);
+    pub fn recv(&self, receive: usize) -> Result<Received> { self.recv_timeout(receive, 0) }
+
+    /// `recv` that fails with `ERR_TIMEOUT` after `ms` milliseconds (0: no limit).
+    pub fn recv_timeout(&self, receive: usize, ms: u32) -> Result<Received> {
+        let raw = syscall(SYSCALL_IPC_RECV, self.word(ms), receive, [0; 4]);
         check(raw.result).map(|_| received(raw))
+    }
+
+    fn word(&self, ms: u32) -> usize { self.0 | (ms as usize) << IPC_TIMEOUT_SHIFT }
+}
+
+// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again.
+fn queued(number: usize, word: usize, receive: usize, message: &Message) -> crate::sys::Raw {
+    loop {
+        let raw = syscall(number, word, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
+        if raw.result != ERR_BUSY { return raw; }
+        call(SYSCALL_WAIT, 10, 0);
     }
 }
 

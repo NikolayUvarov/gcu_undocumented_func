@@ -97,6 +97,7 @@ pub const ERR_PEER: usize = usize::MAX - 4;
 pub const ERR_NO_MEMORY: usize = usize::MAX - 5;
 pub const ERR_BUSY: usize = usize::MAX - 6; // e.g. the service is already running
 pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
+pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
@@ -144,6 +145,12 @@ pub const BLOCK_KIND_USB: usize = 3;
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
 // A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
 pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
+// IPC_SEND, IPC_CALL, IPC_RECV: arg1 = endpoint handle | timeout in milliseconds << IPC_TIMEOUT_SHIFT (0: wait without
+// limit; 10 ms granularity). On expiry the call fails with ERR_TIMEOUT: a waiting send leaves the queue with its
+// capability, a caller stops waiting and the server's later reply fails with ERR_PEER.
+pub const IPC_TIMEOUT_SHIFT: usize = 32;
+// Senders waiting on one endpoint; one more fails with ERR_BUSY at once (back-pressure).
+pub const ENDPOINT_QUEUE: usize = 8;
 // At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;

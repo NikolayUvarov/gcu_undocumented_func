@@ -182,6 +182,16 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     if *handle & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || *handle & abi::HANDLE_SLOT_MASK >= abi::CAP_SLOTS { asm!("ud2", options(noreturn)); }
                 }
                 if call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0) != abi::ERR_LIMIT { asm!("ud2", options(noreturn)); }
+                // Deadlines: send, call and receive on an endpoint nobody serves time out and leave nothing queued.
+                let timed = |handle: usize| handle | 30 << abi::IPC_TIMEOUT_SHIFT;
+                let start = call(mb, abi::SYSCALL_UPTIME, 0, 0);
+                let raw = mb; (*raw).msg = [0, 0, 7, 7];
+                if call(mb, abi::SYSCALL_IPC_SEND, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
+                    || call(mb, abi::SYSCALL_IPC_CALL, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
+                    || call(mb, abi::SYSCALL_IPC_RECV, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
+                    || call(mb, abi::SYSCALL_UPTIME, 0, 0) - start < 90 {
+                    asm!("ud2", options(noreturn));
+                }
                 // A keeper (no read right) cannot receive but can mint a receiver of the same endpoint.
                 let keeper = mint(endpoints[0], (abi::CAP_KEEP | abi::CAP_WRITE) as usize, 0, 0);
                 let reader = mint(keeper, abi::CAP_READ as usize, 0, 0);

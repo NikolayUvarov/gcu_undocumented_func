@@ -6,6 +6,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 |---|---|
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
 | A read-only memory mint maps read-only; a revoked lease is unmapped in its holder; a detached block leaves the address space | `isolation` suite, cases m, v, d |
+| A send, call or receive with a deadline fails with `ERR_TIMEOUT` after it and leaves nothing queued | `isolation` suite, case `k` |
 | A shared block cannot be detached; a memory object cannot be copied over IPC, mints only read-only children and is reported sealed once its writable capability is gone | `isolation` suite, case `k` |
 | Applications cannot use privileged system calls (input, display, ports, IRQ, MMIO, spawn, platform, device enumeration, process control, halt); an application cannot create more endpoints than its quota; a dropped handle stays invalid after its slot is reused; a minted endpoint has only the masked rights and cannot be widened by re-minting; port and memory sub-ranges are validated; revoke removes children and keeps the parent; a keeper cannot receive but mints a receiver | `isolation` suite, case `k` |
 | The application limit is loader's task quota | `normal` suite (`TASK LIMIT REACHED` for the ninth application) |
@@ -25,3 +26,4 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 - Behaviour under a malicious DMA device or driver (not claimed).
 - Timing bounds of any kind.
 - Revocation of a mapping held by a task running on another CPU (the TLB shootdown path of `CAP_REVOKE`).
+- The endpoint queue bound (`ERR_BUSY`) and a server's late reply after the caller's timeout (`ERR_PEER`).

@@ -14,6 +14,7 @@ const ENDPOINTS: usize = 64;
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
 const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
+const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 // Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
 // The PIC, PIT and PCI configuration ports stay with the kernel.
@@ -54,6 +55,7 @@ struct Task {
     nodes: [Node; CAP_SLOTS],
     pending_cap: Option<Pending>, pending_call: bool, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64)>, // slot and PID of the client awaiting a reply
+    deadline: u64, // uptime ms at which a blocked IPC fails with ERR_TIMEOUT (0: none)
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
 }
 struct Scheduler {
@@ -170,6 +172,24 @@ impl Scheduler {
         }
         if self.focus_owner == slot { self.focus_owner = 0; if self.foreground == slot { self.focus(0); } }
     }
+    // Uptime at which an IPC with this handle word times out (0: never).
+    fn deadline(word: usize) -> u64 { match word >> IPC_TIMEOUT_SHIFT { 0 => 0, ms => (interrupts::milliseconds() + ms as u64).max(1) } }
+    // Fails blocked IPC whose deadline passed (MC-2.13): no message is half-delivered and no reply can reach a new call.
+    fn expire(&mut self, now: u64) -> bool {
+        let mut woken = false;
+        for slot in 1..SLOTS {
+            let Some(task) = self.tasks[slot].as_mut() else { continue };
+            if task.deadline == 0 || now < task.deadline || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            let pid = task.pid; task.state = State::Ready; task.pending_cap = None; task.deadline = 0; woken = true;
+            unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), ERR_TIMEOUT); }
+            // Withdraw every right to reply to this caller.
+            for server in self.tasks.iter_mut().flatten() {
+                if server.reply_to == Some((slot, pid)) { server.reply_to = None; }
+                for index in 1..CAP_SLOTS { if server.cspace[index] == Some(Capability::Reply(slot, pid)) { Self::clear(server, index); } }
+            }
+        }
+        woken
+    }
     fn fail_reply(&mut self, slot: usize) {
         let mailbox = self.mailbox(slot);
         unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).result), ERR_PEER); }
@@ -285,7 +305,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, deadline: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -399,14 +419,15 @@ impl Scheduler {
 
     // Ok(Some(sp)): caller is blocked, switch; Ok(None): return 0 immediately.
     unsafe fn ipc_send(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox, call: bool) -> Result<Option<usize>, usize> {
-        let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
+        let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
         if rights & CAP_WRITE == 0 { return Err(ERR_RIGHTS); }
         let receiver = self.blocked(State::BlockedRecv(ep));
         if receiver.is_none() && !self.receivable(ep) { return Err(ERR_PEER); }
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
+        if receiver.is_none() && self.tasks.iter().flatten().filter(|t| t.state == State::BlockedSend(ep)).count() >= ENDPOINT_QUEUE { return Err(ERR_BUSY); }
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
         self.send_seq += 1; let seq = self.send_seq;
-        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.send_seq = seq;
+        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.send_seq = seq; task.deadline = Self::deadline(request.arg1);
         if let Some(receiver) = receiver {
             self.deliver(slot, receiver);
             if !call { return Ok(None); }
@@ -417,12 +438,12 @@ impl Scheduler {
         Ok(Some(self.select(sp, cpu)))
     }
     unsafe fn ipc_recv(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox) -> Result<Option<usize>, usize> {
-        let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
+        let Some(Capability::Endpoint(ep, rights)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         if let Some(irq) = (0..16).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
         let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
-        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true;
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg1);
         Ok(Some(self.select(sp, cpu)))
     }
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
@@ -797,6 +818,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             if let Some(irq) = irq { s.raise_irq(irq); return s.select(sp, cpu); }
             if vector == 32 || vector == 48 {
                 cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
+                if s.expire(now) { s.wake_idle(cpu); }
                 if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                 return s.select(sp, cpu);
             }
