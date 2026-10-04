@@ -26,3 +26,7 @@ Without text output no diagnostics are possible at all (exceptions in [004](004-
 ## Resolution
 
 Font and console exist (`common/font.rs`, kernel console, compositor). The remaining criterion — the panic handler printing the message and location — is split into [issues/018](../issues/018-kernel-panic-diagnostics.md).
+
+## Audit (2026-10-04)
+
+Done; panic diagnostics remain in 018. Correction: since 021 the kernel has no font or console and writes only to serial; the console lives in the shell (`shell/src/main.rs`).

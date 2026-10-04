@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// say [-p <pitch Hz>] [-r <rate %>] [text]: speaks the text; without text, say.txt from disk or a greeting.
+// say [-p <pitch Hz>] [-r <rate %>] [text]: speaks the text and exits; without text, say.txt or a greeting until Esc.
 use mind::abi::BootInfo;
 use mind::fs::File;
 use mind::gfx::Screen;
@@ -36,7 +36,8 @@ fn main(info: &'static BootInfo) {
         Err(error) => mind::println!("[SAY] ERROR {:?}", error),
     }
     mind::println!("[SAY] DONE");
-    loop { mind::input::wait_or_exit(200); }
+    // Text from the command line: done once spoken. The demo text keeps its screen until Esc.
+    if words.is_empty() { loop { mind::input::wait_or_exit(200); } }
 }
 
 // Displayable part of the text for the screen: the 8x8 font knows only ASCII.

@@ -29,3 +29,7 @@ Write `docs/profile/` (English, the code refers to it):
 ## Resolution
 
 Written in [`docs/profile/`](../docs/profile/README.md): README with the conformance table for Articles 1–12, threat-model.md, tcb.md, kernel-objects.md, clocks.md, bootstrap.md, evidence.md. Linked from README, ROADMAP and `constitution/README.md`. Gaps are stated as "not met" or "not claimed" (DMA boundary, revocation, budgets, signed boot).
+
+## Audit (2026-10-04)
+
+Was partial: met rows named no test, and MC-2.5 was marked met although its queue bound is untested. Fixed in the audit commit: every met row names its evidence; MC-2.5 and MC-1.4 are now partial with the untested parts stated.

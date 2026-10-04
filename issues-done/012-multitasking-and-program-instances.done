@@ -2,7 +2,7 @@
 
 - Type: feature
 - Priority: high
-- Status: done
+- Status: done (2026-09-18)
 - Completion date: 2026-09-18
 - Basis: working ELF loading, PIT/IDT, waiting without a busy loop, and three applications.
 
@@ -99,3 +99,7 @@ When no programs are ready, the shell executes `HLT`.
 The limitations of this stage remain: ring 0, a shared address space, execution on
 a single BSP; SMP, hardware memory protection, own GDT/TSS/IST and AVX context
 are not part of this task.
+
+## Audit (2026-10-04)
+
+Done. Corrections: the host-test count changed (scheduler-policy and RTC tests were removed with their modules); `common/wait.rs` moved into `libmind`; the commands moved to the ring-3 shell (021).

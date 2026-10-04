@@ -26,3 +26,7 @@ A capability can only be copied (IPC transfer, spawn grant) or dropped. Copies c
 ## Resolution
 
 Every capability-table entry carries a `Node { id, parent }`; kernel-created capabilities are roots. IPC transfers and spawn grants copy (a new child node) unless `CAP_TRANSFER_MOVE` / `GRANT_MOVE` is set, which keeps the node and empties the source slot only when the transfer completes. `CAP_MINT` (45) narrows endpoint rights, port ranges and page-aligned memory/DMA/MMIO ranges; `CAP_REVOKE` (46) removes all descendants from every table and from blocked sends and returns their number. `init` moves the capabilities it mints and copies DMA regions and its own endpoint. The isolation fixture (case `k`) checks mint masks, that re-minting cannot widen rights, sub-range validation and revoke keeping the parent. Known limit: mappings made from a revoked memory capability stay mapped (C4). All 12 QEMU suites and the USB smoke pass.
+
+## Audit (2026-10-04)
+
+Was partial: revocation followed the tree only through capabilities still in a table, so dropping an intermediate copy (or its holder exiting) made its descendants unrevocable. Fixed in the audit commit with ghost nodes: a removed capability that still has descendants stays in the tree (up to 256) until nothing derives from it. A moved capability in flight is no longer counted twice, and one handle can no longer be moved into two child slots. Evidence: `isolation` case `k` (grandchild of a dropped capability is revoked). Untested: minted port sub-ranges and revoke of a capability waiting in a blocked send.

@@ -20,8 +20,12 @@ A memory capability always maps read-write, so every share is `SHARE_RW`. Revoki
 
 ## Related
 
-[026](026-derivation-and-revocation.done), [029](../issues/029-memory-objects-move-seal.md), [ROADMAP](../ROADMAP.md) C4.
+[026](026-derivation-and-revocation.done), [029](029-memory-objects-move-seal.done), [ROADMAP](../ROADMAP.md) C4.
 
 ## Resolution
 
 `Capability::Memory` carries rights (read, write, grant); `MEM_SHARE` and the framebuffer give all three, `CAP_MINT` narrows them, `MEM_MAP` needs read and maps writable only with write, `SPAWN` images need read; `CAP_INFO` reports memory rights in `arg2`. Foreign mappings record the node of the capability they came from; `CAP_REVOKE` unmaps every mapping of a removed descendant. A space running on another CPU only has its page entries cleared (`unmap_leaves`), that CPU gets a wake IPI and the revoker waits in `FLUSH_WAIT` until every flagged CPU has passed `select` (CR3 reload). Isolation cases `m` (write to a read-only mint faults) and `v` (read after revoking a lease faults) pass; the cross-CPU path has no test yet and is listed under "not covered" in the evidence. All 12 QEMU suites, the USB smoke and the host tests pass.
+
+## Audit (2026-10-04)
+
+Was partial: `MEM_SHARE` accepted the address of a foreign mapping and minted a new root with all rights, which let a read-only lease holder gain write access and escape revocation; a lease dropped after mapping survived revoke; exited tasks still running on another CPU were skipped. Fixed in the audit commit: only own heap blocks are shareable; mappings stay revocable through ghost nodes; revoke includes exited tasks, `TASK_KILL` interrupts a task running on another CPU, and memory is not freed while a TLB flush is pending. Evidence: `isolation` cases `l` (lease dropped after mapping) and `k` (`MEM_SHARE` of a mapping refused). The cross-CPU path is still untested.

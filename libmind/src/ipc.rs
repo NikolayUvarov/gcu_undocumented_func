@@ -69,10 +69,15 @@ impl Endpoint {
     fn word(&self, ms: u32) -> usize { self.0 | (ms as usize) << IPC_TIMEOUT_SHIFT }
 }
 
-// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again.
+// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again, within the caller's timeout.
 fn queued(number: usize, word: usize, receive: usize, message: &Message) -> crate::sys::Raw {
+    let (handle, ms) = (word & ((1 << IPC_TIMEOUT_SHIFT) - 1), word >> IPC_TIMEOUT_SHIFT);
+    let start = call(SYSCALL_UPTIME, 0, 0);
     loop {
-        let raw = syscall(number, word, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
+        let elapsed = call(SYSCALL_UPTIME, 0, 0).wrapping_sub(start);
+        if ms != 0 && elapsed >= ms { return crate::sys::Raw { result: ERR_TIMEOUT, arg1: 0, arg2: 0, msg: [0; 4] }; }
+        let left = if ms == 0 { 0 } else { ms - elapsed };
+        let raw = syscall(number, handle | left << IPC_TIMEOUT_SHIFT, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
         if raw.result != ERR_BUSY { return raw; }
         call(SYSCALL_WAIT, 10, 0);
     }

@@ -3,6 +3,7 @@
 
 Usage: mind_idl.py            write libmind/src/idl/<interface>.rs for every idl/*.wit
        mind_idl.py --check    fail if a generated file is missing or out of date
+       --root DIR             use DIR instead of the repository root
 """
 import re
 import sys
@@ -210,13 +211,13 @@ def generate(interface, source):
         else:
             w("    let reply = wire::call(endpoint, words, None)?;")
         if f.result is None:
-            w("    wire::check_reply(&reply, [0, 0], false)")
+            w("    wire::check_reply(&reply, [0, 0], false).map(drop)")
         else:
             rf = f.result_field
             optional = f.result.startswith("option<")
             used = [0, 0]
             used[rf.word] = ((1 << rf.bits) - 1) << rf.shift
-            w(f"    let none = wire::check_reply(&reply, [{used[0]:#x}, {used[1]:#x}], {'true' if optional else 'false'})?;")
+            w(f"    let {'none' if optional else '_'} = wire::check_reply(&reply, [{used[0]:#x}, {used[1]:#x}], {'true' if optional else 'false'})?;")
             value = decode(rf, "reply")
             w(f"    Ok({'if none { None } else { Some(' + value + ') }' if optional else value})")
         w("}")
@@ -276,6 +277,10 @@ def camel(name):
 
 
 def main(argv):
+    global ROOT, IDL_DIR, OUT_DIR
+    if "--root" in argv:  # generate for another tree (tests)
+        ROOT = Path(argv[argv.index("--root") + 1]).resolve()
+        IDL_DIR, OUT_DIR = ROOT / "idl", ROOT / "libmind" / "src" / "idl"
     check_only = "--check" in argv
     stale = []
     names = []

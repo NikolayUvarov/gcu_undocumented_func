@@ -1,6 +1,6 @@
 # 016 — Storage drivers for the VFS: ATA, AHCI and USB mass storage — done
 
-- Type: feature · Priority: medium · Status: done · Date: 2026-10-03
+- Type: feature · Priority: medium · Status: done (2026-10-03)
 
 ## Problem
 `vfs_server` itself worked with the primary ATA channel (PIO). When booting from a USB image and on most real machines (AHCI), there was no disk.
@@ -18,3 +18,7 @@
 
 ## Limitations
 The drivers poll the controllers without interrupts; no NVMe; 512-byte sectors only; a single drive is mounted as the root.
+
+## Audit (2026-10-04)
+
+Done. Evidence: `ahci` suite and the USB image smoke.

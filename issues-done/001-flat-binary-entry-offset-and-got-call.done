@@ -52,3 +52,7 @@ Expected sizes after the fix: `kernel.bin` ≈ 565 bytes, `app.bin` ≈ 808 byte
 ## Resolution
 
 Superseded by [002](002-elf-loader.done): there are no flat binaries any more. The bootloader loads ELF images with relocations (`bootloader/src/main.rs` `load_elf`, `bootloader/src/elf_reloc.rs`), the kernel parses ELF for `SPAWN_IMAGE` (`kernel/src/elf.rs`).
+
+## Audit (2026-10-04)
+
+Done (superseded by 002). Correction: the kernel call is `SPAWN` (13); `SPAWN_IMAGE` was renamed in 020.

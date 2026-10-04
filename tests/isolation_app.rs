@@ -47,6 +47,17 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if call(mb, abi::SYSCALL_MEM_DETACH, block, 0) & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC { asm!("ud2", options(noreturn)); }
                 let _ = core::ptr::read_volatile(block as *const u64);
             }
+            b'l' => {
+                // A lease whose capability was dropped after mapping still ends when the owner revokes.
+                let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                let lease = mint(memory, abi::CAP_READ | abi::CAP_WRITE);
+                let address = call(mb, abi::SYSCALL_MEM_MAP, lease, 0);
+                core::ptr::write_volatile(address as *mut u64, 42);
+                call(mb, abi::SYSCALL_CAP_DROP, lease, 0);
+                call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0);
+                let _ = core::ptr::read_volatile(address as *const u64);
+            }
             b'm' | b'v' => {
                 // 'm': a read-only mint maps read-only, so a write faults. 'v': revoking a lease unmaps it, so a read faults.
                 let mint = |handle: usize, mask: u8| { (*mb).msg[0] = 0; (*mb).msg[1] = 0; call(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize) };
@@ -136,8 +147,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     }
                 }
                 // MIND IDL: the rtc service checks requests against idl/rtc.wit (status 0x81 version, 0x80 invalid).
-                let rtc = |word: usize| { let raw = mb; (*raw).msg = [0, 0, word, 0]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_RTC, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
-                if rtc(1 | 2 << 8) != 0x81 || rtc(9 | 1 << 8) != 0x80 || rtc(1 | 1 << 8 | 1 << 40) != 0x80 || rtc(1 | 1 << 8) > 1 {
+                let rtc = |word: usize, extra: usize| { let raw = mb; (*raw).msg = [0, 0, word, extra]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_RTC, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
+                if rtc(1 | 2 << 8, 0) != 0x81 || rtc(9 | 1 << 8, 0) != 0x80 || rtc(1 | 1 << 8 | 1 << 40, 0) != 0x80 || rtc(1 | 1 << 8, 1) != 0x80 || rtc(1 | 1 << 8, 0) > 1 {
                     asm!("ud2", options(noreturn));
                 }
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
@@ -158,7 +169,16 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if size(memory) != 8192 || size(half) != 4096 || mint(memory, abi::CAP_READ as usize, 4096, 8192) != abi::ERR_INVALID || mint(memory, abi::CAP_READ as usize, 100, 4096) != abi::ERR_INVALID {
                     asm!("ud2", options(noreturn));
                 }
-                call(mb, abi::SYSCALL_CAP_DROP, half, 0); call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, pages, 0);
+                // Revocation reaches a grandchild whose parent was dropped; a mapping cannot be re-shared as a new root.
+                let child = mint(memory, abi::CAP_READ as usize, 0, 0);
+                let grandchild = mint(child, abi::CAP_READ as usize, 0, 0);
+                call(mb, abi::SYSCALL_CAP_DROP, child, 0);
+                let view = call(mb, abi::SYSCALL_MEM_MAP, half, 0);
+                if call(mb, abi::SYSCALL_MEM_SHARE, view, 0) != abi::ERR_INVALID || call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 2
+                    || call(mb, abi::SYSCALL_CAP_INFO, grandchild, 0) != abi::CAP_KIND_NONE || call(mb, abi::SYSCALL_CAP_INFO, half, 0) != abi::CAP_KIND_NONE {
+                    asm!("ud2", options(noreturn));
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, pages, 0);
                 // Memory objects: a shared block cannot be detached; an object is move-only, mints read-only children
                 // and is sealed once its writable capability is gone.
                 let sealed = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_MEMORY && (*mb).msg[3] == 1 };

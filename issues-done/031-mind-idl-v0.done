@@ -25,3 +25,7 @@ Service protocols are numeric conventions in `common/abi.rs` (`op | fd << 8 | le
 ## Resolution
 
 Specification in `docs/idl/README.md` (v0.1). The generator (`scripts/mind_idl.py`) writes `libmind/src/idl/<interface>.rs`; the hand-written `libmind/src/idl/wire.rs` holds the wire helpers (`call`, `check_reply`, `header`, `body`, `discard`, `reply`, `reject`). `idl/rtc.wit` (`mind:rtc@1.0.0`, `now: func() -> option<u32>`) replaces the old reply convention; `rtc` decodes every request and `mind::rtc` calls the generated client. `tests/idl_test.py` covers layout, limits, unsupported syntax and freshness; the isolation fixture shows `rtc` answering a wrong version with 0x81 and an unknown method or stray bits with 0x80. All QEMU suites, the USB smoke and the host tests pass.
+
+## Audit (2026-10-04)
+
+Was partial: functions without a result generated code that did not compile, and only `rtc` was ever compiled. Fixed in the audit commit: `tests/idl_test.py` generates a self-test interface with every v0 feature into a copy of libmind and builds it without warnings; the isolation fixture also checks stray bits in word 1.

@@ -5,10 +5,14 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Statement | Evidence |
 |---|---|
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
-| A read-only memory mint maps read-only; a revoked lease is unmapped in its holder; a detached block leaves the address space | `isolation` suite, cases m, v, d |
+| A read-only memory mint maps read-only; a revoked lease is unmapped in its holder, also after the holder dropped the lease capability; a detached block leaves the address space | `isolation` suite, cases m, v, l, d |
+| Revocation reaches descendants whose parent was dropped; a mapping cannot be re-shared as a new root | `isolation` suite, case `k` |
+| Heap holes are reused; block and byte limits include retained memory; only own blocks are shareable; revoke unmaps by node; detach leaves the address space | Host tests `user_heap::tests` in `tests/runtime.rs` |
+| The bootloader names a corrupt or truncated kernel ELF and a missing boot file instead of hanging | `boot` suite |
+| Program arguments reach `say`; a bare program name runs it in the foreground | `listen` suite |
 | A send, call or receive with a deadline fails with `ERR_TIMEOUT` after it and leaves nothing queued | `isolation` suite, case `k` |
-| The `rtc` service rejects requests with a wrong version, an unknown method or stray bits (MIND IDL schema check) | `isolation` suite, case `k` |
-| The IDL generator lays out fields within two words, rejects unsupported types and oversize interfaces; generated bindings are current | `tests/idl_test.py` |
+| The `rtc` service rejects requests with a wrong version, an unknown method or stray bits in either word (MIND IDL schema check) | `isolation` suite, case `k` |
+| The IDL generator lays out fields within two words, rejects unsupported types and oversize interfaces; code for every v0 feature compiles without warnings; generated bindings are current | `tests/idl_test.py` |
 | A shared block cannot be detached; a memory object cannot be copied over IPC, mints only read-only children and is reported sealed once its writable capability is gone | `isolation` suite, case `k` |
 | Applications cannot use privileged system calls (input, display, ports, IRQ, MMIO, spawn, platform, device enumeration, process control, halt); an application cannot create more endpoints than its quota; a dropped handle stays invalid after its slot is reused; a minted endpoint has only the masked rights and cannot be widened by re-minting; port and memory sub-ranges are validated; revoke removes children and keeps the parent; a keeper cannot receive but mints a receiver | `isolation` suite, case `k` |
 | The application limit is loader's task quota | `normal` suite (`TASK LIMIT REACHED` for the ninth application) |
@@ -29,3 +33,5 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 - Timing bounds of any kind.
 - Revocation of a mapping held by a task running on another CPU (the TLB shootdown path of `CAP_REVOKE`).
 - The endpoint queue bound (`ERR_BUSY`) and a server's late reply after the caller's timeout (`ERR_PEER`).
+- A successful move of a memory object (only the refused copy is tested); revoke of a capability waiting in a blocked send; a minted port sub-range (applications hold no ports).
+- Playback reaching the audio output in the `listen` suite (QEMU's capture backend has no output file); the kernel's validation of `PLATFORM_CAP` arguments.

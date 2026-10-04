@@ -24,3 +24,7 @@ A send or call waits without limit: a client of a server that never replies wait
 ## Resolution
 
 At most `ENDPOINT_QUEUE` (8) senders wait per endpoint; another send fails at once with `ERR_BUSY`, and libmind's `send`/`call` wait a tick and retry. The deadline is a timeout in milliseconds in the upper half of the endpoint word (`IPC_TIMEOUT_SHIFT` = 32), not a monotonic-ns value: there is no free argument, and wakeups use the 10 ms tick anyway. On each tick `expire` fails blocked sends, calls and receives past their deadline with `ERR_TIMEOUT`, drops the pending capability (a moved one was never taken from the sender) and withdraws the server's `reply_to` and saved reply capabilities for that caller, so a late `IPC_REPLY` fails with `ERR_PEER` and can never reach a newer call. libmind: `send_timeout`, `call_timeout`, `recv_timeout`. The isolation fixture checks that send, call and receive time out after their deadline and leave nothing queued. The queue bound and the late reply have no test yet (listed in the evidence). All 12 QEMU suites, the USB smoke and the host tests pass.
+
+## Audit (2026-10-04)
+
+Was partial: a late reply after a timeout failed with `ERR_INVALID`, not `ERR_PEER`, and libmind's `ERR_BUSY` retry restarted the caller's timeout. Fixed in the audit commit: each call has a sequence number carried by `reply_to` and saved reply capabilities, so a late reply fails with `ERR_PEER` and can never reach a newer call; the retry spends the remaining timeout. The queue bound and the late reply are still untested (profile MC-2.5 is partial).

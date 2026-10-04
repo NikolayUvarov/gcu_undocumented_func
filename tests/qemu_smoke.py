@@ -36,7 +36,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, prompt=True):
         self.disk = disk
         self.cpus = args.cpus
         filename = disk.replace(",", ",,")
@@ -57,6 +57,8 @@ class VM:
         self.log = ""
         self.monitor = False
         threading.Thread(target=self._read, daemon=True).start()
+        if not prompt:
+            return
         try:
             self.expect("MIND> ", timeout=30)
             global BASE
@@ -362,7 +364,9 @@ def isolation_suite(vm):
              # Read-only memory mint written to; a revoked lease read afterwards.
              ("m", 14, 7), ("v", 14, 4),
              # Address of a detached block.
-             ("d", 14, 4)]
+             ("d", 14, 4),
+             # Lease dropped after mapping, then revoked by the owner.
+             ("l", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")
@@ -810,15 +814,18 @@ def listen_suite(vm):
     require(log, "[LISTEN] PLAYED BACK")
     vm.command("kill 1")
     # Program arguments: options and text reach say; a plain word runs a program in the foreground.
-    require(vm.command("run say -p 150 -r 120 hello world &"), "PID=2 NAME=say BACKGROUND")
-    log = ""
-    for _ in range(40):
-        log += vm.command("logs 2")
-        if "[SAY] DONE" in log:
-            break
-        time.sleep(.25)
-    assert re.search(r"\[SAY\] SPOKE \d+ MS", log), log
-    vm.command("kill 2")
+    vm.send("run say -p 150 -r 120 hello world\n")
+    output = vm.expect("PID=2 EXITED. SHELL RESUMED.", timeout=20)
+    require(output, "STARTED PID=2 NAME=say FOREGROUND")
+    # Two short words, not the default greeting (2.5-9 s): the text argument reached say.
+    spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    assert 200 < spoken < 2000, spoken
+    # Run by name: a plain word starts the program in the foreground with the rest as arguments.
+    vm.send("say hi\n")
+    output = vm.expect("PID=3 EXITED. SHELL RESUMED.", timeout=20)
+    require(output, "STARTED PID=3 NAME=say FOREGROUND")
+    spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    assert 50 < spoken < 1500, spoken
     require(vm.command("nosuchprogram"), "ERROR: UNKNOWN COMMAND")
     require(vm.command("run rtc x &"), "SERVICES TAKE NO ARGUMENTS")
     assert "FAULT PID=" not in vm.command("faults")
@@ -883,6 +890,28 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def boot_suite(args, disk):
+    # The bootloader names a broken or missing boot file instead of hanging silently.
+    kernel = (disk / "kernel.elf").read_bytes()
+    for name, data, reason in [("kernel.elf", b"XELF" + kernel[4:], "bad ELF magic"),
+                               ("kernel.elf", kernel[:40], "file too short for an ELF header"),
+                               ("kernel.elf", kernel[:64] + b"\0" * 64, "program headers outside the file"),
+                               ("rtc.elf", None, "file not found")]:
+        target = disk / name
+        original = target.read_bytes()
+        if data is None:
+            target.unlink()
+        else:
+            target.write_bytes(data)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
+        finally:
+            vm.close()
+        target.write_bytes(original)
+    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
@@ -891,10 +920,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: boot,normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -920,6 +949,9 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+            if suite == "boot":
+                boot_suite(args, disk)
+                continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")

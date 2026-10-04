@@ -143,6 +143,7 @@ pub const BLOCK_KIND_AHCI: usize = 2;
 pub const BLOCK_KIND_USB: usize = 3;
 
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
+// The mask narrows endpoint rights only; other capabilities keep their rights (narrow memory with CAP_MINT first).
 // A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
 pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
 // IPC_SEND, IPC_CALL, IPC_RECV: arg1 = endpoint handle | timeout in milliseconds << IPC_TIMEOUT_SHIFT (0: wait without

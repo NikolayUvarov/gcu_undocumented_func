@@ -33,3 +33,7 @@ Every statement in README/handoff either matches the code or is marked as "roadm
 ## Resolution
 
 README is maintained together with the code (sections Current Runtime, System services, IPC, libmind SDK, tests); the handoff document is not part of the repository; `knowledge/04` is kept as a historical matrix. Further documentation work is tracked in [ROADMAP](../ROADMAP.md).
+
+## Audit (2026-10-04)
+
+Done. Plan items not carried out: the OVMF pflash command, links to `issues/` and `knowledge/`, a Linux `03_run_qemu.sh`.
