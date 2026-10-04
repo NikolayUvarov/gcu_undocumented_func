@@ -5,7 +5,7 @@ mod abi;
 #[path = "../libmind/src/keys.rs"]
 mod keys;
 use abi::*;
-use keys::{event, with_byte, Event, Key, Layout, Ps2, Vt};
+use keys::{event, with_byte, Event, Key, Layout, Ps2, Switch, Vt};
 
 // Events without their legacy byte (the scan code or UART byte), which `legacy_bytes` checks.
 fn plain(event: Event) -> Event { match event { Event::Key(word) => Event::Key(with_byte(word, 0)), other => other } }
@@ -58,6 +58,34 @@ fn ps2_russian_layout_switch_by_clean_chord() {
     // Alt+Shift switches too; shortcuts stay positional: Ctrl+С is Ctrl+c.
     let (events, _) = ps2(&[0x38, 0x2A, 0xB8, 0xAA, 0x1D, 0x2E, 0x9D, 0x2E, 0x3A, 0x10]);
     assert_eq!(events, vec![Event::Layout(Layout::Ru), ch('c', MOD_CTRL), ch('с', 0), ch('Й', MOD_CAPS)]);
+}
+
+#[test]
+fn ps2_switch_key_and_layout_are_set() {
+    let feed = |decoder: &mut Ps2, bytes: &[u8]| bytes.iter().filter_map(|&b| decoder.feed(b)).map(plain).collect::<Vec<_>>();
+    let (ctrl_shift, alt_shift, caps) = ([0x1D, 0x2A, 0xAA, 0x9D], [0x38, 0x2A, 0xB8, 0xAA], [0x3A, 0xBA]);
+    let mut decoder = Ps2::new();
+    assert_eq!(decoder.switch(), Switch::CtrlOrAltShift);
+    decoder.set_layout(Layout::Ru);
+    assert_eq!(feed(&mut decoder, &[0x10]), vec![ch('й', 0)], "set_layout takes effect at the next key");
+    // Only Alt+Shift switches.
+    decoder.set_switch(Switch::AltShift);
+    assert!(feed(&mut decoder, &ctrl_shift).is_empty());
+    assert_eq!(feed(&mut decoder, &alt_shift), vec![Event::Layout(Layout::Us)]);
+    // Only Ctrl+Shift.
+    decoder.set_switch(Switch::CtrlShift);
+    assert!(feed(&mut decoder, &alt_shift).is_empty());
+    assert_eq!(feed(&mut decoder, &ctrl_shift), vec![Event::Layout(Layout::Ru)]);
+    // Caps Lock switches and no longer locks capitals; the chords do nothing.
+    decoder.set_switch(Switch::CapsLock);
+    assert_eq!(feed(&mut decoder, &caps), vec![Event::Layout(Layout::Us)]);
+    assert!(feed(&mut decoder, &ctrl_shift).is_empty() && feed(&mut decoder, &alt_shift).is_empty());
+    assert_eq!(feed(&mut decoder, &[0x1E]), vec![ch('a', 0)], "no capitals lock");
+    // None: nothing switches; Caps Lock locks capitals again.
+    decoder.set_switch(Switch::None);
+    assert!(feed(&mut decoder, &ctrl_shift).is_empty() && feed(&mut decoder, &alt_shift).is_empty());
+    assert_eq!(feed(&mut decoder, &[0x3A, 0xBA, 0x1E]), vec![ch('A', MOD_CAPS)]);
+    assert_eq!(decoder.layout(), Layout::Us);
 }
 
 #[test]

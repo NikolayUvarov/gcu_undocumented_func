@@ -67,6 +67,10 @@ pub enum Event {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout { Us, Ru }
 
+/// What switches the layout (idl/keyboard.wit): Ctrl+Shift or Alt+Shift, only one of them, Caps Lock, or nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Switch { CtrlOrAltShift, CtrlShift, AltShift, CapsLock, None }
+
 /// The event word of a key press from its parts; `code` 0 stands for a plain character (KEY_CHAR).
 pub const fn event(code: u16, ch: u32, mods: u8) -> usize { input_event(0, if code == 0 { KEY_CHAR } else { code }, mods, true, ch) }
 /// `word` with the legacy byte `byte`.
@@ -89,14 +93,22 @@ const PAD_CHARS: &[u8; 13] = b"789-456+1230.";
 /// PS/2 scan code set 1 decoder with modifier state, Caps/Num Lock and the layout switch.
 pub struct Ps2 {
     extended: bool, skip: u8, shift: [bool; 2], ctrl: [bool; 2], alt: [bool; 2], caps: bool, num: bool,
-    layout: Layout, chord: bool,
+    layout: Layout, chord: bool, switch: Switch,
 }
 
 impl Default for Ps2 { fn default() -> Self { Self::new() } }
 
 impl Ps2 {
-    pub const fn new() -> Self { Self { extended: false, skip: 0, shift: [false; 2], ctrl: [false; 2], alt: [false; 2], caps: false, num: false, layout: Layout::Us, chord: false } }
+    pub const fn new() -> Self { Self { extended: false, skip: 0, shift: [false; 2], ctrl: [false; 2], alt: [false; 2], caps: false, num: false, layout: Layout::Us, chord: false, switch: Switch::CtrlOrAltShift } }
     pub fn layout(&self) -> Layout { self.layout }
+    pub fn set_layout(&mut self, layout: Layout) { self.layout = layout; }
+    pub fn switch(&self) -> Switch { self.switch }
+    /// With Caps Lock as the switch it no longer locks capitals (a lock already on is released).
+    pub fn set_switch(&mut self, switch: Switch) { self.switch = switch; self.chord = false; if switch == Switch::CapsLock { self.caps = false; } }
+    fn toggle(&mut self) -> Option<Event> {
+        self.layout = if self.layout == Layout::Us { Layout::Ru } else { Layout::Us };
+        Some(Event::Layout(self.layout))
+    }
     fn shift(&self) -> bool { self.shift[0] || self.shift[1] }
     fn ctrl(&self) -> bool { self.ctrl[0] || self.ctrl[1] }
     fn alt(&self) -> bool { self.alt[0] || self.alt[1] }
@@ -124,14 +136,18 @@ impl Ps2 {
         if let Some(state) = modifier {
             *state = !released;
             if !released {
-                // Ctrl+Shift or Alt+Shift: the layout switches when one of them is released with no other key between.
-                if self.shift() && (self.ctrl() || self.alt()) { self.chord = true; }
+                // Ctrl+Shift or Alt+Shift (as `switch` says): the layout switches when one of them is released with no
+                // other key between.
+                let chord = match self.switch {
+                    Switch::CtrlOrAltShift => self.shift() && (self.ctrl() || self.alt()),
+                    Switch::CtrlShift => self.shift() && self.ctrl() && !self.alt(),
+                    Switch::AltShift => self.shift() && self.alt() && !self.ctrl(),
+                    Switch::CapsLock | Switch::None => false,
+                };
+                if chord { self.chord = true; }
                 return None;
             }
-            if core::mem::take(&mut self.chord) {
-                self.layout = if self.layout == Layout::Us { Layout::Ru } else { Layout::Us };
-                return Some(Event::Layout(self.layout));
-            }
+            if core::mem::take(&mut self.chord) { return self.toggle(); }
             return None;
         }
         if released { return None; }
@@ -149,6 +165,7 @@ impl Ps2 {
             };
         }
         match code {
+            0x3A if self.switch == Switch::CapsLock => return self.toggle(),
             0x3A => { self.caps = !self.caps; return None; }
             0x45 => { self.num = !self.num; return None; }
             0x46 => return None,

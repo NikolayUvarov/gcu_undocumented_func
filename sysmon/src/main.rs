@@ -4,6 +4,8 @@
 // load samples every 100 ms (300 kept) and every second (600 kept), with load averages. Clients are rate-limited
 // (MC-10.2): each may make 20 requests at once and 40 per second. Sampling runs at a fixed period into rings allocated
 // once at start; replies are built on the program heap (the 64 KiB stack is too small for 600 samples).
+// Who holds what (`holders`, `authority`, the derivation links in `caps`) goes only to clients whose capability carries
+// the authority badge (sysinfo.wit 2.2).
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -105,7 +107,7 @@ fn name(bytes: &[u8; NAME_MAX]) -> Text<16> {
     Text::new(core::str::from_utf8(&bytes[..len]).unwrap_or("?")).unwrap_or_default()
 }
 
-fn serve(monitor: &mut Monitor, request: Request, call: Call) -> mind::Result<()> {
+fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -> mind::Result<()> {
     macro_rules! records { ($class:expr, $arg:expr) => {{
         let scratch = monitor.scratch.as_mut_slice();
         match stat::read($class, $arg, scratch) { Ok(records) => Ok(records), Err(mind::Error::NotFound) => Err(Error::NotFound), Err(_) => Err(Error::Unavailable) }
@@ -144,8 +146,10 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call) -> mind::Result<()
             sysinfo::reply_vmap(call, items.as_deref().map_err(|e| *e))
         }
         Request::Caps { pid } => {
-            let items: Result<Vec<sysinfo::Capability>, Error> = records!(STAT_CAPS, pid).map(|r| r.iter::<StatCap>().take(64).map(|c| sysinfo::Capability {
-                node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint }).collect());
+            // Without the authority badge: no derivation links.
+            let links = |c: &StatCap| if authority { (c.node, c.parent) } else { (0, 0) };
+            let items: Result<Vec<sysinfo::Capability>, Error> = records!(STAT_CAPS, pid).map(|r| r.iter::<StatCap>().take(64).map(|c| { let (node, parent) = links(&c); sysinfo::Capability {
+                node, parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint } }).collect());
             sysinfo::reply_caps(call, items.as_deref().map_err(|e| *e))
         }
         Request::Endpoints => {
@@ -167,6 +171,26 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call) -> mind::Result<()
             let (count, start) = (count as usize, start as usize);
             let items: Vec<sysinfo::Sample> = if slow { monitor.slow.last(count).skip(start).take(150).map(wire_sample).collect() } else { monitor.fast.last(count).skip(start).take(150).map(wire_sample).collect() };
             sysinfo::reply_history(call, Ok(&items))
+        }
+        Request::Holders { .. } if !authority => sysinfo::reply_holders(call, Err(Error::Denied)),
+        Request::Authority { .. } if !authority => sysinfo::reply_authority(call, Err(Error::Denied)),
+        Request::Authority { start } => {
+            // Every task's capabilities in PID and slot order; the reply holds those from `start` on.
+            let pids: Result<Vec<u64>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().filter(|t| t.wait != WAIT_EXITED).map(|t| t.pid).collect());
+            let entries = pids.map(|mut pids| {
+                pids.sort_unstable();
+                let (mut skipped, mut out) = (0usize, Vec::new());
+                for pid in pids {
+                    let Ok(caps) = records!(STAT_CAPS, pid) else { continue }; // the task ended meanwhile
+                    for c in caps.iter::<StatCap>() {
+                        if skipped < start as usize { skipped += 1; continue; }
+                        if out.len() == 128 { return out; }
+                        out.push(sysinfo::AuthorityEntry { node: c.node, parent: c.parent, pid, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint });
+                    }
+                }
+                out
+            });
+            sysinfo::reply_authority(call, entries.as_deref().map_err(|e| *e))
         }
         Request::Holders { index } => {
             // Every task's capabilities (STAT_CAPS), filtered for the endpoint: the PIDs first, the scratch buffer is reused.
@@ -202,6 +226,7 @@ fn refuse(request: Request, call: Call) -> mind::Result<()> {
         Request::Endpoints => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
         Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
         Request::Load => sysinfo::reply_load(call, Err(busy)), Request::Holders { .. } => sysinfo::reply_holders(call, Err(busy)),
+        Request::Authority { .. } => sysinfo::reply_authority(call, Err(busy)),
     }
 }
 
@@ -225,7 +250,7 @@ fn main(_info: &'static BootInfo) {
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, wait) else { continue };
         let _ = match sysinfo::decode(&request, RECEIVED) {
             Ok((request_data, call)) if !monitor.limiter.admit(request.sender, now) => refuse(request_data, call),
-            Ok((request_data, call)) => serve(&mut monitor, request_data, call),
+            Ok((request_data, call)) => serve(&mut monitor, request_data, call, request.badge == stat::BADGE_AUTHORITY),
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
     }

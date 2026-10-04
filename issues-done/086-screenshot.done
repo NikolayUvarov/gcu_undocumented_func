@@ -1,0 +1,28 @@
+# 086 — `screenshot`: the screen as a BMP file — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3 · **Constitution:** MC-2.6
+
+## Problem
+
+Only the compositor reads task screens (display privilege); there is no way to save what is on screen ([docs/tools](../docs/tools/README.md) §2.3).
+
+## Plan
+
+- `idl/display.wit` 1.0, served by `compositor` on the endpoint `init` gives it (151): `capture() -> result<own<memory>, error-code>` — a sealed read-only copy (SHARE_RO) of the focused screen as `0x00RRGGBB` pixels, plus `mode() -> mode` (width, height, stride).
+- `screenshot [file]` (shell command, default `ram:screen-NNN.bmp`): asks the compositor through the shell's display client (slot 15, 151) and writes a 24-bit BMP with the user's file client.
+- Host test of the BMP writer; QEMU `tools` suite: a screenshot of `view` matches the screen the harness reads back (pixel colours of the first text line).
+
+## Acceptance criteria
+
+- The tests above pass; README and `docs/tools` describe `screenshot`.
+
+## Resolution
+
+- `idl/display.wit` 1.0: `mode() -> mode` (width, height, stride) and `capture() -> result<own<memory>, error>` — a sealed read-only copy (`mind::mem::sealed_copy`) of the screen in front; errors `no-screen`, `no-memory`. `compositor` serves them between frames (`recv_timeout` of 15 ms in place of its sleep).
+- `screenshot [file]` in the shell (`shell/src/screenshot.rs`, slot 15): maps the copy and writes a 24-bit bottom-up BMP (`shell/src/bmp.rs`) in 64 KiB blocks through the shell's VFS client; without a file under the first free `ram:screen-NNN.bmp` (001–999).
+- Deviation: the capture is of the screen in front when the command runs — the shell's own screen, since the command is typed there; the plan's "a screenshot of `view`" would need a delayed capture. The QEMU check compares the shell's screen instead, and it runs in the `vfs` suite (a raw FAT image), because files written in the `tools` suite's virtual FAT never reach the host.
+- Tests: `tests/bmp_host.rs` (headers, rows of several widths with padding, read back by an independent decoder; in CI); QEMU `vfs` suite: after `clear`, `screenshot data/screen.bmp` reports 1280x800 and 3 072 054 bytes, `mtools` reads the file back, its header is a 24-bit BMP of the screen's size and the command's line matches QEMU's own screen dump pixel for pixel; two more screenshots go to `ram:screen-001.bmp` and `ram:screen-002.bmp`; `fsck.fat` is clean.
+
+## Related
+
+[151](151-shell-grant-slots-13-15.done).

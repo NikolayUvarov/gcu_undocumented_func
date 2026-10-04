@@ -72,6 +72,11 @@ pub struct EndpointInfo { pub index: u32, pub creator: u64, pub server: u64, pub
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Holder { pub pid: u64, pub slot: u32, pub rights: u32, pub badge: u32 }
 
+/// A capability of some task with its derivation links (sysinfo 3.0 `authority`): `node` is its derivation node,
+/// `parent` the node it was derived from (0: a root). Revoking it removes the capabilities below its node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthorityEntry { pub node: u64, pub parent: u64, pub pid: u64, pub size: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub badge: u32, pub endpoint: u32 }
+
 /// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sample { pub busy: [u16; 8], pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u8, pub runnable: u8 }
@@ -88,6 +93,8 @@ pub enum Problem {
     /// sysmon refused the request (over the client's rate); the previous data stays.
     Busy,
     NotFound,
+    /// sysmon tells who holds what only to a client with the authority badge (`REQUEST_AUTHORITY`).
+    Denied,
     /// sysmon is not running or answered with an error.
     Failed,
 }
@@ -109,6 +116,8 @@ pub trait Source {
     fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(Vec::new()) }
     /// The tasks holding a capability for endpoint `index` (sysinfo 2.1 `holders`).
     fn holders(&mut self, _index: u32) -> Result<Vec<Holder>, Problem> { Ok(Vec::new()) }
+    /// The capabilities of all tasks with their derivation links (sysinfo 3.0 `authority`, the authority badge).
+    fn authority(&mut self) -> Result<Vec<AuthorityEntry>, Problem> { Ok(Vec::new()) }
     /// Monotonic nanoseconds (the kernel's clock: the same base as `Task::started_ns`).
     fn now_ns(&self) -> u64;
     /// Stops a task through init's lifecycle requests (idl/init.wit 1.1): a service by name, an application by PID.

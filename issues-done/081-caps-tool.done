@@ -1,0 +1,29 @@
+# 081 — `caps`: capabilities of a task and the derivation tree — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3 · **Constitution:** MC-3.4–3.6, MC-10.2
+
+## Problem
+
+The plan's `caps` tool ([docs/tools](../docs/tools/README.md) §2.2, §4.7) shows a task's capabilities, the derivation tree across tasks and what a revoke would remove. The authority graph is sensitive, so it needs a stronger right than plain observation: a program asking for system information must not see who holds what.
+
+## Plan
+
+- `sysmon` serves `idl/sysinfo.wit` 2.x `authority(start: u32) -> result<list<authority-entry, 128>, error>` (PID, slot, kind, rights, badge, endpoint index, node, parent; paged) only to a client whose capability carries `mind::stat::BADGE_AUTHORITY`; others get `denied`.
+- `caps` in `monitor/`: a task's slots (from `caps(pid)`), the derivation tree across tasks from `authority`, and for a selected capability the subtree a revoke would remove; `mind::process::REQUEST_AUTHORITY`, which the shell answers with its authority-badged `sysmon` client (slot 13, kernel issue 151).
+- Host test; QEMU `tools` suite: `caps` shows `init`'s keeper and the services' copies; a program started with only `REQUEST_SYSINFO` gets `denied` from `authority`.
+
+## Acceptance criteria
+
+- The tests above pass; README and `docs/tools` describe `caps` and the authority badge.
+
+## Resolution
+
+- `idl/sysinfo.wit` 3.0: `authority(start) -> result<list<authority-entry, 128>, error>` — every task's capabilities in PID and slot order with `node`, `parent`, PID, slot, generation, kind, rights, badge, size and endpoint index, paged; a new error `denied`. `sysmon` answers it only when the request came through a capability with `mind::stat::BADGE_AUTHORITY`.
+- Beyond the plan, so that "a program asking for system information must not see who holds what" holds: `holders` (2.1, who holds an endpoint) now needs the badge too, and `caps(pid)` gives plain observers no derivation links (`node`, `parent` are 0). These change existing functions, hence the major version 3.0. Observers still see each task's slots and the endpoint indexes in them (`top`'s details show them).
+- `mind::process::REQUEST_AUTHORITY` (128; `REQUEST_NETWORK` took 64 on main): the shell lends its slot-13 client (kernel issue 151) in `SLOT_SYSINFO` in place of the plain one. It reads the flag with the loader's `inspect-requests` (loader.wit 1.2 from the network track), so `loader.wit` is unchanged.
+- `caps [pid]` in `monitor/` (`monitor/src/caps.rs`; `caps` without arguments in the shell starts it, `caps <pid>` still prints one task's slots): view 1, a task's slots with kind, rights, badge, the endpoint or size and where each was derived from (holder and slot of the parent node, or "kernel"), ←/→ to the next task; view 2, the derivation forest across tasks (roots by PID and slot, copies indented below); Enter lists what a revoke of the selected capability removes (the subtree below its node). Without the authority client it says so and shows nothing. `ipc` asks for `REQUEST_AUTHORITY` too (its holders window).
+- Tests: `tests/monitor_host.rs` `caps_tree_and_revoke` (forest order, subtree, a parent that is gone, a loop in a malformed table, the views, the revoke window, the denied case); QEMU `tools` suite: `caps` starts on init with the authority client (`DENIED=0`, the whole table), Enter shows a revoke window for init's capability, the tree shows init's originals with the services' copies below them; a copy of `caps.elf` whose request note lacks `REQUEST_AUTHORITY` gets the plain client, and `sysmon` refuses it (`No authority`, `DENIED=1`).
+
+## Related
+
+[151](151-shell-grant-slots-13-15.done), [080](080-ipc-tool.done).

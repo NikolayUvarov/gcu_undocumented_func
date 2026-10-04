@@ -1,0 +1,21 @@
+/// Keyboard layout and layout switch of the PS/2 driver `ps2_kbd` (issue 085). `init` gives `ps2_kbd` a service endpoint
+/// and the shell a client of it in SLOT_KEYBOARD (kernel issue 151); the shell's `keymap` command uses it.
+package mind:keyboard@1.0.0;
+
+interface keyboard {
+    /// The layouts: US (QWERTY) and Russian (ЙЦУКЕН).
+    enum layout { us, ru }
+    /// What switches the layout: Ctrl+Shift or Alt+Shift (either; the default), only one of them, Caps Lock (then it
+    /// no longer locks capitals), or nothing.
+    enum switch-key { ctrl-or-alt-shift, ctrl-shift, alt-shift, caps-lock, none }
+    record state { layout: layout, switch-key: switch-key }
+
+    /// The current layout and switch.
+    state: func() -> state;
+    /// Selects a layout for the next keys.
+    set-layout: func(layout: layout) -> result<_, error-code>;
+    /// Selects the switch.
+    set-switch: func(key: switch-key) -> result<_, error-code>;
+    /// The names of the layouts, in `layout` order.
+    layouts: func() -> list<string<16>, 8>;
+}

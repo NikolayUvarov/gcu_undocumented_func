@@ -29,7 +29,7 @@ jobs:
         run: |
           rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests
           rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests
-          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search voice; do
+          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search voice bmp; do
             rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests"
           done
           python3 tests/idl_test.py

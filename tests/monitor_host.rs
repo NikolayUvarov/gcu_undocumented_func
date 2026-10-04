@@ -24,6 +24,8 @@ mod load;
 mod hw;
 #[path = "../monitor/src/ipc.rs"]
 mod ipc;
+#[path = "../monitor/src/caps.rs"]
+mod caps;
 
 use abi::*;
 use keys::{event, Key};
@@ -38,7 +40,9 @@ fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
 
 #[derive(Default)]
 struct Fake { tasks: Vec<Task>, now: u64, ranges: Vec<Range>, samples: Vec<Sample>, slow_requested: Vec<(bool, u16)>, vmap_requests: Vec<u64>, devices: Vec<Device>, irqs: Vec<Irq>,
-              lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String>, endpoints: Vec<EndpointInfo>, holder_requests: Vec<u32> }
+              lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String>, endpoints: Vec<EndpointInfo>, holder_requests: Vec<u32>,
+              /// sysmon's authority answer: None stands for a client without the authority badge.
+              authority: Option<Vec<AuthorityEntry>> }
 
 impl Source for Fake {
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> { Ok(self.tasks.clone()) }
@@ -69,6 +73,7 @@ impl Source for Fake {
         Ok(self.samples.iter().rev().take(count as usize).rev().copied().collect())
     }
     fn load(&mut self) -> Result<Load, Problem> { Ok(Load { one: 12, five: 8, fifteen: 1, uptime_ms: 3_723_000, fast_ms: 100, slow_ms: 1000, ..Load::default() }) }
+    fn authority(&mut self) -> Result<Vec<AuthorityEntry>, Problem> { self.authority.clone().ok_or(Problem::Denied) }
     fn now_ns(&self) -> u64 { self.now }
     fn stop(&mut self, task: &Task) -> Result<(), String> {
         if !self.lifecycle { return Err(String::from(NO_LIFECYCLE)); }
@@ -422,7 +427,8 @@ fn every_tool_draws_on_any_screen() {
     source.samples = vec![Sample::default(); 50];
     source.endpoints = vec![EndpointInfo { index: 3, server: 5, holders: 4, messages: 10, ..EndpointInfo::default() }];
     let mut tools: Vec<Box<dyn Tool>> = vec![Box::new(top::Top::new()), Box::new(memmap::Memmap::new()), Box::new(load::LoadView::new()), Box::new(hw::Hw::new(hw::Local::default())),
-                                             Box::new(ipc::Ipc::new())];
+                                             Box::new(ipc::Ipc::new()), Box::new(caps::Caps::new(0))];
+    source.authority = Some(authority());
     for tool in tools.iter_mut() {
         tool.refresh(&mut source).unwrap();
         for (cols, rows) in [(20, 6), (40, 12), (80, 25), (100, 37), (160, 50), (240, 67)] {
@@ -487,4 +493,66 @@ fn ipc_endpoints_and_holders() {
     let screen = draw(&mut view, 120, 20);
     assert!(screen.iter().any(|l| l.contains("No task waits for another.")), "{:#?}", screen);
     assert_eq!(view.key(chr('q'), &mut source), Flow::Quit);
+}
+
+/// init (1) holds the originals; loader (5) and shell (7) got copies from init; the shell lent a copy of its copy to top
+/// (13); busy (12) holds a memory object of its own.
+fn authority() -> Vec<AuthorityEntry> {
+    let endpoint = |node: u64, parent: u64, pid: u64, slot: u32, index: u32, badge: u32| AuthorityEntry { node, parent, pid, slot, kind: CAP_KIND_ENDPOINT as u32,
+        rights: (CAP_READ | CAP_WRITE | CAP_GRANT) as u32, badge, endpoint: index, ..AuthorityEntry::default() };
+    vec![endpoint(100, 0, 1, 3, 9, 0), endpoint(101, 100, 5, 1, 9, 0), endpoint(102, 100, 7, 10, 9, 1), endpoint(103, 102, 13, 10, 9, 1),
+         endpoint(110, 0, 1, 4, 10, 0), AuthorityEntry { node: 120, parent: 0, pid: 12, slot: 16, kind: CAP_KIND_MEMORY as u32, size: 8192, ..AuthorityEntry::default() },
+         // A copy whose parent is gone (the holder exited): a root of its own.
+         endpoint(130, 999, 7, 11, 10, 0)]
+}
+
+#[test]
+fn caps_tree_and_revoke() {
+    let entries = authority();
+    let order: Vec<(u64, usize)> = caps::forest(&entries).iter().map(|&(i, depth)| (entries[i].node, depth)).collect();
+    assert_eq!(order, [(100, 0), (101, 1), (102, 1), (103, 2), (110, 0), (130, 0), (120, 0)], "roots by PID and slot, children below");
+    let below: Vec<u64> = caps::subtree(&entries, 100).iter().map(|&(i, _)| entries[i].node).collect();
+    assert_eq!(below, [101, 102, 103], "a revoke of init's original removes every copy");
+    assert!(caps::subtree(&entries, 103).is_empty());
+    // A loop in a malformed table ends.
+    let looped = vec![AuthorityEntry { node: 1, parent: 2, ..AuthorityEntry::default() }, AuthorityEntry { node: 2, parent: 1, ..AuthorityEntry::default() }];
+    assert!(caps::forest(&looped).len() <= 2);
+
+    let mut source = system();
+    source.authority = Some(entries);
+    let mut tool = caps::Caps::new(7);
+    tool.refresh(&mut source).unwrap();
+    assert!(tool.status().starts_with("VIEW=TASK PID=7 SLOTS=2 ENTRIES=7 ROOTS=4 SELECTED=7:10 KIND=endpoint REVOKE=- DENIED=0"), "{}", tool.status());
+    let screen = draw(&mut tool, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("shell (PID 7): 2 capabilities")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg-  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("slot 11") && l.contains("kernel")), "a parent that is gone: {:#?}", screen);
+    // Enter: what a revoke of the shell's copy removes (top's copy).
+    assert_eq!(tool.key(code(KEY_ENTER), &mut source), Flow::Redraw);
+    assert!(tool.status().contains("REVOKE=1"), "{}", tool.status());
+    let screen = draw(&mut tool, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("Revoke slot 10 of shell")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("A revoke removes 1 capabilities:")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("top (PID 13)  slot 10")), "{:#?}", screen);
+    tool.key(code(KEY_ESC), &mut source);
+    assert!(tool.revoke.is_none());
+    // ←/→ go through the tasks; the Tree view shows the forest.
+    tool.key(code(KEY_LEFT), &mut source);
+    assert!(tool.status().starts_with("VIEW=TASK PID=5 SLOTS=1"), "{}", tool.status());
+    tool.key(chr('2'), &mut source);
+    tool.key(code(KEY_ENTER), &mut source);
+    assert!(tool.status().starts_with("VIEW=TREE") && tool.status().contains("SELECTED=1:3 KIND=endpoint REVOKE=3"), "{}", tool.status());
+    tool.key(code(KEY_ESC), &mut source);
+    let screen = draw(&mut tool, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("    top (PID 13)  slot 10")), "two levels down: {:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("busy (PID 12)  slot 16  memory") && l.contains("8.0K")), "{:#?}", screen);
+    assert_eq!(tool.key(chr('q'), &mut source), Flow::Quit);
+
+    // Without the authority client: nothing but the notice.
+    let mut source = system();
+    let mut tool = caps::Caps::new(0);
+    tool.refresh(&mut source).unwrap();
+    assert!(tool.status().contains("ENTRIES=0") && tool.status().ends_with("DENIED=1"), "{}", tool.status());
+    let screen = draw(&mut tool, 120, 20);
+    assert!(screen.iter().any(|l| l.contains("No authority")), "{:#?}", screen);
 }

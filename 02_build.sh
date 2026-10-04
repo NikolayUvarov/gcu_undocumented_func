@@ -83,6 +83,7 @@ USER_CRATES=(
     "monitor:load:load.elf"
     "monitor:hw:hw.elf"
     "monitor:ipc:ipc.elf"
+    "monitor:caps:caps.elf"
     "fm:fm:fm.elf"
     "edit:edit:edit.elf"
     "disk:df:df.elf"

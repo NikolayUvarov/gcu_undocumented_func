@@ -1,0 +1,29 @@
+# 084 — `reboot` — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — ([152](../issues-done/152-reboot-system-call.done) done) · **Roadmap:** track G, T3
+
+## Problem
+
+`stop` halts the machine; there is no reboot ([docs/tools](../docs/tools/README.md) §2.3), and the kernel has no call for it (152).
+
+## Plan
+
+- `reboot` (shell command): flushes every volume (`vfs.wit` `flush` on the roots), asks `init` to stop the services in reverse start order (lifecycle requests, so drivers quiesce their devices), then calls `REBOOT` (152) with the process-control privilege. `reboot -f` skips the service stop.
+- QEMU `services` suite: after `reboot` the VM boots again (the harness sees a second `[INIT] READY`), and a file written to `data/` before the reboot is intact.
+
+## Acceptance criteria
+
+- The test above passes; README and `docs/tools` describe `reboot`.
+
+## Resolution
+
+- `reboot [-f]` (`shell/src/power.rs`): writes what `vfs_server` caches to the disks (`flush_all`), asks `init` for the boot services in boot order (`idl/init.wit` `list`) and stops the running ones in reverse order (`stop`; init and the shell stay), printing `STOPPED <name>` for each, then calls `REBOOT`. `-f` skips stopping the services; other arguments print the usage.
+- Deviation: the test is in the `vfs` suite rather than `services`: it needs a disk whose writes survive the reset (a raw FAT image without `-snapshot`) and a VM without `-no-reboot`. A file written to `data/` without `sync` is there after the reboot (the flush), the services stop in reverse start order (`vfs_server` before `ata` before `compositor`, `logd` last), the system boots again to the prompt; `reboot -f` stops nothing and boots again; `fsck.fat` is clean afterwards.
+
+## Related
+
+[152](152-reboot-system-call.done), [070](070-svc-lifecycle.done).
+
+## Progress
+
+- 2026-10-04 (kernel track, 152): a plain shell builtin `reboot` exists (`flush_all`, then `REBOOT`); this issue adds stopping the services first and `-f`.

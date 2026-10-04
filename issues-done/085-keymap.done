@@ -1,0 +1,29 @@
+# 085 — `keymap`: keyboard layout and switch key — done
+
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3
+
+## Problem
+
+The PS/2 layouts (US, Russian ЙЦУКЕН) and the switch (Ctrl+Shift or Alt+Shift) are fixed in `ps2_kbd` ([docs/tools](../docs/tools/README.md) §2.3). Nothing can change them: `ps2_kbd` serves no requests.
+
+## Plan
+
+- `idl/keyboard.wit` 1.0, served by `ps2_kbd` on the endpoint `init` gives it (151): `layout() -> layout`, `set-layout(layout)`, `switch() -> switch-key`, `set-switch(switch-key)` (Ctrl+Shift, Alt+Shift, Caps Lock, none), `layouts() -> list<string<16>, 8>`.
+- `keymap [us|ru] [--switch ctrl-shift|alt-shift|caps|none]`: without arguments prints the state; a shell command using the shell's keyboard client (slot 14, 151).
+- QEMU `keys` suite: `keymap ru` makes the next PS/2 key give Cyrillic; `keymap --switch caps` switches with Caps Lock.
+
+## Acceptance criteria
+
+- The test above passes; README and `docs/tools` describe `keymap`.
+
+## Resolution
+
+- `idl/keyboard.wit` 1.0: `state() -> state` (layout and switch key in one record, instead of the plan's separate `layout` and `switch`), `set-layout(layout)`, `set-switch(switch-key)` with `ctrl-or-alt-shift` (the default, as before), `ctrl-shift`, `alt-shift`, `caps-lock`, `none`, and `layouts()`.
+- `mind::keys::Ps2`: `set_layout`, `switch`, `set_switch` (`Switch`); with Caps Lock as the switch it locks no capitals.
+- `ps2_kbd` binds IRQ 1 to its service endpoint (151) and serves the requests between interrupts (an older `init` without the endpoint: keys only, as before); it logs `[KBD] LAYOUT RU (SET)` and `[KBD] SWITCH ...`.
+- `keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]` in the shell (`shell/src/keymap.rs`, slot 14); without arguments it shows the state and the layouts.
+- Tests: `tests/keys_host.rs` `ps2_switch_key_and_layout_are_set`; QEMU `keys` suite: `keymap` shows the state, `keymap ru` makes the next PS/2 key Cyrillic, with `--switch caps` Ctrl+Shift no longer switches and Caps Lock does (without locking capitals), a wrong switch prints the usage, `keymap us --switch both` restores the default.
+
+## Related
+
+[151](151-shell-grant-slots-13-15.done), [055](055-key-events.done).

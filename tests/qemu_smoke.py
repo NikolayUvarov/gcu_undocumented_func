@@ -451,7 +451,31 @@ def keys_suite(vm):
     require(vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN"), "[KBD] LAYOUT RU")
     assert task_rows(vm) == {}
     assert heap_used(vm) == baseline
-    print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc", flush=True)
+    # keymap (issue 085): the layout and its switch through the shell's keyboard client (idl/keyboard.wit).
+    require(vm.command("keymap"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT  LAYOUTS: US RU")
+    require(vm.command("keymap ru"), "LAYOUT: RU  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
+    require(vm.command("keymap --switch caps"), "LAYOUT: RU  SWITCH: CAPS LOCK")
+    require(vm.command("keymap --switch sideways"), "USAGE: KEYMAP")
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    start = len(vm.log)
+    # Russian at once; Ctrl+Shift no longer switches; Caps Lock switches (and locks no capitals).
+    for key in ("q", "ctrl-shift", "q", "caps_lock", "q"):
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.05)
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    got = re.findall(r"\[KEYS\] (code=[^\r\n]*)", vm.log[start:])
+    typed = [line for line in got if line.startswith("code=Char")]  # leaving the QEMU monitor also sends an Enter
+    assert [re.search(r"char=(\S+)", line)[1] for line in typed] == ["й", "й", "q"] and all("mods=-" in line for line in typed), got
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("keymap us --switch both"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT")
+    require(vm.service_logs("ps2_kbd", "[KBD] SWITCH CtrlOrAltShift"), "[KBD] SWITCH CapsLock")
+    print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc; "
+          "keymap sets the layout and the switch key", flush=True)
 
 
 def shell_suite(vm):
@@ -750,6 +774,49 @@ def monitors_check(vm):
     assert table_row(screen, r"tasks wait for a message on their own endpoints; \d+ edges, 0 deadlocks"), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[IPC] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # caps: a task's capabilities, the derivation tree and what a revoke removes, through the shell's authority client
+    # (issue 081). `caps` without a PID starts the tool on the first task, init.
+    vm.send("caps\n")
+    vm.expect("[CAPS] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: what a revoke of init's first capability removes
+    assert table_row(screen, r"init \(PID 1\): \d+ capabilities"), screen
+    status = tool_status(vm, "[CAPS] VIEW=TASK PID=1 ")
+    entries, revoke = int(re.search(r"ENTRIES=(\d+)", status)[1]), int(re.search(r"REVOKE=(\d+)", status)[1])
+    assert "DENIED=0" in status and entries > 50, status
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter closes the window
+    assert table_row(screen, r"Revoke slot \d+ of init"), screen
+    tool_status(vm, "REVOKE=-")
+    # The tree: init's originals with the services' copies below them.
+    vm.send("2")
+    status_line(vm, "[CAPS] VIEW=TREE")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    tree = [row for row in screen if re.search(r"\(PID \d+\) +slot +\d+", row)]
+    copies = [i for i, row in enumerate(tree) if re.match(r" +init \(PID 1\)", tree[i - 1] if i else "") and re.match(r"   +\w+ \(PID \d+\)", row)]
+    assert copies, screen
+    tool_status(vm, "[CAPS] VIEW=TREE")  # the Enter of serial() opened the revoke window of the first root
+    vm.send("q")  # closes the window
+    tool_status(vm, "REVOKE=-")
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[CAPS] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # The same program without REQUEST_AUTHORITY gets the plain sysmon client: sysmon refuses the authority graph.
+    vm.send("capsobs\n")
+    vm.expect("[CAPS] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert table_row(screen, r"No authority"), screen
+    status = tool_status(vm, "[CAPS] VIEW=")
+    assert "ENTRIES=0" in status and "DENIED=1" in status, status
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[CAPS] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command(f"kill {clock}"), "KILLED")
     for _ in range(20):
@@ -1709,6 +1776,18 @@ def vfs_suite(args):
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
                                     ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
+            # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
+            def slow(command):  # 3 MB written through the ATA driver take a while under emulation
+                vm.send(command + "\n")
+                return vm.expect("MIND> ", timeout=180, after=command + "\n")
+            vm.command("clear")  # a screen with room: the output after the capture must not scroll it
+            shot = re.search(r"SCREENSHOT data/screen.bmp: (\d+)x(\d+), (\d+) BYTES", slow("screenshot data/screen.bmp"))
+            assert shot, vm.log[-2000:]
+            screen = vm.screenshot()
+            vm.serial()
+            require(slow("screenshot"), "SCREENSHOT ram:screen-001.bmp")
+            require(slow("screenshot"), "SCREENSHOT ram:screen-002.bmp")
+            require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [FILE]")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-1-{args.cpus}cpu.log").write_text(vm.log)
@@ -1717,18 +1796,53 @@ def vfs_suite(args):
         assert mtype("data/notes.txt") == b"line one\n", mtype("data/notes.txt")
         assert mtype("data/b.txt") == b"alpha\n"
         assert b"sub" not in subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True).stdout
+        # The BMP shows what QEMU's display showed: the command's own line (above the cursor's rows, which moved on).
+        width, height, size = map(int, shot.groups())
+        bmp = mtype("data/screen.bmp")
+        assert len(bmp) == size and bmp[:2] == b"BM" and struct.unpack_from("<iiHH", bmp, 18) == (width, height, 1, 24), (len(bmp), bmp[:54])
+        header, dims, pixels = screen.split(b"\n", 3)[0], screen.split(b"\n", 3)[1], screen.split(b"\n", 3)[3]
+        assert header == b"P6" and tuple(map(int, dims.split())) == (width, height), (header, dims)
+        stride = (width * 3 + 3) & ~3
+        rows = [bmp[54 + (height - 1 - y) * stride:][:width * 3] for y in range(14)]
+        assert len({row[i:i + 3] for row in rows for i in range(0, width * 3, 3)}) >= 2, "the line has text"
+        for y, row in enumerate(rows):
+            assert row == b"".join(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3][::-1] for x in range(width)), y
         # After a reboot: the disk keeps its files, the RAM disk starts empty.
         subprocess.run(["mdel", "-i", part, "::/NvVars"], env=MTOOLS_ENV, capture_output=True)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
             require(vm.command("cat data/notes.txt"), "line one")
-            require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 15 BYTES")
+            require(vm.command("ls data"), f"3 ENTRIES, 3 FILES, {15 + size} BYTES")  # with the screenshot
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-2-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
-    print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it", flush=True)
+        # reboot (issue 084): an unsynced write reaches the disk, the services stop in reverse start order, the machine
+        # boots again; `reboot -f` skips stopping them.
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True)
+        try:
+            require(vm.command("write data/reboot.txt kept"), "WROTE 5 BYTES")
+            vm.send("reboot\n")
+            output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=90)
+            stopped = re.findall(r"^STOPPED (\w+)$", output, re.M)
+            assert "REBOOTING..." in output and stopped[-1] == "logd" and "init" not in stopped and "shell" not in stopped, output
+            assert stopped.index("vfs_server") < stopped.index("ata") < stopped.index("compositor"), stopped
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND> ", timeout=60)
+            require(vm.command("cat data/reboot.txt"), "kept")
+            vm.send("reboot -f\n")
+            output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=60)
+            assert "REBOOTING..." in output and "STOPPED" not in output, output
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND> ", timeout=60)
+            require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+    print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
+          f"screenshot writes the screen as a BMP ({width}x{height}); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f", flush=True)
 
 
 def edit_check(vm):
@@ -2625,6 +2739,11 @@ def main():
                 speech, starts = speech_wav()
                 (disk / "speech.wav").write_bytes(speech)
             if suite == "tools":
+                # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
+                elf = bytearray((disk / "caps.elf").read_bytes())
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~128).to_bytes(4, "little")
+                (disk / "capsobs.elf").write_bytes(elf)
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite in ("busy", "smp"):
