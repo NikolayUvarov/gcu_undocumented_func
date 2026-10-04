@@ -57,7 +57,7 @@ impl Source for Client {
         Ok(list.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
             image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, retained: t.retained, wait: t.wait_on as u64, heap_blocks: t.heap_blocks, caps: t.caps,
             quota_tasks: t.quota_tasks as u32, used_tasks: t.used_tasks as u32, quota_endpoints: t.quota_endpoints as u32, used_endpoints: t.used_endpoints as u32,
-            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags }).collect())
+            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel }).collect())
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
         let list = take(sysinfo::cpus(Endpoint::SYSINFO))?;
@@ -66,7 +66,8 @@ impl Source for Client {
     fn memory(&mut self) -> Result<Memory, Problem> {
         let m = take(sysinfo::memory(Endpoint::SYSINFO))?;
         Ok(Memory { arena: m.arena, used: m.used, free: m.free, images: m.images, stacks: m.stacks, task_pages: m.task_pages, screens: m.screens, heaps: m.heaps,
-                    objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks, endpoints: m.endpoints })
+                    objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks, endpoints: m.endpoints,
+                    largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> {
         let list = take(sysinfo::physmap(Endpoint::SYSINFO))?;
@@ -78,15 +79,15 @@ impl Source for Client {
     }
     fn caps(&mut self, pid: u64) -> Result<Vec<Capability>, Problem> {
         let list = take(sysinfo::caps(Endpoint::SYSINFO, pid))?;
-        Ok(list.as_slice().iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge }).collect())
+        Ok(list.as_slice().iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint }).collect())
     }
     fn irqs(&mut self) -> Result<Vec<Irq>, Problem> {
         let list = take(sysinfo::irqs(Endpoint::SYSINFO))?;
-        Ok(list.as_slice().iter().map(|i| Irq { count: i.count, line: i.line, holder: i.holder, endpoint: i.endpoint, masked: i.masked }).collect())
+        Ok(list.as_slice().iter().map(|i| Irq { count: i.count, line: i.line, holder: i.holder, endpoint: i.endpoint, masked: i.masked, holders: i.holders }).collect())
     }
     fn devices(&mut self) -> Result<Vec<Device>, Problem> {
         let list = take(sysinfo::devices(Endpoint::SYSINFO))?;
-        Ok(list.as_slice().iter().enumerate().map(|(i, d)| Device { bars: [d.bar0, d.bar1, d.bar2, d.bar3, d.bar4, d.bar5], class: d.class, irq: d.irq, holder: d.holder, index: i as u32 }).collect())
+        Ok(list.as_slice().iter().enumerate().map(|(i, d)| Device { bars: [d.bar0, d.bar1, d.bar2, d.bar3, d.bar4, d.bar5], class: d.class, irq: d.irq, holder: d.holder, index: i as u32, location: d.location, io_bars: d.io_bars }).collect())
     }
     fn history(&mut self, slow: bool, count: u16) -> Result<Vec<Sample>, Problem> {
         let unpack = |low: u64, high: u64| core::array::from_fn(|i| (if i < 4 { low >> (16 * i) } else { high >> (16 * (i - 4)) } & 0xFFFF) as u16);

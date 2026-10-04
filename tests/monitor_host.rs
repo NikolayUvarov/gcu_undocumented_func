@@ -31,7 +31,7 @@ use tui::{Cell, Grid, DARK};
 const MS: u64 = 1_000_000;
 
 fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
-    Task { pid, parent, name: name.into(), state: WAIT_RECEIVE, flags: if service { TASK_SERVICE } else { 0 }, caps: 3, quota_endpoints: 4, ..Task::default() }
+    Task { pid, parent, name: name.into(), state: WAIT_RECEIVE, flags: if service { TASK_SERVICE } else { 0 }, caps: 3, quota_endpoints: 4, kernel: 40 << 10, ..Task::default() }
 }
 
 #[derive(Default)]
@@ -43,16 +43,17 @@ impl Source for Fake {
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> { Ok((0..4).map(|i| Cpu { apic: i, online: i < 2, ..Cpu::default() }).collect()) }
     fn memory(&mut self) -> Result<Memory, Problem> {
         Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
-                    tasks: self.tasks.len() as u32, endpoints: 8, ..Memory::default() })
+                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 32, endpoints_limit: 127, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
     fn vmap(&mut self, pid: u64) -> Result<Vec<Region>, Problem> {
         self.vmap_requests.push(pid);
-        Ok(vec![Region { start: 0x80_0000_0000, bytes: 8192, kind: REGION_IMAGE, flags: REGION_READ | REGION_EXECUTE }, Region { start: 0x80_0100_1000, bytes: 65536, kind: REGION_STACK, flags: REGION_READ | REGION_WRITE },
+        Ok(vec![Region { start: 0x80_0000_0000, bytes: 8192, kind: REGION_IMAGE, flags: REGION_READ | REGION_EXECUTE }, Region { start: 0x80_0100_0000, bytes: 4096, kind: REGION_GUARD, flags: 0 },
+                Region { start: 0x80_0100_1000, bytes: 65536, kind: REGION_STACK, flags: REGION_READ | REGION_WRITE },
                 Region { start: 0x80_0400_0000, bytes: 4096, kind: REGION_INFO, flags: REGION_READ }])
     }
     fn caps(&mut self, _pid: u64) -> Result<Vec<Capability>, Problem> {
-        Ok(vec![Capability { slot: 2, kind: CAP_KIND_ENDPOINT as u32, ..Capability::default() }, Capability { slot: 12, kind: CAP_KIND_MEMORY as u32, ..Capability::default() }])
+        Ok(vec![Capability { slot: 2, kind: CAP_KIND_ENDPOINT as u32, endpoint: 6, ..Capability::default() }, Capability { slot: 12, kind: CAP_KIND_MEMORY as u32, ..Capability::default() }])
     }
     fn irqs(&mut self) -> Result<Vec<Irq>, Problem> { Ok(self.irqs.clone()) }
     fn devices(&mut self) -> Result<Vec<Device>, Problem> { Ok(self.devices.clone()) }
@@ -203,7 +204,9 @@ fn details_window_and_keys() {
     assert!(lines[0].contains("PID 5  loader  service"), "{:?}", lines);
     assert!(lines[1].contains("Parent 1 init"), "{:?}", lines);
     assert!(lines.iter().any(|l| l == "Capabilities 3/63: endpoint 1, memory 1"), "{:?}", lines);
-    assert!(lines.iter().any(|l| l.contains("3 regions, 76.0K mapped")), "{:?}", lines);
+    assert!(lines.iter().any(|l| l.contains("4 regions, 76.0K mapped")), "the guard page is not mapped: {:?}", lines);
+    assert!(lines.iter().any(|l| l == "Endpoints (slot→index): 2→6"), "{:?}", lines);
+    assert!(lines.iter().any(|l| l.ends_with(", kernel 40.0K")), "{:?}", lines);
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("Task 5")), "{:#?}", screen);
     assert_eq!(top.key(chr('x'), &mut source), Flow::Ignored, "other keys wait while the window is open");
@@ -326,7 +329,10 @@ fn memmap_views() {
     assert!(!map.merged);
     assert_eq!(map.key(chr('2'), &mut source), Flow::Redraw);
     let screen = draw(&mut map, 100, 30);
-    assert!(screen.iter().any(|l| l.contains("Kernel arena 64.0M: used 16.0M (25.0%)")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("Kernel arena 64.0M: used 16.0M (25.0%), free 48.0M, largest free block 40.0M")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("Free outside the largest block: 8.0M (fragmentation); shared memory mapped by tasks: 2.0M")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("page tables") && l.contains("1.0M")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("Tasks 5/32, endpoints 8/127")), "limits from the kernel: {:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("screens") && l.contains("8.0M") && l.contains("12.5%")), "{:#?}", screen);
     map.key(code(KEY_TAB), &mut source);
     assert_eq!(map.view, memmap::View::Process);
@@ -337,6 +343,7 @@ fn memmap_views() {
     let screen = draw(&mut map, 100, 30);
     assert!(screen.iter().any(|l| l.contains("Address space of top (PID 13)")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("0x0000008001001000     64.0K  rw-    stack")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("0x0000008001000000      4.0K  ---    guard")), "{:#?}", screen);
     assert!(map.status().starts_with("VIEW=PROCESS PID=13"), "{}", map.status());
     map.key(chr('4'), &mut source);
     let screen = draw(&mut map, 100, 30);
@@ -373,9 +380,9 @@ fn graphs() {
 fn hardware_report() {
     let mut source = system();
     source.ranges = physmap();
-    source.devices = vec![Device { class: 0x010180, index: 3, holder: 5, irq: 14, bars: [0, 0, 0, 0, 16, 0], ..Device::default() },
-                          Device { class: 0x0C0330, index: 4, holder: 0, irq: 11, bars: [0x4000, 0, 0, 0, 0, 0], ..Device::default() }];
-    source.irqs = vec![Irq { line: 1, count: 1234, holder: 7, endpoint: 4, masked: false }, Irq { line: 3, ..Irq::default() }];
+    source.devices = vec![Device { class: 0x010180, index: 3, holder: 5, irq: 14, bars: [0, 0, 0, 0, 16, 0], location: 1 << 3 | 1, io_bars: 1 << 4, ..Device::default() },
+                          Device { class: 0x0C0330, index: 4, holder: 0, irq: 11, bars: [0x4000, 0, 0, 0, 0, 0], location: 2 << 8 | 4 << 3, ..Device::default() }];
+    source.irqs = vec![Irq { line: 1, count: 1234, holder: 7, endpoint: 4, masked: false, holders: 2 }, Irq { line: 3, ..Irq::default() }];
     let local = hw::Local { vendor: "GenuineIntel".into(), brand: "Test CPU".into(), family: 6, model: 85, stepping: 4, features: vec![("NX", true), ("x2APIC", false)],
                             tsc_hz: 2_400_000_000, resolution_ns: 1, width: 1280, height: 800, stride: 1280 };
     let mut report = hw::Hw::new(local);
@@ -388,10 +395,11 @@ fn hardware_report() {
     has("+NX  -x2APIC");
     has("TSC 2400.000 MHz");
     has("GOP framebuffer 1280x800, 1280 pixels per line, 32 bits per pixel, 4.0M at 0x80000000");
-    has(" 3  010180  IDE controller   IRQ 14  loader (PID 5)");
-    has("BAR4 16B");
+    has("00:01.1  010180  IDE controller   IRQ 14  loader (PID 5)");
+    has("BAR4 16B io");
+    has("02:04.0  0C0330  USB xHCI");
     has("USB xHCI");
-    has("IRQ 1         1 234 interrupts  shell (PID 7), endpoint 4");
+    has("IRQ 1         1 234 interrupts  shell (PID 7) (+1 holding a copy), endpoint 4");
     assert!(!lines.iter().any(|l| l.contains("IRQ 3 ")), "unused lines are left out");
     let _ = draw(&mut report, 80, 10);
     report.key(code(KEY_TAB), &mut source);

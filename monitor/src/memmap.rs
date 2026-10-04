@@ -153,9 +153,9 @@ impl Memmap {
     }
 
     /// Kernel arena categories: name, bytes, colour, limit (0: none).
-    pub fn categories(m: &Memory) -> [(&'static str, u64, u32, u64); 8] {
+    pub fn categories(m: &Memory) -> [(&'static str, u64, u32, u64); 9] {
         [("task images", m.images, 0xC080FF, 0), ("task stacks", m.stacks, 0x80D0FF, 0), ("screens", m.screens, 0x60C0FF, 0), ("program heaps", m.heaps, 0x50C878, 0),
-         ("task kernel pages", m.task_pages, 0xE0A040, 0), ("memory objects", m.objects, 0xF080C0, m.objects_limit),
+         ("task kernel pages", m.task_pages, 0xE0A040, 0), ("page tables", m.page_tables, 0xE0E060, 0), ("memory objects", m.objects, 0xF080C0, m.objects_limit),
          ("DMA buffers", m.dma, 0xFFB000, m.dma_limit), ("other kernel", m.other(), 0x9090A0, 0)]
     }
 
@@ -163,7 +163,8 @@ impl Memmap {
         let w = grid.cols;
         let m = &self.memory;
         let percent = if m.arena == 0 { 0 } else { m.used * 1000 / m.arena } as u32;
-        grid.text(1, 2, &format!("Kernel arena {}: used {} ({}%), free {}", text::size(m.arena), text::size(m.used), text::permille(percent), text::size(m.free)), theme.header);
+        grid.text(1, 2, &format!("Kernel arena {}: used {} ({}%), free {}, largest free block {}", text::size(m.arena), text::size(m.used), text::permille(percent), text::size(m.free),
+                                 text::size(m.largest_free)), theme.header);
         // A stacked bar of the categories; the rest is free.
         let cells = w.saturating_sub(2) as u64;
         let mut x = 1;
@@ -192,7 +193,11 @@ impl Memmap {
         grid.text_right(36, y, &text::size(m.free), theme.panel);
         grid.text_right(46, y, &format!("{}%", text::permille((m.free * 1000 / m.arena.max(1)) as u32)), theme.panel);
         y += 2;
-        grid.text(1, y, &format!("Tasks {}/{}, endpoints {}/{}", m.tasks, TASKS_LIMIT, m.endpoints, ENDPOINTS_LIMIT), theme.panel);
+        // Program images and screens need contiguous blocks: free memory outside the largest one cannot hold a large one.
+        grid.text(1, y, &format!("Free outside the largest block: {} (fragmentation); shared memory mapped by tasks: {}", text::size(m.free.saturating_sub(m.largest_free)),
+                                 text::size(m.shared)), theme.panel);
+        y += 1;
+        grid.text(1, y, &format!("Tasks {}/{}, endpoints {}/{}", m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
     }
 
     fn process(&mut self, grid: &mut Grid, theme: &Theme) {
@@ -217,7 +222,7 @@ impl Memmap {
             y += 1;
         }
         if self.regions.len() > h.saturating_sub(8) { grid.text(x + 1, y, &format!("… {} more", self.regions.len() - h.saturating_sub(8)), theme.dim); y += 1; }
-        let mapped: u64 = self.regions.iter().map(|r| r.bytes).sum();
+        let mapped: u64 = self.regions.iter().filter(|r| r.kind != REGION_GUARD).map(|r| r.bytes).sum();
         let heap: u64 = self.regions.iter().filter(|r| r.kind == REGION_HEAP).map(|r| r.bytes).sum();
         let shared: u64 = self.regions.iter().filter(|r| r.kind == REGION_SHARED).map(|r| r.bytes).sum();
         grid.text(x + 1, y + 1, &format!("mapped {}", text::size(mapped)), theme.panel);

@@ -135,9 +135,9 @@ impl Top {
         lines.push(format!("Parent {} {}   CPU {}   {}", t.parent, details.parent, t.cpu, text::waits_for(t.state, t.wait)));
         lines.push(format!("Run time {}   age {}   runs {}   syscalls {}", text::cpu_time(t.run_ns), text::uptime(now_ns.saturating_sub(t.started_ns) / 1_000_000), text::count(t.runs), text::count(t.calls)));
         lines.push(format!("IPC: sent {}, received {}", text::count(t.sent), text::count(t.received)));
-        lines.push(format!("Memory: image {}, stack {}, screen {}, retained {}", text::size(t.image), text::size(t.stack), text::size(t.screen), text::size(t.retained)));
+        lines.push(format!("Memory: image {}, stack {}, screen {}, retained {}, kernel {}", text::size(t.image), text::size(t.stack), text::size(t.screen), text::size(t.retained), text::size(t.kernel)));
         lines.push(format!("Heap {} in {}/{} blocks, shared mappings {}", text::size(t.heap), t.heap_blocks, HEAP_MAX_BLOCKS, text::size(t.shared)));
-        let mapped: u64 = details.regions.iter().map(|r| r.bytes).sum();
+        let mapped: u64 = details.regions.iter().filter(|r| r.kind != REGION_GUARD).map(|r| r.bytes).sum();
         lines.push(format!("Address space: {} regions, {} mapped", details.regions.len(), text::size(mapped)));
         let mut kinds: Vec<(&str, usize)> = Vec::new();
         for c in &details.caps {
@@ -146,6 +146,9 @@ impl Top {
         }
         let list: Vec<String> = kinds.iter().map(|(name, n)| format!("{} {}", name, n)).collect();
         lines.push(format!("Capabilities {}/{}: {}", t.caps, CAP_SLOTS - 1, list.join(", ")));
+        // Endpoint indexes are labels (the `ipc` view and the shell's `endpoints` use the same ones), not authority.
+        let endpoints: Vec<String> = details.caps.iter().filter(|c| c.kind as usize == CAP_KIND_ENDPOINT && c.endpoint != 0).map(|c| format!("{}→{}", c.slot, c.endpoint)).collect();
+        if !endpoints.is_empty() { lines.push(format!("Endpoints (slot→index): {}", endpoints.join(" "))); }
         lines.push(format!("Quotas: tasks {}/{}, endpoints {}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints));
         lines
     }
@@ -181,8 +184,8 @@ impl Top {
         grid.put(6, y, '[', theme.dim);
         grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena),
-                                         m.tasks, TASKS_LIMIT, m.endpoints, ENDPOINTS_LIMIT), theme.panel);
+        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
+                                         m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
         y + 2
     }
 

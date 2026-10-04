@@ -655,6 +655,8 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/32")), screen
+    largest = table_row(screen, r"Kernel arena 64\.0M: used .*, largest free block (\d+(?:\.\d)?)M")
+    assert largest and table_row(screen, r"Free outside the largest block: "), screen  # issue 076
     vm.send("3")
     vm.expect("VIEW=PROCESS")
     for _ in range(30):
@@ -667,8 +669,7 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert table_row(screen, re.escape(canon(f"Address space of clock (PID {clock + BASE})"))), screen
-    # main's VMAP records: the image's segments, no guard page (issue 075).
-    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001001000 +64\.0K +rw- +stack",
+    for line in (r"0x0000008000000000 +\S+ +r-x +image", r"0x0000008001000000 +4\.0K +--- +guard", r"0x0000008001001000 +64\.0K +rw- +stack",
                  r"0x0000008002000000 +\S+ +rw- +screen", r"0x0000008004000000 +4\.0K +r-- +info", r"0x0000008004001000 +4\.0K +rw- +mailbox", r"0x0000008005000000 +4\.0K +r-x +exit"):
         assert table_row(screen, line), (line, screen)
     vm.send("4")
@@ -712,11 +713,10 @@ def monitors_check(vm):
     vm.serial()
     tool_status(vm, "[HW] TOP=0")
     for text in ("Processor", f"{vm.cpus} CPUs online", "+NX", "MHz (calibrated)", f"GOP framebuffer {len(screen[0]) * 8}x{len(screen) * 16}",
-                 "Interrupt lines", "kernel arena 64.0M"):
+                 "00:01.1  010180  IDE controller", "Interrupt lines", "kernel arena 64.0M"):
         assert table_row(screen, re.escape(canon(text))), (text, screen)
-    # Devices by index until sysinfo carries the PCI location (issue 076); the holder is the driver (issue 075).
-    assert table_row(screen, r"^ +\d+ +010180 +IDE controller"), screen
-    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\)"), screen
+    # The holder of a line is the driver; init keeps a copy for restarts (issues 075, 076).
+    assert table_row(screen, r"IRQ 1 .* ps2_kbd \(PID \d+\) \(\+1 holding a copy\)"), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[HW] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
