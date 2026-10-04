@@ -1,0 +1,27 @@
+# 152 — `REBOOT` system call — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T3
+
+## Problem
+
+`HALT` stops all CPUs; nothing restarts the machine (084).
+
+## Plan
+
+- `SYSCALL_REBOOT` (process-control privilege): stops the other CPUs, then resets through the ACPI reset register (FADT) when present, else the PCI reset control port 0xCF9, else the 8042 pulse (0x64 ← 0xFE), else a triple fault; the kernel validates nothing from the caller (no arguments).
+- `docs/api`, `docs/profile` (TCB, MC-10.2 table) updated.
+
+## Acceptance criteria
+
+- QEMU: after `REBOOT` the firmware boots the image again (`services` suite through 084, or a kernel test); a task without process control gets `ERR_RIGHTS` (`isolation` case `k`).
+
+## Related
+
+[084](../issues/084-reboot.md).
+
+## Resolution
+
+- `REBOOT` = 55 (process control): stops the other CPUs, then resets through the ACPI reset register from the FADT (`kernel/src/acpi.rs`; the bootloader passes the RSDP from the UEFI configuration table in `BootInfo.acpi_rsdp`, the kernel reads the tables once at boot and checks every length), else port 0xCF9 (0x02, then 0x06), else the 8042 pulse, else a triple fault. Each step prints `MIND CORE KERNEL: REBOOT VIA ...` on COM1; at boot the kernel prints what it found (`ACPI: RESET REGISTER FOUND`, or why not).
+- QEMU's i440fx `pc` machine has a revision 1 FADT without a reset register (the kernel uses 0xCF9 there); `q35` has one.
+- `mind::control::reboot()`; a plain shell builtin `reboot` writes cached files to the disks (`flush_all`, as `stop` does) and resets. Issue 084 turns it into the full tool (stopping the services in reverse order, `-f`).
+- Tests: the `boot` suite reboots on `q35` (ACPI reset register) and on `pc` (0xCF9) and sees the system boot again to the shell prompt; `isolation` case k: an application gets `ERR_RIGHTS`.

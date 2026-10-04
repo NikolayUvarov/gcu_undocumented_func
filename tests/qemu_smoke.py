@@ -41,7 +41,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=()):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image.
         self.disk = disk
@@ -56,7 +56,7 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *extra,
+             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -1362,6 +1362,13 @@ def ahci_suite(vm):
 
 
 def services_suite(vm):
+    # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor.
+    real = vm.services()
+    caps = vm.command(f"stat caps {real['shell']}", raw=True)
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    for slot, service, badge in [(13, "sysmon", 1), (14, "ps2_kbd", 0), (15, "compositor", 0)]:
+        found = re.search(fr"^SLOT={slot} GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE={badge} EP=(\d+)", caps, re.M)
+        assert found and servers.get(int(found[1])) == real[service], (slot, service, caps)
     output = vm.command("ps")
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
@@ -2317,6 +2324,18 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(original)
     print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
+    # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
+    for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=machine)
+        try:
+            vm.send("reboot\n")
+            vm.expect(f"MIND CORE KERNEL: REBOOT VIA {method}", timeout=30)
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+        finally:
+            vm.close()
+    print("PASS: reboot through the ACPI reset register (q35) and port 0xCF9 (pc); the system boots again", flush=True)
     if args.panic_kernel:
         # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
         target = disk / "kernel.elf"

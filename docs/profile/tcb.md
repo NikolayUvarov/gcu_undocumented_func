@@ -19,3 +19,4 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 - A driver running in ring 3 is not automatically outside the TCB: its capabilities decide that. The three DMA drivers are the main gap and are tracked as roadmap K2 (VT-d) / III-4.
 - `init` is in the TCB of nearly everything by design: it is the bootstrap authority. Narrowing it (a minimal supervisor that keeps only what restarts need) is part of roadmap C6.
 - The shell's control privilege is broad (kill any task, read any log). Splitting it is future work.
+| Availability after `REBOOT` | Firmware (reset and boot), the ACPI tables (the FADT reset register is trusted as given), kernel `acpi.rs`; only the holder of process control (the shell) may reset. |

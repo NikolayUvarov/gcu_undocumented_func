@@ -21,7 +21,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 38] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "ip", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "rm", "run", "stat", "stop", "sync", "write"];
+const COMMANDS: [&str; 39] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "ip", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -272,7 +272,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- heap\n- clear\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- heap\n- clear\n- reboot: write cached files to the disks and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -305,6 +305,11 @@ impl Shell {
             let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; LIMIT={} APPS + SERVICES", count, self.own, MAX_APPS);
         } else if is(b"clear") {
             self.term.clear();
+        } else if is(b"reboot") {
+            // The plain reset (152); issue 084 adds stopping the services first.
+            files::flush_all();
+            let _ = writeln!(self.term, "REBOOTING...");
+            if control::reboot().is_err() { self.report("REBOOT REFUSED"); }
         } else if is(b"stop") {
             files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");

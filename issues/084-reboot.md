@@ -1,6 +1,6 @@
 # 084 — `reboot`
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** [152](152-reboot-system-call.md) · **Roadmap:** track G, T3
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([152](../issues-done/152-reboot-system-call.done) done) · **Roadmap:** track G, T3
 
 ## Problem
 
@@ -17,4 +17,8 @@
 
 ## Related
 
-[152](152-reboot-system-call.md), [070](../issues-done/070-svc-lifecycle.done).
+[152](../issues-done/152-reboot-system-call.done), [070](../issues-done/070-svc-lifecycle.done).
+
+## Progress
+
+- 2026-10-04 (kernel track, 152): a plain shell builtin `reboot` exists (`flush_all`, then `REBOOT`); this issue adds stopping the services first and `-f`.

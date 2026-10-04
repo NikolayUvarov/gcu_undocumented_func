@@ -1,6 +1,6 @@
 # 086 — `screenshot`: the screen as a BMP file
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** [151](151-shell-grant-slots-13-15.md) · **Roadmap:** track G, T3 · **Constitution:** MC-2.6
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([151](../issues-done/151-shell-grant-slots-13-15.done) done) · **Roadmap:** track G, T3 · **Constitution:** MC-2.6
 
 ## Problem
 
@@ -18,4 +18,4 @@ Only the compositor reads task screens (display privilege); there is no way to s
 
 ## Related
 
-[151](151-shell-grant-slots-13-15.md).
+[151](../issues-done/151-shell-grant-slots-13-15.done).

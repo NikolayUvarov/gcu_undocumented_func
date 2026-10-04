@@ -131,10 +131,14 @@ impl Init {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
             "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
             "ps2_kbd" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "ps2_kbd")?, ALL); // requests from the shell's keyboard client (151)
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
                 grants.add(SLOT_IRQ, minted.mint(PLATFORM_IRQ, 1, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
             }
-            "compositor" => { grants.add(SLOT_MEM, minted.mint(PLATFORM_FRAMEBUFFER, 0, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_DISPLAY)?, 0); }
+            "compositor" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "compositor")?, ALL); // requests from the shell's display client (151)
+                grants.add(SLOT_MEM, minted.mint(PLATFORM_FRAMEBUFFER, 0, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_DISPLAY)?, 0);
+            }
             "ata" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "ata")?, ALL);
                 grants.add(SLOT_DEV0, minted.ports(0x1F0, 8)?, 0); grants.add(SLOT_DEV1, minted.ports(0x3F6, 1)?, 0);
@@ -215,6 +219,8 @@ impl Init {
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0); // LEGACY: COM1 UART
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
+                grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
+                self.lend(&mut grants, SLOT_KEYBOARD, "ps2_kbd")?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
                 self.lend(&mut grants, SLOT_SOCKET, "netstack")?;
             }

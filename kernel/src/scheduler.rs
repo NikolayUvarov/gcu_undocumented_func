@@ -727,6 +727,7 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => cpu::halt_all(),
+            SYSCALL_REBOOT => crate::acpi::reboot(),
             _ => Err(ERR_INVALID),
         }
     }
@@ -978,7 +979,7 @@ impl Scheduler {
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_STAT => {
+            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_REBOOT | SYSCALL_STAT => {
                 let result = self.control(slot, ptr, &request);
                 // KILL of the caller itself or of the task it waits on is handled like an exit.
                 if self.tasks[slot].as_ref().unwrap().state == State::Exited { return self.select(sp, cpu); }

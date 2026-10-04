@@ -5,6 +5,9 @@ use crate::abi::*;
 use crate::sys::{Error, Result};
 
 /// Flags of a task in idl/sysinfo.wit (`task.flags`): a boot service, has a screen, has the focus.
+/// Badge of a sysmon client that may read the authority graph (the shell's slot 13, issue 151).
+pub const BADGE_AUTHORITY: u16 = 1;
+
 pub const TASK_SERVICE: u8 = 1;
 pub const TASK_SCREEN: u8 = 2;
 pub const TASK_FOCUS: u8 = 4;
