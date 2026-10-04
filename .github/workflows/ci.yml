@@ -1,0 +1,79 @@
+# Build with the pinned toolchain, run host tests and the QEMU suites (issue 011).
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc -V
+      - name: Build
+        run: ./02_build.sh
+      - name: Clean tree after the build
+        run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
+      - name: Host tests
+        run: |
+          rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests
+          rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests
+          python3 tests/idl_test.py
+
+  qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: boot, shell, memory, display
+            args: --suites boot,normal,memory,dzen
+          - name: services, storage, audio
+            args: --suites services,ahci,audio,tts,listen
+          - name: scheduling, isolation, heap
+            args: --suites busy,smp,isolation,heap
+          - name: one CPU
+            args: --cpus 1 --suites smp,isolation,heap,services
+          - name: USB image
+            usb: true
+    name: QEMU (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: QEMU and OVMF
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Build
+        run: ./02_build.sh
+      - name: Test programs
+        run: |
+          for fixture in busy_app isolation_app heap_app; do
+            rustc --edition=2021 --target x86_64-unknown-none --crate-type bin -C opt-level=3 -C panic=abort \
+              -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
+              "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
+          done
+      - name: QEMU suites
+        if: ${{ !matrix.usb }}
+        run: |
+          python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd \
+            --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
+            --heap-elf /tmp/mind-core-heap_app.elf ${{ matrix.args }}
+      - name: USB image
+        if: ${{ matrix.usb }}
+        run: |
+          python3 scripts/make_usb_image.py --no-build --force
+          python3 tests/usb_image_smoke.py --firmware /usr/share/ovmf/OVMF.fd
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-logs-${{ strategy.job-index }}
+          path: /tmp/mind-core-*

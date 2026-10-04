@@ -142,14 +142,13 @@ Requests follow `idl/vfs.wit` (open, read, size, close, list in pages of 16 entr
 ### How to Build and Run
 
 **Prerequisites:**
-You will need a nightly Rust toolchain and a virtual machine capable of UEFI execution.
+You will need [rustup](https://rustup.rs) and a virtual machine capable of UEFI execution. The nightly toolchain and its targets are pinned in `rust-toolchain.toml`; rustup installs them on the first build (or run `./01_prepare_env.sh`). Dependencies are pinned by the committed `Cargo.lock` files.
 
 ```bash
-rustup toolchain install nightly
-rustup default nightly
-rustup target add x86_64-unknown-none x86_64-unknown-uefi
-
+rustup toolchain install   # reads rust-toolchain.toml
 ```
+
+CI (`.github/workflows/ci.yml`) builds with the same toolchain on Ubuntu 24.04 and runs the host tests and all QEMU suites.
 
 *Note: Ensure QEMU and the OVMF firmware (UEFI for QEMU) are installed on your host system.*
 

@@ -1,8 +1,7 @@
 # --- Rust build artifacts ---
 target/
 **/target/
-Cargo.lock
-**/Cargo.lock
+# Cargo.lock files are committed: binaries build from pinned dependencies (issue 011).
 
 # --- Intermediate firmware binaries ---
 # Flat images embedded in the bootloader (02_build.sh)

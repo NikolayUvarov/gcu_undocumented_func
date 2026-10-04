@@ -18,7 +18,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
-| [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
 | [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
 | [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
@@ -44,6 +43,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [007](../issues-done/007-kernel-font-and-primitives.done) | Font, primitives, console | done; panic diagnostics split into 018 (2026-10-03) |
 | [008](../issues-done/008-kernel-timeout-handoff.done) | Handoff to userspace on timeout | superseded (2026-10-03) |
 | [010](../issues-done/010-docs-sync.done) | Sync README/handoff with the code | done (2026-10-03) |
+| [011](../issues-done/011-reproducible-toolchain.done) | Reproducible build: pinned toolchain, lock files, CI | done (2026-10-04) |
 | [012](../issues-done/012-multitasking-and-program-instances.done) | Multitasking, instances, `ps`/`kill`/`fg` | done (2026-09-18) |
 | [013](../issues-done/013-smp-and-memory-isolation.done) | SMP, ring 3, memory isolation | done (2026-09-19) |
 | [014](../issues-done/014-private-program-heap.done) | Private program heap | done (2026-09-19) |

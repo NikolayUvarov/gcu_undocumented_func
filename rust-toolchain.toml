@@ -1,0 +1,5 @@
+# Pinned nightly: the kernel and programs use -Z relax-elf-relocations and abi_x86_interrupt (issue 011).
+[toolchain]
+channel = "nightly-2026-10-02"
+profile = "minimal"
+targets = ["x86_64-unknown-none", "x86_64-unknown-uefi"]
