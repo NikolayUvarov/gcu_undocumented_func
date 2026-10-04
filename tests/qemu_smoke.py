@@ -6,6 +6,7 @@ from WSL. Run after 02_build.sh; pass --qemu and --firmware as needed. Temporary
 FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
+import codecs
 import math
 import os
 from pathlib import Path
@@ -80,8 +81,11 @@ class VM:
         return output
 
     def _read(self):
+        # The UART carries UTF-8 (Cyrillic in program output).
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         while data := self.process.stdout.read(1):
-            self.queue.put(data.decode("ascii", errors="replace"))
+            if text := decoder.decode(data):
+                self.queue.put(text)
 
     def collect(self):
         while True:
@@ -113,6 +117,12 @@ class VM:
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
         for byte in text.encode("ascii"):
+            self.process.stdin.write(bytes([byte]))
+            self.process.stdin.flush()
+            time.sleep(.01)
+
+    def send_bytes(self, data):
+        for byte in data:
             self.process.stdin.write(bytes([byte]))
             self.process.stdin.flush()
             time.sleep(.01)
@@ -323,6 +333,56 @@ def normal_suite(vm):
     vm.serial()
     assert heap_used(vm) == baseline
     print("PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, 4 CPUs", flush=True)
+
+
+def keys_suite(vm):
+    """Key events: the same events from the UART (VT100 sequences, UTF-8) and from PS/2, layouts, Esc."""
+    baseline = heap_used(vm)
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    uart = [(b"\x1b[A", "code=Up mods=-"), (b"\x1b[1;2C", "code=Right mods=S"), (b"\x1bOP", "code=F(1) mods=-"),
+            (b"\x1b[15~", "code=F(5) mods=-"), (b"\x1b[24~", "code=F(12) mods=-"), (b"\x1b[3;5~", "code=Delete mods=C"),
+            (b"\x1b[5~", "code=PageUp mods=-"), (b"\x1b[H", "code=Home mods=-"), (b"\x7f", "code=Backspace mods=- char=U+0008"),
+            (b"\x03", "code=Char mods=C char=c"), ("Ж".encode(), "code=Char mods=- char=Ж U+0416"), (b"q", "code=Char mods=- char=q U+0071"),
+            (b"\r\n", "code=Enter mods=- char=U+000A")]
+    for data, line in uart:
+        vm.send_bytes(data)
+        vm.expect(line)
+    # One CRLF is one Enter: the next event is the next key, not a second Enter.
+    vm.send_bytes(b"x")
+    assert "code=Enter" not in vm.expect("char=x U+0078")
+    ps2 = [("up", "code=Up mods=-"), ("shift-right", "code=Right mods=S"), ("f1", "code=F(1) mods=-"), ("f10", "code=F(10) mods=-"),
+           ("delete", "code=Delete mods=-"), ("home", "code=Home mods=-"), ("pgdn", "code=PageDown mods=-"), ("insert", "code=Insert mods=-"),
+           ("ctrl-c", "code=Char mods=C char=c"), ("alt-x", "code=Char mods=A char=x"), ("shift-a", "code=Char mods=S char=A"),
+           ("backspace", "code=Backspace mods=-"), ("tab", "code=Tab mods=-")]
+    # Russian layout: Ctrl+Shift pressed and released alone switches it; letters by position; Alt+Shift switches back.
+    ps2 += [("ctrl-shift", None), ("q", "char=й U+0439"), ("shift-q", "char=Й U+0419"), ("grave_accent", "char=ё U+0451"),
+            ("ctrl-c", "code=Char mods=C char=c"), ("alt-shift", None), ("q", "char=q U+0071")]
+    # The program's output arrives while the harness is in the QEMU monitor: check the whole log, in order.
+    start = len(vm.log)
+    for key, _ in ps2:
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.05)
+    vm.serial()
+    time.sleep(.3)
+    vm.collect()
+    got = re.findall(r"\[KEYS\] (code=[^\r\n]*)", vm.log[start:])
+    expected = [line for _, line in ps2 if line]
+    at = 0
+    for line in expected:
+        while at < len(got) and line not in got[at]:
+            at += 1
+        assert at < len(got), (line, got)
+        at += 1
+    vm.output = ""
+    # Esc from the UART after the sequence timeout ends the program.
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN"), "[KBD] LAYOUT RU")
+    assert task_rows(vm) == {}
+    assert heap_used(vm) == baseline
+    print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc", flush=True)
 
 
 def busy_suite(vm):
@@ -922,10 +982,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -964,7 +1024,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

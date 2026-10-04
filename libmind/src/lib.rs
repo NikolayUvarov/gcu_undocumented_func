@@ -18,6 +18,7 @@ pub mod heap;
 pub mod idl;
 pub mod input;
 pub mod ipc;
+pub mod keys;
 pub mod mem;
 pub mod platform;
 pub mod process;

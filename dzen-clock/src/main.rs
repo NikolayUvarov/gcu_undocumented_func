@@ -31,13 +31,14 @@ fn main(info: &'static BootInfo) {
     let mut previous_dot = None;
     let mut waiting = false;
     loop {
-        let key = mind::input::read_key().unwrap_or(0) as usize;
-        if key == 0x01 || key == 0x1B {
+        let key = mind::input::read_key();
+        if key.is_some_and(mind::input::is_escape) {
             print(b"[DZEN-CLOCK] RETURNING TO KERNEL.\r\n");
             return;
         }
-        // PS/2 D make code, or the UART's ASCII D/d (the shared input ABI).
-        if key == 0x20 || key == b'd' as usize || key == b'D' as usize {
+        // D/d, H/h, C/c, P/p from either keyboard (key events carry the character).
+        let key = key.and_then(|k| k.char()).map_or(0, |c| c.to_ascii_lowercase() as usize);
+        if key == b'd' as usize {
             show_digits = !show_digits;
             let text = previous_time.map(time_text).unwrap_or(*b"--:--:--");
             view.digital(&text, show_digits);
@@ -49,8 +50,7 @@ fn main(info: &'static BootInfo) {
                 },
             );
         }
-        // PS/2 H make code, or UART ASCII H/h.
-        if key == 0x23 || key == b'h' as usize || key == b'H' as usize {
+        if key == b'h' as usize {
             show_hints = !show_hints;
             view.hints(show_hints);
             print(
@@ -61,10 +61,9 @@ fn main(info: &'static BootInfo) {
                 },
             );
         }
-        // PS/2 C/P make codes, or UART ASCII C/c/P/p.
-        let requested = match key {
-            0x2E | 0x63 | 0x43 => Some(OrbitMode::Simple),
-            0x19 | 0x70 | 0x50 => Some(OrbitMode::Ticks),
+        let requested = match key as u8 {
+            b'c' => Some(OrbitMode::Simple),
+            b'p' => Some(OrbitMode::Ticks),
             _ => None,
         };
         if let Some(requested) = requested {

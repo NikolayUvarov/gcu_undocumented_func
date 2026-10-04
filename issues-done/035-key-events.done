@@ -1,6 +1,6 @@
-# 035 — Key events: E0 keys, modifiers, layouts, VT100, event queue
+# 035 — Key events: E0 keys, modifiers, layouts, VT100, event queue — done
 
-**Type:** bug/feature · **Priority:** P0 · **Status:** open · **Blocked by:** — · **Roadmap:** track G, tools plan F4 · **Constitution:** MC-1.1
+**Type:** bug/feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, tools plan F4 · **Constitution:** MC-1.1
 
 ## Problem
 
@@ -25,3 +25,7 @@
 ## Related
 
 [docs/tools](../docs/tools/README.md) F4; README "Console".
+
+## Resolution
+
+Event word in `common/abi.rs` (`KEY_*`: character in bits 0–20, key code in 21–27, Shift/Ctrl/Alt in 28–30). The kernel's per-task input queue holds 64 events (`kernel/src/input.rs` is now a generic queue); `INPUT_EVENT` takes one event word and the attention flag, `READ_KEY` returns the next word; the kernel no longer distinguishes an "app byte" and an "owner byte". `libmind/src/keys.rs` holds both decoders: `Ps2` (set 1 with E0 keys, break codes, fake shifts and Pause skipped, Shift/Ctrl/Alt left and right, Caps and Num Lock, keypad, F1–F12, US and Russian ЙЦУКЕН layouts switched by Ctrl+Shift or Alt+Shift released without another key, positional Ctrl/Alt shortcuts, Ctrl+Z as attention) and `Vt` (CSI/SS3 sequences with xterm modifier parameters, Linux console F1–F5, Shift+Tab, UTF-8, CR/LF/CRLF as one Enter, control bytes as Ctrl+letter, a lone Esc 50 ms after the last byte). `ps2_kbd` uses `Ps2` and logs layout changes; the shell decodes the UART with `Vt` and forwards events to the focused program. `mind::input::Key` exposes the code, character and modifiers; `app`, `app2`, `dzen-clock` were ported (the `app` colour keys are now space, `g`, `b`). New utility `keys` shows the events it receives. Tests: `tests/keys_host.rs` (11 decoder tests) and the QEMU suite `keys` (UART sequences and UTF-8, PS/2 E0 keys, F-keys, modifiers, the Russian layout and back, Esc); the harness now decodes UART output as UTF-8. All QEMU suites pass.

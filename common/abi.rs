@@ -137,6 +137,20 @@ pub const HANDLE_GENERATION_SHIFT: usize = 8;
 
 // Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
 // through capabilities (MC-3.3).
+// Input events (READ_KEY, INPUT_EVENT): one 32-bit word per key press. Bits 0-20: Unicode character (0 if none);
+// bits 21-27: key code (KEY_*, 0 for a plain character); bits 28-30: Shift, Ctrl, Alt. Enter, Esc, Tab and Backspace
+// also carry their control character ('\n', 0x1B, '\t', 0x08); Ctrl or Alt + a key carries the key's US character.
+// Decoding (scan codes, layouts, terminal sequences) is done in ring 3 by ps2_kbd and the shell (libmind::keys).
+pub const KEY_CHAR_MASK: u32 = 0x1F_FFFF;
+pub const KEY_CODE_SHIFT: u32 = 21;
+pub const KEY_CODE_MASK: u32 = 0x7F;
+pub const KEY_ENTER: u32 = 1; pub const KEY_ESC: u32 = 2; pub const KEY_BACKSPACE: u32 = 3; pub const KEY_TAB: u32 = 4;
+pub const KEY_UP: u32 = 5; pub const KEY_DOWN: u32 = 6; pub const KEY_LEFT: u32 = 7; pub const KEY_RIGHT: u32 = 8;
+pub const KEY_HOME: u32 = 9; pub const KEY_END: u32 = 10; pub const KEY_PGUP: u32 = 11; pub const KEY_PGDN: u32 = 12;
+pub const KEY_INSERT: u32 = 13; pub const KEY_DELETE: u32 = 14;
+pub const KEY_F1: u32 = 15; pub const KEY_F6: u32 = 20; pub const KEY_F11: u32 = 25; pub const KEY_F12: u32 = 26; // F1..F12 = 15..26
+pub const KEY_MOD_SHIFT: u32 = 1 << 28; pub const KEY_MOD_CTRL: u32 = 1 << 29; pub const KEY_MOD_ALT: u32 = 1 << 30;
+pub const INPUT_QUEUE: usize = 64; // events per task; the oldest is dropped when full
 // Block device kinds reported by BLOCK_INFO (protocol data, not authority).
 pub const BLOCK_KIND_ATA: usize = 1;
 pub const BLOCK_KIND_AHCI: usize = 2;

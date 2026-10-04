@@ -1,33 +1,33 @@
-// Bounded byte queue (input, logs, console output); the oldest byte is dropped when full.
-pub struct Queue<const N: usize> {
-    bytes: [u8; N],
+// Bounded queue (input events, logs, console output); the oldest element is dropped when full. Zero is never stored.
+pub struct Queue<T: Copy + Default + PartialEq, const N: usize> {
+    items: [T; N],
     head: usize,
     len: usize,
 }
-impl<const N: usize> Queue<N> {
-    pub const fn new() -> Self {
+impl<T: Copy + Default + PartialEq, const N: usize> Queue<T, N> {
+    pub fn new() -> Self {
         Self {
-            bytes: [0; N],
+            items: [T::default(); N],
             head: 0,
             len: 0,
         }
     }
-    pub fn push(&mut self, value: u8) {
-        if value == 0 {
+    pub fn push(&mut self, value: T) {
+        if value == T::default() {
             return;
         }
         if self.len == N {
             self.head = (self.head + 1) % N;
             self.len -= 1;
         }
-        self.bytes[(self.head + self.len) % N] = value;
+        self.items[(self.head + self.len) % N] = value;
         self.len += 1;
     }
-    pub fn pop(&mut self) -> Option<u8> {
+    pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             return None;
         }
-        let value = self.bytes[self.head];
+        let value = self.items[self.head];
         self.head = (self.head + 1) % N;
         self.len -= 1;
         Some(value)

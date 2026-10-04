@@ -19,7 +19,6 @@
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
 | [034](034-tui-library.md) | Text UI library `mind::tui` | feature | P0 | 033, 035 | G (tools F3) |
-| [035](035-key-events.md) | Key events: E0 keys, modifiers, layouts, VT100 | bug/feature | P0 | — | G (tools F4) |
 | [036](036-shell-line-editing.md) | Shell: line editing, history, Cyrillic | feature | P0 | 033, 035 | G |
 | [037](037-viewer.md) | Viewer `view` | feature | P0 | 034 | G |
 | [038](038-mind-idl-v0.2.md) | MIND IDL v0.2: records, strings, lists | architecture | P0 | — | C5 follow-up (tools F6) |
@@ -70,5 +69,6 @@
 | [031](../issues-done/031-mind-idl-v0.done) | MIND IDL v0: WIT subset, generated bindings, receiver checks (`rtc`) | done (2026-10-04) |
 | [032](../issues-done/032-program-heap.done) | Program heap `mind::alloc` | done (2026-10-04) |
 | [033](../issues-done/033-font-8x16.done) | 8×16 font with Cyrillic and box drawing | done (2026-10-04) |
+| [035](../issues-done/035-key-events.done) | Key events: E0 keys, modifiers, layouts, VT100 | done (2026-10-04) |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

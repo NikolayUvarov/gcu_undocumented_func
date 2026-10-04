@@ -66,6 +66,7 @@ USER_CRATES=(
     "say:say:say.elf"
     "listen:listen:listen.elf"
     "files:files:files.elf"
+    "keys:keys:keys.elf"
     "beep:beep:beep.elf"
 )
 

@@ -7,7 +7,9 @@ use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_event, Ports};
 use mind::font::FONT;
+use mind::input::{Code, Key};
 use mind::ipc::{Endpoint, Message};
+use mind::keys::{Event, Vt};
 use mind::mem::Pages;
 use mind::sys::Error;
 
@@ -254,23 +256,47 @@ impl Shell {
     }
 
     // A key typed while the shell has the focus.
-    fn key(&mut self, byte: u8) {
-        match byte {
-            8 if self.len != 0 => {
+    fn key(&mut self, key: Key) {
+        match key.code() {
+            Code::Backspace if self.len != 0 => {
                 // Remove a whole UTF-8 character: continuation bytes, then the lead byte.
                 while self.len > 1 && (0x80..0xC0).contains(&self.line[self.len - 1]) { self.len -= 1; }
                 self.len -= 1; self.term.print_char(8);
             }
-            b'\n' => {
+            Code::Enter => {
                 self.term.print_char(b'\n');
                 let line = self.line; let len = self.len; self.len = 0;
                 self.command(&line[..len]);
                 if self.focused.is_none() { self.prompt(); }
             }
-            32..=126 | 0x80..=0xFF if self.len < self.line.len() => { self.line[self.len] = byte; self.len += 1; self.term.print_char(byte); }
+            _ => if let Some(ch) = key.text() {
+                let mut bytes = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut bytes).as_bytes();
+                if self.len + encoded.len() <= self.line.len() {
+                    self.line[self.len..self.len + encoded.len()].copy_from_slice(encoded); self.len += encoded.len();
+                    for &byte in encoded { self.term.print_char(byte); }
+                }
+            },
+        }
+    }
+    // A decoded UART event: the shell's own input, or forwarded to the focused program (Ctrl+Z is the attention key).
+    fn uart(&mut self, event: Event) {
+        match event {
+            Event::Key(word) if self.focused.is_some() => { let _ = input_event(word, false); }
+            Event::Key(word) => self.key(Key(word)),
+            Event::Attention if self.focused.is_some() => { let _ = input_event(0, true); }
             _ => {}
         }
     }
+}
+
+// UART events decoded in one pass of the main loop (the 16550 FIFO holds 16 bytes; a sequence yields at most two).
+struct Events { list: [Option<Event>; 64], len: usize }
+impl Events {
+    fn new() -> Self { Self { list: [None; 64], len: 0 } }
+    fn push(&mut self, event: Event) { if self.len < self.list.len() { self.list[self.len] = Some(event); self.len += 1; } }
+    fn as_slice(&self) -> impl Iterator<Item = &Event> { self.list[..self.len].iter().flatten() }
+    fn clear(&mut self) { self.len = 0; }
 }
 
 mind::entry!(main);
@@ -285,6 +311,8 @@ fn main(info: &'static BootInfo) {
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP.");
     shell.prompt();
     let serial = Ports(SLOT_SERIAL);
+    let mut vt = Vt::new();
+    let mut events = Events::new();
     loop {
         if let Some(pid) = shell.focused { shell.mirror(pid); }
         while let Some(notice) = control::notice() {
@@ -293,14 +321,17 @@ fn main(info: &'static BootInfo) {
             let _ = writeln!(shell.term, "\nPID={} {}. SHELL RESUMED.", pid, what);
             shell.prompt();
         }
-        // UART: the shell's own input, or forwarded to the focused program (Ctrl+Z is the attention key).
+        // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout).
+        let now = mind::time::uptime_ms() as u64;
         while serial.in8(COM1 + 5) & 1 != 0 {
             let byte = serial.in8(COM1);
-            let translated = match byte { b'\r' => b'\n', 127 => 8, other => other };
-            if shell.focused.is_some() { let _ = input_event(byte, translated, byte == 26); } else { shell.key(translated); }
+            vt.feed(byte, now, &mut |event| events.push(event));
         }
+        vt.poll(now, &mut |event| events.push(event));
+        for &event in events.as_slice() { shell.uart(event); }
+        events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus.
-        while let Some(byte) = mind::input::read_key() { if shell.focused.is_none() { shell.key(byte); } }
+        while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } }
         mind::time::sleep(10);
     }
 }

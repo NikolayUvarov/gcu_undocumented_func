@@ -42,9 +42,10 @@ impl Irq {
     pub fn ack(&self) -> Result<()> { check(call(SYSCALL_IRQ_ACK, self.0, 0)).map(drop) }
 }
 
-/// Keyboard event from a driver holding the input capability.
-pub fn input_event(app: u8, shell: u8, background: bool) -> Result<()> {
-    check(syscall(SYSCALL_INPUT_EVENT, app as usize, shell as usize, [background as usize, 0, 0, 0]).result).map(drop)
+/// Key event (`common/abi.rs`, KEY_*) for the focused task from a holder of the input capability (keyboard driver,
+/// shell for the UART); `attention` (Ctrl+Z) gives the focus back to its owner instead.
+pub fn input_event(event: u32, attention: bool) -> Result<()> {
+    check(syscall(SYSCALL_INPUT_EVENT, event as usize, 0, [attention as usize, 0, 0, 0]).result).map(drop)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

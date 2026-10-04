@@ -50,7 +50,7 @@ struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Queue<128>, log: Queue<4096>, console: Queue<4096>, dirty: bool,
+    input: Queue<u32, INPUT_QUEUE>, log: Queue<u8, 4096>, console: Queue<u8, 4096>, dirty: bool,
     cspace: [Option<Capability>; CAP_SLOTS], generations: [u32; CAP_SLOTS], // generation of each kernel-allocated slot
     nodes: [Node; CAP_SLOTS],
     pending_cap: Option<Pending>, pending_call: bool, send_seq: u64, // send waiting for a receiver
@@ -64,7 +64,7 @@ struct Scheduler {
     foreground: usize, // focused task: its screen is shown and it receives input
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
-    exited_console: Option<(u64, Queue<4096>)>, // console output of the last focused task that exited
+    exited_console: Option<(u64, Queue<u8, 4096>)>, // console output of the last focused task that exited
     dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; 16], irq_pending: [bool; 16], send_seq: u64, flush: [bool; cpu::MAX],
     orphans: Vec<Region>, // memory freed by its owner that is still mapped or held via a capability
     devices: Vec<pci::Device>, // PCI enumeration: discovery is a kernel mechanism, the choice of drivers is init's
@@ -140,9 +140,9 @@ impl Scheduler {
         self.foreground = slot; self.dirty = true;
     }
     fn push_notice(&mut self, value: usize) { if self.notice_count < self.notices.len() { self.notices[self.notice_count] = value; self.notice_count += 1; } }
-    // Input event: the focus owner gets the `owner` byte, any other focused task the `app` byte; an attention key
-    // (Ctrl+Z) takes the focus back to the owner.
-    fn route_key(&mut self, app: u8, owner: u8, attention: bool) {
+    // Key event for the focused task (decoded in ring 3, the kernel only queues it); an attention key (Ctrl+Z) takes the
+    // focus back to the owner.
+    fn route_key(&mut self, event: u32, attention: bool) {
         let target = self.foreground;
         if attention {
             if target != self.focus_owner && self.live(target) && self.live(self.focus_owner) {
@@ -151,8 +151,7 @@ impl Scheduler {
             return;
         }
         if !self.live(target) { return; }
-        let byte = if target == self.focus_owner { owner } else { app };
-        let task = self.tasks[target].as_mut().unwrap(); task.input.push(byte);
+        let task = self.tasks[target].as_mut().unwrap(); task.input.push(event);
         if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
     }
 
@@ -717,7 +716,7 @@ impl Scheduler {
             SYSCALL_IRQ_ACK => match self.cap(slot, request.arg1) { Some(Capability::Interrupt(irq)) => { interrupts::set_irq_masked(irq, false); Ok(0) } _ => Err(ERR_RIGHTS) },
             SYSCALL_INPUT_EVENT => {
                 // Only a holder of the input capability (keyboard driver, shell for the UART) may inject input.
-                if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else { self.route_key(request.arg1 as u8, request.arg2 as u8, request.msg[0] != 0); Ok(0) }
+                if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else { self.route_key(request.arg1 as u32, request.msg[0] != 0); Ok(0) }
             }
             SYSCALL_COMPOSITOR_PULL => {
                 if !self.holds(slot, Capability::Display) || !(1..SLOT_DYNAMIC).contains(&request.arg1) { Err(ERR_RIGHTS) } else {

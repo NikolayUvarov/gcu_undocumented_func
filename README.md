@@ -39,7 +39,7 @@ The kernel contains no list of services and no per-service capability table. It 
 |---|---|---|
 | `init` | own endpoint, platform and spawn privileges (from the kernel) | service policy; restarts services on request |
 | `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight) |
-| `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → input events for the focused task |
+| `ps2_kbd` | ports 0x60, 0x64, IRQ 1, input | PS/2 keyboard → key events (modifiers, F-keys, navigation keys, US/Russian layout) for the focused task |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer |
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
 | `ahci` | service endpoint, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
@@ -82,7 +82,8 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 |---|---|
 | `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
 | `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `spawn_image`/`loader_done` for `loader` |
-| `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_or_exit` (Esc exits) |
+| `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_key`, `wait_or_exit` (Esc exits) → `Key` (`code()`: character, Enter, Esc, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12; `char()`, `text()`, `shift()`/`ctrl()`/`alt()`) |
+| `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8) |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
 | `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
@@ -332,6 +333,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `say [-p <Hz>] [-r <%>] [text]` — speak the text (or `say.txt`, or a greeting) through `tts`.
 * `listen [seconds]` — record from the microphone, show the level, report peak/RMS and play it back.
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
+* `RUN keys` — show the key events a program receives: key code, modifiers, character (Esc exits).
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * `RUN <name> [arguments] &` — launch a new background instance and retain the shell. Arguments reach the program through `mind::process::args()`.
 * `<name> [arguments]` — any word that is not a shell command runs the program of that name in the foreground (`say hello`, `listen 2`).
@@ -347,6 +349,8 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `HELP` — list the available commands.
 
 `RUN` requires a program name; without one it displays usage and the program list. Program names are case-insensitive, and surrounding whitespace is ignored. Unknown names leave you in the shell with an error message.
+
+**Keyboard.** Programs receive key events, not scan codes: a 32-bit word with the character, a key code and the Shift/Ctrl/Alt modifiers (`common/abi.rs`, `KEY_*`). `ps2_kbd` decodes the PS/2 keyboard (arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, keypad with Num Lock, Caps Lock) and has a US and a Russian (ЙЦУКЕН) layout: **Ctrl+Shift** or **Alt+Shift**, pressed and released without another key, switches it; Ctrl/Alt shortcuts stay positional (Ctrl+C is the same key in both layouts). The shell decodes the UART as a VT100/xterm terminal: escape sequences for the same keys with modifiers, UTF-8 text (a host terminal types Cyrillic directly), CR, LF and CRLF as one Enter, a lone Esc after 50 ms. `RUN keys` shows every event it receives. Ctrl+Z is reserved for the system.
 
 Press **Ctrl+Z** in the QEMU window or send UART byte `0x1A` to return to `MIND>` while the foreground program continues in the background. Press **Esc** to end the foreground program and return to the shell. `FG` restores the existing screen; it does not restart the program. Each new `RUN` starts fresh application state. Rebuild all components together when changing `common/abi.rs`.
 
@@ -456,7 +460,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | # | Name | Arguments → result |
 |---|---|---|
 | 1 | RDTSC | → time stamp counter |
-| 2 | READ_KEY | → next key of the calling (focused) task or 0 |
+| 2 | READ_KEY | → next key event of the calling (focused) task or 0 (`KEY_*` in `common/abi.rs`) |
 | 3 | LOG | buffer, length → bytes logged |
 | 5 | WAIT | milliseconds (10 ms steps, ≤ 60 s) → uptime at sleep |
 | 6 | UPTIME | → milliseconds since boot |
@@ -479,7 +483,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
 | 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
-| 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z) — needs the input capability |
+| 20 | INPUT_EVENT | key event word, msg[0] = attention (Ctrl+Z) — needs the input capability |
 | 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
@@ -501,6 +505,7 @@ After building, run the host tests for real ELF images, independent `.bss`/reloc
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /tmp/mind-core-heap-tests
+rustc --edition=2021 --test tests/keys_host.rs -o /tmp/mind-core-keys-tests && /tmp/mind-core-keys-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
