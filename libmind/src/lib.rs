@@ -37,6 +37,8 @@ pub mod tui;
 pub mod util;
 #[cfg(feature = "alloc")]
 pub mod pattern;
+#[cfg(feature = "alloc")]
+pub mod voice;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;

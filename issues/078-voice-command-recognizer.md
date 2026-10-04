@@ -1,6 +1,6 @@
 # 078 — Voice V1: offline command recognizer
 
-**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** 077 · **Roadmap:** track G · **Constitution:** Art. 8.1–8.2, 11.11, MC-5
+**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** — (077 done) · **Roadmap:** track G · **Constitution:** Art. 8.1–8.2, 11.11, MC-5
 
 ## Problem
 
@@ -23,4 +23,4 @@ Nothing turns speech into text. Voice control needs a recognizer of a fixed comm
 
 ## Related
 
-[077](077-voice-audio-front-end.md), [079](079-voice-control-in-the-shell.md), [017](../issues-done/017-tts-on-audio-gateway.done), [docs/voice](../docs/voice/README.md).
+[077](../issues-done/077-voice-audio-front-end.done), [079](079-voice-control-in-the-shell.md), [017](../issues-done/017-tts-on-audio-gateway.done), [docs/voice](../docs/voice/README.md).

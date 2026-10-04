@@ -1,6 +1,6 @@
 # MIND CORE — voice: speaking, listening, understanding
 
-**Version:** 0.1 (2026-10-04) · **Status:** plan · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Art. 8 (cognitive plane), 11.5, 11.11 (untrusted input), MC-3.7, MC-3.11 · **Roadmap:** [track G](../../ROADMAP.md) (input methods, UI), D (network for V4) · [Russian](README_RU.md)
+**Version:** 0.2 (2026-10-04) · **Status:** V0 done, V1–V4 planned · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Art. 8 (cognitive plane), 11.5, 11.11 (untrusted input), MC-3.7, MC-3.11 · **Roadmap:** [track G](../../ROADMAP.md) (input methods, UI), D (network for V4) · [Russian](README_RU.md)
 
 The system is meant to talk with people: to speak, to listen and to act on what it heard. This plan says what exists, what is missing, how the pieces fit the Constitution, and which work belongs to the **tools track** (this branch, issues 077–099) and which to the **kernel track** (issues 150–199; the network track has 100–149).
 
@@ -12,7 +12,8 @@ The system is meant to talk with people: to speak, to listen and to act on what 
 | Audio output | Done: AC97, DMA ring of 32 × 4 KiB at 48 kHz stereo, interrupts over IPC | `audio_gw`, `idl/audio.wit` |
 | Microphone | Done: AC97 PCM-in ring, `record-start/read/stop`, overflow count; `listen` records, shows the level and plays back | `audio_gw`, `listen/`, [022](../../issues-done/022-audio-tools-say-listen.done) |
 | Speech recognition | **None.** Vosk runs only in the host test harness to check the synthesizer | `tests/qemu_smoke.py --asr-model` |
-| Speech detection, push-to-talk, wake word | **None** | — |
+| Hearing (V0) | Done: `mind::voice` — microphone or WAV file as a 16 kHz mono stream, speech detection and endpointing; `listen --vad`, `listen --wav` | `libmind/src/voice`, `listen/`, [077](../../issues-done/077-voice-audio-front-end.done) |
+| Push-to-talk, wake word | **None** | — |
 | Understanding (commands, intents, dialogue) | **None** | — |
 | Voice as an input method | **None**; track G names "input methods" without issues | ROADMAP |
 
@@ -44,19 +45,22 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 
 | Stage | Result | Track | Issues |
 |---|---|---|---|
-| **V0. Hearing** | 16 kHz mono stream, speech detection and endpointing, WAV source, `listen --vad` | tools | [077](../../issues/077-voice-audio-front-end.md) |
+| **V0. Hearing** (done) | 16 kHz mono stream, speech detection and endpointing, WAV source, `listen --vad` | tools | [077](../../issues-done/077-voice-audio-front-end.done) |
 | **V1. Commands** | Offline recognizer of a fixed grammar (Russian, English) from a model file; `hear` prints what it recognized; tested by synthesizer loopback | tools | [078](../../issues/078-voice-command-recognizer.md) |
 | **V2. Voice control** | `voice` + shell integration: intents, confirmations, spoken replies, push-to-talk in the shell, a command set covering the tools | tools | [079](../../issues/079-voice-control-in-the-shell.md) |
 | **V2+. Push-to-talk anywhere** | A key that reaches the voice program whatever has the focus | kernel | [154](../../issues/154-push-to-talk-routing.md) |
 | **V3. Dictation** | Large-vocabulary recognition (text into `edit`, search in `fm`) from a 40–80 MB model | kernel first, then tools | [150](../../issues/150-user-memory-beyond-the-arena.md), [153](../../issues/153-xsave-avx-state.md); a tools issue when they are done |
 | **V4. Understanding and dialogue** | Free speech → intent through a language model: remote first (through the network track's policy broker and TLS service), local later | network, tools | 101–103 (network track); a tools issue then |
 
-### V0 — hearing (tools)
+### V0 — hearing (tools, done)
 
-- `mind::voice::Source`: `Microphone` (audio client) and `Wav` (a 16-bit PCM file, for tests and offline use); `Stream` resamples 48 kHz stereo to 16 kHz mono (polyphase low-pass, no aliasing above 8 kHz).
-- Speech detection: frame energy against an adaptive noise floor and zero crossings, 200 ms hangover, utterance bounds 0.3–8 s; reports start/end and level.
-- `listen --vad` shows the detected utterances; `listen --wav file` uses a file.
-- Tests: `tests/voice_host.rs` (resampler response, detection on synthesized speech with noise and silence); QEMU: a WAV on the boot disk through `listen --vad --wav`.
+`mind::voice` (libmind, feature `alloc`; the device-free part in `libmind/src/voice/front.rs` is shared with the host tests):
+
+- `Source` — interleaved 16-bit samples with a rate and a channel count: `Microphone` (the audio client, 48 kHz stereo, counts capture overflows, stops capture when dropped) and `Wav` (16-bit PCM or `WAVE_FORMAT_EXTENSIBLE` PCM, 1–8 channels, 4–192 kHz; `Wav::open` reads up to 8 MiB through the file client).
+- `Stream` — any source as 16 kHz mono: channels averaged, the rate changed by L/M with a polyphase windowed-sinc low-pass (Kaiser, cut at 7.5 kHz, about 70 dB stopband, integer Q16 filtering, designed once per stream); 16 kHz passes through.
+- `Detector` — 25 ms frames every 10 ms after a DC blocker; a frame is voiced 9 dB above an adaptive noise floor, or 4 dB above it with clearly more zero crossings than the background (fricatives); nothing under -50 dBFS counts. An utterance starts after 3 voiced frames and ends after 200 ms below the threshold; its bounds widen over adjacent frames 3 dB above the floor (a breathy «х», a fading vowel; at most 250 ms); 0.3–8 s, longer ones are cut. `Utterance { start_ms, samples, level }` holds the 16 kHz samples and the level in dBFS.
+- `listen --vad [seconds]` (1–60, default 10) prints each utterance of the microphone (`SPEECH AT 1230 MS, 850 MS, LEVEL -18 DBFS`); `listen --vad --wav FILE` does the same for a file; `listen --wav FILE` converts a file to 16 kHz mono, measures it and plays it back.
+- Tests: `tests/voice_host.rs` — the resampler (1 kHz within 0.2 dB from 8, 22.05, 32, 44.1 and 48 kHz; 10 kHz below -40 dB; no 8 kHz upsampling image), WAV parsing, detection on four synthesized phrases (Russian and English) in silence and in white noise at 20 dB SNR (each phrase once, bounds within 50 ms), nothing in silence, noise or a click, 10 s of voice cut into 8 s + 2 s; QEMU `listen` suite — a 48 kHz stereo WAV of three phrases from the host build of `tts` on the boot disk, `listen --vad --wav` finds each where it begins, and `listen --vad` finds nothing in the microphone's silence.
 
 ### V1 — commands (tools)
 
@@ -80,8 +84,8 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 
 | № | Task | Blocked by |
 |---|---|---|
-| [077](../../issues/077-voice-audio-front-end.md) | V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` | — |
-| [078](../../issues/078-voice-command-recognizer.md) | V1: offline command recognizer — features, model file, grammar from the synthesizer's phonemes, `hear` | 077 |
+| [077](../../issues-done/077-voice-audio-front-end.done) | V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` — **done** | — |
+| [078](../../issues/078-voice-command-recognizer.md) | V1: offline command recognizer — features, model file, grammar from the synthesizer's phonemes, `hear` | — (077 done) |
 | [079](../../issues/079-voice-control-in-the-shell.md) | V2: `voice` program, intents in the shell, confirmations, spoken replies, capture ownership in `audio_gw` | 078 |
 | later | V3 dictation, V4 understanding through a language model | 150, 153; 101–103 |
 
