@@ -26,6 +26,7 @@ pub mod rtc;
 pub mod sys;
 pub mod time;
 pub mod tts;
+pub mod tui;
 pub mod util;
 #[doc(hidden)]
 pub mod rt;

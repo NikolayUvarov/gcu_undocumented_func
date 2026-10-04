@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Source | `terminus-font-4.49.1.tar.gz`, file `ter-u16n.bdf` (8×16, normal weight), from https://sourceforge.net/projects/terminus-font/ |
+| Source | `terminus-font-4.49.1.tar.gz`, file `ter-u16n.bdf` (8×16, normal weight) after the font's own variant patches `alt/dv1.diff` and `alt/ij1.diff` (Russian forms of в, д, и, й instead of the default Bulgarian ones), from https://sourceforge.net/projects/terminus-font/ |
 | SHA-256 of the archive | `d961c1b781627bf417f9b340693d64fc219e0113ad3a3af1a3424c7aa373ef79` |
 | Copyright | Copyright (C) 2020 Dimitar Toshkov Zhekov, with Reserved Font Name "Terminus Font" |
 | Licence | SIL Open Font License 1.1 — the font and this subset stay under the OFL; MIND CORE code that draws with it is not affected |
@@ -15,6 +15,7 @@
 `scripts/font_gen.py` produces both files:
 
 ```bash
+cd terminus-font-4.49.1 && patch -p1 -i alt/dv1.diff && patch -p1 -i alt/ij1.diff && cd ..
 python3 scripts/font_gen.py --subset terminus-font-4.49.1/ter-u16n.bdf   # fonts/mind-mono-16.bdf from the source
 python3 scripts/font_gen.py                                             # common/font16.rs from the subset
 python3 scripts/font_gen.py --check                                     # fails if common/font16.rs is stale

@@ -186,6 +186,43 @@ def font16():
     return font_gen.parse_bdf(font_gen.SUBSET.read_text(encoding="utf-8"))[1]
 
 
+def glyph_lookup():
+    """Bitmap -> character; glyphs drawn alike (Latin o and Cyrillic о) map to the lowest code point."""
+    lookup = {}
+    for code, (_, rows) in sorted(font16().items(), reverse=True):
+        lookup[tuple(rows)] = chr(code)
+    return lookup
+
+
+def canon(text):
+    """`text` as `screen_text` reads it back (look-alike letters folded)."""
+    glyphs, lookup = font16(), glyph_lookup()
+    return "".join(lookup[tuple(glyphs[ord(ch)][1])] if ord(ch) in glyphs else "?" for ch in text)
+
+
+def screen_text(vm):
+    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs."""
+    lookup = glyph_lookup()
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    width, height = map(int, size.split())
+    lines = []
+    for cy in range(height // 16):
+        line = []
+        for cx in range(width // 8):
+            rows = [[pixels[((cy * 16 + r) * width + cx * 8 + c) * 3:((cy * 16 + r) * width + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+            colours = {p for row in rows for p in row}
+            found = " " if len(colours) == 1 else "?"
+            for fg in colours if len(colours) == 2 else ():
+                bits = tuple(sum(0x80 >> c for c in range(8) if row[c] == fg) for row in rows)
+                ch = lookup.get(bits)
+                if ch is not None:
+                    found = ch
+                    break
+            line.append(found)
+        lines.append("".join(line))
+    return lines
+
+
 def check_text16(vm, x, y, text, color, background):
     """The screen shows `text` in the 8x16 font at (x, y), pixel for pixel."""
     glyphs = font16()
@@ -375,6 +412,12 @@ def keys_suite(vm):
         assert at < len(got), (line, got)
         at += 1
     vm.output = ""
+    # The text UI (mind::tui) on the real screen: frame, title, the latest event, the key bar.
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[0].startswith("╔") and canon(" keys — коды клавиш ") in screen[0], screen[0]
+    assert any("code=Char mods=- char=q U+0071" in row for row in screen), screen
+    assert screen[-1].startswith(canon(" Esc — выход")), screen[-1]
     # Esc from the UART after the sequence timeout ends the program.
     vm.send_bytes(b"\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")

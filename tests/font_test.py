@@ -21,6 +21,11 @@ class Font(unittest.TestCase):
         missing = [ch for ch in need if ord(ch) not in self.glyphs]
         self.assertEqual(missing, [])
 
+    def test_russian_letter_forms(self):
+        # The default Terminus и/й/д/в are Bulgarian forms (и like u, д like g); the subset uses variants ij1 and dv1.
+        for latin, cyrillic in (("u", "и"), ("g", "д"), ("b", "в")):
+            self.assertNotEqual(self.glyphs[ord(latin)][1], self.glyphs[ord(cyrillic)][1], cyrillic)
+
     def test_cells_are_8x16_and_not_empty(self):
         for code, (_, rows) in self.glyphs.items():
             self.assertEqual(len(rows), 16)

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """MIND Mono 16: the 8x16 text font, a subset of Terminus Font (SIL OFL 1.1), see fonts/README.md.
 
-Usage: font_gen.py --subset ter-u16n.bdf   write fonts/mind-mono-16.bdf from the Terminus 4.49.1 BDF
+Usage: font_gen.py --subset ter-u16n.bdf   write fonts/mind-mono-16.bdf from the Terminus 4.49.1 BDF (patched with
+                                           alt/dv1.diff and alt/ij1.diff: Russian forms of в, д, и, й)
        font_gen.py                         write common/font16.rs from fonts/mind-mono-16.bdf
        font_gen.py --check                 fail if common/font16.rs is missing or out of date
 """

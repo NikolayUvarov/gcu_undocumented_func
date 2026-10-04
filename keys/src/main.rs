@@ -5,13 +5,14 @@ use core::fmt::Write;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
 use mind::input::{Code, Key};
+use mind::tui::{Line, Rect, Terminal, DARK};
 use mind::util::FixedBuf;
 
-const BACKGROUND: u32 = 0x00101820; const TEXT: u32 = 0x00E0E0E0; const ACCENT: u32 = 0x0080D0FF;
+const HISTORY: usize = 64;
 
 fn describe(key: Key, out: &mut FixedBuf<96>) {
     let mods = [(key.shift(), 'S'), (key.ctrl(), 'C'), (key.alt(), 'A')];
-    let _ = write!(out, "[KEYS] code={:?} mods=", key.code());
+    let _ = write!(out, "code={:?} mods=", key.code());
     if mods.iter().all(|m| !m.0) { let _ = out.write_char('-'); }
     for (on, letter) in mods { if on { let _ = out.write_char(letter); } }
     match key.char() {
@@ -21,29 +22,45 @@ fn describe(key: Key, out: &mut FixedBuf<96>) {
     }
 }
 
+struct Lines { text: [FixedBuf<96>; HISTORY], count: usize }
+
+fn draw(term: &mut Terminal, lines: &Lines) {
+    let theme = DARK;
+    let mut grid = term.grid();
+    grid.clear(theme.panel);
+    let area = Rect::new(0, 0, grid.cols, grid.rows - 1);
+    grid.frame_titled(area, Line::Double, "keys — коды клавиш", theme.frame, theme.header);
+    let inner = area.inner();
+    grid.text(inner.x + 1, inner.y, "Нажимайте клавиши: код, модификаторы (S/C/A) и символ. Esc — выход.", theme.dim);
+    let rows = inner.h.saturating_sub(2);
+    let first = lines.count.saturating_sub(rows.min(HISTORY));
+    for (row, index) in (first..lines.count).enumerate() {
+        let line = &lines.text[index % HISTORY];
+        let style = if index + 1 == lines.count { theme.accent } else { theme.panel };
+        grid.text(inner.x + 1, inner.y + 2 + row, core::str::from_utf8(line.as_bytes()).unwrap_or("?"), style);
+    }
+    let mut count = FixedBuf::<32>::new();
+    let _ = write!(count, " {} ", lines.count);
+    grid.text_right(area.right() - 2, area.bottom() - 1, core::str::from_utf8(count.as_bytes()).unwrap_or(""), theme.frame);
+    // Every key including F10 is shown, so only Esc exits.
+    let rows = grid.rows;
+    grid.text_padded(0, rows - 1, " Esc — выход   Ctrl+Shift / Alt+Shift — раскладка EN/RU", grid.cols, theme.status);
+}
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let screen = Screen::new(info);
-    if let Some(s) = screen {
-        s.clear(BACKGROUND);
-        s.text16(16, 16, "keys — коды клавиш: нажимайте клавиши, Esc — выход", ACCENT, Some(BACKGROUND));
-    }
+    let mut term = Screen::new(info).and_then(Terminal::new);
+    let mut lines = Lines { text: core::array::from_fn(|_| FixedBuf::new()), count: 0 };
+    if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
     mind::println!("[KEYS] READY");
-    let mut row = 0usize;
     loop {
         let Some(key) = mind::input::wait_key(1000) else { continue };
-        let mut line = FixedBuf::<96>::new();
-        describe(key, &mut line);
-        mind::println!("{}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
-        if let Some(s) = screen {
-            let rows = (s.height.saturating_sub(64)) / 16;
-            if rows > 0 {
-                let y = 48 + (row % rows) * 16;
-                s.fill(16, y, s.width - 32, 16, BACKGROUND);
-                s.text16(16, y, core::str::from_utf8(&line.as_bytes()[7..]).unwrap_or("?"), TEXT, Some(BACKGROUND));
-                row += 1;
-            }
-        }
+        let line = &mut lines.text[lines.count % HISTORY];
+        line.clear();
+        describe(key, line);
+        lines.count += 1;
+        mind::println!("[KEYS] {}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
+        if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
         if key.code() == Code::Esc { mind::println!("[KEYS] DONE"); return; }
     }
 }

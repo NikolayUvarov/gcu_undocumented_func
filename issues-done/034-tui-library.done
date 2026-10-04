@@ -1,0 +1,29 @@
+# 034 — Text UI library `mind::tui` — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 033, 035 · **Roadmap:** track G, tools plan F3
+
+## Problem
+
+Every program draws pixels by hand. The file manager, editor, viewer and monitors need a common text UI: a cell grid, colours, frames, lists, menus, dialogs, an input line and graphs.
+
+## Plan
+
+- `libmind/src/tui/`: `Grid` of cells (character, foreground, background) in a page block, a shadow copy and a renderer that draws only changed cells into `Screen` with the 8×16 font; cursor.
+- Palettes: classic blue (Norton style) and dark.
+- Drawing helpers: text with clipping, frames (single/double lines), fill, horizontal and vertical bars, a time-series graph from block elements.
+- Widgets: scrollable list with selection, menu bar with drop-down menus, message/confirm/input dialogs, input line with editing and history, status line and F-key bar, progress bar.
+- `tui::App` loop helper: draw, wait for a key event or a timeout, dispatch.
+- Host tests render into a grid in memory and compare text.
+
+## Acceptance criteria
+
+- Host tests for grid diffing, clipping, frames, list scrolling and the input line.
+- Used by `view` (037).
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F3.
+
+## Resolution
+
+`libmind/src/tui/`: `mod.rs` — `Style`, `Cell`, `Rect`, `Grid` over borrowed cells (text with clipping and padding, right-aligned and centred text, fills, restyling, single/double lines and frames with titles, bars in 1/8-cell steps, braille time-series graphs with 2 samples × 4 levels per cell), themes `CLASSIC` (Norton Commander colours) and `DARK`, number formatting (`grouped`, `human_size`); `term.rs` — `Terminal`: the grid on the program's screen in page blocks, a back buffer and a copy of the screen, `present` draws only changed cells and the cursor (underline); `widgets.rs` — `ListState`, `InputLine` (UTF-8 editing by character and word, Ctrl+Y clears, horizontal scrolling), `History` (keeps the typed draft), `MenuBar` with drop-down menus, `fkey_bar`, `dialog`, `message`, `buttons_key`, `input_dialog`, `progress`. The key type moved to `mind::keys` so the UI code builds on the host. `tests/tui_host.rs` (9 tests) checks clipping, frames, bars, graphs, list scrolling, the input line, history, the menu bar, the key bar and dialogs. The `keys` utility now draws with the TUI; the QEMU harness reads the screen back as text (`screen_text`: each 8×16 cell matched against the font) and the `keys` suite checks the frame, title, latest event and status line. While doing this the font got the Russian forms of в, д, и, й (correction to 033).

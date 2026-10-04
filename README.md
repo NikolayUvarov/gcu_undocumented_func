@@ -83,6 +83,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
 | `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `spawn_image`/`loader_done` for `loader` |
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_key`, `wait_or_exit` (Esc exits) → `Key` (`code()`: character, Enter, Esc, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12; `char()`, `text()`, `shift()`/`ctrl()`/`alt()`) |
+| `tui` | text UI on the 8×16 font: `Grid` of cells (text with clipping, frames with titles, fills, bars in 1/8 cells, braille time-series graphs), `Terminal` (the grid on the program's screen, redraws only changed cells, cursor), themes `CLASSIC` (Norton Commander colours) and `DARK`, widgets (`ListState`, `InputLine` with UTF-8 editing, `History`, `MenuBar`, `fkey_bar`, dialogs, `progress`) |
 | `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8) |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
@@ -506,6 +507,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /tmp/mind-core-heap-tests
 rustc --edition=2021 --test tests/keys_host.rs -o /tmp/mind-core-keys-tests && /tmp/mind-core-keys-tests
+rustc --edition=2021 --test tests/tui_host.rs -o /tmp/mind-core-tui-tests && /tmp/mind-core-tui-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
