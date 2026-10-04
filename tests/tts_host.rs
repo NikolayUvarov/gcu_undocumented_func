@@ -29,3 +29,29 @@ fn main() {
     let peak = samples.iter().map(|s| (*s as i32).abs()).max().unwrap_or(0);
     println!("{} units, {} samples ({:.2} s), peak {}", count, samples.len(), samples.len() as f64 / 16000.0, peak);
 }
+
+/// Every pause between words and the end of every phrase is digital silence from 50 ms on: rounding the filters'
+/// feedback down kept a quiet tone of about −55 dBFS going until the next sound (issue 087).
+#[test]
+fn pauses_and_phrase_ends_fall_silent() {
+    use phonemes::Ph;
+    let phrases = ["hello world", "the quick brown fox jumps over the lazy dog.", "what time is it?", "открой файлы",
+                   "привет, мир. как дела?", "сегодня хорошая погода, не правда ли"];
+    for voice in [synth::Voice::default(), synth::Voice { pitch: 85, rate: 80 }, synth::Voice { pitch: 160, rate: 130 }] {
+        for phrase in phrases {
+            let mut units = [phonemes::Unit { ph: Ph::Pause(0), soft: false, stress: false }; 2048];
+            let count = text::parse(phrase, &mut units);
+            let mut labeled: Vec<(i16, usize)> = Vec::new();
+            synth::speak_labeled(&units[..count], voice, &mut |chunk, index| labeled.extend(chunk.iter().map(|&s| (s, index))));
+            let mut checked = 0;
+            for (index, unit) in units[..count].iter().enumerate().filter(|(_, u)| matches!(u.ph, Ph::Pause(_) | Ph::End(_))) {
+                let samples: Vec<i16> = labeled.iter().filter(|(_, i)| *i == index).map(|(s, _)| *s).collect();
+                if samples.len() <= 50 * 16 { continue; }
+                let late = samples[50 * 16..].iter().position(|&s| s != 0).map(|at| (50 * 16 + at) / 16);
+                assert_eq!(late, None, "{:?} (pitch {}, rate {}): sound {:?} ms into {:?}", phrase, voice.pitch, voice.rate, late, unit.ph);
+                checked += 1;
+            }
+            assert!(checked >= 2, "{:?}: a pause between words and the end", phrase);
+        }
+    }
+}

@@ -4,12 +4,18 @@ use crate::dsp::{Antiresonator, Glottis, Noise, Resonator, RATE};
 use crate::phonemes::{segments, Ph, Segment, Target, Unit, NASAL_POLE};
 
 pub const FRAME: usize = 80; // 5 ms at 16 kHz
+/// Samples without excitation after which the filters are cleared (30 ms): their fixed-point feedback can keep a small
+/// state circulating as a limit cycle — a quiet tone of about −55 dBFS that lasted through every pause and to the end
+/// of the phrase (issue 087). By then the ringing of the last sound has decayed below −60 dBFS. Clearing at that
+/// point, rather than rounding the feedback differently, changes the speech only by the cycle no longer carried into
+/// the next sound (about 40 dB below the signal); rounding toward zero changed it by 26 dB and still left cycles.
+const SETTLE: usize = 480;
 
 #[derive(Clone, Copy)]
 pub struct Voice { pub pitch: i64, pub rate: i64 }
 impl Default for Voice { fn default() -> Self { Self { pitch: 112, rate: 100 } } }
 
-struct State { cascade: [Resonator; 5], fric: Resonator, nasal_pole: Resonator, nasal_zero: Antiresonator, glottis: Glottis, noise: Noise, current: Target, dc_x: i64, dc_y: i64, phrase_ms: i64, tilt: i64, last_noise: i64, toward: Option<[i32; 3]>, attack: Option<i64>, jitter: i64 }
+struct State { cascade: [Resonator; 5], fric: Resonator, nasal_pole: Resonator, nasal_zero: Antiresonator, glottis: Glottis, noise: Noise, current: Target, dc_x: i64, dc_y: i64, phrase_ms: i64, tilt: i64, last_noise: i64, toward: Option<[i32; 3]>, attack: Option<i64>, jitter: i64, quiet: usize }
 
 fn lerp(a: i32, b: i32, k: i64) -> i32 { a + ((b - a) as i64 * k >> 10) as i32 }
 
@@ -18,7 +24,14 @@ impl State {
         let mut cascade = [Resonator::default(); 5];
         cascade[3].set(3300, 250, false); cascade[4].set(3850, 300, false);
         let mut nasal_pole = Resonator::default(); nasal_pole.set(NASAL_POLE, 100, false);
-        Self { cascade, fric: Resonator::default(), nasal_pole, nasal_zero: Antiresonator::default(), glottis: Glottis::new(), noise: Noise::new(), current: Target { f: [500, 1500, 2500], b: [70, 90, 150], nz: NASAL_POLE, ..Target::default() }, dc_x: 0, dc_y: 0, phrase_ms: 0, tilt: 0, last_noise: 0, toward: None, attack: None, jitter: 0 }
+        Self { cascade, fric: Resonator::default(), nasal_pole, nasal_zero: Antiresonator::default(), glottis: Glottis::new(), noise: Noise::new(), current: Target { f: [500, 1500, 2500], b: [70, 90, 150], nz: NASAL_POLE, ..Target::default() }, dc_x: 0, dc_y: 0, phrase_ms: 0, tilt: 0, last_noise: 0, toward: None, attack: None, jitter: 0, quiet: 0 }
+    }
+
+    // Silence after SETTLE samples without excitation: every filter's state is cleared.
+    fn settle(&mut self) {
+        for resonator in self.cascade.iter_mut() { resonator.clear(); }
+        self.fric.clear(); self.nasal_pole.clear(); self.nasal_zero.clear();
+        self.tilt = 0; self.dc_x = 0; self.dc_y = 0;
     }
 
     // Segment with a three-point pitch contour (rise on stress).
@@ -56,7 +69,9 @@ impl State {
             // Pitch within a segment: linear from contour.0 to contour.1.
             let f0 = contour.0 + (contour.1 - contour.0) * done as i64 / samples.max(1) as i64;
             let count = FRAME.min(samples - done);
+            let excited = cur.av != 0 || cur.ah != 0 || cur.af != 0;
             for sample in buffer[..count].iter_mut() {
+                if excited { self.quiet = 0; } else { self.quiet += 1; if self.quiet == SETTLE { self.settle(); } }
                 // Slight pitch jitter and breath noise in the open phase: a voice is not perfectly periodic.
                 let (pulse, period) = self.glottis.next(f0 + self.jitter);
                 if period { self.jitter = (self.noise.next() * f0 / 4096) / 100; }

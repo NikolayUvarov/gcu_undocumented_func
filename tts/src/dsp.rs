@@ -37,6 +37,8 @@ impl Resonator {
         self.y2 = self.y1; self.y1 = y;
         y
     }
+    /// Forgets the past output (the coefficients stay).
+    pub fn clear(&mut self) { self.y1 = 0; self.y2 = 0; }
 }
 
 // Antiresonator (spectral zero): inverse filter of a resonator with unity gain at DC.
@@ -53,6 +55,7 @@ impl Antiresonator {
         self.x2 = self.x1; self.x1 = x;
         y
     }
+    pub fn clear(&mut self) { self.x1 = 0; self.x2 = 0; }
 }
 
 pub struct Noise(u32);

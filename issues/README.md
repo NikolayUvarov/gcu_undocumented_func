@@ -19,7 +19,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [088](088-text-window-manager.md) | `wm`: text window manager (windows, dragging, snapping to edges and corners, programs in windows) | tools | P2 | — (mouse: 156) | track G |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
@@ -117,6 +116,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [084](../issues-done/084-reboot.done) | `reboot [-f]`: flush, services stopped in reverse order, reset | done (2026-10-04) |
 | [085](../issues-done/085-keymap.done) | `keymap`: layout and switch key (`keyboard.wit` 1.0) | done (2026-10-04) |
 | [086](../issues-done/086-screenshot.done) | `screenshot`: the screen as a BMP (`display.wit` 1.0) | done (2026-10-04) |
+| [087](../issues-done/087-tts-idle-tone.done) | `tts`: a quiet tone stayed after every phrase (fixed-point limit cycle; filters cleared after 30 ms without excitation) | done (2026-10-04) |
 | [090](../issues-done/090-read-only-status-and-modifier-key-bars.done) | Editor says READ-ONLY; key bars follow Shift, Ctrl and Alt | done (2026-10-04) |
 | [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |

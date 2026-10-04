@@ -35,4 +35,4 @@ Nothing turns speech into text. Voice control needs a recognizer of a fixed comm
 
 ## Related
 
-[077](077-voice-audio-front-end.done), [079](079-voice-control-in-the-shell.done), [017](017-tts-on-audio-gateway.done), [087](../issues/087-tts-idle-tone.md), [docs/voice](../docs/voice/README.md).
+[077](077-voice-audio-front-end.done), [079](079-voice-control-in-the-shell.done), [017](017-tts-on-audio-gateway.done), [087](087-tts-idle-tone.done), [docs/voice](../docs/voice/README.md).
