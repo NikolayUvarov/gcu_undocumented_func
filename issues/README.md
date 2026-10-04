@@ -22,6 +22,9 @@ Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` an
 | [101](101-network-stack.md) | Network stack service (IPv4, ARP, ICMP, UDP, TCP) | network | P2 | — (100 done) | track D |
 | [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | 101 | track D |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 101, 102 | track D |
+| [104](104-virtio-modern-msix.md) | Modern VirtIO interface and MSI-X interrupts | kernel + driver | P2 | — | track A |
+| [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | 101 | tracks A, D |
+| [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | 101, benchmark | track D |
 | [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | — (075 done) | track G, T1 |
 
 ## Finished tasks (`issues-done/`)
