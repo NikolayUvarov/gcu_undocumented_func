@@ -11,6 +11,8 @@ pub struct Task {
     pub image: u64, pub stack: u64, pub screen: u64, pub heap: u64, pub shared: u64, pub retained: u64, pub wait: u64,
     pub heap_blocks: u32, pub caps: u32, pub quota_tasks: u32, pub used_tasks: u32, pub quota_endpoints: u32, pub used_endpoints: u32,
     pub name: String, pub state: u8, pub cpu: u8, pub flags: u8,
+    /// Kernel memory for the task: context, mailbox, info and exit pages, page tables.
+    pub kernel: u64,
 }
 
 /// Flags of a task (idl/sysinfo.wit `task.flags`, as sysmon sets them from `mind::stat::TASK_*`).
@@ -29,20 +31,18 @@ impl Task {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Cpu { pub busy_ns: u64, pub idle_ns: u64, pub ticks: u64, pub switches: u64, pub interrupts: u64, pub current: u64, pub apic: u32, pub online: bool }
 
-/// The kernel arena by use (StatMemory, bytes) and the live tasks and endpoints.
+/// The kernel arena by use (StatMemory, bytes), the largest block it can still allocate, the live tasks and endpoints
+/// and the kernel's limits for them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Memory {
     pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64, pub heaps: u64,
     pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub tasks: u32, pub endpoints: u32,
+    pub largest_free: u64, pub page_tables: u64, pub shared: u64, pub tasks_limit: u32, pub endpoints_limit: u32,
 }
 impl Memory {
-    /// Used arena bytes not in a category of their own (page tables, kernel structures).
-    pub fn other(&self) -> u64 { self.used.saturating_sub(self.images + self.stacks + self.task_pages + self.screens + self.heaps + self.objects + self.dma) }
+    /// Used arena bytes not in a category of their own (kernel structures).
+    pub fn other(&self) -> u64 { self.used.saturating_sub(self.images + self.stacks + self.task_pages + self.page_tables + self.screens + self.heaps + self.objects + self.dma) }
 }
-
-/// The kernel's table limits (docs/profile/kernel-objects.md): tasks and endpoints.
-pub const TASKS_LIMIT: u32 = 32;
-pub const ENDPOINTS_LIMIT: u32 = 127;
 
 /// A physical range: UEFI memory type (0..15) or platform layout (`PHYS_*` from PHYS_PLATFORM on); `detail` is the boot
 /// image or device index.
@@ -54,13 +54,14 @@ impl Range { pub fn end(&self) -> u64 { self.start.saturating_add(self.bytes) } 
 pub struct Region { pub start: u64, pub bytes: u64, pub kind: u32, pub flags: u32 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Capability { pub node: u64, pub parent: u64, pub size: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub badge: u32 }
+pub struct Capability { pub node: u64, pub parent: u64, pub size: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub badge: u32, pub endpoint: u32 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Irq { pub count: u64, pub line: u32, pub holder: u64, pub endpoint: u32, pub masked: bool }
+pub struct Irq { pub count: u64, pub line: u32, pub holder: u64, pub endpoint: u32, pub masked: bool, pub holders: u32 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u64, pub index: u32 }
+/// `location`: bus << 8 | device << 3 | function; `io_bars`: bit i set if BAR i is a port range.
+pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u64, pub index: u32, pub location: u32, pub io_bars: u32 }
 
 /// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

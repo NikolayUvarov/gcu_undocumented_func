@@ -1,39 +1,46 @@
 /// System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
 /// an endpoint from the shell at launch (SLOT_SYSINFO); `sysmon` holds the observe privilege and limits each client's
-/// request rate.
-package mind:sysinfo@1.0.0;
+/// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records.
+package mind:sysinfo@2.0.0;
 
 interface sysinfo {
     /// Why a request failed.
     enum error { busy, not-found, unavailable }
 
     /// A task (StatTask). `wait` is WAIT_* and `wait-on` the endpoint index, IRQ line or server PID it waits for;
-    /// `flags`: `mind::stat::TASK_SERVICE`, `TASK_SCREEN`, `TASK_FOCUS`.
+    /// `flags`: `mind::stat::TASK_SERVICE`, `TASK_SCREEN`, `TASK_FOCUS`; `kernel`: its context, mailbox, info and exit
+    /// pages and page tables.
     record task {
         pid: u64, parent: u64, run-ns: u64, runs: u64, ticks: u64, calls: u64, sends: u64, receives: u64, started-ns: u64,
         image: u64, stack: u64, screen: u64, heap: u64, shared: u64, retained: u64, budget-ns: u64, period-ns: u64,
         wait-on: u32, heap-blocks: u32, caps: u32, quota-tasks: u16, used-tasks: u16, quota-endpoints: u16, used-endpoints: u16,
-        name: string<16>, wait: u8, cpu: u8, flags: u8, band: u8, throttled: bool,
+        name: string<16>, wait: u8, cpu: u8, flags: u8, band: u8, throttled: bool, kernel: u64,
     }
     /// A CPU (StatCpu).
     record cpu { busy-ns: u64, idle-ns: u64, ticks: u64, switches: u64, interrupts: u64, current: u64, apic: u32, online: bool }
-    /// Kernel memory by use (StatMemory, bytes).
+    /// Kernel memory by use (StatMemory, bytes): `largest-free` is the largest block the arena can still allocate,
+    /// `shared` memory of other owners mapped by tasks; the kernel's task and endpoint limits.
     record memory {
         arena: u64, used: u64, free: u64, images: u64, stacks: u64, task-pages: u64, screens: u64, heaps: u64,
         objects: u64, objects-limit: u64, dma: u64, dma-limit: u64, tasks: u32, endpoints: u32,
+        largest-free: u64, page-tables: u64, shared: u64, tasks-limit: u32, endpoints-limit: u32,
     }
     /// A physical range (StatPhys): UEFI memory type, or the platform layout from PHYS_PLATFORM on.
     record range { start: u64, pages: u64, kind: u32, index: u32 }
     /// A region of an address space (StatRegion: REGION_* kind and flags).
     record region { start: u64, size: u64, kind: u32, flags: u32 }
-    /// A capability of a task (StatCap: no physical addresses; ports give their base and an IRQ its line in `rights`).
-    record capability { node: u64, parent: u64, size: u64, slot: u32, generation: u32, kind: u32, rights: u32, badge: u32 }
-    /// An endpoint (StatEndpoint: the index is a label, not an authority).
-    record endpoint-info { messages: u64, busy: u64, timeouts: u64, creator: u64, index: u32, receivers: u32, senders: u32, receiving: u32 }
-    /// An interrupt line (StatIrq).
-    record irq { count: u64, holder: u64, line: u32, endpoint: u32, masked: bool }
-    /// A PCI function (StatDevice): BAR sizes, class, IRQ, the task holding it.
-    record device { bar0: u64, bar1: u64, bar2: u64, bar3: u64, bar4: u64, bar5: u64, holder: u64, class: u32, irq: u32 }
+    /// A capability of a task (StatCap: no physical addresses; ports give their base and an IRQ its line in `rights`;
+    /// `endpoint` is the endpoint index of an endpoint capability).
+    record capability { node: u64, parent: u64, size: u64, slot: u32, generation: u32, kind: u32, rights: u32, badge: u32, endpoint: u32 }
+    /// An endpoint (StatEndpoint: the index is a label, not an authority): its server, how many tasks hold it, the IRQ
+    /// line bound to it (0: none).
+    record endpoint-info { messages: u64, busy: u64, timeouts: u64, creator: u64, index: u32, receivers: u32, senders: u32, receiving: u32, server: u64, holders: u32, irq: u32 }
+    /// An interrupt line (StatIrq): the holder is the task that uses it (a driver rather than init); `holders` counts
+    /// the tasks holding a copy.
+    record irq { count: u64, holder: u64, line: u32, endpoint: u32, masked: bool, holders: u32 }
+    /// A PCI function (StatDevice): BAR sizes, class, IRQ, the task holding it, `location` (bus << 8 | device << 3 |
+    /// function), `io-bars` (bit i: BAR i is a port range).
+    record device { bar0: u64, bar1: u64, bar2: u64, bar3: u64, bar4: u64, bar5: u64, holder: u64, class: u32, irq: u32, location: u32, io-bars: u32 }
     /// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
     record sample { busy-low: u64, busy-high: u64, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u8, runnable: u8 }
     /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.

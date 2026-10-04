@@ -106,17 +106,20 @@ impl Hw {
         for d in &self.devices {
             let mut bars = String::new();
             for (i, &bytes) in d.bars.iter().enumerate().filter(|(_, b)| **b != 0) {
-                bars.push_str(&format!(" BAR{} {}", i, text::size(bytes)));
+                bars.push_str(&format!(" BAR{} {}{}", i, text::size(bytes), if d.io_bars & (1 << i) != 0 { " io" } else { "" }));
             }
             let irq = if d.irq == 0 || d.irq == 0xFF { String::from("  —   ") } else { format!("IRQ {:<2}", d.irq) };
-            line(format!("  {:>2}  {:06X}  {:<16} {}  {:<22}{}", d.index, d.class, text::pci_class(d.class), irq, self.holder(d.holder), bars), Kind::Text);
+            line(format!("  {:02x}:{:02x}.{}  {:06X}  {:<16} {}  {:<22}{}", d.location >> 8, (d.location >> 3) & 31, d.location & 7, d.class, text::pci_class(d.class), irq,
+                         self.holder(d.holder), bars), Kind::Text);
         }
         line(String::new(), Kind::Text);
         line(String::from("Interrupt lines"), Kind::Heading);
         let mut any = false;
         for i in self.irqs.iter().filter(|i| i.holder != 0 || i.count != 0) {
             any = true;
-            line(format!("  IRQ {:<2} {:>12} interrupts  {}{}{}", i.line, text::count(i.count), self.holder(i.holder),
+            // The holder is the task using the line; init keeps a copy for restarts and is counted among the holders.
+            line(format!("  IRQ {:<2} {:>12} interrupts  {}{}{}{}", i.line, text::count(i.count), self.holder(i.holder),
+                         if i.holders > 1 { format!(" (+{} holding a copy)", i.holders - 1) } else { String::new() },
                          if i.endpoint != 0 { format!(", endpoint {}", i.endpoint) } else { String::new() }, if i.masked { ", masked" } else { "" }), Kind::Text);
         }
         if !any { line(String::from("  none in use"), Kind::Dim); }

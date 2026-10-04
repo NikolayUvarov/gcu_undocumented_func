@@ -1,0 +1,31 @@
+# 076 — The monitors show the restored `STAT` fields — done
+
+**Type:** tool · **Owner:** tools track (`idl/sysinfo.wit`, `sysmon/`, `monitor/`) · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — ([075](075-stat-fields-for-the-monitors.done) done) · **Roadmap:** track G, T1 · **Constitution:** MC-10.2
+
+## Problem
+
+Issue [075](075-stat-fields-for-the-monitors.done) adds back to `STAT` what the monitors lost in the merge ([051](051-merge-main-into-tools.done)). `sysmon` and `idl/sysinfo.wit` do not carry those fields yet, and the monitors still show less than on the tools branch: `hw` lists PCI devices by index, `memmap` has no largest free block, names the guard page "?", and takes the table limits from constants, `top` has no kernel memory per task. The QEMU `tools` suite was relaxed in the merge to match.
+
+## Plan
+
+- `idl/sysinfo.wit` **2.0** (new fields change the layout of existing records, a major version): `memory` + `largest-free`, `page-tables`, `shared`, `tasks-limit`, `endpoints-limit` (`memory` asks the kernel for the largest free block); `task` + `kernel`; `capability` + `endpoint`; `endpoint-info` + `server`, `holders`, `irq`; `irq` + `holders`; `device` + `location`, `io-bars`. Regenerate the bindings.
+- `sysmon` copies the fields; the focus flag comes from `StatTask.focus` instead of `TASK_LIST`.
+- `monitor`: `memmap` shows the largest free block, page tables and mapped shared memory in the kernel-arena view, the limits from `memory` (no `TASKS_LIMIT`/`ENDPOINTS_LIMIT` constants), "guard" and "kernel image" as kinds; `hw` shows `bus:device.function` and marks I/O BARs; `top` shows a task's kernel memory and, in the details, the endpoint index of each endpoint capability; `load` scales the task graph by the limit from `memory`.
+- Host tests `tests/sysmon_host.rs`, `tests/monitor_host.rs` cover the new fields.
+
+## Acceptance criteria
+
+- The QEMU `tools` suite checks again what the merge relaxed: `hw` shows `00:01.1  010180  IDE controller`; `memmap` shows `0x0000008001000000  4.0K  ---  guard` in clock's address space and the largest free block in the arena view; the task limit comes from the kernel.
+- All QEMU suites and host tests pass; CI is green.
+
+## Resolution
+
+- `idl/sysinfo.wit` 2.0.0: `task.kernel`; `memory.largest-free`, `page-tables`, `shared`, `tasks-limit`, `endpoints-limit`; `capability.endpoint`; `endpoint-info.server`, `holders`, `irq`; `irq.holders`; `device.location`, `io-bars` (bindings regenerated, `libmind/src/idl/sysinfo.rs`).
+- `sysmon`: copies the fields; a `memory` request asks the kernel for the largest free block (the 100 ms samples do not); the focus flag comes from `StatTask.focus`, so the `TASK_LIST` call is gone.
+- `monitor`: the model carries the fields and no longer has `TASKS_LIMIT`/`ENDPOINTS_LIMIT`; `memmap` shows the largest free block, page tables as a category, free memory outside the largest block and mapped shared memory, the kernel's limits, "guard" and "kernel image"; `hw` shows `bus:device.function`, marks I/O BARs and the holders of a line besides the driver; `top` shows the largest free block and the limits in its header, a task's kernel memory and its endpoint capabilities (slot → index) in the details; `load` scales the task graph by the kernel's limit. Guard pages are not counted as mapped.
+- Tests: `tests/monitor_host.rs` covers the new fields; the QEMU `tools` suite checks `00:01.1  010180  IDE controller`, `ps2_kbd` as holder of IRQ 1 with a copy held by init, the guard page in clock's address space and the largest free block; the `tools` and `services` suites, the host tests and the IDL check pass locally.
+- `docs/idl/README.md`: sysinfo 2.0.0.
+
+## Related
+
+[075](075-stat-fields-for-the-monitors.done), [061](061-top-memmap-load-hw.done), [060](060-sysmon.done), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.

@@ -34,7 +34,7 @@ The merge of the tools branch ([051](051-merge-main-into-tools.done)) moved `sys
    - `StatDevice` + `location` (bus << 8 | device << 3 | function), `io_bars` (bit *i*: BAR *i* is an I/O port range); `holder` by the rule above.
 2. `kernel/src/scheduler/stat.rs` fills them; `kernel/src/pci.rs` exposes the location, `kernel/src/paging.rs` the page-table count.
 3. `libmind::stat` names the new kinds; the shell's `stat <class>`, `free`, `irqs`, `devices`, `endpoints`, `caps` and `stat <pid>` print the new fields.
-4. The consumers in the tools (`idl/sysinfo.wit`, `sysmon`, the monitors) follow in [076](../issues/076-monitors-show-restored-stat-fields.md). `sysmon` already passes `holder` through, so `hw` shows the driver again with this issue alone.
+4. The consumers in the tools (`idl/sysinfo.wit`, `sysmon`, the monitors) follow in [076](076-monitors-show-restored-stat-fields.done). `sysmon` already passes `holder` through, so `hw` shows the driver again with this issue alone.
 
 ## Acceptance criteria
 
@@ -52,8 +52,8 @@ Commit `9f44475` (on `main` since then), `STAT_VERSION` 2:
 - Docs: `docs/profile/kernel-objects.md` (Statistics), `docs/api/README.md` (`STAT`).
 - Tests: all 21 QEMU suites on 4 CPUs, `smp,isolation,heap,services` on one CPU, the USB image and the host tests pass locally; CI run 11 is green.
 
-The monitors show the fields in [076](../issues/076-monitors-show-restored-stat-fields.md).
+The monitors show the fields in [076](076-monitors-show-restored-stat-fields.done).
 
 ## Related
 
-[051](051-merge-main-into-tools.done), [076](../issues/076-monitors-show-restored-stat-fields.md), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
+[051](051-merge-main-into-tools.done), [076](076-monitors-show-restored-stat-fields.done), [docs/tools/README.md](../docs/tools/README.md) §4.4–4.7.
