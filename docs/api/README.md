@@ -119,7 +119,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 35 | `TASK_KILL` | `arg1` = PID [process control] |
 | 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
 | 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
-| 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy [process control] |
+| 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
 | 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs [process control] |
 

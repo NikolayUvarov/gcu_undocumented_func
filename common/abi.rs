@@ -278,6 +278,7 @@ pub const fn event_mods(event: usize) -> u8 { (event >> 24) as u8 }
 pub const fn event_pressed(event: usize) -> bool { event >> 32 & 1 != 0 }
 pub const fn event_char(event: usize) -> u32 { (event >> 40) as u32 }
 // CONSOLE_READ / TASK_LOGS: arg1 = PID, msg[0] = buffer address, msg[1] = length; drains and returns the byte count.
+// After the last focused or screenless (console) program exited, both drain its unread console output.
 // CPU_INFO: arg1 = CPU index; result = APIC id, arg2 = online, msg[2] = timer ticks. KERNEL_HEAP: result = used,
 // arg2 = free, msg[2] = 1 if a test allocation was fully released.
 // Block device protocol: idl/block.wit (bindings in mind::idl::block).

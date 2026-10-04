@@ -36,6 +36,9 @@ impl<const N: usize> Queue<N> {
         self.head = 0;
         self.len = 0;
     }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 // Bounded queue of input event words; the oldest event is dropped when full.
