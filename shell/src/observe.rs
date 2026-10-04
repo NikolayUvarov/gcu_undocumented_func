@@ -106,3 +106,37 @@ pub fn caps(out: &mut impl Write, pid: u64) {
         let _ = writeln!(out);
     }
 }
+
+// Uptime, load averages and the current CPU load from sysmon (idl/sysinfo.wit): the console form of `load`.
+pub fn uptime(out: &mut impl Write) {
+    use mind::idl::{sysinfo, wire};
+    use mind::ipc::Endpoint;
+    let Ok(mut shared) = wire::Shared::new(4096) else { return };
+    match sysinfo::load(Endpoint::SYSINFO, shared.buffer()) {
+        Ok(Ok(load)) => {
+            let seconds = load.uptime_ms / 1000;
+            let _ = write!(out, "UP {}:{:02}:{:02} LOAD {}.{:02} {}.{:02} {}.{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60,
+                           load.one / 100, load.one % 100, load.five / 100, load.five % 100, load.fifteen / 100, load.fifteen % 100);
+        }
+        Ok(Err(error)) => { let _ = writeln!(out, "ERROR: SYSMON: {:?}", error); return; }
+        Err(_) => { let _ = writeln!(out, "ERROR: SYSMON NOT AVAILABLE"); return; }
+    }
+    if let Ok(Ok(samples)) = sysinfo::history(Endpoint::SYSINFO, shared.buffer(), false, 10) {
+        let (mut count, mut busy, mut tasks, mut cpus) = (0u64, 0u64, 0u8, 0u64);
+        for s in samples.iter() {
+            let per_cpu = (0..4).map(|i| (s.busy_low >> (16 * i)) & 0xFFFF).chain((0..4).map(|i| (s.busy_high >> (16 * i)) & 0xFFFF));
+            let mut n = 0; for value in per_cpu { busy += value; n += 1; }
+            cpus = n; count += 1; tasks = s.tasks;
+        }
+        let _ = control_cpus(&mut cpus);
+        if count > 0 && cpus > 0 { let _ = write!(out, " CPU {}% TASKS {}", busy / count / cpus / 10, tasks); }
+    }
+    let _ = writeln!(out);
+}
+
+// Online CPUs (the samples carry eight slots).
+fn control_cpus(cpus: &mut u64) -> bool {
+    let mut n = 0; while mind::control::cpu(n).is_some() { n += 1; }
+    *cpus = n as u64;
+    true
+}

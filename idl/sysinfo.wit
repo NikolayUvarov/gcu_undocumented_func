@@ -1,0 +1,55 @@
+/// System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
+/// an endpoint from the shell at launch; `sysmon` holds the observe privilege and limits each client's request rate.
+package mind:sysinfo@1.0.0;
+
+interface sysinfo {
+    /// Why a request failed.
+    enum error { busy, not-found, unavailable }
+
+    /// A task (TaskStat).
+    record task {
+        pid: u64, parent: u64, run-ns: u64, runs: u64, calls: u64, sent: u64, received: u64, started-ns: u64,
+        image: u64, stack: u64, screen: u64, heap: u64, shared: u64, kernel: u64, wait: u64,
+        heap-blocks: u32, caps: u32, quota-tasks: u32, used-tasks: u32, quota-endpoints: u32, used-endpoints: u32,
+        name: string<16>, state: u8, cpu: u8, flags: u8,
+    }
+    /// A CPU (CpuStat).
+    record cpu { busy-ns: u64, idle-ns: u64, ticks: u64, switches: u64, interrupts: u64, current: u64, apic: u32, online: bool }
+    /// Kernel memory by use (MemoryStat).
+    record memory {
+        arena: u64, used: u64, free: u64, largest-free: u64, images: u64, stacks: u64, screens: u64, heaps: u64, task-kernel: u64,
+        page-tables: u64, objects: u64, objects-limit: u64, dma: u64, dma-limit: u64, mapped: u64, other: u64,
+        tasks: u32, tasks-limit: u32, endpoints: u32, endpoints-limit: u32,
+    }
+    /// A physical range: UEFI type (0..15) or platform layout (16..).
+    record range { start: u64, bytes: u64, kind: u32, detail: u32 }
+    /// A region of an address space.
+    record region { start: u64, bytes: u64, kind: u32, flags: u32 }
+    /// A capability of a task (no physical addresses).
+    record capability { node: u64, parent: u64, size: u64, base: u64, slot: u32, generation: u32, kind: u32, rights: u32, endpoint: u32 }
+    /// An endpoint (the index is a label, not an authority).
+    record endpoint { messages: u64, busy: u64, timeouts: u64, index: u32, creator: u32, server: u32, receivers: u32, holders: u32, waiting: u32, receiving: u32, irq: u32 }
+    /// An interrupt line.
+    record irq { count: u64, line: u32, holder: u32, endpoint: u32, masked: bool }
+    /// A PCI function: BAR sizes, class, IRQ, the task holding it.
+    record device { bar0: u64, bar1: u64, bar2: u64, bar3: u64, bar4: u64, bar5: u64, class: u32, irq: u32, holder: u32, index: u32, location: u32, io-bars: u32 }
+    /// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
+    record sample { busy-low: u64, busy-high: u64, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u8, runnable: u8 }
+    /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
+    record load { one: u32, five: u32, fifteen: u32, uptime-ms: u64, fast-ms: u32, slow-ms: u32, fast-count: u32, slow-count: u32 }
+
+    tasks: func(buffer: borrow<memory>) -> result<list<task, 24>, error>;
+    cpus: func(buffer: borrow<memory>) -> result<list<cpu, 8>, error>;
+    memory: func(buffer: borrow<memory>) -> result<memory, error>;
+    physmap: func(buffer: borrow<memory>) -> result<list<range, 220>, error>;
+    /// Address space of task `pid`.
+    vmap: func(pid: u64, buffer: borrow<memory>) -> result<list<region, 80>, error>;
+    /// Capabilities of task `pid`.
+    caps: func(pid: u64, buffer: borrow<memory>) -> result<list<capability, 32>, error>;
+    endpoints: func(buffer: borrow<memory>) -> result<list<endpoint, 64>, error>;
+    irqs: func(buffer: borrow<memory>) -> result<list<irq, 16>, error>;
+    devices: func(buffer: borrow<memory>) -> result<list<device, 64>, error>;
+    /// The last `count` samples, oldest first: every 100 ms (`slow` false, up to 300) or every second (up to 600).
+    history: func(buffer: borrow<memory>, slow: bool, count: u16) -> result<list<sample, 600>, error>;
+    load: func(buffer: borrow<memory>) -> result<load, error>;
+}

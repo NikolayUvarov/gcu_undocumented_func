@@ -2,7 +2,7 @@
 //! Test interface for the MIND IDL generator (tests/idl_host.rs): every v0.2 type.
 #![allow(clippy::all, unused_imports, unused_variables, unused_mut, dead_code)]
 use crate::abi::*;
-use crate::ipc::{Endpoint, Received};
+use crate::ipc::{self, Received};
 use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
@@ -59,7 +59,7 @@ impl<'a> wire::Item<'a> for Pair<'a> {
 }
 
 /// Scalars only, as in v0.
-pub fn ping(endpoint: Endpoint, x: u32, flag: bool) -> Result<u32> {
+pub fn ping(endpoint: ipc::Endpoint, x: u32, flag: bool) -> Result<u32> {
     let words = [1 | MAJOR << 8 | ((x) as usize) << 16 | ((flag) as usize) << 48, 0];
     let reply = wire::call(endpoint, words, None)?;
     let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], false, false)?;
@@ -67,7 +67,7 @@ pub fn ping(endpoint: Endpoint, x: u32, flag: bool) -> Result<u32> {
 }
 
 /// A string argument and a fallible scalar result.
-pub fn find<'b>(endpoint: Endpoint, dir: u32, buffer: wire::Buffer<'b>, name: &'_ str) -> Result<core::result::Result<u32, Error>> {
+pub fn find<'b>(endpoint: ipc::Endpoint, dir: u32, buffer: wire::Buffer<'b>, name: &'_ str) -> Result<core::result::Result<u32, Error>> {
     let wire::Buffer { cap, bytes } = buffer;
     let mut writer = wire::Writer::new(bytes);
     {
@@ -84,7 +84,7 @@ pub fn find<'b>(endpoint: Endpoint, dir: u32, buffer: wire::Buffer<'b>, name: &'
 }
 
 /// A list of records as the result.
-pub fn list<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, start: u32) -> Result<wire::List<'b, Entry<'b>>> {
+pub fn list<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, start: u32) -> Result<wire::List<'b, Entry<'b>>> {
     let wire::Buffer { cap, bytes } = buffer;
     let mut writer = wire::Writer::new(bytes);
     let payload = writer.len();
@@ -101,7 +101,7 @@ pub fn list<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, start: u32) -> Res
 }
 
 /// Two bulk arguments and a result without a value.
-pub fn put<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, items: &'_ [u16], note: &'_ [u8]) -> Result<core::result::Result<(), Error>> {
+pub fn put<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, items: &'_ [u16], note: &'_ [u8]) -> Result<core::result::Result<(), Error>> {
     let wire::Buffer { cap, bytes } = buffer;
     let mut writer = wire::Writer::new(bytes);
     {
@@ -119,7 +119,7 @@ pub fn put<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, items: &'_ [u16], n
 }
 
 /// A nested record result.
-pub fn info<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, of: Kind) -> Result<Pair<'b>> {
+pub fn info<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, of: Kind) -> Result<Pair<'b>> {
     let wire::Buffer { cap, bytes } = buffer;
     let mut writer = wire::Writer::new(bytes);
     let payload = writer.len();
@@ -136,7 +136,7 @@ pub fn info<'b>(endpoint: Endpoint, buffer: wire::Buffer<'b>, of: Kind) -> Resul
 }
 
 /// An enum argument and an optional result.
-pub fn mode(endpoint: Endpoint, k: Kind) -> Result<Option<u8>> {
+pub fn mode(endpoint: ipc::Endpoint, k: Kind) -> Result<Option<u8>> {
     let words = [6 | MAJOR << 8 | (((k as u8)) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     let status = wire::check_reply(&reply, [0xff0000, 0x0], true, false)?;

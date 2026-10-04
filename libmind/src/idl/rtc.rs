@@ -2,7 +2,7 @@
 //! Calendar time from the CMOS RTC, a service separate from the monotonic clock (MC-5.6).
 #![allow(clippy::all, unused_imports, unused_variables, unused_mut, dead_code)]
 use crate::abi::*;
-use crate::ipc::{Endpoint, Received};
+use crate::ipc::{self, Received};
 use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
@@ -11,7 +11,7 @@ pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Seconds since midnight; none if the RTC cannot be read.
-pub fn now(endpoint: Endpoint) -> Result<Option<u32>> {
+pub fn now(endpoint: ipc::Endpoint) -> Result<Option<u32>> {
     let words = [1 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
     let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], true, false)?;
@@ -19,7 +19,7 @@ pub fn now(endpoint: Endpoint) -> Result<Option<u32>> {
 }
 
 /// Days since 2000-01-01 (the date of `now`); none if the RTC cannot be read. Added in 1.1.
-pub fn date(endpoint: Endpoint) -> Result<Option<u32>> {
+pub fn date(endpoint: ipc::Endpoint) -> Result<Option<u32>> {
     let words = [2 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
     let status = wire::check_reply(&reply, [0xffffffff0000, 0x0], true, false)?;

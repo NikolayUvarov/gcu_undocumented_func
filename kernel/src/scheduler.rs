@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const MAX_TASKS: usize = 20; // services + applications
+pub const MAX_TASKS: usize = 24; // services + applications
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 64;

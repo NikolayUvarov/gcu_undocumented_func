@@ -74,6 +74,7 @@ A change that alters the meaning or layout of an existing function increments th
 | File | Service | Since |
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.1.0 (`date` added) |
+| [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` | 1.0.0 |
 
 `tests/idl/sample.wit` exercises every v0.2 type; its bindings (`tests/idl/sample.rs`) run in `tests/idl_host.rs` against a loopback of client and server, with malformed payloads.
 

@@ -18,7 +18,6 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [040](040-sysmon.md) | `sysmon` service | feature | P0 | 038, 039 | G (tools F9) |
 | [041](041-top-memmap-load-hw.md) | `top`, `memmap`, `load`, `hw` | feature | P0 | 034, 040, 042 | G |
 | [042](042-loader-v1-launch-grants.md) | Loader v1: launch with granted capabilities | architecture | P0 | 038 | G (tools F7) |
 | [043](043-file-manager-read-only.md) | File manager `fm`, read-only | feature | P0 | 034, 037, 042 | G |
@@ -70,5 +69,6 @@
 | [037](../issues-done/037-viewer.done) | Viewer `view` | done (2026-10-04) |
 | [038](../issues-done/038-mind-idl-v0.2.done) | MIND IDL v0.2: records, strings, lists | done (2026-10-04) |
 | [039](../issues-done/039-observation-abi.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04) |
+| [040](../issues-done/040-sysmon.done) | `sysmon` service | done (2026-10-04) |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

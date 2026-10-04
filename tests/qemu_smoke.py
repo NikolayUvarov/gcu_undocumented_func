@@ -21,7 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage drivers exist only when the controller is present.
-SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell")
+SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps)(\s+)(\d{1,18})\b", re.I)
@@ -555,6 +555,10 @@ def busy_suite(vm):
     assert int(second[1][-2]) > int(first[1][-2]), (first, second)
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
     assert int(second[2][-1]) > int(first[2][-1]), (first, second)
+    # sysmon's samples see the busy CPU: one of the CPUs at full load.
+    time.sleep(1.5)
+    cpu = int(re.search(r"CPU (\d+)%", vm.command("uptime"))[1])
+    assert cpu >= 100 // vm.cpus // 2, cpu
     # TSC accounting (STAT): a task that never yields gets most of its CPU.
     run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
     before, started = run(), time.monotonic()
@@ -949,7 +953,7 @@ def ahci_suite(vm):
 
 def services_suite(vm):
     output = vm.command("ps")
-    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts"):
+    for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
     clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
@@ -959,7 +963,7 @@ def services_suite(vm):
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
     tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
-    assert f"TASKS={tasks}/20" in free, (tasks, free)
+    assert f"TASKS={tasks}/24" in free, (tasks, free)
     arena, used, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=\d+ LARGEST=(\d+)", free).groups())
     assert arena == 64 << 20 and 0 < used < arena and 0 < largest <= arena - used, free
     cpus = vm.command("cpus")
@@ -973,6 +977,12 @@ def services_suite(vm):
     require(vm.command("devices"), "00:01.1 010180 IDE controller")
     endpoints = vm.command("endpoints")
     assert len(re.findall(r"^EP=\d+ CREATOR=1 SERVER=\d+", endpoints, re.M)) >= 6, endpoints
+    # sysmon (idl/sysinfo.wit) through the shell's client: uptime, load averages, current CPU load and task count.
+    time.sleep(1.2)
+    uptime = vm.command("uptime")
+    match = re.search(r"UP \d+:\d\d:\d\d LOAD \d+\.\d\d \d+\.\d\d \d+\.\d\d CPU (\d+)% TASKS (\d+)", uptime)
+    assert match and int(match[2]) == tasks and 0 <= int(match[1]) <= 100, (uptime, tasks)
+    require(vm.service_logs("sysmon", "[SYSMON] READY"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
     # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
     import datetime
     today = datetime.date.today()

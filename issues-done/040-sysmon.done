@@ -1,0 +1,25 @@
+# 040 — `sysmon` service — done
+
+**Type:** feature · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** 038, 039 · **Roadmap:** track G, tools plan F9 · **Constitution:** MC-5.5, MC-10.2
+
+## Problem
+
+Tools should not hold the OBSERVE privilege themselves, and graphs need history from before the tool was opened.
+
+## Plan
+
+- Boot service `sysmon` with OBSERVE from `init`, serving `idl/sysinfo.wit`: snapshots of every `STAT` class into the client's buffer; history of 300 samples every 100 ms and 600 every second (per-CPU busy, interrupts, syscalls, IPC, context switches, kernel arena use, task count); load averages 1/5/15 min.
+- Preallocated buffers, fixed sampling period; a client may make at most one request per 50 ms (rate limit, MC-10.2).
+- The shell gets a client endpoint and passes it to tools at launch (042).
+
+## Acceptance criteria
+
+- `sysmon` runs in all suites; `top`/`load` read history; a flood of requests is throttled.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F9.
+
+## Resolution
+
+New boot service `sysmon` (`sysmon/src/main.rs`): `init` gives it its endpoint and the observe privilege (nobody else gets it) and gives the shell a client endpoint in slot 10 (`SLOT_SYSINFO`; fixed slots now end at 11, `SLOT_DYNAMIC` is 12). It serves `idl/sysinfo.wit` 1.0: tasks, CPUs, memory, the physical map, the address space and capabilities of a task, endpoints, IRQ lines, devices (the kernel's `STAT` records as typed lists), a load history and load averages. Sampling runs every 100 ms into a ring of 300 samples (busy per mille per CPU, interrupts, syscalls, IPC messages, switches, arena use, tasks, runnable tasks); every tenth sample makes a one-second sample in a ring of 600 and updates fixed-point load averages over 1, 5 and 15 minutes. The rings and replies live on the program heap (`mind::alloc`). Each client PID has a token bucket (`sysmon/src/limit.rs`: 20 requests at once, 40 per second); a request over the rate gets the `busy` error (MC-10.2). The kernel's task table grew to 24 (`init`'s root quota 23) for the new service and the ones to come. The shell's `UPTIME` command is the console form: uptime, load averages, CPU load and task count. Tests: `tests/sysmon_host.rs` (rate limit), QEMU `services` (format and task count of `UPTIME`, the ready line), `busy` (a fully loaded CPU shows up in the samples), the USB image smoke test. Profile `bootstrap.md` and `kernel-objects.md` updated.

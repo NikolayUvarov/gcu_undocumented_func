@@ -48,9 +48,10 @@ The kernel contains no list of services and no per-service capability table. It 
 | `loader` | service endpoint, RTC/VFS/audio/TTS client endpoints, spawn privilege | reads application ELF files from the disk and starts them with the standard client capabilities |
 | `audio_gw` | service endpoint, AC97 BARs, its IRQ, 200 KiB DMA | audio gateway: playback (PCM, tones) and microphone capture through AC97 DMA rings |
 | `tts` | service endpoint, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
-| `shell` | screen, init/loader and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
+| `sysmon` | service endpoint, observe privilege | system information (`idl/sysinfo.wit`): the kernel's `STAT` records, load samples every 100 ms (300 kept) and every second (600 kept), load averages; at most 20 requests at once and 40 per second per client |
+| `shell` | screen, init/loader/sysmon and other client endpoints, process control, input, COM1 ports | the `MIND>` command shell |
 
-In the default QEMU setup (IDE disk, no xHCI/AHCI) ten services run and applications start at PID 11. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
+In the default QEMU setup (IDE disk, no xHCI/AHCI) eleven services run and applications start at PID 12. The kernel has room for 24 tasks. Tasks and endpoints are charged to quotas delegated at spawn: `init` holds the root quota and gives `loader` eight application tasks (the application limit) and 32 endpoints; each application may create four endpoints.
 
 The shell runs in ring 3. It reads the UART itself, forwards bytes to the focused program through the input privilege, and prints that program's console output to COM1 with a `[PID n]` prefix. Focus is a kernel mechanism set only by the holder of process control: the focused task's screen is shown and receives keyboard input; when it exits, or on Ctrl+Z (an input event flagged as attention), focus returns to the shell and the shell gets a notice. The kernel writes to COM1 only its boot line, kernel exceptions and panics.
 
@@ -347,6 +348,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
 * `CPUS` — show online CPU/APIC IDs, per-CPU timer counters, busy and idle time (TSC), context switches and interrupts.
+* `UPTIME` — uptime, load averages over 1/5/15 minutes, current CPU load and task count, from `sysmon`.
 * `FREE` — kernel memory by use: arena used/free and the largest free block, task images, stacks, screens, private heaps, kernel pages, page tables, memory objects, DMA, mapped memory.
 * `PHYSMAP` — the physical memory map: UEFI ranges and the platform layout (kernel, arena, boot images, framebuffer, device BARs).
 * `PMAP <id>` — the address space of a task: code and data segments, stack with guard pages, screen, info page, mailbox, heap blocks and shared mappings with their rights.
@@ -507,7 +509,7 @@ This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for progr
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` is the first service on MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)); since v0.2 records, enums, strings, bytes, lists and `result<T, E>` travel in a memory buffer lent with the call. `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` and `sysmon` (`idl/sysinfo.wit`) are on MIND IDL; the other services still use the numeric conventions of `common/abi.rs` (roadmap C8).
 
 ### Runtime checks
 
@@ -522,6 +524,7 @@ rustc --edition=2021 --test tests/tui_host.rs -o /tmp/mind-core-tui-tests && /tm
 rustc --edition=2021 --test tests/viewer_host.rs -o /tmp/mind-core-viewer-tests && /tmp/mind-core-viewer-tests
 rustc --edition=2021 --test tests/idl_host.rs -o /tmp/mind-core-idl-tests && /tmp/mind-core-idl-tests   # generated bindings over a loopback
 rustc --edition=2021 --test tests/rtc_host.rs -o /tmp/mind-core-rtc-tests && /tmp/mind-core-rtc-tests
+rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests && /tmp/mind-core-sysmon-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```

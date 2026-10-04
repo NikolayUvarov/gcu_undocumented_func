@@ -191,7 +191,7 @@ def parse(text, source="<idl>"):
             if line == "}":
                 kind, bname, bdoc, body = block
                 items = [p for p in split_top(" ".join(body)) if p]
-                if bname in ("request", "reject", "status", "buffer", "result"):
+                if bname in ("request", "reject", "status", "buffer", "result", "ipc", "wire"):
                     raise IdlError(f"{where}: '{bname}' is reserved in the generated bindings")
                 if kind == "enum":
                     if not 1 <= len(items) <= 255:
@@ -395,7 +395,7 @@ def generate(interface, source):
         w(f"//! {line}" if line else "//!")
     w("#![allow(clippy::all, unused_imports, unused_variables, unused_mut, dead_code)]")
     w("use crate::abi::*;")
-    w("use crate::ipc::{Endpoint, Received};")
+    w("use crate::ipc::{self, Received};")
     w("use crate::sys::{Error as SysError, Result};")
     w("use super::wire::{self, Reject};")
     w("")
@@ -443,7 +443,7 @@ def generate(interface, source):
             w(f"/// {line}")
         buffered = f.handle is not None and (f.bulk or (f.ok and not f.ok.scalar))
         life = "<'b>" if buffered else ""
-        args = ["endpoint: Endpoint"]
+        args = ["endpoint: ipc::Endpoint"]
         for p in f.params:
             if p.handle:
                 args.append(f"{p.name}: wire::Buffer<'b>" if buffered else f"{p.name}: usize")

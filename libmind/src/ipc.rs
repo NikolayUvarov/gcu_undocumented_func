@@ -36,6 +36,8 @@ impl Endpoint {
     pub const TTS: Self = Self(SLOT_TTS);
     pub const INIT: Self = Self(SLOT_INIT);
     pub const SERVICE: Self = Self(SLOT_SERVICE);
+    /// sysmon client (idl/sysinfo.wit), when the launcher granted it.
+    pub const SYSINFO: Self = Self(SLOT_SYSINFO);
 
     /// New endpoint with all rights.
     pub fn create() -> Result<Self> { check(call(SYSCALL_ENDPOINT_CREATE, 0, 0)).map(Self) }
