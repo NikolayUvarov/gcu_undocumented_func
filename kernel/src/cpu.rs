@@ -7,6 +7,8 @@ pub static COUNT: AtomicUsize = AtomicUsize::new(1);
 static LAPIC: AtomicUsize = AtomicUsize::new(0xfee00000);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
 pub static TICKS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
+// Hardware interrupts and IPIs taken by each CPU (observation; system calls are not counted).
+pub static INTERRUPTS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
 
 #[repr(C, align(16))]
 struct Cpu {

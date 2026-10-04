@@ -129,6 +129,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_TASK_KILL, 1, 0, abi::ERR_RIGHTS), // process control is the shell's
                     (abi::SYSCALL_FOCUS, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_STAT, abi::STAT_TASKS, 0, abi::ERR_RIGHTS), // observation needs the observe privilege (MC-10.2)
+                    (abi::SYSCALL_TASK_LIST, 0, 0, abi::ERR_RIGHTS),
                 ];
                 for (number, a, b, expected) in checks {
                     if call(mb, number, a, b) != expected {

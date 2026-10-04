@@ -9,6 +9,8 @@ use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, MemoryType};
 #[path = "../../common/abi.rs"] mod abi;
 use abi::{BootInfo, ProgramImage}; mod elf_reloc;
+// BootInfo page, firmware memory map page, then the kernel's initial stack.
+const HANDOFF_PAGES: usize = 66;
 
 fn keep_program(services: &uefi::table::boot::BootServices, data: &[u8]) -> ProgramImage { let address = services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, data.len().div_ceil(4096)).unwrap(); unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), address as *mut u8, data.len()); } ProgramImage { data: address as *const u8, len: data.len() } }
 #[repr(C)] struct Elf64_Ehdr { e_ident: [u8; 16], e_type: u16, e_machine: u16, e_version: u32, e_entry: u64, e_phoff: u64, e_shoff: u64, e_flags: u32, e_ehsize: u16, e_phentsize: u16, e_phnum: u16, e_shentsize: u16, e_shnum: u16, e_shstrndx: u16 }
@@ -29,10 +31,24 @@ fn main(_image: Handle, system_table: SystemTable<Boot>) -> Status {
         let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES]; for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) { *image = load_file(name); }
         
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize; let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24; if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() { let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap(); for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } } }
-        let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap(); let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap(); let mode = gop.current_mode_info(); let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>(); let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, kernel_entry, handoff + 65 * 4096)
+        let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap(); let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap(); let mode = gop.current_mode_info(); let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>(); let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, HANDOFF_PAGES).unwrap() as usize;
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map: (handoff + 4096) as *const abi::MemoryRange, memory_map_len: 0 }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, kernel_entry, handoff + HANDOFF_PAGES * 4096)
     };
-    let (_system_table, _memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA); unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
+    let (_system_table, mut memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
+    // The firmware memory map for the kernel's observation interface (STAT_PHYSMAP): page 1 of the handoff area,
+    // adjacent ranges of the same type merged.
+    memory_map.sort();
+    let ranges = unsafe { core::slice::from_raw_parts_mut((boot_info + 4096) as *mut abi::MemoryRange, abi::MEMORY_MAP_MAX) };
+    let mut count = 0usize;
+    for entry in memory_map.entries() {
+        let kind = entry.ty.0;
+        if count > 0 && ranges[count - 1].kind == kind && ranges[count - 1].start + ranges[count - 1].pages * 4096 == entry.phys_start { ranges[count - 1].pages += entry.page_count; continue; }
+        if count == abi::MEMORY_MAP_MAX { break; }
+        ranges[count] = abi::MemoryRange { start: entry.phys_start, pages: entry.page_count, kind, reserved: 0 };
+        count += 1;
+    }
+    unsafe { (*(boot_info as *mut BootInfo)).memory_map_len = count; }
+    unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
 }
 #[panic_handler] fn panic(_info: &PanicInfo) -> ! { loop {} }
 #[no_mangle] pub extern "C" fn wcslen(mut s: *const u16) -> usize { let mut len = 0; unsafe { while *s != 0 { len += 1; s = s.add(1); } } len }

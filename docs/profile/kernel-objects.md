@@ -18,11 +18,15 @@
 
 ## Capability kinds
 
-Endpoint (read/write/grant/keep rights; keep allows minting a child with the read right), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control and platform. Handles carry a generation for kernel-allocated slots (a generation wraps after 16 777 215 reuses of one slot). Every capability has an identity and a parent: kernel-created capabilities are roots, copies and `CAP_MINT` children are descendants of their source, a move keeps the identity. `CAP_MINT` narrows endpoint and memory rights (read, write, grant), port ranges and page-aligned memory, DMA and MMIO ranges; other kinds are copied unchanged, reply capabilities cannot be minted. `CAP_REVOKE` removes all descendants from every task and from blocked sends and unmaps every mapping made from them. If an affected task is running on another CPU, its page entries are cleared, that CPU gets a wake IPI and the revoking task waits (`FLUSH_WAIT`) until it has reloaded CR3; the emptied page tables are reclaimed when the task exits.
+Endpoint (read/write/grant/keep rights; keep allows minting a child with the read right), memory, DMA, MMIO, I/O port range, IRQ line, one-time reply, and the privileges input, display, spawn, process control, observe (read-only statistics, `STAT`) and platform. Handles carry a generation for kernel-allocated slots (a generation wraps after 16 777 215 reuses of one slot). Every capability has an identity and a parent: kernel-created capabilities are roots, copies and `CAP_MINT` children are descendants of their source, a move keeps the identity. `CAP_MINT` narrows endpoint and memory rights (read, write, grant), port ranges and page-aligned memory, DMA and MMIO ranges; other kinds are copied unchanged, reply capabilities cannot be minted. `CAP_REVOKE` removes all descendants from every task and from blocked sends and unmaps every mapping made from them. If an affected task is running on another CPU, its page entries are cleared, that CPU gets a wake IPI and the revoking task waits (`FLUSH_WAIT`) until it has reloaded CR3; the emptied page tables are reclaimed when the task exits.
 
 ## Quotas
 
 Every task has a task quota and an endpoint quota, delegated by its spawner at `SPAWN` and taken from the spawner's own (MC-3.13). The kernel gives `init` the root quota: 19 tasks and 63 endpoints (its own endpoint included). `init` gives `loader` 8 tasks (`MAX_APPS`, the application limit is init's policy) and 32 endpoints; `loader` gives every application 0 tasks and 4 endpoints; other services get none. A spawn or `ENDPOINT_CREATE` beyond the quota fails with `ERR_LIMIT`. A child's reservation returns to its spawner when the child exits.
+
+## Observation
+
+`STAT` (system call 48) copies versioned fixed-size records into the caller's buffer under the scheduler lock; the work is bounded by the table sizes (20 tasks, 63 endpoints, 31 slots, 15 IRQ lines, the PCI functions, at most 170 firmware ranges). The kernel accounts for it: time on each CPU is measured with the TSC at every switch (busy, idle, per-task run time), interrupts per CPU and per line, messages, `ERR_BUSY` rejections and timeouts per endpoint. The bootloader hands over the UEFI memory map in the second handoff page (`BootInfo.memory_map`); tasks get a null pointer.
 
 ## Gaps
 

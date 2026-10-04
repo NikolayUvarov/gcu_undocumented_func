@@ -10,7 +10,10 @@ pub const MAX_APPS: usize = 8; // init's policy: live applications loader may st
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
+// Firmware memory map entry handed over by the bootloader (UEFI memory type, physical start, 4 KiB pages).
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct MemoryRange { pub start: u64, pub pages: u64, pub kind: u32, pub reserved: u32 }
+pub const MEMORY_MAP_MAX: usize = 170; // one page of entries after the BootInfo page
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const MemoryRange, pub memory_map_len: usize, }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -68,6 +71,11 @@ pub const SYSCALL_CAP_REVOKE: usize = 46;
 // The block leaves the caller's address space; the object lives while a capability or mapping refers to it. Copying a
 // writable memory capability needs CAP_GRANT, so an object can only be moved (MOVE: one owner) or minted read-only.
 pub const SYSCALL_MEM_DETACH: usize = 47;
+// STAT (observation, MC-10.2): arg1 = class (STAT_*), arg2 = argument (a PID for STAT_VMAP and STAT_CAPS), msg[0] = buffer
+// address, msg[1] = capacity in bytes -> number of records written after a StatHeader. Needs the observe or the
+// process-control privilege. Records describe kernel objects; they never contain memory contents or physical addresses
+// of task memory, and nothing in them can be used as an authority.
+pub const SYSCALL_STAT: usize = 48;
 pub const DETACHED_MAX_BYTES: usize = 16 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 
 // CAP_INFO reply: result=capability kind, arg2=port base or memory rights, msg[2]=size/port count/endpoint rights.
@@ -87,6 +95,7 @@ pub const CAP_KIND_SPAWN: usize = 9;
 pub const CAP_KIND_REPLY: usize = 10;
 pub const CAP_KIND_PLATFORM: usize = 11;
 pub const CAP_KIND_CONTROL: usize = 12;
+pub const CAP_KIND_OBSERVE: usize = 13; // read-only statistics (STAT, TASK_LIST, CPU_INFO, KERNEL_HEAP, FAULTS)
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -213,13 +222,75 @@ pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port rang
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
-pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN or _CONTROL
+pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _OBSERVE
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match; result = device index.
 
 // TASK_LIST fills an array of TaskInfo (arg1 = address, arg2 = capacity) and returns the count.
 #[derive(Clone, Copy)] #[repr(C)] pub struct TaskInfo { pub pid: u64, pub name: [u8; NAME_MAX], pub state: [u8; 8], pub cpu: u32, pub focus: u8, pub service: u8, pub screen: u8, pub reserved: u8, pub runs: u64, pub ticks: u64, pub calls: u64 }
 // FAULTS fills an array of FaultInfo (arg1 = address, arg2 = capacity) and returns the count.
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct FaultInfo { pub pid: u64, pub cpu: u64, pub vector: u64, pub error: u64, pub rip: u64, pub address: u64 }
+// STAT classes and records (version STAT_VERSION; a reader checks `record_size`).
+pub const STAT_VERSION: u32 = 1;
+pub const STAT_TASKS: usize = 1; // TaskStat per task
+pub const STAT_CPUS: usize = 2; // CpuStat per CPU
+pub const STAT_MEMORY: usize = 3; // one MemoryStat; argument 1 also finds the largest free block (by trial allocations)
+pub const STAT_PHYSMAP: usize = 4; // PhysRange: the firmware memory map, then the platform layout (kind >= PHYS_LAYOUT)
+pub const STAT_VMAP: usize = 5; // VmRegion per region of the address space of task arg2
+pub const STAT_CAPS: usize = 6; // CapStat per occupied slot of task arg2
+pub const STAT_ENDPOINTS: usize = 7; // EndpointStat per live endpoint
+pub const STAT_IRQS: usize = 8; // IrqStat per line 1..15
+pub const STAT_DEVICES: usize = 9; // DeviceStat per PCI function
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatHeader { pub version: u32, pub record_size: u32, pub count: u32, pub total: u32 }
+// Task states in TaskStat.state; `wait` names what the task waits for (endpoint index, PID, IRQ line, deadline ms).
+pub const TASK_READY: u8 = 1; pub const TASK_RUNNING: u8 = 2; pub const TASK_SLEEPING: u8 = 3; pub const TASK_SEND: u8 = 4;
+pub const TASK_RECV: u8 = 5; pub const TASK_REPLY: u8 = 6; pub const TASK_IRQ: u8 = 7; pub const TASK_FLUSH: u8 = 8; pub const TASK_EXITED: u8 = 9;
+pub const TASK_FLAG_SERVICE: u8 = 1; pub const TASK_FLAG_SCREEN: u8 = 2; pub const TASK_FLAG_FOCUS: u8 = 4;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct TaskStat {
+    pub pid: u64, pub parent: u64, pub run_ns: u64, pub runs: u64, pub ticks: u64, pub calls: u64, pub sent: u64, pub received: u64,
+    pub started_ns: u64, pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64, pub heap_bytes: u64, pub shared_bytes: u64,
+    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables
+    pub wait: u64, pub heap_blocks: u32, pub caps: u32, pub quota_tasks: u32, pub used_tasks: u32, pub quota_endpoints: u32, pub used_endpoints: u32,
+    pub name: [u8; NAME_MAX], pub state: u8, pub cpu: u8, pub flags: u8, pub reserved: [u8; 5],
+}
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct CpuStat { pub busy_ns: u64, pub idle_ns: u64, pub ticks: u64, pub switches: u64, pub interrupts: u64, pub current: u64, pub apic: u32, pub online: u32 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct MemoryStat {
+    pub arena_bytes: u64, pub arena_used: u64, pub arena_free: u64, pub largest_free: u64,
+    pub task_images: u64, pub task_stacks: u64, pub task_screens: u64, pub task_heaps: u64, pub task_kernel: u64, pub page_tables: u64,
+    pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub shared_mapped: u64, pub kernel_other: u64,
+    pub tasks: u32, pub tasks_limit: u32, pub endpoints: u32, pub endpoints_limit: u32,
+}
+// PhysRange.kind: 0..15 are UEFI memory types (7 = conventional memory); from PHYS_LAYOUT on, the platform layout.
+pub const PHYS_LAYOUT: u32 = 16;
+pub const PHYS_KERNEL: u32 = 16; pub const PHYS_HEAP: u32 = 17; pub const PHYS_BOOT_IMAGE: u32 = 18; pub const PHYS_FRAMEBUFFER: u32 = 19;
+pub const PHYS_TRAMPOLINE: u32 = 20; pub const PHYS_DEVICE: u32 = 21; pub const PHYS_DMA: u32 = 22;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct PhysRange { pub start: u64, pub bytes: u64, pub kind: u32, pub detail: u32 } // detail: boot image or device index
+// VmRegion.kind and flags (R/W/X; SHARED: memory of another owner, DEVICE: registers).
+pub const VM_CODE: u32 = 1; pub const VM_DATA: u32 = 2; pub const VM_STACK: u32 = 3; pub const VM_GUARD: u32 = 4; pub const VM_SCREEN: u32 = 5;
+pub const VM_INFO: u32 = 6; pub const VM_MAILBOX: u32 = 7; pub const VM_EXIT: u32 = 8; pub const VM_HEAP: u32 = 9; pub const VM_SHARED: u32 = 10; pub const VM_DEVICE: u32 = 11;
+pub const VM_READ: u32 = 1; pub const VM_WRITE: u32 = 2; pub const VM_EXEC: u32 = 4;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct VmRegion { pub start: u64, pub bytes: u64, pub kind: u32, pub flags: u32 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct CapStat {
+    pub node: u64, pub parent: u64, pub size: u64, // memory/DMA/MMIO bytes or port count
+    pub base: u64, // port base or IRQ line; never a physical address
+    pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub endpoint: u32, pub reserved: u32,
+}
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct EndpointStat {
+    pub messages: u64, pub busy: u64, pub timeouts: u64,
+    pub index: u32, // observation label: no system call accepts it
+    pub creator: u32, pub server: u32, pub receivers: u32, pub holders: u32, pub waiting: u32, pub receiving: u32, pub irq: u32,
+}
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct IrqStat { pub count: u64, pub line: u32, pub holder: u32, pub endpoint: u32, pub masked: u32 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)]
+pub struct DeviceStat { pub bar_bytes: [u64; 6], pub class: u32, pub irq: u32, pub holder: u32, pub index: u32, pub location: u32, pub io_bars: u32 }
+
 // FOCUS: arg1 = PID (0 = the caller), arg2 = 1 to keep the task's buffered console output; result = PID.
 // The caller becomes the focus owner: focus returns to it when the focused task exits or on an attention key.
 // NOTICE: 0 if none, else PID | NOTICE_EXITED (the focused task exited) or PID (sent to the background).

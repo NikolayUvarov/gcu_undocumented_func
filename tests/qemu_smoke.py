@@ -24,7 +24,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 SERVICES = ("init", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
-PID_IN = re.compile(r"\b(fg|kill|logs)(\s+)(\d{1,18})\b", re.I)
+PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps)(\s+)(\d{1,18})\b", re.I)
 PID_OUT = re.compile(r"(PID[= ])(\d+)")
 
 
@@ -555,6 +555,12 @@ def busy_suite(vm):
     assert int(second[1][-2]) > int(first[1][-2]), (first, second)
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
     assert int(second[2][-1]) > int(first[2][-1]), (first, second)
+    # TSC accounting (STAT): a task that never yields gets most of its CPU.
+    run = lambda: int(re.search(r"RUN_MS=(\d+)", vm.command("stat 1"))[1])
+    before, started = run(), time.monotonic()
+    time.sleep(1)
+    after, elapsed = run(), time.monotonic() - started
+    assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
     require(vm.command("logs 1"), "BUSY FIXTURE")
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
@@ -950,6 +956,23 @@ def services_suite(vm):
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
+    # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
+    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    free = vm.command("free")
+    assert f"TASKS={tasks}/20" in free, (tasks, free)
+    arena, used, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=\d+ LARGEST=(\d+)", free).groups())
+    assert arena == 64 << 20 and 0 < used < arena and 0 < largest <= arena - used, free
+    cpus = vm.command("cpus")
+    assert len(re.findall(r"BUSY_MS=\d+ IDLE_MS=\d+ SWITCHES=\d+", cpus)) == vm.cpus, cpus
+    physmap = vm.command("physmap")
+    for kind in ("free RAM", "kernel arena", "kernel", "framebuffer", "boot image"):
+        require(physmap, kind)
+    free_ram = int(re.search(r"FREE_RAM=(\d+)K", physmap)[1])
+    assert 128 * 1024 < free_ram < 512 * 1024, free_ram  # the VM has 512 MiB
+    require(vm.command("irqs"), f"IRQ=1 COUNT=")
+    require(vm.command("devices"), "00:01.1 010180 IDE controller")
+    endpoints = vm.command("endpoints")
+    assert len(re.findall(r"^EP=\d+ CREATOR=1 SERVER=\d+", endpoints, re.M)) >= 6, endpoints
     # Calendar date from the rtc service (idl/rtc.wit 1.1): QEMU's RTC follows the host's local time here.
     import datetime
     today = datetime.date.today()
@@ -989,6 +1012,23 @@ def services_suite(vm):
         require(listing, f"  {name} ")
     assert "kernel " not in listing
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
+    # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
+    pmap = vm.command("pmap 4")
+    require(pmap, "0x0000008000000000 ")
+    assert re.search(r"0x0000008000000000 +\d+ r-x code", pmap), pmap
+    for line in ("0x0000008001000000      4096 --- guard", "0x0000008001001000     65536 rw- stack", "0x0000008001011000      4096 --- guard",
+                 "0x0000008004000000      4096 r-- info", "0x0000008004001000      4096 rw- mailbox", "0x0000008005000000      4096 r-x exit"):
+        require(pmap, line)
+    assert re.search(r"0x0000008002000000 +\d+ rw- screen", pmap), pmap
+    details = vm.command("stat 4")
+    require(details, "NAME=hello")
+    require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
+    require(details, "CAPS=5/31")
+    # The standard client endpoints in slots 2..6, write and grant only; no privilege.
+    caps = vm.command("caps 4")
+    for slot in (2, 3, 4, 5, 6):
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=\d+ RIGHTS=-wg-", caps), (slot, caps)
+    assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)
     require(vm.command("logs 4"), "[CLOCK] ")

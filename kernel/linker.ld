@@ -5,5 +5,6 @@ SECTIONS {
     .rodata : { *(.rodata .rodata.*) }
     .data : { *(.data .data.*) }
     .bss : { *(.bss .bss.*) }
+    __kernel_end = .;
     /DISCARD/ : { *(.eh_frame) }
 }

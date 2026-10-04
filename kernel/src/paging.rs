@@ -185,6 +185,10 @@ impl Space {
     pub fn root(&self) -> usize {
         self.tables[0].as_ref().unwrap().ptr() as usize
     }
+    // Page tables this space owns (observation).
+    pub fn table_count(&self) -> usize {
+        self.tables.iter().flatten().count()
+    }
 
     pub fn map(
         &mut self,

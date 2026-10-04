@@ -47,7 +47,7 @@ Status: **met** (implemented and tested within this profile), **partial**, **not
 | MC-6.4–6.9 supervision | not met | No supervisor, restart budget or instance generation; `init` restarts a service only on request (roadmap C6). |
 | Articles 7, 8 | not claimed | Single node; no safety plane. |
 | Article 9 boot and update | not met — declared | Boot images are not signed or measured; the bootloader loads whatever is on the boot volume. |
-| MC-10.2 observability under authority | met | Task logs, console output, task list, faults and CPU data are readable only with the process-control privilege (the shell). |
+| MC-10.2 observability under authority | met | Task logs and console output are readable only with the process-control privilege (the shell). Statistics — the task list, faults, CPU data and the `STAT` records (tasks, CPUs, kernel memory, firmware map and platform layout, address-space layout, capabilities, endpoints, IRQ lines, devices) — need the observe or the process-control privilege. `STAT` never returns memory contents, physical addresses of task memory or anything usable as an authority (endpoint indexes are labels no call accepts); its copy is bounded by the table sizes. |
 | MC-10.5 side channels | not claimed | No mitigation is claimed. |
 | MC-11.1 explicit ABI | partial | The ABI is a `repr(C)` mailbox and constants in `common/abi.rs`; there is no versioning. |
 | MC-11.3, 11.11 external formats in adapters | partial | FAT and USB/SCSI parsing run in ring 3 services with only their device capabilities; ELF parsing of applications runs in the kernel. |

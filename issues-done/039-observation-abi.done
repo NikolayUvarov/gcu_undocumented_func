@@ -1,0 +1,29 @@
+# 039 — Observation ABI: OBSERVE privilege, `STAT`, firmware memory map — done
+
+**Type:** architecture · **Priority:** P0 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, tools plan F5 · **Constitution:** MC-1.1, MC-3.3, MC-5.4, MC-10.2
+
+## Problem
+
+All observation needs the process-control privilege (it also allows kill, focus, halt and reading logs) and gives too little: no per-task memory, no idle time, no IRQ/IPC counters, no address-space map, no firmware memory map (the bootloader discards it).
+
+## Plan
+
+- Privilege `CAP_KIND_OBSERVE`: `TASK_LIST`, `CPU_INFO`, `KERNEL_HEAP`, `FAULTS` and `STAT` accept OBSERVE or CONTROL; kill, focus, halt, logs and console stay CONTROL.
+- `STAT(class, buffer, capacity, argument)` → versioned fixed-size records after a `StatHeader`; copies are bounded by the table sizes. Classes `TASKS`, `CPUS`, `MEMORY`, `PHYSMAP`, `VMAP(pid)`, `CAPS(pid)`, `ENDPOINTS`, `IRQS`, `DEVICES` (fields in the tools plan, F5).
+- Accounting: TSC at every context switch (run ns per task, busy ns per CPU), counters per IRQ line and per endpoint, kernel-arena bytes by category.
+- Never exported: memory contents, physical addresses of task memory, anything usable as authority.
+- Bootloader: the UEFI memory map returned by `exit_boot_services` is copied into the handoff pages; `BootInfo` gets `memory_map` and `memory_map_len`.
+
+## Acceptance criteria
+
+- The isolation fixture shows that OBSERVE cannot kill, focus, halt or read logs and that STAT rejects bad buffers.
+- QEMU checks in the `tools` suite: task count in `STAT` = `ps`; the address-space map of a test application matches its known layout; busy time grows on a CPU running `busy_app`.
+- Profile updated: kernel-objects.md, conformance row MC-10.2.
+
+## Related
+
+[docs/tools](../docs/tools/README.md) F5.
+
+## Resolution
+
+Kernel (`kernel/src/scheduler.rs`): a new privilege `CAP_KIND_OBSERVE` (minted by `init` through `PLATFORM_PRIVILEGE`, reported by `CAP_INFO`); `TASK_LIST`, `CPU_INFO`, `KERNEL_HEAP` and `FAULTS` accept it besides process control, while kill, focus, halt, logs and console stay with process control. System call 48 `STAT` writes a `StatHeader` and versioned records of one class into the caller's buffer, bounded by the table sizes: `TaskStat` (state and what the task waits for, spawner, run time, syscalls, IPC sent/received, start time, image/stack/screen/heap/mapped/kernel bytes, blocks, capabilities, quotas), `CpuStat` (busy and idle time, ticks, switches, interrupts, current PID), `MemoryStat` (arena use, the largest free block found by trial allocations when asked, bytes by use, limits), `PhysRange` (the UEFI memory map, then the platform layout: kernel image, arena, boot images, framebuffer, AP trampoline, device BARs), `VmRegion` (segments, stack and guard pages, screen, info page, mailbox, exit page, heap blocks and shared mappings with guards), `CapStat` (slot, generation, kind, rights, size or port range, derivation node and parent; never a physical address), `EndpointStat`, `IrqStat`, `DeviceStat`. Accounting added: the TSC at every switch gives per-task run time and per-CPU busy/idle time; interrupts per CPU and per IRQ line; messages, `ERR_BUSY` rejections and timeouts per endpoint. The bootloader copies the UEFI memory map (adjacent ranges merged) into the second handoff page and passes it in `BootInfo` (`MemoryRange`, up to 170 entries); tasks get a null pointer. `libmind/src/stat.rs` reads the records and names their kinds. Shell commands `FREE`, `PHYSMAP`, `PMAP <id>`, `STAT <id>`, `CAPS <id>`, `ENDPOINTS`, `IRQS`, `DEVICES`, and `CPUS` with busy/idle time. Tests: the isolation fixture shows that an application without the privilege gets `ERR_RIGHTS` from `STAT` and `TASK_LIST`; the `services` suite checks the task count against `ps`, the arena numbers, all CPUs, the physical map (free RAM within the VM's 512 MiB, kernel, arena, framebuffer, boot images), the IRQ and device lists, the endpoints created by `init`, the exact address-space layout of a known program, its details and its five client capabilities without privileges; the `busy` suite checks that a task that never yields gets at least 30 % of wall time in `STAT` run time. Profile: MC-10.2 row and kernel-objects.md updated. All QEMU suites pass.

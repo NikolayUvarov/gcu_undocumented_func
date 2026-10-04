@@ -9,6 +9,7 @@ struct Block {
     size: usize,
     node: u64, // derivation node of the capability a foreign mapping was made from
     writable: bool,
+    device: bool,
 }
 
 pub struct Heap {
@@ -20,6 +21,15 @@ pub struct Heap {
 impl Heap {
     pub fn new() -> Self {
         Self { blocks: core::array::from_fn(|_| None), bytes: 0, shared: 0 }
+    }
+
+    // Observation: private bytes, mapped foreign bytes, live blocks, and every block as (address, size, private, writable,
+    // device) without physical addresses.
+    pub fn bytes(&self) -> usize { self.bytes }
+    pub fn shared(&self) -> usize { self.shared }
+    pub fn blocks(&self) -> usize { self.blocks.iter().flatten().count() }
+    pub fn regions(&self) -> impl Iterator<Item = (usize, usize, bool, bool, bool)> + '_ {
+        self.blocks.iter().flatten().map(|b| (b.address, b.size, b.memory.is_some(), b.writable, b.device))
     }
 
     fn find_hole(&self, size: usize) -> Option<usize> {
@@ -42,7 +52,7 @@ impl Heap {
         let address = self.find_hole(size)?;
         let memory = Region::new(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
-        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true });
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false });
         self.bytes += size;
         Some(address)
     }
@@ -55,7 +65,7 @@ impl Heap {
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, writable, false).ok()?; }
-        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device });
+        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device, device });
         self.shared += size;
         Some(address)
     }

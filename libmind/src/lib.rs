@@ -23,6 +23,7 @@ pub mod mem;
 pub mod platform;
 pub mod process;
 pub mod rtc;
+pub mod stat;
 pub mod sys;
 pub mod time;
 pub mod tts;

@@ -125,6 +125,9 @@ pub unsafe fn init() {
 }
 
 static PIC_MASK: AtomicU16 = AtomicU16::new(0xFFF8);
+// Interrupts per PIC line (observation, STAT_IRQS).
+pub static IRQ_COUNT: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+pub fn irq_masked(irq: u8) -> bool { PIC_MASK.load(Ordering::Relaxed) & (1 << irq) != 0 }
 
 // Masks or unmasks a PIC line; called with the scheduler lock held.
 pub unsafe fn set_irq_masked(irq: u8, masked: bool) {

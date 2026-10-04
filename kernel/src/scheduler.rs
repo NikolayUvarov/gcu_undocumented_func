@@ -28,7 +28,7 @@ struct Node { id: u64, parent: u64 } // parent 0: root
 struct Pending { cap: Capability, node: Node, moved_from: Option<usize> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64), Platform, Control }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64), Platform, Control, Observe }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,7 @@ struct Task {
     reply_to: Option<(usize, u64)>, // slot and PID of the client awaiting a reply
     deadline: u64, // uptime ms at which a blocked IPC fails with ERR_TIMEOUT (0: none)
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
+    run_ns: u64, sent: u64, received: u64, started_ns: u64, segments: [(usize, usize, u32); 4], // observation
 }
 struct Scheduler {
     boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
@@ -71,6 +72,9 @@ struct Scheduler {
     dma: Vec<Region>, // DMA regions handed out to init; they outlive driver restarts
     composited: usize, // screen the compositor already holds a capability for
     next_node: u64, // capability identities are never reused
+    // Observation (STAT): time on and off each CPU since boot, per-endpoint traffic, the firmware memory map.
+    busy_ns: [u64; cpu::MAX], idle_ns: [u64; cpu::MAX], switches: [u64; cpu::MAX], last_switch: [u64; cpu::MAX],
+    ep_messages: [u64; ENDPOINTS], ep_busy: [u64; ENDPOINTS], ep_timeouts: [u64; ENDPOINTS], physmap: Vec<MemoryRange>,
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -87,6 +91,20 @@ fn spawn_error(error: &'static str) -> usize {
     match error { "TASK LIMIT REACHED" | "NO FREE TASK SLOT" => ERR_LIMIT, e if e.contains("MEMORY") || e.contains("PAGE TABLE") => ERR_NO_MEMORY, _ => ERR_INVALID }
 }
 
+// Largest block the kernel arena could still allocate (page-aligned), found by trying: the allocator has no list of its
+// free blocks to read. Called with local interrupts off (scheduler lock).
+fn largest_free(free: usize) -> usize {
+    let (mut low, mut high) = (0usize, free.next_multiple_of(4096) + 4096);
+    while high - low > 4096 {
+        let mid = (low + (high - low) / 2) & !4095;
+        if mid <= low { break; }
+        let layout = core::alloc::Layout::from_size_align(mid, 4096).unwrap();
+        let mut heap = crate::ALLOCATOR.lock();
+        match heap.allocate_first_fit(layout) { Ok(block) => { unsafe { heap.deallocate(block, layout); } low = mid; } Err(()) => high = mid }
+    }
+    low
+}
+
 // Copies bytes into a task's writable memory; false if any page is not writable.
 fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
     if bytes.is_empty() { return true; }
@@ -99,7 +117,9 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], orphans: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; 16], irq_pending: [false; 16], send_seq: 0, flush: [false; cpu::MAX], orphans: Vec::new(), devices, dma: Vec::new(), composited: 0, next_node: 1,
+        busy_ns: [0; cpu::MAX], idle_ns: [0; cpu::MAX], switches: [0; cpu::MAX], last_switch: [0; cpu::MAX], ep_messages: [0; ENDPOINTS], ep_busy: [0; ENDPOINTS], ep_timeouts: [0; ENDPOINTS],
+        physmap: if info.memory_map.is_null() { Vec::new() } else { core::slice::from_raw_parts(info.memory_map, info.memory_map_len.min(MEMORY_MAP_MAX)).to_vec() } }); }
     Ok(())
 }
 
@@ -112,8 +132,12 @@ impl Scheduler {
             for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; } }
             self.wake_idle(cpu);
         }
+        // Time since the last switch on this CPU belongs to whoever ran (MC-5.1 accounting, STAT).
+        let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(self.last_switch[cpu]); self.last_switch[cpu] = now;
+        if current == 0 { self.idle_ns[cpu] += elapsed; } else { self.busy_ns[cpu] += elapsed; if let Some(task) = self.tasks[current].as_mut() { task.run_ns += elapsed; } }
         if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); unsafe { context::save(sp, task.context.ptr() as usize); } }
         let next = task_state::next(&self.states(cpu), current); self.current[cpu] = next;
+        if next != current { self.switches[cpu] += 1; }
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI.
@@ -179,6 +203,8 @@ impl Scheduler {
         for slot in 1..SLOTS {
             let Some(task) = self.tasks[slot].as_mut() else { continue };
             if task.deadline == 0 || now < task.deadline || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            if let State::BlockedSend(ep) | State::BlockedRecv(ep) = task.state { self.ep_timeouts[ep] += 1; }
+            let task = self.tasks[slot].as_mut().unwrap();
             let pid = task.pid; task.state = State::Ready; task.pending_cap = None; task.deadline = 0; woken = true;
             unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), ERR_TIMEOUT); }
             // Withdraw every right to reply to this caller.
@@ -276,7 +302,7 @@ impl Scheduler {
                 let region = Region::new(bytes, 64 * 1024).map_err(|_| ERR_NO_MEMORY)?;
                 let cap = Capability::Dma(region.ptr() as usize, region.len()); self.dma.push(region); Ok(cap)
             }
-            PLATFORM_PRIVILEGE => match a { CAP_KIND_INPUT => Ok(Capability::Input), CAP_KIND_DISPLAY => Ok(Capability::Display), CAP_KIND_SPAWN => Ok(Capability::Spawn), CAP_KIND_CONTROL => Ok(Capability::Control), _ => Err(ERR_INVALID) },
+            PLATFORM_PRIVILEGE => match a { CAP_KIND_INPUT => Ok(Capability::Input), CAP_KIND_DISPLAY => Ok(Capability::Display), CAP_KIND_SPAWN => Ok(Capability::Spawn), CAP_KIND_CONTROL => Ok(Capability::Control), CAP_KIND_OBSERVE => Ok(Capability::Observe), _ => Err(ERR_INVALID) },
             _ => Err(ERR_INVALID),
         }
     }
@@ -293,7 +319,8 @@ impl Scheduler {
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::new(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if has_screen { Some(Region::new(frame_bytes(&self.boot), 4096)?) } else { None };
-        let mut info = self.boot; info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
+        let mut segments = [(0usize, 0usize, 0u32); 4]; for (i, segment) in elf.segments().take(4).enumerate() { segments[i] = segment; }
+        let mut info = self.boot; info.memory_map = core::ptr::null(); info.memory_map_len = 0; info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -304,7 +331,7 @@ impl Scheduler {
         let context = Region::new(context::SIZE, 16)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, deadline: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::new(), context, _exit: exit, runs: 0, ticks: 0, calls: 0, _image: image, _stack: stack, screen, abi, input: Queue::new(), log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, send_seq: 0, reply_to: None, deadline: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, run_ns: 0, sent: 0, received: 0, started_ns: crate::clock::now_ns(), segments });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -387,11 +414,12 @@ impl Scheduler {
     // Delivers the message of a blocked or current sender to the receiver.
     unsafe fn deliver(&mut self, from: usize, to: usize) {
         let (from_mb, to_mb) = (self.mailbox(from), self.mailbox(to));
-        let sender = self.tasks[from].as_mut().unwrap(); let (pid, call, cap) = (sender.pid, sender.pending_call, sender.pending_cap.take());
+        let sender = self.tasks[from].as_mut().unwrap(); let (pid, call, cap) = (sender.pid, sender.pending_call, sender.pending_cap.take()); sender.sent += 1;
+        match (self.tasks[from].as_ref().unwrap().state, self.tasks[to].as_ref().unwrap().state) { (State::BlockedSend(ep), _) | (_, State::BlockedRecv(ep)) => self.ep_messages[ep] += 1, _ => {} }
         (*to_mb).msg[2] = (*from_mb).msg[2]; (*to_mb).msg[3] = (*from_mb).msg[3]; (*to_mb).arg1 = pid as usize; (*to_mb).msg[1] = if call { MSG_FLAG_CALL } else { 0 };
         let receive = (*to_mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
         if let (true, Some(pending)) = (delivered, cap) { self.place(from, to, receive, pending); }
-        let receiver = self.tasks[to].as_mut().unwrap();
+        let receiver = self.tasks[to].as_mut().unwrap(); receiver.received += 1;
         (*to_mb).msg[0] = delivered as usize; (*to_mb).result = 0; receiver.state = State::Ready;
         let previous = if call { receiver.reply_to.replace((from, pid)) } else { None };
         if let Some((old, old_pid)) = previous { if self.tasks[old].as_ref().is_some_and(|t| t.pid == old_pid && t.state == State::BlockedReply(to)) { self.fail_reply(old); } }
@@ -423,7 +451,7 @@ impl Scheduler {
         let receiver = self.blocked(State::BlockedRecv(ep));
         if receiver.is_none() && !self.receivable(ep) { return Err(ERR_PEER); }
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
-        if receiver.is_none() && self.tasks.iter().flatten().filter(|t| t.state == State::BlockedSend(ep)).count() >= ENDPOINT_QUEUE { return Err(ERR_BUSY); }
+        if receiver.is_none() && self.tasks.iter().flatten().filter(|t| t.state == State::BlockedSend(ep)).count() >= ENDPOINT_QUEUE { self.ep_busy[ep] += 1; return Err(ERR_BUSY); }
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
         self.send_seq += 1; let seq = self.send_seq;
         let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.send_seq = seq; task.deadline = Self::deadline(request.arg1);
@@ -511,9 +539,11 @@ impl Scheduler {
         Ok(pid as usize)
     }
 
-    // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
+    // Process control (TASK_LIST ... HALT): the holder of the control capability; the read-only statistics also for
+    // the holder of the observe capability (MC-10.2).
     unsafe fn control(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
-        if !self.holds(slot, Capability::Control) { return Err(ERR_RIGHTS); }
+        let read_only = matches!(request.syscall_num, SYSCALL_TASK_LIST | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_FAULTS);
+        if !self.holds(slot, Capability::Control) && !(read_only && self.holds(slot, Capability::Observe)) { return Err(ERR_RIGHTS); }
         let task_slot = |s: &Self, pid: usize| if pid == 0 { Some(slot) } else { s.find(pid as u64) };
         match request.syscall_num {
             SYSCALL_TASK_LIST => {
@@ -579,6 +609,177 @@ impl Scheduler {
             SYSCALL_HALT => cpu::halt_all(),
             _ => Err(ERR_INVALID),
         }
+    }
+
+    // STAT (MC-10.2): records about kernel objects for the holder of the observe or control privilege. The copy is
+    // bounded by the table sizes; no memory contents, no physical addresses of task memory, nothing usable as authority.
+    unsafe fn stat(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
+        if !self.holds(slot, Capability::Observe) && !self.holds(slot, Capability::Control) { return Err(ERR_RIGHTS); }
+        let (class, argument, address, capacity) = (request.arg1, request.arg2, request.msg[0], request.msg[1]);
+        let header = core::mem::size_of::<StatHeader>();
+        let record_size = match class {
+            STAT_TASKS => core::mem::size_of::<TaskStat>(), STAT_CPUS => core::mem::size_of::<CpuStat>(), STAT_MEMORY => core::mem::size_of::<MemoryStat>(),
+            STAT_PHYSMAP => core::mem::size_of::<PhysRange>(), STAT_VMAP => core::mem::size_of::<VmRegion>(), STAT_CAPS => core::mem::size_of::<CapStat>(),
+            STAT_ENDPOINTS => core::mem::size_of::<EndpointStat>(), STAT_IRQS => core::mem::size_of::<IrqStat>(), STAT_DEVICES => core::mem::size_of::<DeviceStat>(),
+            _ => return Err(ERR_INVALID),
+        };
+        if capacity < header || address.checked_add(capacity).is_none() { return Err(ERR_INVALID); }
+        let room = (capacity - header) / record_size;
+        let (mut count, mut total) = (0usize, 0usize);
+        let mut failed = false;
+        // Every record goes straight into the caller's buffer; records past its capacity are only counted.
+        macro_rules! emit { ($record:expr) => {{
+            let record = $record;
+            if count < room {
+                let bytes = core::slice::from_raw_parts((&record as *const _ as *const u8), record_size);
+                if !copy_out(&self.tasks[slot].as_ref().unwrap().space, address + header + count * record_size, bytes) { failed = true; }
+                count += 1;
+            }
+            total += 1;
+        }}; }
+        let now = crate::clock::now_ns();
+        let target = |s: &Self| -> Result<usize, usize> { if argument == 0 { Ok(slot) } else { s.find(argument as u64).ok_or(ERR_NOT_FOUND) } };
+        match class {
+            STAT_TASKS => for index in 1..SLOTS {
+                let Some(task) = self.tasks[index].as_ref() else { continue };
+                let running = self.current.iter().position(|&c| c == index);
+                let (state, wait) = match task.state {
+                    State::Ready if running.is_some() => (TASK_RUNNING, 0),
+                    State::Ready | State::Empty => (TASK_READY, 0),
+                    State::Sleeping(until) => (TASK_SLEEPING, until),
+                    State::BlockedSend(ep) => (TASK_SEND, ep as u64),
+                    State::BlockedRecv(ep) => (TASK_RECV, ep as u64),
+                    State::BlockedReply(server) => (TASK_REPLY, self.tasks[server].as_ref().map_or(0, |s| s.pid)),
+                    State::BlockedIrq(irq) => (TASK_IRQ, irq as u64),
+                    State::BlockedFlush => (TASK_FLUSH, 0),
+                    State::Exited => (TASK_EXITED, 0),
+                };
+                // The interval since the last switch belongs to a task that is running now.
+                let run_ns = task.run_ns + running.map_or(0, |cpu| now.saturating_sub(self.last_switch[cpu]));
+                let mut name = [0u8; NAME_MAX]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
+                let flags = if task.service { TASK_FLAG_SERVICE } else { 0 } | if task.screen.is_some() { TASK_FLAG_SCREEN } else { 0 } | if self.foreground == index { TASK_FLAG_FOCUS } else { 0 };
+                emit!(TaskStat {
+                    pid: task.pid, parent: task.parent.map_or(0, |(_, pid)| pid), run_ns, runs: task.runs, ticks: task.ticks, calls: task.calls,
+                    sent: task.sent, received: task.received, started_ns: task.started_ns, image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64,
+                    screen_bytes: task.screen.as_ref().map_or(0, |s| s.len()) as u64, heap_bytes: task.heap.bytes() as u64, shared_bytes: task.heap.shared() as u64,
+                    kernel_bytes: (task.context.len() + task.abi.len() + task._exit.len() + task.space.table_count() * 4096) as u64,
+                    wait, heap_blocks: task.heap.blocks() as u32, caps: task.cspace.iter().flatten().count() as u32,
+                    quota_tasks: task.quota_tasks as u32, used_tasks: self.used_tasks(index) as u32, quota_endpoints: task.quota_endpoints as u32, used_endpoints: self.used_endpoints(index) as u32,
+                    name, state, cpu: task.cpu as u8, flags, reserved: [0; 5],
+                });
+            },
+            STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
+                let since = now.saturating_sub(self.last_switch[index]);
+                let current = self.current[index];
+                let (busy, idle) = if current == 0 { (self.busy_ns[index], self.idle_ns[index] + since) } else { (self.busy_ns[index] + since, self.idle_ns[index]) };
+                emit!(CpuStat { busy_ns: busy, idle_ns: idle, ticks: cpu::TICKS[index].load(Ordering::Relaxed), switches: self.switches[index],
+                    interrupts: cpu::INTERRUPTS[index].load(Ordering::Relaxed), current: self.tasks[current].as_ref().filter(|_| current != 0).map_or(0, |t| t.pid),
+                    apic: cpu::apic_id(index), online: cpu::ONLINE[index].load(Ordering::Acquire) as u32 });
+            },
+            STAT_MEMORY => {
+                let (used, free) = { let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free()) };
+                let mut stat = MemoryStat { arena_bytes: self.boot.heap_len as u64, arena_used: used as u64, arena_free: free as u64, largest_free: if argument != 0 { largest_free(free) as u64 } else { 0 },
+                    objects_limit: DETACHED_MAX_BYTES as u64, dma_limit: DMA_LIMIT as u64, tasks_limit: MAX_TASKS as u32, endpoints_limit: (ENDPOINTS - FIRST_ENDPOINT) as u32, ..MemoryStat::default() };
+                for task in self.tasks.iter().flatten() {
+                    stat.tasks += 1;
+                    stat.task_images += task._image.len() as u64; stat.task_stacks += task._stack.len() as u64;
+                    stat.task_screens += task.screen.as_ref().map_or(0, |s| s.len()) as u64; stat.task_heaps += task.heap.bytes() as u64;
+                    stat.task_kernel += (task.context.len() + task.abi.len() + task._exit.len()) as u64; stat.page_tables += (task.space.table_count() * 4096) as u64;
+                    stat.shared_mapped += task.heap.shared() as u64;
+                }
+                stat.objects = self.orphans.iter().map(|r| r.len() as u64).sum();
+                stat.dma = self.dma.iter().map(|r| r.len() as u64).sum();
+                stat.endpoints = self.endpoints[FIRST_ENDPOINT..].iter().filter(|&&e| e).count() as u32;
+                let accounted = stat.task_images + stat.task_stacks + stat.task_screens + stat.task_heaps + stat.task_kernel + stat.page_tables + stat.objects + stat.dma;
+                stat.kernel_other = (used as u64).saturating_sub(accounted);
+                emit!(stat);
+            }
+            STAT_PHYSMAP => {
+                for range in &self.physmap { emit!(PhysRange { start: range.start, bytes: range.pages * 4096, kind: range.kind.min(15), detail: range.kind }); }
+                extern "C" { static __kernel_end: u8; }
+                let kernel_start = crate::_start as *const () as usize; let kernel_end = core::ptr::addr_of!(__kernel_end) as usize;
+                emit!(PhysRange { start: kernel_start as u64, bytes: (kernel_end - kernel_start) as u64, kind: PHYS_KERNEL, detail: 0 });
+                emit!(PhysRange { start: self.boot.heap_ptr as u64, bytes: self.boot.heap_len as u64, kind: PHYS_HEAP, detail: 0 });
+                for (index, image) in self.boot.programs.iter().enumerate().filter(|(_, i)| i.len != 0) { emit!(PhysRange { start: image.data as u64, bytes: image.len as u64, kind: PHYS_BOOT_IMAGE, detail: index as u32 }); }
+                emit!(PhysRange { start: self.boot.fb_ptr as u64, bytes: frame_bytes(&self.boot) as u64, kind: PHYS_FRAMEBUFFER, detail: 0 });
+                if self.boot.ap_trampoline != 0 { emit!(PhysRange { start: self.boot.ap_trampoline as u64, bytes: 4096, kind: PHYS_TRAMPOLINE, detail: 0 }); }
+                for (index, device) in self.devices.iter().enumerate() {
+                    for bar in device.bars.iter().filter(|b| !b.io && b.size != 0) { emit!(PhysRange { start: bar.base, bytes: bar.size, kind: PHYS_DEVICE, detail: index as u32 }); }
+                }
+            }
+            STAT_VMAP => {
+                let task = self.tasks[target(self)?].as_ref().unwrap();
+                for &(offset, size, flags) in task.segments.iter().filter(|s| s.1 != 0) {
+                    let rights = VM_READ | if flags & 2 != 0 { VM_WRITE } else { 0 } | if flags & 1 != 0 { VM_EXEC } else { 0 };
+                    emit!(VmRegion { start: (paging::USER_IMAGE + offset) as u64, bytes: size as u64, kind: if flags & 1 != 0 { VM_CODE } else { VM_DATA }, flags: rights });
+                }
+                emit!(VmRegion { start: (paging::USER_STACK - 4096) as u64, bytes: 4096, kind: VM_GUARD, flags: 0 });
+                emit!(VmRegion { start: paging::USER_STACK as u64, bytes: STACK_SIZE as u64, kind: VM_STACK, flags: VM_READ | VM_WRITE });
+                emit!(VmRegion { start: (paging::USER_STACK + STACK_SIZE) as u64, bytes: 4096, kind: VM_GUARD, flags: 0 });
+                if let Some(screen) = task.screen.as_ref() { emit!(VmRegion { start: paging::USER_SCREEN as u64, bytes: screen.len() as u64, kind: VM_SCREEN, flags: VM_READ | VM_WRITE }); }
+                emit!(VmRegion { start: paging::USER_INFO as u64, bytes: 4096, kind: VM_INFO, flags: VM_READ });
+                emit!(VmRegion { start: paging::USER_MAILBOX as u64, bytes: 4096, kind: VM_MAILBOX, flags: VM_READ | VM_WRITE });
+                emit!(VmRegion { start: paging::USER_EXIT as u64, bytes: 4096, kind: VM_EXIT, flags: VM_READ | VM_EXEC });
+                let mut blocks = [(0usize, 0usize, false, false, false); HEAP_MAX_BLOCKS];
+                let mut n = 0; for block in task.heap.regions() { blocks[n] = block; n += 1; }
+                blocks[..n].sort_unstable_by_key(|b| b.0);
+                for &(start, size, private, writable, device) in &blocks[..n] {
+                    let kind = if device { VM_DEVICE } else if private { VM_HEAP } else { VM_SHARED };
+                    emit!(VmRegion { start: start as u64, bytes: size as u64, kind, flags: VM_READ | if writable { VM_WRITE } else { 0 } });
+                    emit!(VmRegion { start: (start + size) as u64, bytes: 4096, kind: VM_GUARD, flags: 0 });
+                }
+            }
+            STAT_CAPS => {
+                let task = self.tasks[target(self)?].as_ref().unwrap();
+                for index in 1..CAP_SLOTS {
+                    let Some(cap) = task.cspace[index] else { continue };
+                    let (kind, rights, size, base, endpoint) = match cap {
+                        Capability::Endpoint(ep, rights) => (CAP_KIND_ENDPOINT, rights as u32, 0, 0, ep as u32),
+                        Capability::Memory(_, size, rights) => (CAP_KIND_MEMORY, rights as u32, size as u64, 0, 0),
+                        Capability::Dma(_, size) => (CAP_KIND_DMA, 0, size as u64, 0, 0),
+                        Capability::Mmio(_, size) => (CAP_KIND_MMIO, 0, size as u64, 0, 0),
+                        Capability::IoPorts(base, count) => (CAP_KIND_PORTS, 0, count as u64, base as u64, 0),
+                        Capability::Interrupt(irq) => (CAP_KIND_IRQ, 0, 0, irq as u64, 0),
+                        Capability::Input => (CAP_KIND_INPUT, 0, 0, 0, 0), Capability::Display => (CAP_KIND_DISPLAY, 0, 0, 0, 0),
+                        Capability::Spawn => (CAP_KIND_SPAWN, 0, 0, 0, 0), Capability::Reply(..) => (CAP_KIND_REPLY, 0, 0, 0, 0),
+                        Capability::Platform => (CAP_KIND_PLATFORM, 0, 0, 0, 0), Capability::Control => (CAP_KIND_CONTROL, 0, 0, 0, 0),
+                        Capability::Observe => (CAP_KIND_OBSERVE, 0, 0, 0, 0),
+                    };
+                    let generation = if index < SLOT_DYNAMIC { 0 } else { task.generations[index] };
+                    emit!(CapStat { node: task.nodes[index].id, parent: task.nodes[index].parent, size, base, slot: index as u32, generation, kind: kind as u32, rights, endpoint, reserved: 0 });
+                }
+            }
+            STAT_ENDPOINTS => for ep in FIRST_ENDPOINT..ENDPOINTS {
+                if !self.endpoints[ep] { continue; }
+                let holds = |t: &Task, read: bool| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, r) if *id == ep && (!read || r & CAP_READ != 0)));
+                let live = self.tasks.iter().flatten();
+                emit!(EndpointStat { messages: self.ep_messages[ep], busy: self.ep_busy[ep], timeouts: self.ep_timeouts[ep], index: ep as u32,
+                    creator: self.endpoint_owner[ep].map_or(0, |(_, pid)| pid as u32),
+                    server: self.tasks.iter().flatten().find(|t| holds(t, true)).map_or(0, |t| t.pid as u32),
+                    receivers: live.clone().filter(|t| holds(t, true)).count() as u32, holders: live.clone().filter(|t| holds(t, false)).count() as u32,
+                    waiting: live.clone().filter(|t| t.state == State::BlockedSend(ep)).count() as u32, receiving: live.filter(|t| t.state == State::BlockedRecv(ep)).count() as u32,
+                    irq: self.irq_bind.iter().position(|&b| b == Some(ep)).map_or(0, |i| i as u32 + 1) });
+            },
+            STAT_IRQS => for line in 1..16u8 {
+                if line == 2 { continue; }
+                let holder = self.tasks.iter().flatten().find(|t| t.state != State::Exited && t.cspace.contains(&Some(Capability::Interrupt(line)))).map_or(0, |t| t.pid as u32);
+                emit!(IrqStat { count: interrupts::IRQ_COUNT[line as usize].load(Ordering::Relaxed), line: line as u32, holder,
+                    endpoint: self.irq_bind[line as usize].map_or(0, |ep| ep as u32), masked: interrupts::irq_masked(line) as u32 });
+            },
+            STAT_DEVICES => for (index, device) in self.devices.iter().enumerate() {
+                let owns = |c: &Capability| device.bars.iter().any(|b| b.size != 0 && match *c { Capability::Mmio(base, _) => base as u64 == b.base, Capability::IoPorts(base, _) => b.io && base as u64 == b.base, _ => false })
+                    || (device.irq != 0 && *c == Capability::Interrupt(device.irq));
+                let holder = self.tasks.iter().flatten().find(|t| t.state != State::Exited && t.cspace.iter().flatten().any(owns)).map_or(0, |t| t.pid as u32);
+                let mut io_bars = 0u32; let mut bar_bytes = [0u64; 6];
+                for (i, bar) in device.bars.iter().enumerate() { bar_bytes[i] = bar.size; if bar.io { io_bars |= 1 << i; } }
+                emit!(DeviceStat { bar_bytes, class: device.class, irq: device.irq as u32, holder, index: index as u32, location: device.location(), io_bars });
+            },
+            _ => return Err(ERR_INVALID),
+        }
+        let header_record = StatHeader { version: STAT_VERSION, record_size: record_size as u32, count: count as u32, total: total as u32 };
+        let bytes = core::slice::from_raw_parts((&header_record as *const StatHeader).cast::<u8>(), header);
+        if failed || !copy_out(&self.tasks[slot].as_ref().unwrap().space, address, bytes) { return Err(ERR_INVALID); }
+        Ok(count)
     }
 
     unsafe fn syscall(&mut self, slot: usize, sp: usize, cpu: usize) -> usize {
@@ -747,6 +948,7 @@ impl Scheduler {
                     Some(Capability::Reply(..)) => (CAP_KIND_REPLY, 0, 0),
                     Some(Capability::Platform) => (CAP_KIND_PLATFORM, 0, 0),
                     Some(Capability::Control) => (CAP_KIND_CONTROL, 0, 0),
+                    Some(Capability::Observe) => (CAP_KIND_OBSERVE, 0, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
                 let sealed = match self.cap(slot, request.arg1) { Some(Capability::Memory(physical, size, _)) => self.sealed(physical, size), _ => false };
@@ -759,6 +961,7 @@ impl Scheduler {
                 match outcome { Ok(Some(next)) => return next, Ok(None) => Ok(0), Err(error) => Err(error) }
             }
             SYSCALL_IPC_REPLY => self.ipc_reply(slot, &request),
+            SYSCALL_STAT => self.stat(slot, &request),
             SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::free_slot(&task.cspace)) {
                 // Deferred reply: the server accepts further requests and replies to this client later.
                 (Some((caller, pid)), Some(_)) => { task.reply_to = None; let node = self.root(); Ok(Self::insert(task, Capability::Reply(caller, pid), node).unwrap()) }
@@ -807,6 +1010,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         if vector == 0x31 { asm!("cli"); loop { asm!("hlt"); } }
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
         let irq = (33..48).contains(&vector).then_some(vector as usize - 32);
+        if vector >= 32 && vector != 0x80 { cpu::INTERRUPTS[cpu].fetch_add(1, Ordering::Relaxed); }
+        if let Some(irq) = irq { interrupts::IRQ_COUNT[irq].fetch_add(1, Ordering::Relaxed); }
         if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
         else if let Some(irq) = irq { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // the driver will unmask the line
         else if vector == 48 || vector == 50 { cpu::eoi(); }

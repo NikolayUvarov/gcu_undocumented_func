@@ -92,6 +92,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `block` | block device client (`Device`) and the driver loop (`serve`, `Driver`) |
 | `gfx` | `Screen`: pixels, rectangles, 8×8 font text, UTF-8 text in the 8×16 font (`text16`, `glyph16`) |
 | `font16` | MIND Mono 16, the 8×16 text font: a subset of Terminus Font under the SIL OFL 1.1 with Cyrillic, box drawing, block elements and braille ([fonts/](fonts/README.md)) |
+| `stat` | kernel observation (`STAT`): records of tasks, CPUs, memory, physical map, address spaces, capabilities, endpoints, IRQs, devices, and their names |
 | `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`audio::Stream`, `audio::wait_space`, `tts::say`) |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 | `heap` | program heap: with the cargo feature `alloc` (`libmind = { path = "../libmind", features = ["alloc"] }`) a program gets a `GlobalAlloc` and can use `Vec`, `String`, `Box` after `extern crate alloc;`; `mind::heap_stats()` |
@@ -345,7 +346,13 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `FG <id>` — show an existing application's screen (services have none) and route keyboard/UART input to it, preserving its PID and state.
 * `KILL <id>` — terminate that instance; the kernel then frees its image, stack, screen, private heap and page tables.
 * `LOGS <id>` — read and drain that instance's last 4096 bytes of buffered output. Foreground output is also printed to UART with a PID prefix; background output stays buffered so it does not interrupt command entry.
-* `CPUS` — show online CPU/APIC IDs and per-CPU timer counters.
+* `CPUS` — show online CPU/APIC IDs, per-CPU timer counters, busy and idle time (TSC), context switches and interrupts.
+* `FREE` — kernel memory by use: arena used/free and the largest free block, task images, stacks, screens, private heaps, kernel pages, page tables, memory objects, DMA, mapped memory.
+* `PHYSMAP` — the physical memory map: UEFI ranges and the platform layout (kernel, arena, boot images, framebuffer, device BARs).
+* `PMAP <id>` — the address space of a task: code and data segments, stack with guard pages, screen, info page, mailbox, heap blocks and shared mappings with their rights.
+* `STAT <id>` — task details: state and what it waits for, run time, syscalls, IPC counts, memory, capabilities, quotas.
+* `CAPS <id>` — the capabilities of a task: slot, generation, kind, rights, derivation node and parent.
+* `ENDPOINTS`, `IRQS`, `DEVICES` — endpoints with server, holders, waiting senders and traffic; interrupt lines with holder and count; PCI functions with class, BARs and the task holding them.
 * `CLOCK` — show the monotonic clock (ns), its resolution and the calibrated TSC frequency.
 * `DATE` — show the calendar date and time from the RTC (no time zone).
 * `FAULTS` — show the last 16 application exceptions: PID, CPU, exception vector/error code, instruction and fault addresses.
@@ -493,6 +500,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |
 | 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: 10 ms tick) |
+| 48 | STAT | class (`STAT_*`), argument (PID); msg[0] = buffer, msg[1] = capacity → records after a `StatHeader`: tasks, CPUs, kernel memory, physical map, address space, capabilities, endpoints, IRQs, devices — observe or control privilege |
 | 29 | CAP_INFO | slot → kind, arg2 = port base or memory rights, msg[2] = size/count/endpoint rights, msg[3] = 1 if the memory is sealed |
 
 This is a page-block API. `mind::heap` (feature `alloc`) subdivides it for programs: objects up to 2 KiB come from power-of-two size classes carved out of single pages, objects up to 256 KiB are runs of pages in 1 MiB arenas (at most 12), larger ones get their own block; allocation failure ends in the panic handler, which logs and exits the task. Services keep static memory. `tests/heap_host.rs` checks alignment, disjointness, reuse and exhaustion on the host. `app2` already uses a block for its 64×64 sprite and handles allocation failure by reporting it and returning. Page-table edits are serialized with the scheduler; a process runs on only one pinned CPU, so local invalidation is sufficient. Kernel allocation locks disable local interrupts to avoid allocator/scheduler lock inversion. CR3 invalidation follows the [Intel system programming manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
