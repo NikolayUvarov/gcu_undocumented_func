@@ -2,10 +2,14 @@
 #![no_main]
 // Command shell in ring 3: text console on its own screen and COM1, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
+mod bmp;
 mod console;
 mod files;
+mod keymap;
 mod net;
 mod observe;
+mod power;
+mod screenshot;
 
 use console::{Console, Position, COM1};
 use core::fmt::Write;
@@ -21,7 +25,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 41] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "ip", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "stat", "stop", "sync", "write"];
+const COMMANDS: [&str; 43] = ["boot", "budget", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -139,8 +143,9 @@ impl Shell {
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
     // client for `REQUEST_SYSINFO`, a VFS client confined to the named file's directory for `REQUEST_FILE` (its own
     // VFS client, which writes on `ram:` and in `data/`, for `REQUEST_FILES`), its log
-    // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`.
-    // Nothing is granted by program name.
+    // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`,
+    // its sysmon client with the authority badge (who holds what) for `REQUEST_AUTHORITY`, in SLOT_SYSINFO in place of
+    // the plain one. Nothing is granted by program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
@@ -154,6 +159,9 @@ impl Shell {
             loader::Error::Rights => Error::Rights, loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY),
         };
         let needs = loader::inspect(Endpoint::LOADER, name)?.map_err(failed)?;
+        // Requests `needs` has no field for (loader.wit 1.2): the network (issue 102), the authority client (issue 081).
+        let requests = loader::inspect_requests(Endpoint::LOADER, name)?.map_err(failed)?;
+        let authority = requests & mind::process::REQUEST_AUTHORITY != 0;
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -166,14 +174,14 @@ impl Shell {
             if let Err(error) = made { let _ = loader::abort(Endpoint::LOADER, session); return Err(Error::from(error)); }
         }
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
-        let wanted = [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
+        let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)];
         let lent = wanted.iter().filter(|w| w.0).try_for_each(|&(_, slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         // A program that asks for the network gets what the policy broker grants it, or runs without (issue 102).
         let mut network = None;
-        if matches!(loader::inspect_requests(Endpoint::LOADER, name), Ok(Ok(flags)) if flags & mind::process::REQUEST_NETWORK != 0) {
+        if requests & mind::process::REQUEST_NETWORK != 0 {
             match net::grant(&mut self.term, name, SCOPE_RECEIVE, |cap| match lend(SLOT_NETWORK, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) }) {
                 Ok(badge) => network = badge,
                 Err(error) => { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
@@ -253,6 +261,9 @@ impl Shell {
             let Ok(text) = core::str::from_utf8(args) else { return self.report("NOT UTF-8") };
             if text.is_empty() { return self.report("EXPECTED A TEXT"); }
             match mind::log::write(mind::log::INFO, text) { Ok(()) => { let _ = writeln!(self.term, "LOGGED"); } Err(_) => self.report("NO SYSTEM LOG") }
+        } else if is(b"caps") && args.is_empty() {
+            // Without a PID: the caps tool (capabilities and their derivation tree).
+            self.run_program(b"caps", b"", false);
         } else if is(b"pmap") || is(b"caps") || (is(b"stat") && pid_arg(args).is_some()) {
             // `stat <id>`: task details; `stat <class> [pid]`: the kernel's records (below).
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
@@ -282,7 +293,7 @@ impl Shell {
         } else if !args.is_empty() && [&b"help"[..], b"list", b"cpus", b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"clock", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
-            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- heap\n- clear\n- reboot: write cached files to the disks and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
+            let _ = write!(self.term, "- list: programs\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- clock: monotonic clock and its resolution\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip: address, gateway and DNS server\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n");
         } else if is(b"list") {
             self.list_programs();
         } else if is(b"cpus") {
@@ -316,10 +327,11 @@ impl Shell {
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"reboot") {
-            // The plain reset (152); issue 084 adds stopping the services first.
-            files::flush_all();
-            let _ = writeln!(self.term, "REBOOTING...");
-            if control::reboot().is_err() { self.report("REBOOT REFUSED"); }
+            power::reboot(&mut self.term, args);
+        } else if is(b"keymap") {
+            keymap::command(&mut self.term, args);
+        } else if is(b"screenshot") {
+            screenshot::command(&mut self.term, args, SCOPE_RECEIVE);
         } else if is(b"stop") {
             files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");

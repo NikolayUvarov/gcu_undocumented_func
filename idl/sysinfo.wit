@@ -1,11 +1,17 @@
 /// System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
 /// an endpoint from the shell at launch (SLOT_SYSINFO); `sysmon` holds the observe privilege and limits each client's
-/// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`.
-package mind:sysinfo@2.1.0;
+/// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`; 3.0:
+/// `authority`, and who holds what needs the authority badge (issue 081).
+///
+/// Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
+/// carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
+/// that ask for `REQUEST_AUTHORITY`); other clients get `denied`, and `caps` gives them no derivation links (`node`
+/// and `parent` are 0).
+package mind:sysinfo@3.0.0;
 
 interface sysinfo {
     /// Why a request failed.
-    enum error { busy, not-found, unavailable }
+    enum error { busy, not-found, unavailable, denied }
 
     /// A task (StatTask). `wait` is WAIT_* and `wait-on` the endpoint index, IRQ line or server PID it waits for;
     /// `flags`: `mind::stat::TASK_SERVICE`, `TASK_SCREEN`, `TASK_FOCUS`; `kernel`: its context, mailbox, info and exit
@@ -43,6 +49,9 @@ interface sysinfo {
     record device { bar0: u64, bar1: u64, bar2: u64, bar3: u64, bar4: u64, bar5: u64, holder: u64, class: u32, irq: u32, location: u32, io-bars: u32 }
     /// A task holding a capability for an endpoint: its slot, rights (CAP_*) and badge.
     record holder { pid: u64, slot: u32, rights: u32, badge: u32 }
+    /// A capability of some task with its derivation links (3.0): `node` is its derivation node, `parent` the node it
+    /// was derived from (0: a root); revoking a capability removes the subtree below its node.
+    record authority-entry { node: u64, parent: u64, pid: u64, size: u64, slot: u32, generation: u32, kind: u32, rights: u32, badge: u32, endpoint: u32 }
     /// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
     record sample { busy-low: u64, busy-high: u64, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u8, runnable: u8 }
     /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
@@ -63,6 +72,10 @@ interface sysinfo {
     /// holds those from position `start` on, at most 150 (call again with a larger `start` for the rest).
     history: func(slow: bool, count: u16, start: u16) -> result<list<sample, 150>, error>;
     load: func() -> result<load, error>;
-    /// The tasks holding a capability for endpoint `index` (2.1); error not-found for an index no endpoint has.
+    /// The tasks holding a capability for endpoint `index` (2.1); error not-found for an index no endpoint has. Needs
+    /// the authority badge (3.0).
     holders: func(index: u32) -> result<list<holder, 64>, error>;
+    /// The capabilities of all tasks in PID and slot order, from entry `start` on, at most 128 (call again with a larger
+    /// `start` for the rest); needs the authority badge (3.0).
+    authority: func(start: u32) -> result<list<authority-entry, 128>, error>;
 }

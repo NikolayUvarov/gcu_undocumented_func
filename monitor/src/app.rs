@@ -18,6 +18,7 @@ fn take<T>(reply: mind::Result<core::result::Result<T, sysinfo::Error>>) -> Resu
         Ok(Ok(value)) => Ok(value),
         Ok(Err(sysinfo::Error::Busy)) => Err(Problem::Busy),
         Ok(Err(sysinfo::Error::NotFound)) => Err(Problem::NotFound),
+        Ok(Err(sysinfo::Error::Denied)) => Err(Problem::Denied),
         Ok(Err(_)) => Err(Problem::Failed),
         // Nothing in the slot (or no right to call): the program was not given a sysmon client.
         Err(mind::Error::Invalid) | Err(mind::Error::Rights) => Err(Problem::NoAccess),
@@ -113,6 +114,17 @@ impl Source for Client {
     fn holders(&mut self, index: u32) -> Result<Vec<Holder>, Problem> {
         let list = take(sysinfo::holders(Endpoint::SYSINFO, index))?;
         Ok(list.as_slice().iter().map(|h| Holder { pid: h.pid, slot: h.slot, rights: h.rights, badge: h.badge }).collect())
+    }
+    fn authority(&mut self) -> Result<Vec<AuthorityEntry>, Problem> {
+        // In replies of up to 128 entries (64 slots of at most 40 tasks: 20 replies at most).
+        let mut entries = Vec::new();
+        for _ in 0..20 {
+            let list = take(sysinfo::authority(Endpoint::SYSINFO, entries.len() as u32))?;
+            entries.extend(list.as_slice().iter().map(|e| AuthorityEntry { node: e.node, parent: e.parent, pid: e.pid, size: e.size, slot: e.slot, generation: e.generation,
+                                                                         kind: e.kind, rights: e.rights, badge: e.badge, endpoint: e.endpoint }));
+            if list.len() < 128 { break; }
+        }
+        Ok(entries)
     }
     fn now_ns(&self) -> u64 { mind::time::monotonic_ns() }
 }

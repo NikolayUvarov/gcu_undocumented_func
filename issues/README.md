@@ -21,10 +21,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | — (077 done) | track G |
 | [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
-| [081](081-caps-tool.md) | `caps`: capabilities and the derivation tree | tools | P1 | — (151 done) | track G, T3 |
-| [084](084-reboot.md) | `reboot` | tools | P2 | — (152 done) | track G, T3 |
-| [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | — (151 done) | track G, T3 |
-| [086](086-screenshot.md) | `screenshot` | tools | P2 | — (151 done) | track G, T3 |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | — (102 done) | track D |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
 | [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | benchmark | track D |
@@ -114,8 +110,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [076](../issues-done/076-monitors-show-restored-stat-fields.done) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0) | done (2026-10-04) |
 | [077](../issues-done/077-voice-audio-front-end.done) | Voice V0: audio front end (`mind::voice`, `listen --vad/--wav`) | done (2026-10-04) |
 | [080](../issues-done/080-ipc-tool.done) | `ipc`: endpoints, holders, wait-for graph | done (2026-10-04) |
+| [081](../issues-done/081-caps-tool.done) | `caps`: capabilities and the derivation tree (`sysinfo.wit` 3.0 authority) | done (2026-10-04) |
 | [082](../issues-done/082-find-and-grep.done) | `find` and `grep` | done (2026-10-04) |
 | [083](../issues-done/083-format.done) | `format` for the RAM disk (`vfs.wit` 2.3) | done (2026-10-04) |
+| [084](../issues-done/084-reboot.done) | `reboot [-f]`: flush, services stopped in reverse order, reset | done (2026-10-04) |
+| [085](../issues-done/085-keymap.done) | `keymap`: layout and switch key (`keyboard.wit` 1.0) | done (2026-10-04) |
+| [086](../issues-done/086-screenshot.done) | `screenshot`: the screen as a BMP (`display.wit` 1.0) | done (2026-10-04) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

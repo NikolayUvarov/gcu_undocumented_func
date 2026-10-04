@@ -4,7 +4,7 @@ use crate::console::Console;
 use core::fmt::Write;
 use mind::fs::{self, Error, File};
 
-fn text(error: Error) -> &'static str {
+pub fn text(error: Error) -> &'static str {
     match error {
         Error::NotFound => "NOT FOUND", Error::Exists => "ALREADY EXISTS", Error::NotEmpty => "DIRECTORY NOT EMPTY", Error::Invalid => "INVALID PATH OR REQUEST",
         Error::Denied => "DENIED (ONLY RAM: AND DATA/ ARE WRITABLE)", Error::NoSpace => "NO SPACE", Error::ReadOnly => "READ-ONLY DEVICE", Error::Io => "I/O ERROR",

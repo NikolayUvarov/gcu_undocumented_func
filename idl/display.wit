@@ -1,0 +1,15 @@
+/// The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
+/// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it.
+package mind:display@1.0.0;
+
+interface display {
+    /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy.
+    enum error { no-screen, no-memory }
+    /// The screen's size in pixels and its stride (pixels per row, at least the width).
+    record mode { width: u32, height: u32, stride: u32 }
+
+    mode: func() -> mode;
+    /// What is on the screen now (the screen of the task in front): a sealed read-only copy (SHARE_RO) of
+    /// `stride * height` pixels `0x00RRGGBB`, row after row.
+    capture: func() -> result<own<memory>, error>;
+}

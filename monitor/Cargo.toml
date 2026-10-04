@@ -28,6 +28,10 @@ path = "src/bin/hw.rs"
 name = "ipc"
 path = "src/bin/ipc.rs"
 
+[[bin]]
+name = "caps"
+path = "src/bin/caps.rs"
+
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
 
