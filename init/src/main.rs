@@ -20,13 +20,14 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "observe privilege", "screen; process control; input; COM1"];
+    "an audio client", "network card ports and IRQ; 160 KiB DMA", "observe privilege", "screen; process control; input; COM1"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
+const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -177,6 +178,12 @@ impl Init {
                 }
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
+            "virtio_net" => {
+                // VirtIO network card, legacy interface (vendor 1AF4, device 1000, class 02:00): ports in BAR0 and the IRQ line.
+                let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0)?; self.devices[index] = Some(device);
+                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, 0); grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "virtio_net")?, ALL); grants.copy(SLOT_MEM, self.dma(index, NET_DMA_BYTES)?, 0);
+            }
             // The observe privilege (read-only statistics, MC-10.2) goes to sysmon and to logd, which names the sender
             // of a record from the kernel's task records (MC-10.6).
             "logd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "logd")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
@@ -191,6 +198,7 @@ impl Init {
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
+                self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
             }
             _ => return Err(Error::NotFound),
         }

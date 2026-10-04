@@ -104,7 +104,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | No. | Name | Arguments → result |
 |---|---|---|
 | 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel [platform privilege] |
-| 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match → device index |
+| 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match, `msg[1]` = PCI vendor \| device << 16 (0: any) → device index |
 | 49 | `DEVICE_STATE` | `arg1` = device index, `arg2` = `DEVICE_STOP` / `DEVICE_START` [platform privilege or a BAR capability of the device] |
 
 ### Observation and process control

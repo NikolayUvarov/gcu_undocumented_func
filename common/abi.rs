@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 15;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 16;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "sysmon.elf", "shell.elf"];
 pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
@@ -179,6 +179,8 @@ pub const SLOT_FILE: usize = 7;
 pub const SLOT_SYSINFO: usize = 10;
 pub const SLOT_LIFECYCLE: usize = 11;
 pub const SLOT_LOG: usize = 12;
+// The shell's client of the network card driver (idl/net.wit), for the `net` diagnostics.
+pub const SLOT_NET: usize = 13;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 16;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
@@ -243,7 +245,8 @@ pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
-// DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match; result = device index.
+// DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
+// vendor | device << 16 to match as well (0: any); result = device index.
 
 // TASK_LIST fills an array of TaskInfo (arg1 = address, arg2 = capacity) and returns the count.
 #[derive(Clone, Copy)] #[repr(C)] pub struct TaskInfo { pub pid: u64, pub name: [u8; NAME_MAX], pub state: [u8; 8], pub cpu: u32, pub focus: u8, pub service: u8, pub screen: u8, pub reserved: u8, pub runs: u64, pub ticks: u64, pub calls: u64, pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16 }

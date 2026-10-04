@@ -19,8 +19,7 @@ Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` an
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [100](100-virtio-net-driver.md) | `virtio_net`: network card driver in ring 3 | driver / kernel track | P1 | — | track A, D |
-| [101](101-network-stack.md) | Network stack service (IPv4, ARP, ICMP, UDP, TCP) | network | P2 | 100 | track D |
+| [101](101-network-stack.md) | Network stack service (IPv4, ARP, ICMP, UDP, TCP) | network | P2 | — (100 done) | track D |
 | [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | 101 | track D |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 101, 102 | track D |
 | [076](076-monitors-show-restored-stat-fields.md) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0, `sysmon`, `hw`, `memmap`, `top`) | tools | P2 | — (075 done) | track G, T1 |
@@ -104,5 +103,6 @@ Tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` an
 | [073](../issues-done/073-port-out-block.done) | `PORT_OUT_BLOCK`: block writes of 16-bit words to a port | done (2026-10-04) |
 | [074](../issues-done/074-exited-console-output.done) | Output of an exited console program stays readable | done (2026-10-04) |
 | [075](../issues-done/075-stat-fields-for-the-monitors.done) | `STAT` fields the monitors lost in the merge (`STAT_VERSION` 2) | done (2026-10-04) |
+| [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

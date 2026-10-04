@@ -1,0 +1,26 @@
+/// Network card driver (`virtio_net`): raw Ethernet frames of one device. Its only clients are the network stack and
+/// the shell's diagnostics (Appendix B.6: the driver gets no say over what the frames mean). Frames travel in MIND IDL
+/// buffers, so the driver works on its own copy of a frame to send.
+package mind:net@1.0.0;
+
+interface net {
+    /// Why a request failed.
+    enum error { no-device, busy, empty, invalid }
+
+    /// The device: MAC address (low 48 bits, first byte in bits 40-47), largest frame without the Ethernet header,
+    /// link state as the device reports it.
+    record info { mac: u64, mtu: u16, link: bool }
+
+    /// Frames since the driver started; `dropped` counts received frames lost because the queue of received frames was full.
+    record counters { sent: u64, received: u64, dropped: u64, interrupts: u64 }
+
+    info: func() -> result<info, error>;
+    /// Queues one Ethernet frame (destination, source, type and payload, without the checksum). Error busy: the
+    /// transmit ring is full; invalid: shorter than 14 bytes.
+    send: func(frame: bytes<1514>) -> result<_, error>;
+    /// The oldest received frame. Error empty: none is waiting.
+    receive: func() -> result<bytes<1514>, error>;
+    /// Answers once a received frame is waiting (the reply comes from the interrupt); returns how many are waiting.
+    wait: func() -> u32;
+    counters: func() -> counters;
+}

@@ -21,8 +21,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# System services (PID 1..N, started by init); ahci/usb_storage drivers exist only when the controller is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "sysmon", "shell")
+# System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -38,7 +38,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, display=()):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=()):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image.
         self.disk = disk
@@ -53,7 +53,7 @@ class VM:
         self.process = subprocess.Popen(
             [args.qemu, "-bios", args.firmware, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
-             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *display,
+             "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", "-no-reboot", *extra,
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -2080,10 +2080,45 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+def net_suite(args, disk):
+    # VirtIO network card in ring 3: frames out and in (ARP to QEMU's user-mode gateway), restart after device quiesce.
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
+        require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP")
+        require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
+        require(vm.command("net arp 10.0.2.2"), "ARP 10.0.2.2 IS AT 52:55:0A:00:02:02")
+        counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
+        assert counters and int(counters[1]) >= 1 and int(counters[2]) >= 1 and int(counters[4]) >= 1, counters  # sent, received, interrupts
+        require(vm.command("net arp 10.0.2.99"), "ARP 10.0.2.99: NO ANSWER")
+        # init stops the device and clears its DMA region before the driver starts again; the shell's client still works.
+        require(vm.command(f"kill {vm.services()['virtio_net']}", raw=True), "KILLED PID=")
+        log = vm.service_logs("init", "virtio_net RESTARTED")
+        assert log.index("virtio_net DEVICE QUIESCED") < log.index("virtio_net RESTARTED"), log
+        for _ in range(20):
+            if "IS AT" in vm.command("net arp 10.0.2.2"):
+                break
+            time.sleep(.2)
+        else:
+            raise AssertionError("no ARP answer after the driver restart")
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
+    # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card.
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        assert "virtio_net" not in vm.services()
+        require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
+        require(vm.command("net"), "NET: NO NETWORK CARD")
+    finally:
+        vm.close()
+    print("PASS: VirtIO network card in ring 3: MAC and link, ARP request and answer through the driver, restart after device quiesce; e1000 not taken", flush=True)
+
+
 def display_suite(args, disk):
     # Colours are right on every QEMU display adapter: the compositor converts to the framebuffer's pixel format.
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), display=display)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=display)
         try:
             require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
             vm.send("fg 1\n")
@@ -2145,10 +2180,10 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -2196,6 +2231,9 @@ def main():
                 continue
             if suite == "display":
                 display_suite(args, disk)
+                continue
+            if suite == "net":
+                net_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
