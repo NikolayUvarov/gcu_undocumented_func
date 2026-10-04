@@ -1,0 +1,32 @@
+/// TLS service (`tls`, issue 103, Appendix B.6): TLS 1.3 client sessions over the client's own network flow. A client
+/// lends its network stack capability (`attach`), so the network policy that applies to the client applies to its TLS
+/// connections too; the service holds no network access of its own. Server certificates are verified against the root
+/// store `tlsroots.pem` on the boot disk. With `client-certificate`, the device certificate is offered when a server
+/// asks for one and the key service signs the handshake: the TLS service never sees the private key. A session belongs
+/// to the process that attached it; the service runs one handshake at a time.
+package mind:tls@1.0.0;
+
+interface tls {
+    /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
+    /// `handshake`: the handshake failed otherwise; `no-entropy`: the processor has no RDRAND (the service fails
+    /// closed); `no-roots`: no usable root certificate.
+    enum error { no-network, refused, timeout, closed, again, invalid, limit, not-found, denied, certificate, handshake, no-entropy, no-roots }
+
+    /// An established session: the cipher suite and key exchange group (IANA numbers), whether the device certificate
+    /// was sent.
+    record peer { suite: u16, group: u16, client-certificate: bool }
+
+    /// A new session on the client's network flow (its socket client, idl/socket.wit).
+    attach: func(flow: borrow<endpoint>) -> result<u32, error>;
+    /// TCP to `address`:`port`, then the TLS 1.3 handshake verifying the server for `name` (a DNS name or an IPv4
+    /// address in dotted form).
+    connect: func(session: u32, name: string<253>, address: u32, port: u16, client-certificate: bool, timeout-ms: u32) -> result<peer, error>;
+    /// Encrypts and sends `data`; returns how many bytes were taken.
+    send: func(session: u32, data: bytes<4096>) -> result<u32, error>;
+    /// Up to `length` decrypted bytes. Error again: nothing yet; closed: the peer closed and everything was read.
+    receive: func(session: u32, length: u32) -> result<bytes<4096>, error>;
+    /// Sends close_notify, closes the connection and frees the session and the lent flow.
+    close: func(session: u32) -> result<_, error>;
+    /// The device certificate (DER), from the key service.
+    certificate: func() -> result<bytes<512>, error>;
+}

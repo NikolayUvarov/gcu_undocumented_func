@@ -6,3 +6,6 @@ pub const BADGE_OPERATOR: u16 = 0xFFFE;
 pub const BADGE_POLICY: u16 = 0xFFFF;
 /// Flow grants of the broker use badges from 1 up to this one.
 pub const BADGE_GRANT_LAST: u16 = 0xFFFD;
+
+/// The key service's signer (idl/keystore.wit, issue 103): the TLS service's client may ask for signatures.
+pub const BADGE_KEY_SIGNER: u16 = 1;

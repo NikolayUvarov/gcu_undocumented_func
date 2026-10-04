@@ -1,0 +1,54 @@
+# 103 — TLS service with non-exportable keys — done
+
+**Type:** service · **Owner:** network track · **Priority:** P3 · **Status:** done (2026-10-04) · **Blocked by:** 101, 102 · **Roadmap:** track D · **Constitution:** MC-11.9, Appendix B.6 (TLS service)
+
+## Problem
+
+Secure connections need TLS; MC-11.9 separates access to key material from the right to request a key operation.
+
+## Plan
+
+- `tls` service on top of a flow capability: TLS 1.3 client first (candidate: rustls with a `no_std` crypto provider, licence to be checked), certificate validation against a root store from the boot volume.
+- Private keys live in a key service; parsers and applications get a handle for an operation with a purpose and a budget, never the key.
+- A session parser (for example HTTP) gets only bounded bytes in and typed messages out.
+
+## Acceptance criteria
+
+- An HTTPS request to a host-forwarded test server succeeds in QEMU with certificate validation; a wrong certificate is refused; no process except the key service can read the private key.
+
+## Related
+
+[101](101-network-stack.done), [102](102-network-policy-broker.done).
+
+## Resolution
+
+- **Crypto:** rustls 0.23 without a built-in provider (*ring* does not build for the soft-float `x86_64-unknown-none` target). `tls/src/provider.rs`, adapted from rustls-rustcrypto 0.0.2-alpha, supplies TLS 1.3 only:
+  - cipher suites AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305;
+  - key exchange X25519 and P-256;
+  - verification of ECDSA P-256/P-384, Ed25519 and RSA PKCS#1/PSS signatures;
+  - random bytes from RDRAND (`mind::random`; no RDRAND: fail closed), time from the RTC (`mind::rtc::unix_time`).
+  - The RustCrypto crates use their portable backends (`--cfg *_force_soft`, serial curve25519 backend).
+  - rustls-webpki is at 0.103.13 or later.
+- **`keystore`** (`idl/keystore.wit`): makes the device key (Ed25519) from RDRAND at boot, keeps it only in its memory and builds a self-signed certificate for it (`MIND xxxxxxxx`, DER by hand). No call returns the key. `sign` answers only the signer's badge (`mind::network::BADGE_KEY_SIGNER`, held by `tls`), only data in the form of a TLS 1.3 client CertificateVerify, at most 4096 times per boot; every signature and refusal is logged.
+- **`tls`** (`idl/tls.wit`): a client lends its network flow (`attach`, a word call carrying the capability), so the client's network policy holds and the service has no network access of its own.
+  - `connect` runs the TLS 1.3 handshake (unbuffered rustls API) and verifies the server certificate for a DNS name or an IP address against `tlsroots.pem` on the boot disk.
+  - With `client-certificate`, the service offers the device certificate when the server asks; the key service signs the handshake.
+  - Also `send`, `receive`, `close` and `certificate`. A session belongs to the attaching PID and ends when that process ends.
+- **Shell:** `https [-c] <host>[:port] [path] [name]` and `tls cert` (PEM). `SLOT_TLS` 20; `SLOT_DYNAMIC` 21. Boot images 20. `CAP_SLOTS` 64 → 96, since `init` keeps a keeper and minted clients of every service for restarts and ran out of slots.
+- **Tests:** the `tls` suite (QEMU with `-cpu qemu64,+rdrand`). openssl makes a test CA and a server certificate; Python and `openssl s_server` serve HTTPS. Checked:
+  - verified requests by name and by address, with all three cipher suites and both groups;
+  - wrong name and untrusted CA refused;
+  - the device certificate accepted by a server that trusts exactly it;
+  - only `tls` holds a client of `keystore` (besides `init`);
+  - without RDRAND, no key and no connection.
+- **Acceptance:** an HTTPS request with certificate validation succeeds; a wrong certificate is refused; the private key is readable by no process but `keystore`.
+- **Docs:** README, `docs/idl`, `docs/api`, `docs/profile` (platform, MC-11.3, new MC-11.9 row, TCB, evidence), `bootstrap.md`, THIRD_PARTY.md (and the BSD-3-Clause and ISC texts in `LICENSES/`), roadmap track D.
+- **Follow-ups (not done):**
+  - signatures bound to a session the key service can check;
+  - budgets per client;
+  - a key that survives a reboot (sealed storage);
+  - session plaintext separated per client process;
+  - TLS for applications (a `REQUEST_TLS` grant);
+  - session parsers (the HTTP part of `https` is still in the shell);
+  - a root store that cannot be changed through the unauthenticated boot disk.
+

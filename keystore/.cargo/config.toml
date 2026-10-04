@@ -1,0 +1,13 @@
+[build]
+target = "x86_64-unknown-none"
+# The target has no SSE registers in its ABI: the RustCrypto crates use their portable backends.
+rustflags = [
+    "-C", "relocation-model=pic",
+    "-Z", "relax-elf-relocations=yes",
+    "-C", "link-arg=-Tlinker.ld",
+    "--cfg", "curve25519_dalek_backend=\"serial\"",
+    "--cfg", "aes_force_soft",
+    "--cfg", "polyval_force_soft",
+    "--cfg", "chacha20_force_soft",
+    "--cfg", "poly1305_force_soft"
+]

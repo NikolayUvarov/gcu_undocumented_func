@@ -210,7 +210,7 @@ fn details_window_and_keys() {
     let lines = top::Top::details_lines(details, source.now);
     assert!(lines[0].contains("PID 5  loader  service"), "{:?}", lines);
     assert!(lines[1].contains("Parent 1 init"), "{:?}", lines);
-    assert!(lines.iter().any(|l| l == "Capabilities 3/63: endpoint 1, memory 1"), "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "Capabilities 3/95: endpoint 1, memory 1"), "{:?}", lines);
     assert!(lines.iter().any(|l| l.contains("4 regions, 76.0K mapped")), "the guard page is not mapped: {:?}", lines);
     assert!(lines.iter().any(|l| l == "Endpoints (slot→index): 2→6"), "{:?}", lines);
     assert!(lines.iter().any(|l| l.ends_with(", kernel 40.0K")), "{:?}", lines);

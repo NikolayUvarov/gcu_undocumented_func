@@ -69,6 +69,8 @@ USER_CRATES=(
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
     "netcheck:netcheck:netcheck.elf"
+    "keystore:keystore:keystore.elf"
+    "tls:tls:tls.elf"
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"
@@ -118,8 +120,8 @@ for entry in "${USER_CRATES[@]}"; do
     cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
-# Licences travel with the image: tts.elf embeds third-party dictionaries, the text programs the MIND Mono font
-# (THIRD_PARTY.md).
+# Licences travel with the image: tts.elf embeds third-party dictionaries, the text programs the MIND Mono font, tls.elf and
+# keystore.elf BSD and ISC licensed crypto crates (THIRD_PARTY.md).
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 
