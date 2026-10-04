@@ -11,7 +11,7 @@ use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 1, 0);
+pub const VERSION: (u8, u8, u8) = (2, 2, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -303,6 +303,20 @@ pub fn check<'b>(endpoint: ipc::Endpoint, buffer: wire::Buffer<'b>, handle: u32)
     Ok(Ok(value))
 }
 
+/// A client confined to directory `dir` (a handle of the caller), lands in the caller's fixed slot `receive`: its
+/// `root` of the directory's volume is that directory, every other root is refused, and it may change files there
+/// only if `writable` and the caller may (never more than `dir`, MC-3.4). It works for the first task that uses it
+/// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory
+/// (version 2.2).
+pub fn scope(endpoint: ipc::Endpoint, dir: u32, writable: bool, receive: usize) -> Result<core::result::Result<usize, Error>> {
+    let words = [15 | MAJOR << 8 | ((dir) as usize) << 16 | ((writable) as usize) << 48, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    let status = wire::check_reply(&reply, [0x0, 0x0], false, true)?;
+    if let wire::Status::Failed(code) = status { return Error::from_u8(code).map(Err).ok_or(SysError::Invalid); }
+    if !received || crate::dev::cap_info(receive).0 != CAP_KIND_ENDPOINT { return Err(SysError::Invalid); }
+    Ok(Ok(receive))
+}
+
 /// A request to the `vfs` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -320,6 +334,7 @@ pub enum Request {
     Flush { handle: u32 },
     Close { handle: u32 },
     Check { buffer: usize, handle: u32 },
+    Scope { dir: u32, writable: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, enum values, capability
@@ -384,6 +399,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<Request, R
         14 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
             Ok(Request::Check { buffer: cap, handle: wire::field(&words, 0, 16, 32) as u32 })
+        }
+        15 => {
+            wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok(Request::Scope { dir: wire::field(&words, 0, 16, 32) as u32, writable: wire::field(&words, 0, 48, 1) != 0 })
         }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
@@ -513,4 +532,8 @@ pub fn reply_check(bytes: &mut [u8], value: core::result::Result<Report<'_>, Err
     let encoded = (|w: &mut wire::Writer| -> Result<()> { wire::Item::encode(&value, w)?; Ok(()) })(&mut writer);
     if encoded.is_err() { return wire::reply([wire::STATUS_OVERFLOW, 0]); }
     wire::reply([(writer.len() as usize) << 16, 0])
+}
+pub fn reply_scope(value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) };
+    wire::reply_cap([0, 0], value, false)
 }

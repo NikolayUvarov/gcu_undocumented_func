@@ -1590,6 +1590,12 @@ def edit_check(vm):
     keys("Вторая строка".encode(), "BYTES=34 ")
     keys(b"\r", "LINE=3 COL=1 BYTES=35 ")
     keys(f2, "[EDIT] SAVED 35 BYTES TO data/edit.txt")
+    # The editor's client is confined to data/: other places are refused (issue 051).
+    for outside in (b"ram:x.txt", b"kernel.elf", b"EFI/x.txt"):
+        keys(shift_f2, "DIALOG=SAVEAS")
+        keys(b"\x7f" * 16, "DIALOG=SAVEAS")
+        keys(outside, "DIALOG=SAVEAS")
+        keys(b"\r", "[EDIT] NOT SAVED denied: the editor may change only its file's directory")
     leave(f10, "[EDIT] DONE")
     # A file with CR LF line endings keeps them; a new line gets one too.
     assert "BYTES=15 LINES=3 MODIFIED=0" in start("data/crlf.txt")
@@ -1599,20 +1605,23 @@ def edit_check(vm):
     keys(b"4", "BYTES=24 ")
     keys(f2, "[EDIT] SAVED 24 BYTES TO data/crlf.txt")
     leave(f10, "[EDIT] DONE")
-    # A boot file opens read-only: typing changes nothing; Shift+F2 saves a copy on ram:, which may be changed.
+    # A boot file opens read-only (its directory is read-only to the editor): typing changes nothing, and a copy
+    # cannot go elsewhere.
     assert "BYTES=33 LINES=2 MODIFIED=0 DIALOG=NONE MENU=0 RO=1" in start("readme.txt")
     keys(b"x", "BYTES=33 LINES=2 MODIFIED=0")
     keys(shift_f2, "DIALOG=SAVEAS")
     keys(b"\x7f" * 10, "DIALOG=SAVEAS")
     keys(b"ram:copy.txt", "DIALOG=SAVEAS")
-    keys(b"\r", "[EDIT] SAVED 33 BYTES TO ram:copy.txt")
-    keys(b"x", "BYTES=34 ")
-    keys(f10, "DIALOG=UNSAVED")
-    keys(b"\x1b[C", "DIALOG=UNSAVED")  # Right: Don't save
-    leave(b"\r", "[EDIT] DONE")
-    require(utf8("cat ram:copy.txt"), "Только для чтения")
+    keys(b"\r", "[EDIT] NOT SAVED denied")
+    leave(f10, "[EDIT] DONE")
+    require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
     require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
-    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only and is saved elsewhere", flush=True)
+    # vfs_server made a scope for each start and ended those whose editor had exited.
+    scopes = vm.command("dmesg -s vfs_server")
+    for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
+        require(scopes, made)
+    require(scopes, "ENDED")
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory", flush=True)
 
 
 def edit_suite(args):

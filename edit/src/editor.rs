@@ -122,7 +122,7 @@ impl Editor {
 
     // Changes need a writable file.
     fn writable(&mut self) -> bool {
-        if self.read_only { self.notice = Some(String::from("Read-only: save it elsewhere with Shift+F2 (ram:, data/)")); }
+        if self.read_only { self.notice = Some(String::from("Read-only: this file may not be changed here")); }
         !self.read_only
     }
 

@@ -88,5 +88,25 @@ class Bulk(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class CapabilityResults(unittest.TestCase):
+    """A result may be a capability: the reply carries it into a slot the client names."""
+
+    def test_capability_result(self):
+        i = parse("enum e { a }\nf: func(x: u32) -> result<borrow<endpoint>, e>;\n")
+        f = i.functions[0]
+        self.assertEqual((f.ok_handle, f.ok, f.error), (("borrow", "endpoint"), None, "e"))
+        rust = mind_idl.generate(i, "t.wit")
+        self.assertIn("pub fn f(endpoint: ipc::Endpoint, x: u32, receive: usize) -> Result<core::result::Result<usize, E>>", rust)
+        self.assertIn("wire::call_receiving(endpoint, words, None, receive)", rust)
+        self.assertIn("crate::dev::cap_info(receive).0 != CAP_KIND_ENDPOINT", rust)
+        self.assertIn("wire::reply_cap([0, 0], value, false)", rust)
+        moved = mind_idl.generate(parse("enum e { a }\nf: func() -> result<own<memory>, e>;\n"), "t.wit")
+        self.assertIn("wire::reply_cap([0, 0], value, true)", moved)
+
+    def test_unknown_capability_kind_rejected(self):
+        with self.assertRaises(mind_idl.IdlError):
+            parse("enum e { a }\nf: func() -> result<own<page>, e>;\n")
+
+
 if __name__ == "__main__":
     unittest.main()

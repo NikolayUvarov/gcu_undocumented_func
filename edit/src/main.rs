@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
-// edit: text editor (edit::editor). It asks its launcher for a file capability (`REQUEST_FILE`): the shell lends its
-// own VFS client in SLOT_FILE, so the editor can save where the user may write (`ram:`, `data/`). Without it the
-// editor has the read-only client every application gets, and a file opens read-only.
+// edit: text editor (edit::editor). It asks its launcher for its file (`REQUEST_FILE`): the shell lends a VFS client
+// confined to the file's directory (`ram:` without a file), writable where the user may write, in SLOT_FILE; the
+// editor keeps using full paths (`mind::fs::use_scope`). Without it the editor has the read-only client every
+// application gets, and a file opens read-only.
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -21,7 +22,7 @@ mind::entry!(main);
 
 fn describe(error: Error) -> String {
     match error {
-        Error::Denied | Error::ReadOnly => String::from("denied (only ram: and data/ are writable)"),
+        Error::Denied | Error::ReadOnly => String::from("denied: the editor may change only its file's directory, where you may"),
         Error::NoSpace => String::from("the disk is full"),
         Error::NotFound => String::from("no such directory"),
         Error::Name | Error::Invalid => String::from("invalid name"),
@@ -65,8 +66,16 @@ fn save(path: &str, text: &[u8]) -> Result<usize, String> {
 }
 
 fn main(info: &'static mind::BootInfo) {
-    if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let path = mind::process::args_str().trim();
+    if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
+        // The client's root is the file's directory.
+        let base = if path.is_empty() { String::from("ram:") } else {
+            let (volume, rest) = fs::split(path);
+            let parent = rest.rfind('/').map_or("", |i| &rest[..i]);
+            if volume.is_empty() { String::from(parent) } else { format!("{}:{}", volume, parent) }
+        };
+        fs::use_scope(Endpoint(SLOT_FILE), &base);
+    }
     let (text, read_only) = match load(path) {
         Ok(loaded) => loaded,
         Err(error) => { mind::println!("[EDIT] CANNOT OPEN {}", error); return; }

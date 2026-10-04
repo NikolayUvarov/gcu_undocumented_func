@@ -8,8 +8,8 @@ use crate::sys::{Error as SysError, Result};
 use super::wire::{self, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,7 +25,7 @@ impl<'a> wire::Item<'a> for Error {
 
 /// What a program asks its launcher for (`mind::request!`, read from its ELF). It grants nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Needs { pub console: bool, pub sysinfo: bool, pub file: bool, pub lifecycle: bool, pub log: bool }
+pub struct Needs { pub console: bool, pub sysinfo: bool, pub file: bool, pub lifecycle: bool, pub log: bool, pub files: bool }
 impl<'a> wire::Item<'a> for Needs {
     fn encode(&self, w: &mut wire::Writer) -> Result<()> {
         w.bool(self.console)?;
@@ -33,9 +33,10 @@ impl<'a> wire::Item<'a> for Needs {
         w.bool(self.file)?;
         w.bool(self.lifecycle)?;
         w.bool(self.log)?;
+        w.bool(self.files)?;
         Ok(())
     }
-    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { console: r.bool()?, sysinfo: r.bool()?, file: r.bool()?, lifecycle: r.bool()?, log: r.bool()? }) }
+    fn decode(r: &mut wire::Reader<'a>) -> Option<Self> { Some(Self { console: r.bool()?, sysinfo: r.bool()?, file: r.bool()?, lifecycle: r.bool()?, log: r.bool()?, files: r.bool()? }) }
 }
 
 /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session.

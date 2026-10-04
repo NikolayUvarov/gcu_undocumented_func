@@ -22,6 +22,9 @@ use mind::sys::Error;
 // Words the shell completes with Tab besides program names.
 const COMMANDS: [&str; 31] = ["boot", "caps", "cat", "clear", "clock", "cpus", "date", "devices", "endpoints", "faults", "fg", "free", "heap", "help", "irqs", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "physmap", "pmap", "ps", "rm", "run", "stat", "stop", "sync", "write"];
 const NAMES: usize = 64;
+// Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
+// SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
+const SCOPE_RECEIVE: usize = 11;
 
 struct Shell {
     term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
@@ -110,7 +113,8 @@ impl Shell {
 
     // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
-    // client for `REQUEST_SYSINFO`, its own VFS client (writes on `ram:` and in `data/`) for `REQUEST_FILE`, its log
+    // client for `REQUEST_SYSINFO`, a VFS client confined to the named file's directory for `REQUEST_FILE` (its own
+    // VFS client, which writes on `ram:` and in `data/`, for `REQUEST_FILES`), its log
     // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`.
     // Nothing is granted by program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
@@ -134,11 +138,22 @@ impl Shell {
         let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
         let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
-        let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
-        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG), (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)] {
-            if !asked { continue; }
-            if let Err(error) | Ok(Err(error)) = lend(slot, cap) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
+        // writable where the user may write; one that asks for the user's files gets the shell's own client.
+        let scoped = needs.file && !needs.files;
+        if scoped {
+            let path = args.split_whitespace().next().unwrap_or("");
+            let (volume, rest) = if path.is_empty() { ("ram", "") } else { mind::fs::split(path) };
+            let parent = rest.rfind('/').map_or("", |i| &rest[..i]);
+            let made = mind::fs::Dir::root(volume).and_then(|root| root.dir(parent, false)).and_then(|dir| dir.scope(true, SCOPE_RECEIVE));
+            if let Err(error) = made { let _ = loader::abort(Endpoint::LOADER, session); return Err(Error::from(error)); }
         }
+        let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
+        let wanted = [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
+                      (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)];
+        let lent = wanted.iter().filter(|w| w.0).try_for_each(|&(_, slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
+        if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
+        if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         loader::commit(Endpoint::LOADER, session)?.map_err(failed)
     }
 

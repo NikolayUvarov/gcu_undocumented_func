@@ -37,7 +37,16 @@ struct Handle { owner: u64, badge: u16, volume: usize, node: Node, name: String,
 
 struct Mounted { name: &'static str, volume: Volume<Disk> }
 
-struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>> }
+// A client confined to one directory (`scope`): the capability vfs_server minted with the scope's badge stays here, so
+// ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user.
+struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize }
+
+struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16 }
+
+const SCOPES: usize = 8;
+const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
+// Badges of scoped clients start here (below: applications 0, the user 1).
+const SCOPE_BADGE_FIRST: u16 = 0x100;
 
 fn error(e: fat::Error) -> Error {
     match e {
@@ -112,6 +121,28 @@ impl Server {
         for h in self.handles.iter_mut().flatten() { if h.volume == volume && node.entry.is_some() && h.node.entry == node.entry { h.node = node; } }
     }
 
+    fn scope_of(&self, badge: u16) -> Option<usize> {
+        if badge < SCOPE_BADGE_FIRST { return None; }
+        self.scopes.iter().position(|s| s.as_ref().is_some_and(|s| s.badge == badge))
+    }
+
+    fn end_scope(&mut self, index: usize) {
+        if let Some(scope) = self.scopes[index].take() {
+            let _ = ipc::revoke(scope.cap);
+            let _ = ipc::drop_cap(scope.cap);
+            mind::println!("[VFS] SCOPE {:#x} ENDED", scope.badge);
+        }
+    }
+
+    // Scopes whose task has ended, or that nobody took up, are revoked.
+    fn sweep_scopes(&mut self) {
+        let now = mind::time::uptime_ms() as u64;
+        for index in 0..self.scopes.len() {
+            let over = self.scopes[index].as_ref().is_some_and(|s| match s.user { Some(pid) => !mind::process::alive(pid), None => now.saturating_sub(s.made_ms) > SCOPE_UNUSED_MS });
+            if over { self.end_scope(index); }
+        }
+    }
+
     fn writable(&self, zone: Zone, volume: usize) -> Result<(), Error> {
         if !self.volumes[volume].volume.writable() { return Err(Error::ReadOnly); }
         if zone != Zone::Writable { return Err(Error::Denied); }
@@ -119,11 +150,20 @@ impl Server {
     }
 
     fn serve(&mut self, request: Request, sender: u64, badge: u16, bytes: &mut [u8]) -> mind::Result<()> {
-        let user = badge & VFS_BADGE_USER != 0;
+        let user = badge == VFS_BADGE_USER;
         match request {
             Request::Root { payload, .. } => {
                 let name = match vfs::args_root(bytes, payload) { Ok(name) => String::from(name), Err(reason) => return wire::reject(reason) };
                 let result = (|| {
+                    // A scoped client's root of its volume is the scope's directory; other roots are refused.
+                    if badge >= SCOPE_BADGE_FIRST {
+                        let index = self.scope_of(badge).ok_or(Error::Denied)?;
+                        let scope = self.scopes[index].as_mut().unwrap();
+                        match scope.user { None => scope.user = Some(sender), Some(pid) if pid != sender => return Err(Error::Denied), _ => {} }
+                        let (volume, node, zone, dir_name) = (scope.volume, scope.node, scope.zone, scope.name.clone());
+                        if !self.volumes[volume].name.eq_ignore_ascii_case(&name) { return Err(Error::Denied); }
+                        return self.add(Handle { owner: sender, badge, volume, node, name: dir_name, zone });
+                    }
                     let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(&name)).ok_or(Error::NotFound)?;
                     let zone = if !user { Zone::ReadOnly } else if self.volumes[volume].name.is_empty() { Zone::BootRoot } else { Zone::Writable };
                     let node = self.volumes[volume].volume.root();
@@ -237,6 +277,10 @@ impl Server {
                     let v = &mut self.volumes[volume].volume;
                     let entry = v.find(&parent, name).map_err(error)?;
                     v.remove(&parent, name).map_err(error)?;
+                    // A scope of the removed directory ends.
+                    for index in 0..self.scopes.len() {
+                        if self.scopes[index].as_ref().is_some_and(|s| s.volume == volume && entry.node.cluster >= 2 && s.node.cluster == entry.node.cluster) { self.end_scope(index); }
+                    }
                     // Handles of the removed entry are closed: its clusters may be reused.
                     for slot in self.handles.iter_mut() {
                         if slot.as_ref().is_some_and(|h| h.volume == volume && (h.node.entry == entry.node.entry || (entry.node.cluster >= 2 && h.node.cluster == entry.node.cluster))) { *slot = None; }
@@ -277,6 +321,27 @@ impl Server {
                 vfs::reply_check(bytes, result.as_ref().map(|r| vfs::Report { files: r.files, directories: r.directories, used: r.used, free: r.free, lost: r.lost,
                     lost_chains: r.lost_chains, cross_linked: r.cross_linked, bad_chains: r.bad_chains, sizes: r.sizes, bad_entries: r.bad_entries, dirty: r.dirty,
                     first: &r.first }).map_err(|e| *e))
+            }
+            Request::Scope { dir, writable } => {
+                let result = (|| {
+                    let h = self.get(dir, sender, badge)?;
+                    if !h.node.is_dir() { return Err(Error::NotDirectory); }
+                    // Never more than the caller's handle: writable only where the handle is.
+                    let zone = if writable && h.zone == Zone::Writable { Zone::Writable } else { Zone::ReadOnly };
+                    let (volume, node, name) = (h.volume, h.node, h.name.clone());
+                    self.sweep_scopes();
+                    let index = self.scopes.iter().position(Option::is_none).ok_or(Error::Handles)?;
+                    let badge = loop {
+                        let next = self.next_badge;
+                        self.next_badge = if next == u16::MAX { SCOPE_BADGE_FIRST } else { next + 1 };
+                        if self.scope_of(next).is_none() { break next; }
+                    };
+                    let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Handles)?;
+                    mind::println!("[VFS] SCOPE {:#x} FOR {}:/{} ({})", badge, self.volumes[volume].name, name, if zone == Zone::Writable { "WRITABLE" } else { "READ-ONLY" });
+                    self.scopes[index] = Some(Scope { badge, volume, node, name, zone, user: None, made_ms: mind::time::uptime_ms() as u64, cap });
+                    Ok(cap)
+                })();
+                vfs::reply_scope(result)
             }
             Request::Flush { handle } => {
                 let result = self.get(handle, sender, badge).map(|h| h.volume).and_then(|volume| self.volumes[volume].volume.flush().map_err(error));
@@ -334,7 +399,7 @@ fn main(_info: &'static BootInfo) {
             }
         }
     }
-    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect() };
+    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         let decoded = vfs::decode(&request, RECEIVED);

@@ -163,10 +163,10 @@ fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
     let (file, _) = open(name.as_bytes()).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })?;
     let flags = request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0));
     use mind::process::*;
-    Ok(loader::Needs { console: flags & REQUEST_CONSOLE != 0, sysinfo: flags & REQUEST_SYSINFO != 0, file: flags & REQUEST_FILE != 0, lifecycle: flags & REQUEST_LIFECYCLE != 0, log: flags & REQUEST_LOG != 0 })
+    Ok(loader::Needs { console: flags & REQUEST_CONSOLE != 0, sysinfo: flags & REQUEST_SYSINFO != 0, file: flags & REQUEST_FILE != 0, lifecycle: flags & REQUEST_LIFECYCLE != 0, log: flags & REQUEST_LOG != 0, files: flags & REQUEST_FILES != 0 })
 }
 
-// A request in the MIND IDL protocol (idl/loader.wit): method 1..5 and major version 1 in the low bytes. The older
+// A request in the MIND IDL protocol (idl/loader.wit): method 1..5 and the interface's major version in the low bytes. The older
 // protocol's first word is a program name (printable bytes) or 0.
 fn idl_request(launcher: &mut Launcher, request: &ipc::Received) {
     let decoded = loader::decode(request, RECEIVED_CAP);
@@ -218,7 +218,7 @@ fn main(_info: &'static BootInfo) {
             if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
             continue;
         }
-        if (1..=5).contains(&(request.data[0] & 0xFF)) && (request.data[0] >> 8) & 0xFF == 1 { idl_request(&mut launcher, &request); continue; }
+        if (1..=5).contains(&(request.data[0] & 0xFF)) && (request.data[0] >> 8) & 0xFF == loader::VERSION.0 as usize { idl_request(&mut launcher, &request); continue; }
         let code = if request.data == [0, LOADER_LIST] {
             // Program list into the caller's memory page.
             match Mapping::new(RECEIVED_CAP) { Ok(mut page) => listing(page.as_mut_slice()), Err(error) => error.code() }

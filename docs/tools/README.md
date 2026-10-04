@@ -141,6 +141,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - The caller grants, the program only requests (MC-3.11):
   - **Loader v1** (`loader.wit`): `begin(name, args) → session`, `grant(session, slot, capability)` — repeated, one capability per IPC message, `commit(session) → pid`, `abort(session)`, `inspect(name) → needs`. The loader copies only what the caller passed (slots 7–11); the program's request chooses screen or console program. Done in issue 042.
   - **Request:** a note section `.note.mind.request` in the ELF lists what the program asks for (`sysinfo`, `file:rw`, `dir:rw`, `lifecycle`) and whether it needs a screen; `inspect(name)` returns it to the caller, who decides.
+  - Done for files in issue 051: `REQUEST_FILE` gets a client of `vfs_server` confined to the named file's directory, `REQUEST_FILES` the user's whole client (fm).
   - **The shell as the user's agent (powerbox):** `edit notes.txt` → the shell opens `notes.txt` for writing and passes only that handle; `fm` → a read-only handle for `/` and a read-write one for the data directory; `top`, `memmap`, `load` → a sysinfo client. Anything else in the request is refused or confirmed by the user.
   - Signed manifests (track C, Article 9) later replace the note section.
 
@@ -185,7 +186,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Keys (Norton Commander / FAR):** Tab — other panel; Enter — enter a directory, run an `.elf` (through the loader with the standard grants) or view a text; F3 view; F4 edit (starts `edit` with a read-write handle for that file); F5 copy; F6 move/rename; F7 mkdir; F8 delete; F9 menu; F10 quit; Ins select; `+`/`-` select by mask; Alt+F1/Alt+F2 volume for the left/right panel; Ctrl+R reread; Alt+F7 find.
 - **Operations:** progress dialog with cancel; on error retry / skip / abort; confirmation for delete and overwrite; copy between volumes (boot disk ↔ RAM disk).
 - **Phase 1** (read-only VFS): browse, view, run, information, find. **Phase 2** (after F8): write operations.
-- Phase 1 done in issue 043, phase 2 in issue 048: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILE`, as the editor does (narrowed in issue 051).
+- Phase 1 done in issue 043, phase 2 in issue 048: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILES` (issue 051 split it from the editor's one-directory `REQUEST_FILE`).
 - The viewer is built in rather than a separate process: every application with a screen costs a full frame of kernel memory.
 
 ### 4.2 `edit` — panel text editor
@@ -197,7 +198,7 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Modes:** read-only (opened with a read-only handle) and hex (shared with `view`).
 - **Later:** syntax highlighting (Rust, TOML, WIT, Markdown), column selection.
 - The core (buffer, cursor, search, undo) is a `no_std` module that also builds on the host and is tested there, like `tests/tts_host.rs`.
-- Done in issue 047 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Deviations: the editor gets the shell's own VFS client for `REQUEST_FILE` (writes on `ram:` and in `data/`) instead of a handle for one file — narrowed in issue 051; no hex mode yet (use `view`).
+- Done in issue 047 (`edit/`, `tests/edit_host.rs`, QEMU suite `edit`). Since issue 051 the editor gets a VFS client confined to its file's directory (`vfs.wit` `scope`) rather than a handle for the one file: saving through `name.tmp` and a rename needs the directory. Deviation: no hex mode yet (use `view`).
 
 ### 4.3 `view` — viewer
 
@@ -286,7 +287,7 @@ graph LR
 
 ## 7. Issues
 
-Opened on 2026-10-04 as [032–050](../../issues/README.md): 032 program heap, 033 font, 034 text UI library, 035 key events, 036 shell line editing, 037 `view`, 038 IDL v0.2, 039 observation ABI, 040 `sysmon`, 041 `top`/`memmap`/`load`/`hw`, 042 loader v1, 043 `fm` read-only, 044 endpoint badges and block write, 045 `ramdisk`, 046 VFS v2 with FAT write, 047 `edit`, 048 `fm` writes/`df`/`fsck`, 049 `logd`/`dmesg`, 050 `svc`.
+Opened on 2026-10-04 as [032–050](../../issues/README.md): 032 program heap, 033 font, 034 text UI library, 035 key events, 036 shell line editing, 037 `view`, 038 IDL v0.2, 039 observation ABI, 040 `sysmon`, 041 `top`/`memmap`/`load`/`hw`, 042 loader v1, 043 `fm` read-only, 044 endpoint badges and block write, 045 `ramdisk`, 046 VFS v2 with FAT write, 047 `edit`, 048 `fm` writes/`df`/`fsck`, 049 `logd`/`dmesg`, 050 `svc`; 051 (scoped file grants) split off from 047.
 
 ## 8. Decisions (accepted 2026-10-04)
 

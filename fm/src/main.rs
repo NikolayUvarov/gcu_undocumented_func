@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// fm: file manager over vfs_server (fm::fm). It asks its launcher for a file capability (`REQUEST_FILE`): the shell
+// fm: file manager over vfs_server (fm::fm). It asks its launcher for the user's files (`REQUEST_FILES`): the shell
 // lends its own VFS client in SLOT_FILE, so copies, moves, new directories, deletions and the built-in editor can
 // change `ram:` and `data/`. Programs it starts go through the loader's launch session with the standard grants and
 // run in the background.
@@ -18,7 +18,7 @@ use mind::ipc::Endpoint;
 use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
 
-mind::request!(REQUEST_FILE);
+mind::request!(REQUEST_FILES);
 
 struct DiskFile(File);
 impl Source for DiskFile {

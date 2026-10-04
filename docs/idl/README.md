@@ -23,6 +23,7 @@ interface rtc {
 - Parameter types:
   - `bool`, `u8`, `u16`, `u32`, `u64`;
   - at most one capability: `own<memory>`, `own<endpoint>` (moved, `CAP_TRANSFER_MOVE`) or `borrow<memory>`, `borrow<endpoint>` (copied, so the client can revoke it: a lease).
+  - a result may be a capability, `result<own<K>, E>` or `result<borrow<K>, E>`: the reply carries it (moved, or copied so that the server can revoke it), and the generated client takes a `receive` argument, the caller's fixed slot where it lands, and checks its kind.
 - Result: none, an integer type, `option<integer>`, a bulk type (below) or `result<T, E>` where `T` is `_` (no value), a scalar or a bulk type and `E` is an enum.
 - Since 0.2, inside the interface:
   - `enum name { a, b-c }` — 1..255 cases, carried as `u8`; an enum may be a parameter, a result, a record field, a list item or the error of `result<>`;
@@ -75,8 +76,8 @@ A change that alters the meaning or layout of an existing function increments th
 |---|---|---|
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` | 1.1.0 (`date` added) |
 | [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` | 1.0.0 |
-| [`idl/loader.wit`](../../idl/loader.wit) | `loader` (launch sessions) | 1.1.0 (1.1: `grant` also takes slot 12, the system log) |
-| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` | 2.1.0 (2.0 replaced the numeric VFS protocol; 2.1 adds `check`) |
+| [`idl/loader.wit`](../../idl/loader.wit) | `loader` (launch sessions) | 2.0.0 (1.1: `grant` also takes slot 12, the system log; 2.0: `needs` gains `files`) |
+| [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` | 2.2.0 (2.0 replaced the numeric VFS protocol; 2.1 adds `check`, 2.2 `scope`) |
 | [`idl/log.wit`](../../idl/log.wit) | `logd` | 1.0.0 |
 | [`idl/lifecycle.wit`](../../idl/lifecycle.wit) | `init` | 1.0.0 (replaces the numeric start-by-name request) |
 

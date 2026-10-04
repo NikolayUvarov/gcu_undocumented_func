@@ -31,6 +31,17 @@ pub fn call(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>) -
     endpoint.call(&message, 0).map(|reply| reply.data)
 }
 
+/// `call` whose reply may carry a capability into the caller's fixed slot `receive`: the reply words, and whether a
+/// capability came.
+pub fn call_receiving(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>, receive: usize) -> Result<([usize; 2], bool)> {
+    let message = match cap {
+        None => Message::new(words[0], words[1]),
+        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, u8::MAX),
+        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, u8::MAX),
+    };
+    endpoint.call(&message, receive).map(|reply| (reply.data, reply.cap_received))
+}
+
 /// What a reply said.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status { Ok, None, Failed(u8) }
@@ -66,6 +77,12 @@ pub fn body(request: &Received, cap: usize, used: [usize; 2], kind: usize, expec
 }
 
 pub fn reply(words: [usize; 2]) -> Result<()> { ipc::reply(&Message::new(words[0], words[1])) }
+
+/// A reply carrying capability `handle`: moved, or copied so that the server can still revoke what it gave.
+pub fn reply_cap(words: [usize; 2], handle: usize, moved: bool) -> Result<()> {
+    let message = Message::new(words[0], words[1]);
+    ipc::reply(&if moved { message.with_cap_moved(handle, u8::MAX) } else { message.with_cap(handle, u8::MAX) })
+}
 
 /// Answers a request that failed `decode`.
 pub fn reject(reason: Reject) -> Result<()> { reply([if reason == Reject::Version { STATUS_VERSION } else { STATUS_INVALID }, 0]) }

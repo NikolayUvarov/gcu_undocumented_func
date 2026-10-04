@@ -3,7 +3,7 @@
 /// endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
 /// the shell (Appendix B.6); boot files are never writable.
-package mind:vfs@2.1.0;
+package mind:vfs@2.2.0;
 
 interface vfs {
     /// Why a request failed.
@@ -49,4 +49,10 @@ interface vfs {
     close: func(handle: u32) -> result<_, error>;
     /// Checks the volume of `handle` without changing it (version 2.1).
     check: func(buffer: borrow<memory>, handle: u32) -> result<report, error>;
+    /// A client confined to directory `dir` (a handle of the caller), lands in the caller's fixed slot `receive`: its
+    /// `root` of the directory's volume is that directory, every other root is refused, and it may change files there
+    /// only if `writable` and the caller may (never more than `dir`, MC-3.4). It works for the first task that uses it
+    /// and ends when that task does: vfs_server then revokes it. For a launcher to give a program one directory
+    /// (version 2.2).
+    scope: func(dir: u32, writable: bool) -> result<borrow<endpoint>, error>;
 }

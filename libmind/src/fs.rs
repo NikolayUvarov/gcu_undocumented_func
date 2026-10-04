@@ -57,6 +57,42 @@ pub fn use_endpoint(endpoint: Endpoint) {
     if let Some(c) = unsafe { &mut *STATE.0.get() } { c.roots = [(0, false); 2]; }
 }
 
+// With a scoped client (`use_scope`): the volume and the directory its root stands for.
+struct Base { volume: [u8; 16], volume_len: usize, dir: [u8; 255], dir_len: usize }
+impl Base {
+    fn volume(&self) -> &str { core::str::from_utf8(&self.volume[..self.volume_len]).unwrap_or("") }
+    fn dir(&self) -> &str { core::str::from_utf8(&self.dir[..self.dir_len]).unwrap_or("") }
+}
+struct BaseCell(UnsafeCell<Option<Base>>);
+unsafe impl Sync for BaseCell {}
+static BASE: BaseCell = BaseCell(UnsafeCell::new(None));
+
+/// Sends later calls to a client confined to one directory (`Dir::scope`; the shell lends one for `REQUEST_FILE`).
+/// `base` (`data`, `ram:`, `ram:notes`) is the directory its root stands for, so the program keeps using full paths;
+/// paths outside it fail with `Denied` (vfs_server would refuse them anyway).
+pub fn use_scope(endpoint: Endpoint, base: &str) {
+    use_endpoint(endpoint);
+    let (volume, dir) = split(base);
+    let dir = dir.trim_end_matches('/');
+    let mut b = Base { volume: [0; 16], volume_len: volume.len().min(16), dir: [0; 255], dir_len: dir.len().min(255) };
+    b.volume[..b.volume_len].copy_from_slice(&volume.as_bytes()[..b.volume_len]);
+    b.dir[..b.dir_len].copy_from_slice(&dir.as_bytes()[..b.dir_len]);
+    unsafe { *BASE.0.get() = Some(b); }
+}
+
+/// A path as this process's client sees it: the volume, and the path below the root the client gets.
+fn locate(path: &str) -> Result<(&str, &str)> {
+    let (volume, rest) = split(path);
+    let Some(base) = (unsafe { &*BASE.0.get() }) else { return Ok((volume, rest)) };
+    if !volume.eq_ignore_ascii_case(base.volume()) { return Err(Error::Denied); }
+    let dir = base.dir();
+    if dir.is_empty() { return Ok((volume, rest)); }
+    match rest.get(..dir.len()) {
+        Some(head) if head.eq_ignore_ascii_case(dir) && (rest.len() == dir.len() || rest.as_bytes()[dir.len()] == b'/') => Ok((volume, rest[dir.len()..].trim_start_matches('/'))),
+        _ => Err(Error::Denied),
+    }
+}
+
 fn client() -> Result<&'static mut Client> {
     let slot = unsafe { &mut *STATE.0.get() };
     if slot.is_none() { *slot = Some(Client { shared: wire::Shared::new(BUFFER).map_err(|_| Error::NoMemory)?, roots: [(0, false); 2] }); }
@@ -102,9 +138,9 @@ impl Dir {
     /// The root of a volume (`""`: the boot disk, `"ram"`).
     pub fn root(volume: &str) -> Result<Self> { Ok(Self { handle: root(volume)?, owned: false }) }
     /// A directory by path (`ram:docs`, `data/notes`).
-    pub fn open(path: &str) -> Result<Self> { let (volume, rest) = split(path); Self::root(volume)?.dir(rest, false) }
+    pub fn open(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, false) }
     /// The same, made with its parents if missing.
-    pub fn create(path: &str) -> Result<Self> { let (volume, rest) = split(path); Self::root(volume)?.dir(rest, true) }
+    pub fn create(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, true) }
     /// A directory below this one.
     pub fn dir(&self, path: &str, create: bool) -> Result<Self> {
         if path.is_empty() { return Ok(Self { handle: self.handle, owned: false }); }
@@ -144,6 +180,9 @@ impl Dir {
     }
     /// Writes what is cached for this volume to the disk.
     pub fn flush(&self) -> Result<()> { call(vfs::flush(endpoint(), self.handle)) }
+    /// A client confined to this directory (vfs.wit `scope`), received in the caller's fixed slot `receive`; it may
+    /// change files only if `writable` and this handle may. For a launcher that gives a program one directory.
+    pub fn scope(&self, writable: bool, receive: usize) -> Result<usize> { call(vfs::scope(endpoint(), self.handle, writable, receive)) }
     /// Checks this directory's volume without changing it; `visit` sees the report (idl/vfs.wit `report`).
     pub fn check<T>(&self, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> {
         let c = client()?;
@@ -162,7 +201,7 @@ impl File {
     /// Creates a file (or empties an existing one) to write.
     pub fn create(path: &str) -> Result<Self> { Self::open_mode(path, VFS_MODE_WRITE | VFS_MODE_CREATE | VFS_MODE_TRUNCATE) }
     /// Opens with `VFS_MODE_*` bits.
-    pub fn open_mode(path: &str, mode: u8) -> Result<Self> { let (volume, rest) = split(path); Dir::root(volume)?.file(rest, mode) }
+    pub fn open_mode(path: &str, mode: u8) -> Result<Self> { let (volume, rest) = locate(path)?; Dir::root(volume)?.file(rest, mode) }
     pub fn size(&self) -> usize { self.size }
     pub fn position(&self) -> usize { self.position }
     pub fn seek(&mut self, position: usize) { self.position = position.min(self.size); }
@@ -219,11 +258,11 @@ pub fn list(path: &str, visit: impl FnMut(&DirEntry)) -> Result<usize> { Dir::op
 pub fn mkdir(path: &str) -> Result<()> { Dir::create(path).map(drop) }
 
 /// Removes a file or an empty directory.
-pub fn remove(path: &str) -> Result<()> { let (volume, rest) = split(path); Dir::root(volume)?.remove(rest) }
+pub fn remove(path: &str) -> Result<()> { let (volume, rest) = locate(path)?; Dir::root(volume)?.remove(rest) }
 
 /// Renames or moves within a volume.
 pub fn rename(from: &str, to: &str) -> Result<()> {
-    let ((volume, from), (target, to)) = (split(from), split(to));
+    let ((volume, from), (target, to)) = (locate(from)?, locate(to)?);
     if !volume.eq_ignore_ascii_case(target) { return Err(Error::Invalid); }
     let root = Dir::root(volume)?;
     root.rename(from, &root, to)
@@ -231,7 +270,7 @@ pub fn rename(from: &str, to: &str) -> Result<()> {
 
 /// Size, time and attributes of a file or directory.
 pub fn metadata(path: &str) -> Result<Metadata> {
-    if split(path).1.is_empty() { return Dir::open(path)?.metadata(); }
+    if locate(path)?.1.is_empty() { return Dir::open(path)?.metadata(); }
     match File::open(path) { Ok(file) => file.metadata(), Err(Error::IsDirectory) => Dir::open(path)?.metadata(), Err(e) => Err(e) }
 }
 

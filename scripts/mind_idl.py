@@ -75,6 +75,7 @@ class Function:
     ok: Type | None = None         # result value (None: no value)
     error: str | None = None       # enum of result<T, E>
     optional: bool = False
+    ok_handle: tuple | None = None  # result<own|borrow<kind>, E>: a capability in the reply
 
 
 @dataclass
@@ -287,7 +288,13 @@ def check(function, interface, where):
             if error not in interface.enums:
                 raise IdlError(f"{where}: the error of result<> must be an enum")
             function.error = error
-            function.ok = None if ok == "_" else parse_type(ok, interface, where)
+            if handle := re.fullmatch(r"(own|borrow)<(\w+)>", ok):
+                if handle.group(2) not in HANDLES:
+                    raise IdlError(f"{where}: unknown handle kind '{handle.group(2)}'")
+                function.ok_handle = (handle.group(1), handle.group(2))
+                function.ok = None
+            else:
+                function.ok = None if ok == "_" else parse_type(ok, interface, where)
         elif match := re.fullmatch(r"option<(\w+)>", result):
             function.optional = True
             function.ok = parse_type(match.group(1), interface, where)
@@ -451,7 +458,9 @@ def generate(interface, source):
                 args.append(f"{p.name}: {rust_type(p.t, interface)}")
         for p in f.bulk:
             args.append(f"{p.name}: {rust_type(p.t, interface, chr(39) + '_')}")
-        value = "()" if f.ok is None else rust_type(f.ok, interface, "'b", view=True)
+        if f.ok_handle:
+            args.append("receive: usize")
+        value = "usize" if f.ok_handle else "()" if f.ok is None else rust_type(f.ok, interface, "'b", view=True)
         if f.optional:
             value = f"Option<{value}>"
         ret = f"core::result::Result<{value}, {camel(f.error)}>" if f.error else value
@@ -473,12 +482,15 @@ def generate(interface, source):
         for p in f.scalars:
             words[p.word].append(encode_word(p, p.name))
         w(f"    let words = [{' | '.join(words[0])}, {' | '.join(words[1]) or '0'}];")
+        sent = "None"
         if f.handle:
             mode, _ = f.handle.handle
             cap = "cap" if buffered else f.handle.name
-            w(f"    let reply = wire::call(endpoint, words, Some(({cap}, {'true' if mode == 'own' else 'false'})))?;")
+            sent = f"Some(({cap}, {'true' if mode == 'own' else 'false'}))"
+        if f.ok_handle:
+            w(f"    let (reply, received) = wire::call_receiving(endpoint, words, {sent}, receive)?;")
         else:
-            w("    let reply = wire::call(endpoint, words, None)?;")
+            w(f"    let reply = wire::call(endpoint, words, {sent})?;")
         # Reply: status, then the value (scalar in the words, bulk in the buffer).
         if f.ok is not None and f.ok.scalar:
             rf = f.result_field
@@ -491,7 +503,10 @@ def generate(interface, source):
         w(f"    let status = wire::check_reply(&reply, [{used[0]:#x}, {used[1]:#x}], {'true' if f.optional else 'false'}, {'true' if f.error else 'false'})?;")
         if f.error:
             w(f"    if let wire::Status::Failed(code) = status {{ return {camel(f.error)}::from_u8(code).map(Err).ok_or(SysError::Invalid); }}")
-        if f.ok is None:
+        if f.ok_handle:
+            w(f"    if !received || crate::dev::cap_info(receive).0 != {HANDLES[f.ok_handle[1]]} {{ return Err(SysError::Invalid); }}")
+            value_expr = "receive"
+        elif f.ok is None:
             value_expr = "()"
         elif f.ok.scalar:
             value_expr = decode_word(f.result_field, "reply")
@@ -574,7 +589,9 @@ def generate(interface, source):
             w("")
     for f in interface.functions:
         bulk_result = f.ok is not None and not f.ok.scalar
-        if f.ok is None:
+        if f.ok_handle:
+            value_type = "usize"
+        elif f.ok is None:
             value_type = "()"
         else:
             value_type = rust_type(f.ok, interface, "'_")
@@ -582,14 +599,16 @@ def generate(interface, source):
             value_type = f"core::result::Result<{value_type}, {camel(f.error)}>"
         elif f.optional:
             value_type = f"Option<{value_type}>"
-        args = (["bytes: &mut [u8]"] if bulk_result else []) + ([] if (f.ok is None and not f.error) else [f"value: {value_type}"])
+        args = (["bytes: &mut [u8]"] if bulk_result else []) + ([] if (f.ok is None and not f.error and not f.ok_handle) else [f"value: {value_type}"])
         w(f"pub fn reply_{f.name}({', '.join(args)}) -> Result<()> {{")
         ok_value = "value"
         if f.error:
             w(f"    let value = match value {{ Ok(value) => value, Err(code) => return wire::reply([wire::STATUS_FAILED | (code as usize) << 16, 0]) }};")
         if f.optional:
             w("    let Some(value) = value else { return wire::reply([wire::STATUS_NONE, 0]) };")
-        if f.ok is None:
+        if f.ok_handle:
+            w(f"    wire::reply_cap([0, 0], value, {'true' if f.ok_handle[0] == 'own' else 'false'})")
+        elif f.ok is None:
             w("    wire::reply([0, 0])")
         elif f.ok.scalar:
             rf = f.result_field
