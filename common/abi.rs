@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 20;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 21;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
@@ -199,8 +199,14 @@ pub const SLOT_NETWORK: usize = 18;
 pub const SLOT_NETPOLICY: usize = 19;
 // The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls.
 pub const SLOT_TLS: usize = 20;
+// The shell's clients of the window broker (idl/window.wit, issue 157): a program's (lent for REQUEST_WINDOW) and the
+// manager's, with mind::window::BADGE_MANAGER (lent for REQUEST_WINDOW_MANAGER). Both go to the program's SLOT_WINDOW.
+pub const SLOT_WINDOWS: usize = 21;
+pub const SLOT_WINDOW_MANAGER: usize = 22;
+// In an application: its client of the window broker (8 is the input privilege only in the shell).
+pub const SLOT_WINDOW: usize = 8;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 21;
+pub const SLOT_DYNAMIC: usize = 23;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots.

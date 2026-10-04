@@ -1,0 +1,52 @@
+/// Window broker (`windows`, issue 157): keeps the windows of programs so they outlive the window manager. A window's
+/// surface (layout in `mind::window`) is memory of the broker, lent to the program that draws in it and to the manager
+/// that shows it: neither can take it from the other or from the broker. A program may lend an endpoint to wake it;
+/// the broker keeps the window's last place on the screen. One manager at a time (the manager badge, which the shell lends
+/// for `REQUEST_WINDOW_MANAGER`) attaches, gets the windows, copies of their surfaces and wake endpoints, saves where
+/// it puts them, and either detaches (windows and programs stay, hidden) or closes all (every program is asked to end).
+/// A manager that ends is detached. A window ends with its program.
+package mind:window@1.0.0;
+
+interface window {
+    /// Why a request failed. `denied`: not the manager, or not the window's owner; `busy`: another manager is attached.
+    enum error { invalid, limit, not-found, denied, busy }
+
+    /// What a window's content is.
+    enum kind { text, pixels }
+
+    /// Where the manager put a window: position and size in cells, stacking order (higher: in front), minimized or
+    /// maximized.
+    record placement { x: u16, y: u16, columns: u16, rows: u16, z: u16, minimized: bool, maximized: bool }
+
+    /// A window as the manager sees it: its id, the program, the content's kind and size (cells or pixels), the title
+    /// and the last placement (all 0 until a manager placed it).
+    record info { id: u32, owner: u64, kind: kind, width: u16, height: u16, title: string<64>, place: placement }
+
+    /// Program: a new window with a surface for `width` × `height` cells (text: up to 256 × 128) or pixels (up to
+    /// 1920 × 1200); returns its id. The surface comes from `surface`.
+    create: func(kind: kind, width: u16, height: u16) -> result<u32, error>;
+    /// Program: an endpoint the manager sends a short message to when it queued input events.
+    wake: func(window: u32, waker: borrow<endpoint>) -> result<_, error>;
+    /// Program: removes its window.
+    remove: func(window: u32) -> result<_, error>;
+
+    /// Manager: attaches; returns how many windows there are.
+    attach: func() -> result<u32, error>;
+    /// Manager: detaches; the windows stay, hidden.
+    detach: func() -> result<_, error>;
+    /// Manager: asks every window's program to end (state close in its surface, a wake message); returns how many.
+    close-all: func() -> result<u32, error>;
+    /// Manager: the windows from the `start`-th on, oldest first.
+    list: func(start: u32) -> result<list<info, 16>, error>;
+    /// Manager: counts every window created or removed; list again when it changes.
+    generation: func() -> u64;
+    /// The program that owns the window, or the manager: a read-write lease of its surface (revoked when the window
+    /// ends, and the manager's also when it detaches).
+    surface: func(window: u32) -> result<borrow<memory>, error>;
+    /// Manager: a copy of the window's wake endpoint.
+    waker: func(window: u32) -> result<borrow<endpoint>, error>;
+    /// Manager: saves where a window is.
+    place: func(window: u32, place: placement) -> result<_, error>;
+    /// Manager: a program's client of the broker, to lend to programs it starts in windows.
+    client: func() -> result<borrow<endpoint>, error>;
+}

@@ -99,6 +99,8 @@ pub const REQUEST_LOG: u32 = 16; // the system log
 pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, data/), for fm
 pub const REQUEST_NETWORK: u32 = 64; // a flow grant from the network policy broker in SLOT_NETWORK (issue 102)
 pub const REQUEST_AUTHORITY: u32 = 128; // the sysmon client with the authority badge in SLOT_SYSINFO: who holds what (issue 081)
+pub const REQUEST_WINDOW: u32 = 256; // a client of the window broker in SLOT_WINDOW: the program shows itself in a window (issue 157)
+pub const REQUEST_WINDOW_MANAGER: u32 = 512; // the broker's manager client in SLOT_WINDOW: a window manager (issue 157)
 pub const REQUEST_MAGIC: &[u8; 8] = b"MINDREQ1";
 
 /// Contents of the `.mind_request` section: magic, flags, reserved.

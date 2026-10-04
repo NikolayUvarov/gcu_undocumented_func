@@ -1,6 +1,6 @@
-# 157 — `windows`: window broker, windows that outlive the window manager
+# 157 — `windows`: window broker, windows that outlive the window manager — done
 
-**Type:** service + IDL · **Owner:** services track (this branch), with the tools track for 088 · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-2.6, MC-2.11, MC-3.11, MC-6.4
+**Type:** service + IDL · **Owner:** services track (this branch), with the tools track for 088 · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-2.6, MC-2.11, MC-3.11, MC-6.4
 
 ## Problem
 
@@ -40,4 +40,34 @@ QEMU suite with a test manager and two test programs (or `wm` from 088 once it e
 
 ## Related
 
-[088](088-text-window-manager.md), [155](155-virtual-consoles.md), [156](../issues-done/156-ps2-mouse.done).
+[088](../issues/088-text-window-manager.md), [155](../issues/155-virtual-consoles.md), [156](156-ps2-mouse.done).
+
+## Resolution
+
+- **One change from the plan: the surface is the broker's memory, not the program's.** A program could revoke memory it lent, and the broker or the manager reading it would fault. So the broker allocates each surface and lends it to the program and to the manager from two separate children of its capability:
+  - nobody can take a lease away from another;
+  - detaching revokes only the manager's lease;
+  - a window's end revokes both.
+- **`windows`** (boot service, `idl/window.wit` 1.0):
+  - Program side: `create` (kind, size: text up to 256 × 128 cells, pixels up to 1920 × 1200), `surface` (its lease), `wake` (an endpoint the manager or broker pokes with a short send), `remove`.
+  - Manager side (badge `mind::window::BADGE_MANAGER`): `attach` (`busy` while another live manager is attached), `detach`, `close-all`, `list` (id, owner, kind, size, title, saved placement), `generation`, `surface`, `waker`, `place`, `client` (a plain client to lend to programs it starts).
+  - Windows of ended programs are removed. A manager that ends is detached: its leases are revoked and the windows are marked hidden.
+- **`mind::window`:** the surface layout. Header (magic, kind, size, wanted size, change counter and changed rectangle, title, state shown/hidden/close), an input-event queue from the manager to the program, and then the cells (character, foreground, background) or pixels. Every reader checks what it reads (host test `tests/window_host.rs`).
+- **ABI:**
+  - `SLOT_WINDOW` 8 in applications; `REQUEST_WINDOW` (256) and `REQUEST_WINDOW_MANAGER` (512);
+  - the shell holds the broker's plain client (`SLOT_WINDOWS` 21) and the manager client (`SLOT_WINDOW_MANAGER` 22), and `SLOT_DYNAMIC` is now 23;
+  - the loader accepts slot 8 in a launch session.
+- **Tests:** test programs `wintest` (a program in a window, and an intruder with a plain client) and `winmgr` (a manager). The `windows` suite:
+  - two programs draw in windows;
+  - a manager lists them with their content, moves them, sends a key, and ends;
+  - the programs keep running (hidden, still drawing);
+  - a second manager gets them at the saved places;
+  - a manager while another is attached gets `busy`;
+  - the intruder is refused (`denied`) and gets no surface;
+  - "close all" ends both programs and their windows.
+- **Not done here (088, tools track):**
+  - the window manager `wm` itself;
+  - the surface backends of `mind::tui` and `gfx::Screen`;
+  - input from the surface's event queue in `mind::input`;
+  - resizing beyond a window's first size (a program creates a new window for a larger surface for now).
+

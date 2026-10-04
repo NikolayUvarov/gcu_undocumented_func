@@ -1,6 +1,6 @@
 # 088 — `wm`: window manager for text and pixel programs
 
-**Type:** tools (application, `mind::tui` and `gfx::Screen` backends, launch grants) · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** 157 (window broker); 156 (PS/2 mouse) for dragging with the mouse · **Roadmap:** track G · **Constitution:** MC-2.6, MC-2.11, MC-3.3, MC-3.11
+**Type:** tools (application, `mind::tui` and `gfx::Screen` backends, launch grants) · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** — (157 window broker and 156 PS/2 mouse are done) · **Roadmap:** track G · **Constitution:** MC-2.6, MC-2.11, MC-3.3, MC-3.11
 
 ## Problem
 
@@ -34,7 +34,17 @@ Every program has a whole screen of its own, and only the focused one is shown. 
   - **close all:** every program gets a close event. Programs that do not end are listed, and `wm` stops them through a lifecycle client only if it holds one.
   
   Closing one window sends its program the close event. A program that ends loses its window.
-- **Fixed slots.** The broker client of a program in a window needs one application slot (8 is free in applications; in the shell it is the input privilege). The loader accepts it in a launch session. This is an ABI change in `common/abi.rs`, done with the kernel owner.
+- **What 157 and 156 already provide:**
+  - **The broker:** service `windows`, `idl/window.wit`, `mind::window::Surface`. The surface is the broker's memory, lent to the program and the manager.
+  - **Slot and flags:** `SLOT_WINDOW` 8 with `REQUEST_WINDOW` and `REQUEST_WINDOW_MANAGER`, lent by the shell and accepted by the loader.
+  - **The mouse:** `mind::input::pointer`, `read_input`, `Input::Pointer`.
+  - **Examples:** `wintest` and `winmgr` show both sides of the protocol.
+  
+  What remains here:
+  - `wm` itself;
+  - the surface backends of `mind::tui::Terminal` and `gfx::Screen`, plus reading input from `Surface::event` in `mind::input` for programs started with `REQUEST_WINDOW`;
+  - `wm` lending its broker `client` to the programs it starts;
+  - `clock` and the monitors declaring `REQUEST_WINDOW` (or a `--window` start).
 
 ## Acceptance criteria
 
@@ -52,4 +62,4 @@ QEMU suite (keys over the UART and `sendkey`, the mouse with `mouse_move`/`mouse
 
 ## Related
 
-[157](157-window-broker.md), [089](089-text-clock-faces.md) (text faces of `clock` and `dzen-clock`), [156](../issues-done/156-ps2-mouse.done), [155](155-virtual-consoles.md) (full-screen consoles with Alt+F1…F4, which complement windows), [063](../issues-done/063-file-manager-read-only.done), [054](../issues-done/054-tui-library.done), [docs/tools](../docs/tools/README.md).
+[157](../issues-done/157-window-broker.done), [089](089-text-clock-faces.md) (text faces of `clock` and `dzen-clock`), [156](../issues-done/156-ps2-mouse.done), [155](155-virtual-consoles.md) (full-screen consoles with Alt+F1…F4, which complement windows), [063](../issues-done/063-file-manager-read-only.done), [054](../issues-done/054-tui-library.done), [docs/tools](../docs/tools/README.md).
