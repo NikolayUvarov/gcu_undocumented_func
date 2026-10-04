@@ -87,7 +87,8 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
 | `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `input_event`, `compositor_pull`, `cap_info` — for drivers |
 | `block` | block device client (`Device`) and the driver loop (`serve`, `Driver`) |
-| `gfx` | `Screen`: pixels, rectangles, 8×8 font text |
+| `gfx` | `Screen`: pixels, rectangles, 8×8 font text, UTF-8 text in the 8×16 font (`text16`, `glyph16`) |
+| `font16` | MIND Mono 16, the 8×16 text font: a subset of Terminus Font under the SIL OFL 1.1 with Cyrillic, box drawing, block elements and braille ([fonts/](fonts/README.md)) |
 | `rtc`, `fs`, `audio`, `tts` | clients of the RTC, VFS, audio and speech services (`audio::Stream`, `audio::wait_space`, `tts::say`) |
 | `util` | `Decimal`, `FixedBuf` (`core::fmt::Write` into a fixed buffer) |
 | `heap` | program heap: with the cargo feature `alloc` (`libmind = { path = "../libmind", features = ["alloc"] }`) a program gets a `GlobalAlloc` and can use `Vec`, `String`, `Box` after `extern crate alloc;`; `mind::heap_stats()` |
@@ -501,6 +502,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 /tmp/mind-core-runtime-tests
 rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /tmp/mind-core-heap-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
+python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
 
 The QEMU integration test boots an isolated copy of `usb_root`, exercises concurrent instances, `fg`, `kill`, UART/PS2 input, task limits, repeated allocation/freeing, and idle `HLT`. Additional suites check concurrent CPU progress, remote termination, independent SIMD contexts, private heap stress/OOM recovery, deliberate ring-3 faults and capability checks without stopping other programs, the boot services (IPC call/reply with memory capabilities, VFS over the ATA driver), the AHCI driver (`ahci` suite: the disk attached to an AHCI controller), text to speech (`tts` suite: duration and voiced pitch of the captured speech; with `--asr-model <Vosk Russian model directory>` also checks that the words are recognized) and the audio gateway (AC97 output captured to a WAV file and checked for the expected tones):

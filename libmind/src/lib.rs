@@ -5,6 +5,8 @@
 pub mod abi;
 #[path = "../../common/font.rs"]
 pub mod font;
+#[path = "../../common/font16.rs"]
+pub mod font16;
 
 pub mod audio;
 pub mod block;

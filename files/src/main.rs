@@ -11,11 +11,13 @@ use mind::gfx::Screen;
 use mind::util::FixedBuf;
 
 const BACKGROUND: u32 = 0x00101820; const TEXT: u32 = 0x00E0E0E0; const ACCENT: u32 = 0x0080D0FF;
+// Drawn with the 8x16 font (MIND Mono 16); the services suite compares it with the font's bitmaps.
+const TITLE: &str = "Files — демо VFS-сервера ╞═╡ Esc: выход";
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen = Screen::new(info);
-    if let Some(s) = screen { s.clear(BACKGROUND); s.text(24, 24, b"FILES - VFS SERVER DEMO (ESC: EXIT)", 2, ACCENT, None); }
+    if let Some(s) = screen { s.clear(BACKGROUND); s.text16(24, 24, TITLE, ACCENT, Some(BACKGROUND)); }
     let mut y = 64;
     let mut line = |text: &[u8]| { mind::process::log(text); mind::process::log(b"\n"); if let Some(s) = screen { s.text(24, y, text, 1, TEXT, None); y += 12; } };
 

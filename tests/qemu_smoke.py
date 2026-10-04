@@ -169,6 +169,28 @@ class VM:
         self.collect()
 
 
+def font16():
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import font_gen
+    return font_gen.parse_bdf(font_gen.SUBSET.read_text(encoding="utf-8"))[1]
+
+
+def check_text16(vm, x, y, text, color, background):
+    """The screen shows `text` in the 8x16 font at (x, y), pixel for pixel."""
+    glyphs = font16()
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    width = int(size.split()[0])
+    fg, bg = color.to_bytes(3, "big"), background.to_bytes(3, "big")
+    for index, ch in enumerate(text):
+        rows = glyphs.get(ord(ch), glyphs[0xFFFD])[1]
+        for row in range(16):
+            for col in range(8):
+                at = ((y + row) * width + x + index * 8 + col) * 3
+                want = fg if rows[row] & (0x80 >> col) else bg
+                assert pixels[at:at + 3] == want, (ch, index, row, col, pixels[at:at + 3], want)
+
+
 def require(text, fragment):
     assert fragment in text, (fragment, text)
 
@@ -727,6 +749,12 @@ def services_suite(vm):
     require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM ATA"), "[VFS] MOUNTED FAT16 FROM ATA")
     require(vm.command("run files &"), "PID=3 NAME=files BACKGROUND")
     files_check(vm, 3)
+    # Cyrillic, an em dash and box drawing in the 8x16 font (MIND Mono 16), checked pixel for pixel.
+    vm.send("fg 3\n")
+    vm.expect("FOREGROUND PID=3")
+    time.sleep(.2)
+    check_text16(vm, 24, 24, "Files — демо VFS-сервера ╞═╡ Esc: выход", 0x80D0FF, 0x101820)
+    vm.serial(); vm.background(3)
     require(vm.command("kill 3"), "KILLED PID=3")
     # loader: programs are read from disk, not the kernel table — new files launch too.
     listing = vm.command("list")
