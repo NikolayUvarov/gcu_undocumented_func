@@ -484,6 +484,67 @@ def shell_suite(vm):
     print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
 
 
+NOTES = "".join(f"Строка {i}: съешь же ещё этих мягких французских булок, да выпей чаю. Line {i}.\n" for i in range(1, 301))
+
+
+def tools_suite(vm):
+    """Text tools on the 8x16 text UI: the viewer."""
+    baseline = heap_used(vm)
+    vm.send("view docs/notes.txt\n")
+    require(vm.expect("[VIEW] TOP 0x0"), f"[VIEW] OPEN docs/notes.txt {len(NOTES.encode())} BYTES")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert canon("notes.txt") in screen[0] and canon("Стр 1 ") in screen[0], screen[0]
+    assert screen[1].startswith(canon("Строка 1: съешь же ещё этих мягких")), screen[1]
+    assert canon("10Quit") in screen[-1], screen[-1]
+    rows = len(screen) - 2
+    # Page down moves by a page less one line; the status follows.
+    vm.send_bytes(b"\x1b[6~")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    lines_per_row = 1 if len(NOTES.splitlines()[0]) <= len(screen[0]) else 2
+    assert canon(f"Стр {(rows - 1) // lines_per_row + 1} ") in screen[0], screen[0]
+    # F7 search (case-insensitive), the match is highlighted on the top line.
+    vm.send_bytes(b"\x1b[18~")
+    time.sleep(.3)
+    vm.send_bytes("СТРОКА 200:".encode() + b"\r")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith(canon("Строка 200:")), screen[1]
+    assert canon("Стр 200 ") in screen[0], screen[0]
+    # End shows the last line at the bottom of the page.
+    vm.send_bytes(b"\x1b[F")
+    vm.expect("[VIEW] TOP")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(row.startswith(canon("Строка 300:")) or canon("Line 300.") in row for row in screen[-3:-1]), screen[-3:]
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[VIEW] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # Hex mode on a binary.
+    vm.send("view kernel.elf\n")
+    vm.expect("[VIEW] TOP 0x0")
+    vm.send_bytes(b"\x1bOS")
+    vm.expect("[VIEW] TOP 0x0")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith("00000000: 7F 45 4C 46 02 01 01"), screen[1]
+    assert "HEX" in screen[0], screen[0]
+    vm.send_bytes(b"\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("view nothing.txt"), "PID=")
+    assert heap_used(vm) == baseline
+    print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+
+
 def busy_suite(vm):
     baseline = heap_used(vm)
     require(vm.command("run app2 &"), "PID=1 NAME=app2 BACKGROUND")
@@ -1081,10 +1142,10 @@ def main():
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
-    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,busy,smp,isolation,heap")
+    parser.add_argument("--suites", help="comma-separated subset: normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,busy,smp,isolation,heap")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -1102,6 +1163,9 @@ def main():
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
                 shutil.copyfile(disk / "app.elf", disk / "extra/demo.elf")
+            if suite == "tools":
+                (disk / "docs").mkdir()
+                (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
             elif suite == "isolation":
@@ -1123,7 +1187,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

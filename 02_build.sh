@@ -67,6 +67,7 @@ USER_CRATES=(
     "listen:listen:listen.elf"
     "files:files:files.elf"
     "keys:keys:keys.elf"
+    "view:view:view.elf"
     "beep:beep:beep.elf"
 )
 

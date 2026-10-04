@@ -83,6 +83,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `sys` | raw syscall, `Error`/`Result`, mailbox set up by `entry!` |
 | `process` | `exit`, `spawn` (through `loader`), `alive`, `log`, `print!`/`println!`; `spawn_image`/`loader_done` for `loader` |
 | `time`, `input` | `sleep`, `uptime_ms`, `rdtsc`; `read_key`, `wait_key`, `wait_or_exit` (Esc exits) → `Key` (`code()`: character, Enter, Esc, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12; `char()`, `text()`, `shift()`/`ctrl()`/`alt()`) |
+| `tui::viewer` | file viewer core shared by `view` and the file manager: a `Source` read through a window cache, text with or without wrapping and line numbers, hex dump, search ignoring case, go to |
 | `tui` | text UI on the 8×16 font: `Grid` of cells (text with clipping, frames with titles, fills, bars in 1/8 cells, braille time-series graphs), `Terminal` (the grid on the program's screen, redraws only changed cells, cursor), themes `CLASSIC` (Norton Commander colours) and `DARK`, widgets (`ListState`, `InputLine` with UTF-8 editing, `History`, `MenuBar`, `fkey_bar`, dialogs, `progress`) |
 | `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8) |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
@@ -334,6 +335,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `say [-p <Hz>] [-r <%>] [text]` — speak the text (or `say.txt`, or a greeting) through `tts`.
 * `listen [seconds]` — record from the microphone, show the level, report peak/RMS and play it back.
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
+* `view <file>` — text and hex viewer: UTF-8 text (Cyrillic), ↑/↓/PgUp/PgDn/Space/Home/End, F2 wrap on/off (←/→ shift long lines), F4 hex/text, F5 go to a line, `0x` offset or `N%`, F7 search ignoring case (Shift+F7 next), F1 keys, Esc/F3/F10 exit. The file is read on demand through a 64 KiB window, so large files open at once.
 * `RUN keys` — show the key events a program receives: key code, modifiers, character (Esc exits).
 * `RUN dzen-clock` — five color indicators for time (`dzen-clock.elf`); **D** toggles the thin digital time, **C** selects a simple 100-second orbit, **P** selects an orbit with 10-second ticks, **H** hides/shows the title and key hints.
 * `RUN <name> [arguments] &` — launch a new background instance and retain the shell. Arguments reach the program through `mind::process::args()`.
@@ -508,6 +510,7 @@ rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests
 rustc --edition=2021 --test tests/heap_host.rs -o /tmp/mind-core-heap-tests && /tmp/mind-core-heap-tests
 rustc --edition=2021 --test tests/keys_host.rs -o /tmp/mind-core-keys-tests && /tmp/mind-core-keys-tests
 rustc --edition=2021 --test tests/tui_host.rs -o /tmp/mind-core-tui-tests && /tmp/mind-core-tui-tests
+rustc --edition=2021 --test tests/viewer_host.rs -o /tmp/mind-core-viewer-tests && /tmp/mind-core-viewer-tests
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
