@@ -6,6 +6,16 @@
 //! 1.1 (issue 106): transmit checksum offload. When the device offers it (`offloads` bit 0), `send-partial` hands it a
 //! frame whose TCP or UDP checksum the device completes: the field holds the pseudo-header sum, `start` is where the
 //! summed bytes begin (from the start of the frame) and `offset` where the checksum field is, from `start`.
+//!
+//! 1.2 (issue 107): a frame ring shared with the network stack, so frames need no call each. The client lends a memory
+//! region (`attach`, at least `ring-bytes` long); the driver moves sent frames out of its transmit ring and received
+//! frames into its receive ring, and `kick` wakes the driver after the client queued frames (and tells it the client
+//! still uses the ring: after a second without a kick, received frames go back to `receive`). Layout, little-endian:
+//! bytes 0-3 the transmit head (frames the client queued), 64-67 the transmit tail (frames the driver took), 128-131
+//! the receive head (frames the driver queued), 192-195 the receive tail (frames the client took), all counting up and
+//! wrapping; from 4096, `ring-slots` transmit slots and then as many receive slots of 2048 bytes: a u16 length, a u16
+//! checksum start and a u16 checksum offset (both 0: no checksum to complete; transmit only), then the frame from byte
+//! 8. Each side checks every index and length it reads from the shared region.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -15,7 +25,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:net";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -140,6 +150,24 @@ pub fn send_partial(endpoint: Endpoint, frame: &[u8], start: u16, offset: u16) -
     Ok(Ok(()))
 }
 
+/// Uses `ring` as the shared frame ring (1.2); returns the slots per direction. A new ring replaces the old one.
+pub fn attach(endpoint: Endpoint, ring: usize) -> Result<core::result::Result<u32, Error>> {
+    let words = [8 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, Some((ring, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// The client queued frames or still uses the ring (1.2). Error invalid: no ring is attached (attach again).
+pub fn kick(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
+    let words = [9 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 1520;
 
@@ -153,6 +181,8 @@ pub enum Request<'a> {
     Counters,
     Offloads,
     SendPartial { frame: &'a [u8], start: u16, offset: u16 },
+    Attach { ring: usize },
+    Kick,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -210,6 +240,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SendPartial { frame, start, offset }, call))
         }
+        8 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_MEMORY, true)?;
+            Ok((Request::Attach { ring: cap }, Call::words(request, cap)))
+        }
+        9 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Kick, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -238,4 +276,12 @@ pub fn reply_offloads(call: Call, value: u32) -> Result<()> {
 pub fn reply_send_partial(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_attach(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_kick(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

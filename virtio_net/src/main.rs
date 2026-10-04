@@ -14,7 +14,8 @@ use mind::virtio::{Layout, Modern, NO_VECTOR};
 mod legacy;
 use mind::idl::{net, wire};
 use mind::ipc::Endpoint;
-use mind::mem::Pages;
+use mind::mem::{Mapping, Pages};
+use mind::netring::{self, Ring};
 
 const F_CSUM: u32 = 1 << 0; const F_MAC: u32 = 1 << 5; const F_STATUS: u32 = 1 << 16;
 const HDR_NEEDS_CSUM: u8 = 1; // virtio_net_hdr flags: the device completes the checksum (issue 106)
@@ -29,6 +30,7 @@ const PENDING: usize = 16; // received frames kept until a client takes them
 const WAITERS: usize = 4;
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 20; // rings are also checked without an interrupt (a shared or lost line)
+const RING_IDLE_MS: u64 = 1000; // a shared ring without a kick for this long is no longer served (its client is gone)
 
 const fn align(value: usize) -> usize { (value + 4095) & !4095 }
 
@@ -192,6 +194,22 @@ impl Device {
         self.queues[TX].last_used = last;
     }
 
+    // Moves frames through the shared ring (net.wit 1.2): received frames waiting here into its receive ring, frames
+    // the stack queued into the device's transmit queue while it has room.
+    fn pump(&mut self, ring: &Ring) {
+        while self.count > 0 {
+            let slot = self.head;
+            if !ring.deliver(&self.pending.as_slice()[slot * FRAME_MAX..slot * FRAME_MAX + self.lengths[slot]]) { break; }
+            self.head = (self.head + 1) % PENDING; self.count -= 1;
+        }
+        let mut frame = [0u8; FRAME_MAX];
+        while self.tx_free.iter().any(|&free| free) {
+            let Some(sent) = ring.take_sent(&mut frame) else { break };
+            let partial = (sent.start != 0 || sent.offset != 0).then_some((sent.start, sent.offset));
+            if sent.len == 0 || self.send(&frame[..sent.len], partial).is_err() { self.counters.dropped += 1; }
+        }
+    }
+
     // `partial`: (start, offset) of a checksum the device completes (only with F_CSUM).
     fn send(&mut self, frame: &[u8], partial: Option<(u16, u16)>) -> Result<(), net::Error> {
         if frame.len() < 14 || frame.len() > FRAME_MAX { return Err(net::Error::Invalid); }
@@ -248,6 +266,10 @@ fn main(_info: &'static BootInfo) {
     let mut waiters: [Option<wire::Call>; WAITERS] = [const { None }; WAITERS];
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut frame = [0u8; FRAME_MAX];
+    // The stack's shared frame ring, the PID that lent it and when it last kicked (net.wit 1.2).
+    let mut ring: Option<(Mapping, Ring)> = None;
+    let mut owner = 0u64;
+    let mut kicked = 0u64;
     match &device {
         Some(d) => {
             let _ = irq.bind(Endpoint::SERVICE);
@@ -265,11 +287,16 @@ fn main(_info: &'static BootInfo) {
                 let _ = irq.ack();
             }
             d.service();
+            let now = mind::time::uptime_ms() as u64;
+            // A ring whose lender ended is dropped at once: received frames go to `receive` again (the shell's ARP).
+            if ring.is_some() && !mind::process::alive(owner) { ring = None; mind::println!("[VIRTIO_NET] FRAME RING DROPPED: ITS CLIENT ENDED"); }
+            if let Some((_, r)) = ring.as_ref().filter(|_| now - kicked < RING_IDLE_MS) { d.pump(r); }
             // Clients parked in `wait` are answered once a frame is waiting.
             if d.count > 0 { for waiter in waiters.iter_mut() { if let Some(call) = waiter.take() { let _ = net::reply_wait(call, d.count as u32); } } }
         }
         let Ok(request) = received else { continue };
         if request.irq.is_some() { continue; }
+        let sender = request.sender;
         let (request, call) = match net::decode(&request, RECEIVED_CAP, &mut scratch) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
         let _ = match (request, device.as_mut()) {
             (net::Request::Counters, d) => net::reply_counters(call, &d.map_or(net::Counters::default(), |d| d.counters)),
@@ -280,6 +307,26 @@ fn main(_info: &'static BootInfo) {
             (net::Request::Info, Some(d)) => net::reply_info(call, Ok(&d.info())),
             (net::Request::Send { frame: data }, Some(d)) => net::reply_send(call, d.send(data, None)),
             (net::Request::SendPartial { frame: data, start, offset }, Some(d)) => net::reply_send_partial(call, d.send(data, Some((start, offset)))),
+            (net::Request::Attach { ring: lent }, Some(d)) => {
+                // The new ring replaces the old one (whose mapping goes with it).
+                let result = match Mapping::new(lent) {
+                    Ok(mapping) if mapping.len() >= netring::BYTES && mapping.address() % 64 == 0 => {
+                        let shared = unsafe { Ring::new(mapping.as_ptr::<u8>()) };
+                        ring = Some((mapping, shared)); kicked = mind::time::uptime_ms() as u64; owner = sender;
+                        mind::println!("[VIRTIO_NET] FRAME RING ATTACHED: {} SLOTS EACH WAY", netring::SLOTS);
+                        Ok(netring::SLOTS as u32)
+                    }
+                    _ => Err(net::Error::Invalid),
+                };
+                if let Some((_, r)) = ring.as_ref() { d.pump(r); }
+                net::reply_attach(call, result)
+            }
+            (net::Request::Kick, Some(d)) => match ring.as_ref() {
+                Some((_, r)) => { kicked = mind::time::uptime_ms() as u64; d.service(); d.pump(r); net::reply_kick(call, Ok(())) }
+                None => net::reply_kick(call, Err(net::Error::Invalid)),
+            },
+            (net::Request::Attach { .. }, None) => net::reply_attach(call, Err(net::Error::NoDevice)),
+            (net::Request::Kick, None) => net::reply_kick(call, Err(net::Error::NoDevice)),
             (net::Request::Offloads, d) => net::reply_offloads(call, d.map_or(0, |d| (d.features & F_CSUM != 0) as u32)),
             (net::Request::SendPartial { .. }, None) => net::reply_send_partial(call, Err(net::Error::NoDevice)),
             (net::Request::Receive, Some(d)) => {

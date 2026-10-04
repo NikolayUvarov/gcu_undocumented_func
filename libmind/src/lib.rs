@@ -25,6 +25,7 @@ pub mod keys;
 pub mod log;
 pub mod mem;
 pub mod network;
+pub mod netring;
 pub mod platform;
 pub mod process;
 pub mod random;

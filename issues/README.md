@@ -20,7 +20,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
-| [107](107-batched-frame-path.md) | Batched frame path between the stack and the card drivers | network | P3 | — (106 done) | tracks A, D |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
 | [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
@@ -123,6 +122,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [103](../issues-done/103-tls-service.done) | TLS service with non-exportable keys | done (2026-10-04) |
 | [105](../issues-done/105-multiple-network-cards.done) | Several network cards: driver instances per card, stack interfaces | done (2026-10-04) |
 | [106](../issues-done/106-network-offloads.done) | Checksum and segmentation offloads, after measurement (transmit checksum offload, off by default) | done (2026-10-04) |
+| [107](../issues-done/107-batched-frame-path.done) | Batched frame path between the stack and the card drivers (frame ring) | done (2026-10-04) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 

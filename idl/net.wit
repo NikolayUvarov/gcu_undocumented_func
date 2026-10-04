@@ -5,7 +5,17 @@
 /// 1.1 (issue 106): transmit checksum offload. When the device offers it (`offloads` bit 0), `send-partial` hands it a
 /// frame whose TCP or UDP checksum the device completes: the field holds the pseudo-header sum, `start` is where the
 /// summed bytes begin (from the start of the frame) and `offset` where the checksum field is, from `start`.
-package mind:net@1.1.0;
+///
+/// 1.2 (issue 107): a frame ring shared with the network stack, so frames need no call each. The client lends a memory
+/// region (`attach`, at least `ring-bytes` long); the driver moves sent frames out of its transmit ring and received
+/// frames into its receive ring, and `kick` wakes the driver after the client queued frames (and tells it the client
+/// still uses the ring: after a second without a kick, received frames go back to `receive`). Layout, little-endian:
+/// bytes 0-3 the transmit head (frames the client queued), 64-67 the transmit tail (frames the driver took), 128-131
+/// the receive head (frames the driver queued), 192-195 the receive tail (frames the client took), all counting up and
+/// wrapping; from 4096, `ring-slots` transmit slots and then as many receive slots of 2048 bytes: a u16 length, a u16
+/// checksum start and a u16 checksum offset (both 0: no checksum to complete; transmit only), then the frame from byte
+/// 8. Each side checks every index and length it reads from the shared region.
+package mind:net@1.2.0;
 
 interface net {
     /// Why a request failed.
@@ -32,4 +42,8 @@ interface net {
     /// Like `send`, with the checksum completed by the device (1.1). Error invalid also when the device cannot do it or
     /// `start` and `offset` do not leave room for the 16-bit field inside the frame.
     send-partial: func(frame: bytes<1514>, start: u16, offset: u16) -> result<_, error>;
+    /// Uses `ring` as the shared frame ring (1.2); returns the slots per direction. A new ring replaces the old one.
+    attach: func(ring: borrow<memory>) -> result<u32, error>;
+    /// The client queued frames or still uses the ring (1.2). Error invalid: no ring is attached (attach again).
+    kick: func() -> result<_, error>;
 }
