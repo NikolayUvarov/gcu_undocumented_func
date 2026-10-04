@@ -1,0 +1,23 @@
+/// Network policy broker (`netpolicy`): grants flow capabilities according to `netpolicy.txt` on the boot disk
+/// (MC-11.6). A grant is an endpoint capability of the network stack with its own badge; the stack lets its holder
+/// reach only the destinations, for the term and up to the volume the policy names for the program. Every grant,
+/// refusal and revocation is written to the system log. Its clients are launchers (the shell).
+package mind:netpolicy@1.0.0;
+
+interface netpolicy {
+    enum error { no-policy, no-network, limit, not-found, invalid }
+
+    /// A live grant: its badge, the program it was made for, rules, milliseconds left, bytes used.
+    record grant { badge: u16, program: string<16>, rules: u8, left-ms: u32, used: u64 }
+
+    /// Makes a grant for `program` from the policy; returns its badge. Error no-policy: the policy names nothing for it.
+    prepare: func(program: string<16>) -> result<u16, error>;
+    /// The grant with `badge` as a stack client to lend to that program (a word call, so it can carry the capability).
+    take: func(badge: u16) -> result<borrow<endpoint>, error>;
+    /// Ties grant `badge` to the process the launcher started with it: the grant ends when that process does.
+    bind: func(badge: u16, pid: u64) -> result<_, error>;
+    /// Revokes every grant of `program` (its copies are removed, its flows closed); returns how many.
+    revoke: func(program: string<16>) -> result<u32, error>;
+    /// The live grants.
+    list: func() -> list<grant, 32>;
+}

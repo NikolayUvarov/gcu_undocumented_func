@@ -18,7 +18,7 @@ This profile states what the current implementation is, what it guarantees, unde
 - x86-64, UEFI (OVMF in QEMU), 1–8 xAPIC CPUs, no SMT siblings in the tested configuration (`-smp N,cores=N,threads=1`).
 - QEMU `pc` machine with IDE, optionally AHCI, xHCI with USB mass storage, AC97; physical machines boot from the USB image but are not part of the evidence.
 - **No IOMMU is used.** Every device that can do DMA can read and write all physical memory.
-- One node. A VirtIO network card (QEMU `virtio-net-pci`) and an IPv4 stack (`netstack`, DHCP, ICMP, DNS, UDP, TCP) run in ring 3. No flow policy exists yet (issue 102): any holder of the stack's endpoint (today only the shell) may reach any destination. No network confidentiality or integrity is claimed (no TLS, issue 103).
+- One node. A VirtIO network card (QEMU `virtio-net-pci`) and an IPv4 stack (`netstack`, DHCP, ICMP, DNS, UDP, TCP) run in ring 3. Flows follow the policy broker (`netpolicy`, `netpolicy.txt` on the boot disk, issue 102): an application reaches only the destinations, term and volume its grant names; the shell's client has the operator's badge and reaches any destination. No network confidentiality or integrity is claimed (no TLS, issue 103).
 
 ## Conformance
 
@@ -51,6 +51,7 @@ Status: **met** (implemented and tested within this profile; each met row names 
 | MC-10.5 side channels | not claimed | No mitigation is claimed. |
 | MC-11.1 explicit ABI | partial | The ABI is a `repr(C)` mailbox and constants in `common/abi.rs`; there is no versioning. |
 | MC-11.3, 11.11 external formats in adapters | partial | FAT and USB/SCSI parsing run in ring 3 services with only their device capabilities; network frames, IP, TCP, UDP, DHCP and DNS are parsed in `netstack`, which holds only a client of the card driver (B.6); ELF parsing of applications runs in the kernel. |
+| MC-11.6 Babel access scope | partial | The network policy broker grants each program that asks for the network (`REQUEST_NETWORK`) a stack client with its own badge; the stack refuses (`denied`) every destination, protocol and port the grant does not name, ends it after its term or volume and when the program exits, and closes its flows when the grant is revoked (`netrevoke`); every grant, refusal and revocation is logged. Evidence: `net` suite. Not done: names in the policy (addresses only), policy changes by an authorized editor (the file is on the read-only boot volume), flows from the shell's operator client are unrestricted. |
 
 ## Memory transfers (Appendix B.2)
 

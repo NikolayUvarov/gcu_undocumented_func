@@ -1,11 +1,13 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card driver's frames. Serves idl/socket.wit. Holds a client of the driver and nothing of the device itself
-// (Appendix B.6: packet and flow endpoints with quotas, no power over the device).
+// network card driver's frames. Serves idl/socket.wit 2.0. Holds a client of the driver and nothing of the device
+// itself (Appendix B.6: packet and flow endpoints with quotas, no power over the device); what each client may reach
+// comes from the badge of its capability (policy.rs, MC-11.6).
 extern crate alloc;
 
 mod dns;
+mod policy;
 
 use alloc::boxed::Box;
 use alloc::vec;
@@ -19,7 +21,8 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium};
 use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
-use socket::Error;
+use policy::{Access, Policy};
+use socket::{Error, Protocol};
 
 const RECEIVED: usize = 9;
 const FRAME_MAX: usize = 1514;
@@ -254,7 +257,9 @@ impl Stack {
         Ok((self.sockets.add(socket), id, now_ms() + timeout.clamp(100, 30_000) as u64))
     }
 
-    fn handle(&mut self, request: socket::Request, call: wire::Call, owner: (u64, u16)) {
+    // Answers one request; returns the bytes it moved (sent, received). `source` tells which datagrams the client may see.
+    fn handle(&mut self, request: socket::Request, call: wire::Call, owner: (u64, u16), source: &dyn Fn(u32, u16) -> bool) -> (usize, usize) {
+        let mut moved = (0, 0);
         let _ = match request {
             socket::Request::Config => {
                 let config = self.address.map(|cidr| socket::Config { address: u32::from(cidr.address()), prefix: cidr.prefix_len(), gateway: self.gateway.map_or(0, u32::from),
@@ -283,6 +288,7 @@ impl Stack {
                     if self.address.is_none() { return Err(Error::NoNetwork); }
                     self.sockets.get_mut::<udp::Socket>(handle).send_slice(data, IpEndpoint::new(ip(address), port)).map_err(|_| Error::Again)
                 });
+                if result.is_ok() { moved.0 = data.len(); }
                 socket::reply_udp_send(call, result)
             }
             socket::Request::UdpReceive { socket: id } => {
@@ -290,6 +296,8 @@ impl Stack {
                 let result = self.slot(id, owner, Kind::Udp).and_then(|(_, handle)| {
                     let (data, meta) = self.sockets.get_mut::<udp::Socket>(handle).recv().map_err(|_| Error::Again)?;
                     let IpAddress::Ipv4(from) = meta.endpoint.addr;
+                    if !source(u32::from(from), meta.endpoint.port) { return Err(Error::Again); } // a source the grant does not name: dropped
+                    moved.1 = data.len();
                     datagram.address = u32::from(from); datagram.port = meta.endpoint.port;
                     datagram.data = List::from_slice(&data[..data.len().min(1472)]).unwrap_or_default();
                     Ok(())
@@ -297,7 +305,7 @@ impl Stack {
                 socket::reply_udp_receive(call, result.map(|()| &datagram))
             }
             socket::Request::TcpConnect { address, port, timeout_ms } => {
-                if self.address.is_none() { let _ = socket::reply_tcp_connect(call, Err(Error::NoNetwork)); return; }
+                if self.address.is_none() { let _ = socket::reply_tcp_connect(call, Err(Error::NoNetwork)); return moved; }
                 let socket = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; TCP_BUFFER]), tcp::SocketBuffer::new(vec![0; TCP_BUFFER]));
                 let handle = self.sockets.add(socket);
                 let local = self.port();
@@ -313,6 +321,7 @@ impl Stack {
                     if !socket.may_send() { return Err(Error::Closed); }
                     socket.send_slice(data).map(|n| n as u32).map_err(|_| Error::Closed)
                 });
+                if let Ok(n) = result { moved.0 = n as usize; }
                 socket::reply_tcp_send(call, result)
             }
             socket::Request::TcpReceive { socket: id, length } => {
@@ -324,14 +333,26 @@ impl Stack {
                         socket.recv_slice(&mut buffer[..want]).map_err(|_| Error::Closed)
                     } else if !socket.may_recv() { Err(Error::Closed) } else { Err(Error::Again) }
                 });
+                if let Ok(n) = result { moved.1 = n; }
                 socket::reply_tcp_receive(call, result.map(|n| &buffer[..n]))
             }
             socket::Request::Close { socket: id } => {
                 let result = self.slot(id, owner, Kind::Udp).or_else(|_| self.slot(id, owner, Kind::Tcp)).map(|(index, _)| self.free(index));
                 socket::reply_close(call, result)
             }
+            // Policy requests are answered in main.
+            _ => Ok(()),
         };
+        moved
     }
+
+    /// Closes every socket held with `badge`; returns how many.
+    fn close_badge(&mut self, badge: u16) -> u32 {
+        let mut closed = 0;
+        for index in 0..SOCKETS { if self.slots[index].is_some_and(|s| s.owner.1 == badge) { self.free(index); closed += 1; } }
+        closed
+    }
+    fn sockets_of(&self, badge: u16) -> u32 { self.slots.iter().flatten().filter(|s| s.owner.1 == badge).count() as u32 }
 
     // Parks a call that waits for the network; it is answered from `poll`.
     fn wait(&mut self, mut call: wire::Call, make: impl FnOnce(wire::Call) -> Waiting) -> mind::sys::Result<()> {
@@ -347,6 +368,7 @@ fn main(_info: &'static BootInfo) {
     let mut stack: Option<Stack> = None;
     let mut scratch: Box<[u8; socket::REQUEST_MAX]> = vec![0u8; socket::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     let (mut tried, mut reaped) = (0u64, 0u64);
+    let mut policy = Policy::default();
     loop {
         let now = now_ms();
         // The driver may start later (or not at all, without a card): it is asked again every second.
@@ -358,20 +380,64 @@ fn main(_info: &'static BootInfo) {
         if let Some(stack) = stack.as_mut() {
             stack.poll();
             if now - reaped >= 1000 { reaped = now; stack.reap(); }
+            // Grants that ran out of time or volume lose their flows.
+            for badge in policy.ended(now) { let closed = stack.close_badge(badge); mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed); }
         }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, POLL_MS) else { continue };
         let owner = (request.sender, request.badge);
         let (decoded, call) = match socket::decode(&request, RECEIVED, &mut scratch) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
-        match stack.as_mut() {
-            Some(stack) => { stack.handle(decoded, call, owner); stack.poll(); }
-            None => { let _ = no_network(decoded, call); }
+        let now = now_ms();
+        let badge = owner.1;
+        // Policy requests: only from the broker's control client.
+        match decoded {
+            socket::Request::PolicySet { badge: grant, rules, seconds, bytes } => {
+                let result = if matches!(policy::access(badge), Access::Policy) { policy.set(grant, rules.as_slice(), seconds, bytes, now) } else { Err(Error::Denied) };
+                let _ = socket::reply_policy_set(call, result); continue;
+            }
+            socket::Request::PolicyDrop { badge: grant } => {
+                let result = if !matches!(policy::access(badge), Access::Policy) { Err(Error::Denied) } else if policy.drop(grant) { Ok(stack.as_mut().map_or(0, |s| s.close_badge(grant))) } else { Err(Error::NotFound) };
+                let _ = socket::reply_policy_drop(call, result); continue;
+            }
+            socket::Request::PolicyUsage { badge: grant } => {
+                let sockets = stack.as_ref().map_or(0, |s| s.sockets_of(grant));
+                let usage = if matches!(policy::access(badge), Access::Policy) { policy.usage(grant, now, sockets).ok_or(Error::NotFound) } else { Err(Error::Denied) };
+                let _ = socket::reply_policy_usage(call, usage.as_ref().map_err(|e| *e)); continue;
+            }
+            _ => {}
+        }
+        // Flow requests: the operator may do anything, a grant what its rules name, nobody else anything.
+        let dns = stack.as_ref().and_then(|s| s.dns).map_or(0, u32::from);
+        let allowed = match policy::access(badge) {
+            Access::Operator => Ok(()),
+            Access::Policy => if matches!(decoded, socket::Request::Config) { Ok(()) } else { Err(Error::Denied) }, // the broker reads the DNS server
+            Access::Nothing => Err(Error::Denied),
+            Access::Grant(grant) => match &decoded {
+                socket::Request::Config => Ok(()),
+                socket::Request::Ping { address, .. } => policy.allows(grant, Protocol::Icmp, *address, 0, now),
+                socket::Request::Resolve { server, port, .. } => policy.allows(grant, Protocol::Udp, if *server != 0 { *server } else { dns }, if *port != 0 { *port } else { 53 }, now),
+                socket::Request::UdpOpen { .. } => policy.allows(grant, Protocol::Udp, 0, 0, now),
+                socket::Request::UdpSend { address, port, .. } => policy.allows(grant, Protocol::Udp, *address, *port, now),
+                socket::Request::TcpConnect { address, port, .. } => policy.allows(grant, Protocol::Tcp, *address, *port, now),
+                socket::Request::Close { .. } => Ok(()),
+                _ => policy.alive(grant, now),
+            },
+        };
+        match (allowed, stack.as_mut()) {
+            (Err(error), _) => { if matches!(error, Error::Denied) && matches!(policy::access(badge), Access::Grant(_)) { mind::println!("[NETSTACK] DENIED FOR GRANT {}", badge); } let _ = refuse(decoded, call, error); }
+            (Ok(()), None) => { let _ = refuse(decoded, call, Error::NoNetwork); }
+            (Ok(()), Some(stack)) => {
+                let grant = match policy::access(badge) { Access::Grant(grant) => Some(grant), _ => None };
+                let source = |address: u32, port: u16| grant.is_none_or(|g| policy.allows(g, Protocol::Udp, address, port, now).is_ok());
+                let (sent, received) = stack.handle(decoded, call, owner, &source);
+                if let Some(grant) = grant { policy.charge(grant, sent, received); }
+                stack.poll();
+            }
         }
     }
 }
 
-// Every request fails the same way while there is no network card.
-fn no_network(request: socket::Request, call: wire::Call) -> mind::sys::Result<()> {
-    let error = Error::NoNetwork;
+// Answers a request with `error` (no network card, or refused by the policy).
+fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys::Result<()> {
     match request {
         socket::Request::Config => socket::reply_config(call, Err(error)),
         socket::Request::Ping { .. } => socket::reply_ping(call, Err(error)),
@@ -383,5 +449,8 @@ fn no_network(request: socket::Request, call: wire::Call) -> mind::sys::Result<(
         socket::Request::TcpSend { .. } => socket::reply_tcp_send(call, Err(error)),
         socket::Request::TcpReceive { .. } => socket::reply_tcp_receive(call, Err(error)),
         socket::Request::Close { .. } => socket::reply_close(call, Err(error)),
+        socket::Request::PolicySet { .. } => socket::reply_policy_set(call, Err(error)),
+        socket::Request::PolicyDrop { .. } => socket::reply_policy_drop(call, Err(error)),
+        socket::Request::PolicyUsage { .. } => socket::reply_policy_usage(call, Err(error)),
     }
 }

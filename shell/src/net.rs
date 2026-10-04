@@ -168,3 +168,45 @@ pub fn fetch(out: &mut impl Write, args: &[u8]) {
     let _ = socket::close(STACK, handle);
     let _ = writeln!(out, "\nFETCH: {} BYTES", total);
 }
+
+// Flow grants of the network policy broker (idl/netpolicy.wit, issue 102).
+use mind::abi::SLOT_NETPOLICY;
+use mind::idl::netpolicy;
+
+const BROKER: Endpoint = Endpoint(SLOT_NETPOLICY);
+
+/// Asks the broker for a grant for program `path` and passes it to `lend` (through the fixed slot `receive`); a
+/// program the policy names nothing for runs without the network.
+pub fn grant(out: &mut impl Write, path: &str, receive: usize, lend: impl FnOnce(usize) -> Result<(), mind::sys::Error>) -> Result<Option<u16>, mind::sys::Error> {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let program = file.strip_suffix(".elf").or_else(|| file.strip_suffix(".ELF")).unwrap_or(file);
+    let badge = match netpolicy::prepare(BROKER, program) {
+        Ok(Ok(badge)) => badge,
+        Ok(Err(error)) => { let _ = writeln!(out, "NETWORK FOR {}: {:?}", program, error); return Ok(None); }
+        Err(_) => { let _ = writeln!(out, "NETWORK FOR {}: NO POLICY BROKER", program); return Ok(None); }
+    };
+    if !matches!(netpolicy::take(BROKER, badge, receive), Ok(Ok(()))) { let _ = writeln!(out, "NETWORK FOR {}: GRANT LOST", program); return Ok(None); }
+    let result = lend(receive);
+    let _ = mind::ipc::drop_cap(receive); // the loader holds its copy now
+    result.map(|()| Some(badge))
+}
+
+/// Ties grant `badge` to the started program: the broker drops it when the program ends.
+pub fn bind(badge: u16, pid: u64) { let _ = netpolicy::bind(BROKER, badge, pid); }
+
+pub fn grants(out: &mut impl Write) {
+    match netpolicy::list(BROKER) {
+        Ok(list) if list.is_empty() => { let _ = writeln!(out, "NO NETWORK GRANTS"); }
+        Ok(list) => for g in list.as_slice() { let _ = writeln!(out, "GRANT {} {} RULES={} LEFT={} S USED={} BYTES", g.badge, g.program, g.rules, g.left_ms / 1000, g.used); },
+        Err(_) => { let _ = writeln!(out, "NET: NO POLICY BROKER"); }
+    }
+}
+
+pub fn revoke(out: &mut impl Write, args: &[u8]) {
+    let Some(program) = core::str::from_utf8(args).ok().and_then(|t| t.split_whitespace().next()) else { let _ = writeln!(out, "NETREVOKE <PROGRAM>"); return };
+    match netpolicy::revoke(BROKER, program) {
+        Ok(Ok(n)) => { let _ = writeln!(out, "REVOKED {} GRANTS OF {}", n, program); }
+        Ok(Err(error)) => { let _ = writeln!(out, "NETREVOKE: {:?}", error); }
+        Err(_) => { let _ = writeln!(out, "NET: NO POLICY BROKER"); }
+    }
+}

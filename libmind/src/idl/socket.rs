@@ -4,6 +4,11 @@
 //! opened it (PID and endpoint badge); a client has at most 8 sockets, the stack 32, each with bounded buffers.
 //! Calls that wait for the network (`ping`, `resolve`, `tcp-connect`) are answered later, when the answer arrives or
 //! the timeout passes; the other calls never block (error `again`: try later).
+//!
+//! What a client may do comes from the badge of its endpoint capability (issue 102): the operator's badge (the shell)
+//! may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
+//! protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
+//! unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,21 +18,53 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request failed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NoNetwork = 0, NoSocket = 1, Closed = 2, Again = 3, Refused = 4, Timeout = 5, Invalid = 6, Limit = 7, Unreachable = 8, NotFound = 9 }
+pub enum Error { #[default] NoNetwork = 0, NoSocket = 1, Closed = 2, Again = 3, Refused = 4, Timeout = 5, Invalid = 6, Limit = 7, Unreachable = 8, NotFound = 9, Denied = 10 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoNetwork), 1 => Some(Self::NoSocket), 2 => Some(Self::Closed), 3 => Some(Self::Again), 4 => Some(Self::Refused), 5 => Some(Self::Timeout), 6 => Some(Self::Invalid), 7 => Some(Self::Limit), 8 => Some(Self::Unreachable), 9 => Some(Self::NotFound), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoNetwork), 1 => Some(Self::NoSocket), 2 => Some(Self::Closed), 3 => Some(Self::Again), 4 => Some(Self::Refused), 5 => Some(Self::Timeout), 6 => Some(Self::Invalid), 7 => Some(Self::Limit), 8 => Some(Self::Unreachable), 9 => Some(Self::NotFound), 10 => Some(Self::Denied), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A protocol a rule allows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Protocol { #[default] Tcp = 0, Udp = 1, Icmp = 2 }
+impl Protocol {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Tcp), 1 => Some(Self::Udp), 2 => Some(Self::Icmp), _ => None } }
+}
+impl Wire for Protocol {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// One destination a grant may reach: an address (never 0), a port (0: any; ICMP has none) and a protocol.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rule { pub address: u32, pub port: u16, pub protocol: Protocol }
+impl Wire for Rule {
+    const MAX: usize = <u32 as Wire>::MAX + <u16 as Wire>::MAX + <Protocol as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.address.encode(w)?; self.port.encode(w)?; self.protocol.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { address: Wire::decode(r)?, port: Wire::decode(r)?, protocol: Wire::decode(r)? }) }
+}
+
+/// What a grant used: bytes sent and received, sockets open, milliseconds left (0: expired).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage { pub sent: u64, pub received: u64, pub sockets: u32, pub left_ms: u32 }
+impl Wire for Usage {
+    const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.sent.encode(w)?; self.received.encode(w)?; self.sockets.encode(w)?; self.left_ms.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { sent: Wire::decode(r)?, received: Wire::decode(r)?, sockets: Wire::decode(r)?, left_ms: Wire::decode(r)? }) }
 }
 
 /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
@@ -180,6 +217,48 @@ pub fn close(endpoint: Endpoint, socket: u32) -> Result<core::result::Result<(),
     Ok(Ok(()))
 }
 
+/// Registers what clients with `badge` may reach, for `seconds`, up to `bytes` in both directions (policy badge only).
+pub fn policy_set(endpoint: Endpoint, badge: u16, rules: &[Rule], seconds: u32, bytes: u64) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        badge.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<Rule, 16>(rules, &mut w).ok_or(SysError::Invalid)?;
+        seconds.encode(&mut w).ok_or(SysError::Invalid)?;
+        bytes.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// Drops a grant: its sockets are closed and further requests with its badge are refused (policy badge only).
+pub fn policy_drop(endpoint: Endpoint, badge: u16) -> Result<core::result::Result<u32, Error>> {
+    let words = [12 | MAJOR << 8 | ((badge) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
+/// What a grant has used (policy badge only).
+pub fn policy_usage(endpoint: Endpoint, badge: u16) -> Result<core::result::Result<Usage, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        badge.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 13 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 24, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Usage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -196,6 +275,9 @@ pub enum Request<'a> {
     TcpSend { socket: u32, data: &'a [u8] },
     TcpReceive { socket: u32, length: u32 },
     Close { socket: u32 },
+    PolicySet { badge: u16, rules: List<Rule, 16>, seconds: u32, bytes: u64 },
+    PolicyDrop { badge: u16 },
+    PolicyUsage { badge: u16 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -277,6 +359,29 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Close { socket: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
+        11 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let badge = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let rules = <List<Rule, 16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let seconds = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let bytes = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PolicySet { badge, rules, seconds, bytes }, call))
+        }
+        12 => {
+            wire::body(request, cap, [0xffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::PolicyDrop { badge: wire::field(&words, 0, 16, 16) as u16 }, Call::words(request, cap)))
+        }
+        13 => {
+            let (call, length) = wire::take_buffer(request, cap, 24, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let badge = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PolicyUsage { badge }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -320,4 +425,16 @@ pub fn reply_tcp_receive(call: Call, value: core::result::Result<&[u8], Error>) 
 pub fn reply_close(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_policy_set(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_policy_drop(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_policy_usage(call: Call, value: core::result::Result<&Usage, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

@@ -67,6 +67,8 @@ USER_CRATES=(
     "tts:tts:tts.elf"
     "virtio_net:virtio_net:virtio_net.elf"
     "netstack:netstack:netstack.elf"
+    "netpolicy:netpolicy:netpolicy.elf"
+    "netcheck:netcheck:netcheck.elf"
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"

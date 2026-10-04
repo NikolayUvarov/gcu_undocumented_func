@@ -133,7 +133,7 @@ impl Launcher {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         // The fixed slots a launcher may fill: an endpoint for the program's INIT slot (a ping/pong pair), its file
         // client, sysinfo, lifecycle control, the system log. The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if ![SLOT_INIT, SLOT_FILE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();
@@ -161,9 +161,14 @@ impl Launcher {
     }
 }
 
-fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
+// The raw request flags of program `name` (REQUEST_*).
+fn requests(name: &str) -> Result<u32, loader::Error> {
     let (file, _) = open(name.as_bytes()).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })?;
-    let flags = request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0));
+    Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)))
+}
+
+fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
+    let flags = requests(name)?;
     use mind::process::*;
     Ok(loader::Needs { console: flags & REQUEST_CONSOLE != 0, sysinfo: flags & REQUEST_SYSINFO != 0, file: flags & REQUEST_FILE != 0, lifecycle: flags & REQUEST_LIFECYCLE != 0, log: flags & REQUEST_LOG != 0, files: flags & REQUEST_FILES != 0 })
 }
@@ -198,6 +203,7 @@ fn main(_info: &'static BootInfo) {
             Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session)),
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
+            Ok((loader::Request::InspectRequests { name }, call)) => loader::reply_inspect_requests(call, requests(name.as_str())),
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
     }

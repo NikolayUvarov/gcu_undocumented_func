@@ -1,0 +1,32 @@
+# 102 — Network policy broker and flow capabilities — done
+
+**Type:** service · **Owner:** network track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** 101 · **Roadmap:** track D · **Constitution:** MC-11.4, MC-11.6, Appendix B.6 (policy broker)
+
+## Problem
+
+A program must reach only the destinations its purpose needs (MC-11.6). Without a broker, any holder of the stack's endpoint could open any flow.
+
+## Plan
+
+- `netpolicy` service: holds the stack's "open flow" authority and grants flow capabilities for a destination (address or name), port, term, rate and volume according to a policy file.
+- Launchers ask the broker on behalf of a program, as they ask for files today; nothing is granted by program name.
+- Every grant and refusal goes to the system log.
+
+## Acceptance criteria
+
+- A program with a grant for one host and port reaches it and nothing else; the refusal is logged; revoking the grant ends its flows.
+
+## Related
+
+[101](../issues-done/101-network-stack.done), [103](../issues/103-tls-service.md).
+
+## Resolution
+
+- **Flow grants are capabilities.** A grant is a `netstack` endpoint capability with its own badge (1..0xFFFD), minted by the broker from an unbadged stack client; copying or lending it carries the badge, `CAP_REVOKE` removes every copy.
+- **`netstack` (`idl/socket.wit` 2.0)** decides by the badge: the operator's (`mind::network::BADGE_OPERATOR`, the shell's client) may reach anything; a grant's badge only the rules registered for it (`policy-set`: address, port, TCP/UDP/ICMP, up to 16 rules, a term, a volume in both directions) and gets `denied` otherwise; UDP datagrams from sources the grant does not name are dropped; the policy badge only registers, drops and reads grants; an unbadged client may do nothing. A grant that ran out of time or volume loses its sockets; `policy-drop` closes them at once.
+- **`netpolicy`** reads `netpolicy.txt` from the boot disk at every request (lines `program address tcp|udp|icmp [port [seconds [bytes]]]` or `program dns`; the shortest term and smallest volume named win, defaults 3600 s and 16 MiB). `prepare` makes a grant, `take` hands its capability to the launcher once (a word call, since only those carry capabilities), `bind` ties it to the started process, `revoke` ends every grant of a program, `list` shows them. Grants of ended processes, and expired ones, are dropped every second. Every grant, refusal, drop and revocation goes to the system log.
+- **Launch:** a program declares `REQUEST_NETWORK` (`mind::request!`); the shell reads it with the loader's new `inspect-requests` (`idl/loader.wit` 1.2), asks the broker, lends the grant into `SLOT_NETWORK` (18) and binds it to the new PID; without a policy the program starts without the network. Shell commands `netgrants` and `netrevoke <program>`. `SPAWN_GRANTS_MAX` is now 24 (the shell holds 18 grants).
+- **Test program `netcheck`** (`tcp:`, `udp:`, `ping:`, `dns:`, `hold:` checks).
+- **Tests (`net` suite):** with a policy for `netcheck` (the host's web port, ICMP to the gateway, 600 s, 100 000 bytes): the allowed connection and ping succeed, another port, UDP and another ping target are `Denied`; a copy named `rogue` gets no grant; the grant is dropped when `netcheck` exits; the log has the grant (with its term and volume), the refusal, the denials and the drop; a held connection ends when `netrevoke` removes the grant (one copy removed, one socket closed).
+
+Not done: host names in the policy (addresses only), changing the policy at run time through an authorized editor, listening sockets for granted programs, per-grant rate limits.
