@@ -199,7 +199,9 @@ qemu-system-x86_64 \
   -drive format=raw,file=fat:rw:usb_root \
   -m 512 -smp 4,sockets=1,cores=4,threads=1 \
   -serial stdio -rtc base=localtime \
-  -audiodev wav,id=snd0,path=out.wav -device AC97,audiodev=snd0   # optional audio
+  -cpu qemu64,+rdrand \
+  -audiodev pa,id=snd0 -device AC97,audiodev=snd0 \
+  -nic user,model=virtio-net-pci
 
 ```
 
@@ -207,9 +209,17 @@ qemu-system-x86_64 \
 
 *(Adjust the path to `OVMF.fd` depending on your OS and package manager).*
 
-On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`).
+What the last three lines add:
+- **`-audiodev … -device AC97`:** the sound card. `audio_gw` drives an AC97 controller; without one, `beep`, `say` and `listen` find no device and stay silent. The `-audiodev` driver is the host's sound system: `pa` (PulseAudio, also PipeWire's), `pipewire`, `alsa`, `sdl`, `dsound` on Windows, `coreaudio` on macOS. `wav,path=out.wav` writes the sound to a file instead of playing it.
+- **`-cpu qemu64,+rdrand`:** a processor with RDRAND. The TLS and key services refuse to work without it.
+- **`-nic user,model=virtio-net-pci`:** a VirtIO network card on QEMU's user networking.
 
-On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio` and initialize the RTC with the host's local time using `-rtc base=localtime`.
+On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`). It adds the sound card, the network card and RDRAND as above:
+- **Sound:** the backend is the first of PipeWire, PulseAudio, ALSA (with `/dev/snd`) and SDL (in a desktop session) that starts on this host. Without any, it starts without sound and says so. `MIND_AUDIO=<driver>` picks the backend, `MIND_AUDIO=none` leaves the card out.
+- **Network:** `MIND_NET=none` leaves the network card out.
+- **CPU:** `MIND_CPU=<model>` replaces the CPU model.
+
+On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card and RDRAND.
 
 From WSL with Windows interop enabled, build and launch Windows QEMU directly:
 
@@ -222,7 +232,8 @@ for QEMU in MSYS2 UCRT64, then MinGW64, then `C:\Program Files\qemu`, then `PATH
 It locates `OVMF.fd` and `usb_root/` beside the script and converts their paths
 with `wslpath`, so it can be invoked from any directory. To use another Windows
 installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
-arguments are passed through to QEMU.
+arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
+`MIND_AUDIO`, `MIND_NET` and `MIND_CPU` work as with `03_run_qemu.sh`.
 
 ### Bootable USB image
 
