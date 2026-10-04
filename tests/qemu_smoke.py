@@ -26,7 +26,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -78,7 +78,7 @@ class VM:
 
     def services(self):
         # Real service PIDs from the ps table (the harness does not translate its rows).
-        return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
+        return {name: int(pid) for pid, name in re.findall(r"^(\d+) ([\w#-]+) ", self.command("ps", raw=True), re.M) if name in SERVICES}
 
     def service_logs(self, name, until=None):
         # Service log; with `until`, wait for the line (drivers initialize in parallel with the test).
@@ -2577,6 +2577,49 @@ def net_suite(args, disk):
         vm.close()
         web.shutdown(); dns.close()
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
+    # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
+    # and one driver's restart leaves the other card working and gives the new instance its own card back.
+    web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
+    web.daemon_threads = True
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+    web_port = web.server_address[1]
+    two = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56",
+           "-netdev", "user,id=n1,net=10.0.3.0/24", "-device", "virtio-net-pci,netdev=n1,mac=52:54:00:12:34:57"]
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=two)
+    try:
+        require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), "[VIRTIO_NET] MAC=52:54:00:12:34:56")
+        require(vm.service_logs("virtio_net#1", "[VIRTIO_NET] MAC="), "[VIRTIO_NET] MAC=52:54:00:12:34:57")
+        log = vm.service_logs("netstack", "ON CARD 1")
+        require(log, "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 ON CARD 0")
+        require(log, "[NETSTACK] DHCP 10.0.3.15/24 GATEWAY 10.0.3.2 DNS 10.0.3.3 ON CARD 1")
+
+        def frames():
+            found = dict((int(card), (int(sent), int(received))) for card, sent, received in re.findall(r"CARD (\d) MAC .* SENT=(\d+) RECEIVED=(\d+)", vm.command("ip")))
+            assert set(found) == {0, 1}, found
+            return found
+        before = frames()
+        require(vm.command("ping 10.0.3.2"), "PING: 3 SENT, 3 RECEIVED")
+        require(vm.command(f"fetch 10.0.3.2:{web_port} /second"), "hello from the host: /second")
+        after = frames()
+        assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
+        require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
+        assert frames()[0][0] - after[0][0] >= 3, (after, frames())
+        # The second driver dies: the first card keeps working, the restarted instance drives the second card again.
+        require(vm.command(f"kill {vm.services()['virtio_net#1']}", raw=True), "KILLED PID=")
+        require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+        log = vm.service_logs("init", "virtio_net#1 RESTARTED")
+        assert log.index("virtio_net#1 DEVICE QUIESCED") < log.index("virtio_net#1 RESTARTED"), log
+        require(vm.service_logs("virtio_net#1", "[VIRTIO_NET] MAC="), "[VIRTIO_NET] MAC=52:54:00:12:34:57")
+        for _ in range(40):
+            if "3 RECEIVED" in vm.command("ping 10.0.3.2"):
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError("no ping answer on the second card after its driver's restart")
+        require(vm.command("svc"), "virtio_net#1")
+    finally:
+        vm.close()
+        web.shutdown()
     # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X).
     for device, mode in [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
@@ -2601,7 +2644,8 @@ def net_suite(args, disk):
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
-          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), "
+          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), two cards on two networks "
+          "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
 

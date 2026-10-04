@@ -6,6 +6,9 @@
 pub const BOOT_IMAGES: usize = 20;
 pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "sysmon", "shell"];
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "sysmon.elf", "shell.elf"];
+// Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
+// init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
+pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
 pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 

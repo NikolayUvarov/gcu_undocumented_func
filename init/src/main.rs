@@ -67,7 +67,16 @@ struct Plan { grants: Grants, flags: usize, quota: Quota }
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; BOOT_IMAGES], pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], devices: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES], restarts: [[u64; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [bool; BOOT_IMAGES], starts: [u32; BOOT_IMAGES], stopped: [bool; BOOT_IMAGES], missing: [bool; BOOT_IMAGES] }
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS] }
+
+// Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
+const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
+fn unit_name(unit: usize) -> &'static str { if unit < BOOT_IMAGES { BOOT_SERVICES[unit] } else { SERVICE_INSTANCES[unit - BOOT_IMAGES] } }
+// The image a unit runs and which instance of it it is (0: the image's own service).
+fn unit_image(unit: usize) -> (usize, usize) {
+    let name = unit_name(unit);
+    match name.split_once('#') { Some((image, n)) => (service_index(image), n.parse().unwrap_or(0)), None => (unit, 0) }
+}
 
 // Restart budget (MC-6.5): at most RESTART_BUDGET automatic restarts of one service within RESTART_WINDOW_MS.
 const RESTART_BUDGET: usize = 3;
@@ -99,7 +108,7 @@ impl Init {
     // Before a driver is restarted (MC-6.3): its device stops DMA, then the DMA region is cleared, so the new instance
     // starts from a quiet device and no residue of the old one.
     fn quiesce(&mut self, index: usize) {
-        if let Some(device) = self.devices[index] { match platform::quiesce(device) { Ok(()) => mind::println!("[INIT] {} DEVICE QUIESCED", BOOT_SERVICES[index]), Err(error) => mind::println!("[INIT] {} QUIESCE FAILED: {:?}", BOOT_SERVICES[index], error) } }
+        if let Some(device) = self.devices[index] { match platform::quiesce(device) { Ok(()) => mind::println!("[INIT] {} DEVICE QUIESCED", unit_name(index)), Err(error) => mind::println!("[INIT] {} QUIESCE FAILED: {:?}", unit_name(index), error) } }
         if let Some(slot) = self.dma[index] { if let Ok(mut region) = mind::mem::Mapping::new(slot) { region.as_mut_slice().fill(0); } }
     }
 
@@ -118,7 +127,8 @@ impl Init {
 
     // Starts boot service `index` with its capabilities; Err(NotFound) if its hardware is absent.
     fn start(&mut self, index: usize) -> Result<u64> {
-        let name = BOOT_SERVICES[index];
+        let name = unit_name(index);
+        let (image, instance) = unit_image(index);
         if index == 0 || self.running(index) { return Err(Error::Other(ERR_BUSY)); }
         if let Some(plan) = self.plans[index] {
             // A restart: the device was stopped when its driver ended; the same capabilities are granted again.
@@ -128,7 +138,7 @@ impl Init {
         let mut minted = Minted::new();
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
-        match name {
+        match BOOT_SERVICES[image] {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
             "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
             "ps2_kbd" => {
@@ -187,7 +197,10 @@ impl Init {
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
             // The stack holds only a client of the card driver (B.6): frames, no device.
-            "netstack" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL); self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; }
+            "netstack" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL);
+                self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; self.lend(&mut grants, SLOT_DEV1, "virtio_net#1")?; // one client per card
+            }
             // The broker mints flow grants from an unbadged stack client (which itself may open nothing), registers them
             // through the stack's policy client and reads netpolicy.txt through a VFS client.
             "netpolicy" => {
@@ -204,8 +217,14 @@ impl Init {
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
             }
             "virtio_net" => {
-                // VirtIO network card (vendor 1AF4, class 02:00): modern-only (device 1041) or transitional (1000).
-                let device = platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1041_1AF4, 0).or_else(|_| platform::find_device_id(0x02_00_00, 0xFF_FF_00, 0x1000_1AF4, 0))?;
+                // The instance's VirtIO network card (vendor 1AF4, class 02:00, modern-only 1041 or transitional 1000), in
+                // PCI order: instance n drives the n-th card.
+                let mut cards: [usize; 8] = [usize::MAX; 8]; let mut found = 0;
+                for id in [0x1041_1AF4, 0x1000_1AF4] {
+                    for nth in 0.. { match platform::find_device_id(0x02_00_00, 0xFF_FF_00, id, nth) { Ok(device) if found < cards.len() => { cards[found] = device; found += 1; } _ => break } }
+                }
+                cards[..found].sort_unstable();
+                let device = *cards[..found].get(instance).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 // The modern interface when the device describes it in one memory BAR: that BAR and an MSI-X vector (the
                 // legacy line if MSI-X cannot be set up); otherwise the legacy registers in I/O BAR0 and the legacy line.
@@ -219,7 +238,7 @@ impl Init {
                     // LEGACY: a VirtIO card without the modern interface (docs/legacy.md).
                     None => { grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, 0); grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?, 0); }
                 }
-                grants.add(SLOT_SERVICE, self.server(&mut minted, "virtio_net")?, ALL); grants.copy(SLOT_MEM, self.dma(index, NET_DMA_BYTES)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, NET_DMA_BYTES)?, 0);
             }
             // The observe privilege (read-only statistics, MC-10.2) goes to sysmon and to logd, which names the sender
             // of a record from the kernel's task records (MC-10.6).
@@ -262,14 +281,14 @@ impl Init {
     }
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
-        let name = BOOT_SERVICES[index];
+        let name = unit_name(index);
         let mut grants = plan.grants; let mut receiver = None;
         if let Some(keeper) = self.keepers[index] {
             for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == SLOT_SERVICE) {
                 let slot = ipc::mint(keeper, ALL, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, ALL); receiver = Some(slot);
             }
         }
-        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], plan.flags, plan.quota)
+        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
             .inspect_err(|_| { if let Some(slot) = receiver { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         self.starts[index] += 1;
@@ -285,8 +304,8 @@ impl Init {
     // A watched service ended: restart it within the budget, otherwise quarantine it until the operator runs it.
     fn ended(&mut self, exit: mind::ipc::Exit) {
         if exit.lost != 0 { mind::println!("[INIT] {} EXIT NOTICES LOST", exit.lost); }
-        let Some(index) = (1..BOOT_IMAGES).find(|&i| self.pids[i] == exit.pid) else { return };
-        let name = BOOT_SERVICES[index];
+        let Some(index) = (1..UNITS).find(|&i| self.pids[i] == exit.pid) else { return };
+        let name = unit_name(index);
         // Stopped on request (idl/init.wit `stop`): it stays stopped until it is started again.
         if self.stopped[index] { mind::println!("[INIT] {} PID={} STOPPED", name, exit.pid); return; }
         match exit.reason & 0xFF {
@@ -313,7 +332,7 @@ impl Init {
 // Lifecycle requests (idl/init.wit 1.1). Stopping uses the process control privilege init keeps after boot; init and
 // the shell are never stopped.
 impl Init {
-    fn index(name: &str) -> Option<usize> { BOOT_SERVICES.iter().position(|s| s.eq_ignore_ascii_case(name)) }
+    fn index(name: &str) -> Option<usize> { (0..UNITS).position(|u| unit_name(u).eq_ignore_ascii_case(name)) }
 
     // `run`: an explicit start is the operator's decision: it lifts a quarantine and resets the restart budget. A service
     // whose device was missing at boot has nothing to start (init no longer looks for devices).
@@ -328,12 +347,12 @@ impl Init {
         match self.run(index) {
             Ok(pid) => Ok(pid),
             Err(Error::NotFound) => Err(idl_init::Error::NoDevice),
-            Err(error) => { mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error); Err(idl_init::Error::Failed) }
+            Err(error) => { mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error); Err(idl_init::Error::Failed) }
         }
     }
 
     fn stop_service(&mut self, index: usize) -> core::result::Result<(), idl_init::Error> {
-        if index == 0 || BOOT_SERVICES[index] == "shell" { return Err(idl_init::Error::Denied); }
+        if index == 0 || unit_name(index) == "shell" { return Err(idl_init::Error::Denied); }
         if !self.running(index) { return Err(idl_init::Error::Stopped); }
         let pid = self.pids[index];
         self.stopped[index] = true;
@@ -341,14 +360,14 @@ impl Init {
         for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
         // Its device stops DMA until the next start (MC-6.3).
         self.quiesce(index);
-        mind::println!("[INIT] STOPPED {} PID={}", BOOT_SERVICES[index], pid);
+        mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid);
         Ok(())
     }
 
-    fn list(&self) -> [idl_init::Service; BOOT_IMAGES] {
+    fn list(&self) -> [idl_init::Service; UNITS] {
         core::array::from_fn(|i| idl_init::Service {
-            name: wire_text(BOOT_SERVICES[i]), pid: if i == 0 { INIT_PID } else if self.running(i) { self.pids[i] } else { 0 },
-            starts: if i == 0 { 1 } else { self.starts[i] }, running: i == 0 || self.running(i), quarantined: self.quarantined[i], holds: wire_text(HOLDS[i]),
+            name: wire_text(unit_name(i)), pid: if i == 0 { INIT_PID } else if self.running(i) { self.pids[i] } else { 0 },
+            starts: if i == 0 { 1 } else { self.starts[i] }, running: i == 0 || self.running(i), quarantined: self.quarantined[i], holds: wire_text(HOLDS[unit_image(i).0]),
         })
     }
 
@@ -363,14 +382,14 @@ impl Init {
             Request::Stop { name } => { let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| self.stop_service(i)); idl_init::reply_stop(call, result) }
             Request::Restart { name } => {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
-                    if i == 0 || BOOT_SERVICES[i] == "shell" { return Err(E::Denied); }
+                    if i == 0 || unit_name(i) == "shell" { return Err(E::Denied); }
                     if self.running(i) { self.stop_service(i)?; }
                     self.start_service(i)
                 });
                 idl_init::reply_restart(call, result)
             }
             Request::StopTask { pid } => {
-                let service = pid == INIT_PID || (1..BOOT_IMAGES).any(|i| self.pids[i] == pid && self.running(i));
+                let service = pid == INIT_PID || (1..UNITS).any(|i| self.pids[i] == pid && self.running(i));
                 let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
@@ -384,22 +403,24 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
     mind::idl::codec::Text::new(&text[..end]).unwrap_or_default()
 }
 
-fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == name).unwrap_or(0) }
+fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut init = Init { plans: [None; BOOT_IMAGES], pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], devices: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES], restarts: [[0; RESTART_BUDGET]; BOOT_IMAGES], quarantined: [false; BOOT_IMAGES], starts: [0; BOOT_IMAGES], stopped: [false; BOOT_IMAGES], missing: [false; BOOT_IMAGES] };
-    // Boot order is the BOOT_SERVICES order: logd first, drivers before vfs_server, loader before the shell.
-    for index in 1..BOOT_IMAGES {
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS] };
+    // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
+    // instances of an image follow its first one.
+    let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    for index in order {
         match init.start(index) {
             // From now on init's own lines (and those printed so far) go to the system log too.
-            Ok(_) if BOOT_SERVICES[index] == "logd" => {
+            Ok(_) if unit_name(index) == "logd" => {
                 // The keeper may send: init needs no client of its own.
                 if let Ok(keeper) = init.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
             }
             Ok(_) => {}
-            Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", BOOT_SERVICES[index]); }
-            Err(error) => mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error),
+            Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", unit_name(index)); }
+            Err(error) => mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error),
         }
     }
     legacy::report();

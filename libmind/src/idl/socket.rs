@@ -9,6 +9,10 @@
 //! may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
 //! protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
 //! unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
+//!
+//! Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
+//! goes out through the interface whose network holds the destination, otherwise through the first interface with a
+//! gateway; `config` describes that default interface, `interfaces` all of them.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -18,7 +22,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+pub const VERSION: (u8, u8, u8) = (2, 1, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -56,6 +60,16 @@ impl Wire for Rule {
     const MAX: usize = <u32 as Wire>::MAX + <u16 as Wire>::MAX + <Protocol as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.address.encode(w)?; self.port.encode(w)?; self.protocol.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { address: Wire::decode(r)?, port: Wire::decode(r)?, protocol: Wire::decode(r)? }) }
+}
+
+/// A network interface: its card (0: the first driver instance), configuration (address 0: not configured yet),
+/// MAC address and the frames it sent and received.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Interface { pub card: u8, pub address: u32, pub prefix: u8, pub gateway: u32, pub dns: u32, pub mac: u64, pub dhcp: bool, pub sent: u64, pub received: u64 }
+impl Wire for Interface {
+    const MAX: usize = <u8 as Wire>::MAX + <u32 as Wire>::MAX + <u8 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.address.encode(w)?; self.prefix.encode(w)?; self.gateway.encode(w)?; self.dns.encode(w)?; self.mac.encode(w)?; self.dhcp.encode(w)?; self.sent.encode(w)?; self.received.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, address: Wire::decode(r)?, prefix: Wire::decode(r)?, gateway: Wire::decode(r)?, dns: Wire::decode(r)?, mac: Wire::decode(r)?, dhcp: Wire::decode(r)?, sent: Wire::decode(r)?, received: Wire::decode(r)? }) }
 }
 
 /// What a grant used: bytes sent and received, sockets open, milliseconds left (0: expired).
@@ -259,6 +273,20 @@ pub fn policy_usage(endpoint: Endpoint, badge: u16) -> Result<core::result::Resu
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Usage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Every interface whose card driver answered (2.1).
+pub fn interfaces(endpoint: Endpoint) -> Result<core::result::Result<List<Interface, 4>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 158, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Interface, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -278,6 +306,7 @@ pub enum Request<'a> {
     PolicySet { badge: u16, rules: List<Rule, 16>, seconds: u32, bytes: u64 },
     PolicyDrop { badge: u16 },
     PolicyUsage { badge: u16 },
+    Interfaces,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -382,6 +411,13 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::PolicyUsage { badge }, call))
         }
+        14 => {
+            let (call, length) = wire::take_buffer(request, cap, 158, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Interfaces, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -437,4 +473,8 @@ pub fn reply_policy_drop(call: Call, value: core::result::Result<u32, Error>) ->
 pub fn reply_policy_usage(call: Call, value: core::result::Result<&Usage, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_interfaces(call: Call, value: core::result::Result<&[Interface], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Interface, 4>(value, w))
 }

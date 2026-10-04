@@ -8,7 +8,11 @@
 /// may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
 /// protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
 /// unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
-package mind:socket@2.0.0;
+///
+/// Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
+/// goes out through the interface whose network holds the destination, otherwise through the first interface with a
+/// gateway; `config` describes that default interface, `interfaces` all of them.
+package mind:socket@2.1.0;
 
 interface socket {
     /// Why a request failed.
@@ -19,6 +23,10 @@ interface socket {
 
     /// One destination a grant may reach: an address (never 0), a port (0: any; ICMP has none) and a protocol.
     record rule { address: u32, port: u16, protocol: protocol }
+
+    /// A network interface: its card (0: the first driver instance), configuration (address 0: not configured yet),
+    /// MAC address and the frames it sent and received.
+    record interface { card: u8, address: u32, prefix: u8, gateway: u32, dns: u32, mac: u64, dhcp: bool, sent: u64, received: u64 }
 
     /// What a grant used: bytes sent and received, sockets open, milliseconds left (0: expired).
     record usage { sent: u64, received: u64, sockets: u32, left-ms: u32 }
@@ -54,4 +62,6 @@ interface socket {
     policy-drop: func(badge: u16) -> result<u32, error>;
     /// What a grant has used (policy badge only).
     policy-usage: func(badge: u16) -> result<usage, error>;
+    /// Every interface whose card driver answered (2.1).
+    interfaces: func() -> result<list<interface, 4>, error>;
 }

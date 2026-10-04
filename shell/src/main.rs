@@ -137,7 +137,7 @@ impl Shell {
             Err(_) => self.report("CANNOT LIST THE BOOT DISK"),
         }
         let _ = write!(self.term, "SERVICES (STARTED AT BOOT): ");
-        for name in BOOT_SERVICES { let _ = write!(self.term, "{} ", name); }
+        for name in BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()) { let _ = write!(self.term, "{} ", name); }
         let _ = writeln!(self.term, "\nUSE: RUN <NAME> [&]. CTRL+Z: BACKGROUND. ESC: EXIT.");
     }
 
@@ -218,7 +218,7 @@ impl Shell {
     }
 
     fn run_program(&mut self, name: &[u8], args: &[u8], background: bool) {
-        let service = BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(name));
+        let service = BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).any(|s| s.as_bytes().eq_ignore_ascii_case(name));
         match self.start(name, args, service) {
             Ok(pid) => self.started(pid, name, background),
             Err(error) => self.report(error_text(error, service)),
@@ -389,7 +389,7 @@ impl Shell {
             let (used, free, freed) = control::kernel_heap();
             let _ = writeln!(self.term, "Dynamic allocation works! Uptime: {} ms", mind::time::uptime_ms());
             let _ = writeln!(self.term, "HEAP: USED={} FREE={} TEST FREED={}", used, free, freed);
-        } else if cmd.len() <= NAME_MAX && cmd.is_ascii() && !BOOT_SERVICES.iter().any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
+        } else if cmd.len() <= NAME_MAX && cmd.is_ascii() && !BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).any(|s| s.as_bytes().eq_ignore_ascii_case(cmd)) {
             // Any other word runs the program of that name in the foreground: `say hello`, `listen 3`.
             match self.start(cmd, args, false) {
                 Ok(pid) => self.started(pid, cmd, false),
@@ -430,7 +430,7 @@ impl Shell {
         if let Ok(programs) = loader::list(Endpoint::LOADER) {
             for program in programs.as_slice() { add(self, program.name.as_str().as_bytes()); }
         }
-        for name in BOOT_SERVICES { add(self, name.as_bytes()); }
+        for name in BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()) { add(self, name.as_bytes()); }
     }
 
     // Tab: completes the word before the cursor with a command or program name; several matches are listed.
