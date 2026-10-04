@@ -7,7 +7,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
    - slot 1: its own endpoint (created by the kernel, charged to init's quota), all rights;
    - slot 2: the **platform** privilege (`PLATFORM_CAP`, `DEVICE_FIND`, spawning boot images and services);
    - slot 3: the **spawn** privilege;
-   - the root quota: 19 tasks, 63 endpoints.
+   - the root quota: 31 tasks, 127 endpoints.
    Nothing else in the system holds the platform privilege unless `init` grants it (it does not).
 3. Endpoints have no numbers in the ABI. For each service `init` creates an endpoint with `ENDPOINT_CREATE` and keeps only a keeper capability (`CAP_KEEP | CAP_WRITE | CAP_GRANT`): it can mint a receive child for the server and write/grant children for clients but cannot receive itself, so a send to a service with no running server still fails with `ERR_PEER`. A restarted server receives a new child of the same endpoint.
 4. `init` starts the other boot images in `BOOT_SERVICES` order. For each it mints the needed capabilities, moves them into the service through the `SPAWN` grant list (`GRANT_MOVE`), except DMA regions and its own endpoint, which it copies and keeps.

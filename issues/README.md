@@ -22,7 +22,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
 | [035](035-observe-and-stat.md) | OBSERVE privilege, `STAT`, firmware memory map (tools F5) | kernel | P1 | — | track G, T1 |
 | [036](036-endpoint-badges.md) | Endpoint badges (tools F8) | kernel | P2 | — | track G, T2 |
-| [037](037-task-limit.md) | Raise the task limit for new services | kernel | P2 | — | track G |
 | [038](038-scheduling-budgets.md) | Scheduling budgets | kernel | P1 | — | C7 |
 | [039](039-port-services.md) | Port the services to MIND IDL and the C4 memory modes | kernel | P1 | 044 | C8 |
 | [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
@@ -72,5 +71,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [032](../issues-done/032-minimal-supervision.done) | Minimal supervision: exit notices, restart budget, quarantine, fencing | done (2026-10-04) |
 | [033](../issues-done/033-audit-and-supervision-follow-ups.done) | Follow-ups: multi-process tests, device stop, platform privilege dropped, quotas | done (2026-10-04) |
 | [034](../issues-done/034-key-events-input-queue.done) | Key events in the per-task input queue | done (2026-10-04) |
+| [037](../issues-done/037-task-limit.done) | Task limit 32, 127 endpoints | done (2026-10-04) |
 
 Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

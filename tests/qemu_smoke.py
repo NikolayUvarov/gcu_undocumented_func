@@ -754,7 +754,7 @@ def services_suite(vm):
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
     # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
     quotas = vm.command("quotas", raw=True)
-    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/19 \d+/63$", quotas, re.M), quotas
+    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/31 \d+/127$", quotas, re.M), quotas
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)

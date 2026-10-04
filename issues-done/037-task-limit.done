@@ -1,0 +1,30 @@
+# 037 — Raise the task limit for new services
+
+**Type:** kernel · **Owner:** kernel track (coordinates `kernel/src/scheduler.rs`, `common/abi.rs`) · **Priority:** P2 · **Status:** done (2026-10-04) · **Roadmap:** track G · **Constitution:** MC-1.7
+
+## Problem
+
+The kernel has 20 task slots: 12 services and 8 applications. The tools track adds `sysmon`, `logd` and `ramdisk`, which would take application slots.
+
+## Plan
+
+- `MAX_TASKS` 20 → 32 (task tables, scheduler arrays, quota of `init`); measure the kernel arena per task and record it in the profile.
+- `init` keeps the application limit (`MAX_APPS`) as policy.
+
+## Acceptance criteria
+
+- All suites pass; `quotas` shows the new root quota; the profile states the cost per task.
+
+## Related
+
+[docs/tools/README.md](../docs/tools/README.md) (plan of the tools track, branch `claude/wizardly-franklin-kec1a9`) §6.
+
+## Resolution
+
+`MAX_TASKS` is 32 and the endpoint table has 127 usable endpoints. `init`'s root quota follows (31 tasks, 127 endpoints, checked by `quotas` in the services suite). The application limit stays `MAX_APPS` (8), as `init`'s policy.
+
+Measured cost:
+- an application with a screen takes about 4.0 MiB of the kernel arena at 1280×800 (10.95 → 15.18 MiB used), almost all of it the screen buffer;
+- a service without a screen costs well under 1 MiB.
+
+So the 64 MiB arena, not the table, limits screen programs; console programs and the viewer built into `fm` keep the cost down. This is recorded in the profile (`kernel-objects.md`). The services, normal, memory and isolation suites pass.

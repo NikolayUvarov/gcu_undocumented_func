@@ -7,10 +7,10 @@ use alloc::vec::Vec;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub const MAX_TASKS: usize = 20; // services + applications
+pub const MAX_TASKS: usize = 32; // services + applications
 const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
-const ENDPOINTS: usize = 64;
+const ENDPOINTS: usize = 128;
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
 const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
