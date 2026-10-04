@@ -280,34 +280,15 @@ graph LR
 - **MC-5.4, 5.5:** `STAT` copies are bounded; `sysmon` samples at a fixed period into preallocated buffers.
 - **Limits to revisit:** two new services take 2 of the 20 task slots (12 services + 8 applications = 20 in the default QEMU setup, see [kernel-objects.md](../profile/kernel-objects.md)); `MAX_TASKS` may need raising. Each application with a screen costs a full frame in the 64 MiB arena — console programs and the viewer built into `fm` reduce that.
 
-## 7. Issues to open when work starts
+## 7. Issues
 
-Numbers continue after 031 and are assigned when an issue is opened (rule 4 of [`issues/README.md`](../../issues/README.md)):
+Opened on 2026-10-04 as [032–050](../../issues/README.md): 032 program heap, 033 font, 034 text UI library, 035 key events, 036 shell line editing, 037 `view`, 038 IDL v0.2, 039 observation ABI, 040 `sysmon`, 041 `top`/`memmap`/`load`/`hw`, 042 loader v1, 043 `fm` read-only, 044 endpoint badges and block write, 045 `ramdisk`, 046 VFS v2 with FAT write, 047 `edit`, 048 `fm` writes/`df`/`fsck`, 049 `logd`/`dmesg`, 050 `svc`.
 
-1. Program heap `mind::alloc` (F1)
-2. 8×16 font with Cyrillic and box drawing, licence recorded (F2)
-3. TUI library `mind::tui` (F3)
-4. Key events: E0 keys, modifiers, layouts, VT100 decoding, event queue (F4)
-5. Shell line editing and history
-6. Viewer `view`
-7. MIND IDL v0.2: records, strings and lists in buffers (F6)
-8. OBSERVE privilege, `STAT` system call, UEFI memory map in `BootInfo` (F5)
-9. `sysmon` service (F9)
-10. `top`, `memmap`, `load`, `hw`
-11. Loader v1: launch sessions and capability requests in the ELF (F7)
-12. `fm`, read-only
-13. Endpoint badges (or read-write endpoints) and block write (F8)
-14. `ramdisk` block service (F8)
-15. `vfs_server` v2 on `vfs.wit`: directory handles and FAT write (F8, C8)
-16. Editor `edit`
-17. `fm` write operations, `df`, `fsck`
-18. `logd` and `dmesg` (F10); `svc` and kill in `top` after C6
+## 8. Decisions (accepted 2026-10-04)
 
-## 8. Decisions for the owner
-
-1. **FAT writing:** accept it as an export/compatibility path (recommended — it gives a usable editor and file manager), or keep FAT read-only and let the tools write only to the RAM disk until track B.
-2. **`sysmon` service** (recommended) or the OBSERVE privilege given directly to each tool.
-3. **Endpoint badges** in the kernel (recommended, a general mechanism) or a second endpoint per service for write rights.
-4. **Font** source and licence (Terminus under SIL OFL 1.1 or another).
-5. **Key conventions:** Norton Commander / FAR keys; layout switch Ctrl+Shift or Alt+Shift; undo key, given that Ctrl+Z is reserved.
-6. **Screen mode:** fix a target mode in the bootloader ([issue 009](../../issues/009-gop-pixel-format.md)) so that the cell grid is predictable.
+1. **FAT writing** is accepted as an export/compatibility path with a separate write right; the native store stays track B.
+2. **`sysmon` service** holds the OBSERVE privilege; tools are its clients.
+3. **Endpoint badges** in the kernel distinguish read-only and read-write clients of one endpoint.
+4. **Font:** a subset of Terminus 4.49.1 (SIL OFL 1.1) named **MIND Mono 16** — the OFL forbids the reserved name "Terminus Font" for modified versions ([fonts/](../../fonts/README.md)).
+5. **Keys:** Norton Commander / FAR conventions; the layout switches with Ctrl+Shift or Alt+Shift pressed and released alone; Ctrl+Z stays the system attention key, so undo is Ctrl+U or Alt+Backspace.
+6. **Screen mode:** the bootloader selects a fixed target mode ([issue 009](../../issues/009-gop-pixel-format.md)).
