@@ -1,0 +1,22 @@
+# 073 — `PORT_OUT_BLOCK`: block writes of 16-bit words to a port — done
+
+**Type:** kernel · **Owner:** kernel track (`kernel/src/scheduler.rs`, `common/abi.rs`) · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track G, T2 · **Constitution:** MC-4.1, MC-6.1
+
+## Problem
+
+The tools branch adds block writes (`ata` WRITE SECTORS). PIO writes a sector as 256 16-bit words to the data port; with `PORT_OUT` that is one system call per word. `PORT_IN_BLOCK` (27) already reads a sector in one call. The tools branch had added the counterpart as system call 49, which `main` uses for `DEVICE_STATE`.
+
+## Plan
+
+- `SYSCALL_PORT_OUT_BLOCK` = 53: `arg1` = port range handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (1..2048) → words written. Same checks as `PORT_IN_BLOCK`: the port must be in the capability's range, the buffer must be mapped and readable in the caller.
+- `libmind::dev::Ports::write_words`.
+
+## Acceptance criteria
+
+- A task without a port capability gets `ERR_RIGHTS` (`isolation`).
+- `ata` writes sectors with it after the merge (tools block write suite).
+
+## Resolution
+
+- `kernel/src/scheduler.rs`: `SYSCALL_PORT_OUT_BLOCK` next to `PORT_IN_BLOCK` (readable pages instead of writable ones). `common/abi.rs`, `libmind/src/dev.rs` (`write_words`), README and `docs/api` system call tables.
+- Tests: `tests/isolation_app.rs` checks `ERR_RIGHTS` without a port range; all QEMU suites of `main` pass. The driver use is tested by the tools block write suite after the merge (051).

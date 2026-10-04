@@ -92,6 +92,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 17 | `PORT_IN` | `arg1` = port range handle, `arg2` = port, `msg[1]` = width 1/2/4 → value |
 | 18 | `PORT_OUT` | as `PORT_IN`, `msg[0]` = value |
 | 27 | `PORT_IN_BLOCK` | `arg1` = handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (≤ 2048) → words read |
+| 53 | `PORT_OUT_BLOCK` | as `PORT_IN_BLOCK`; the words are written from the buffer → words written |
 | 19 | `IRQ_WAIT` | `arg1` = IRQ handle; blocks until the line fires |
 | 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |

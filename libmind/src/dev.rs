@@ -27,6 +27,10 @@ impl Ports {
     pub fn read_words(&self, port: u16, buffer: &mut [u16]) -> Result<usize> {
         check(syscall(SYSCALL_PORT_IN_BLOCK, self.0, port as usize, [0, 0, buffer.as_mut_ptr() as usize, buffer.len()]).result)
     }
+    /// Bulk write of 16-bit words (ATA data) from a buffer.
+    pub fn write_words(&self, port: u16, buffer: &[u16]) -> Result<usize> {
+        check(syscall(SYSCALL_PORT_OUT_BLOCK, self.0, port as usize, [0, 0, buffer.as_ptr() as usize, buffer.len()]).result)
+    }
 }
 
 /// Interrupt line in a capability slot. After it fires, the kernel masks it until wait/ack.

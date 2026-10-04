@@ -61,6 +61,8 @@ pub const SYSCALL_IRQ_BIND: usize = 24;
 pub const SYSCALL_IRQ_ACK: usize = 25;
 pub const SYSCALL_MEM_PHYS: usize = 26;
 pub const SYSCALL_PORT_IN_BLOCK: usize = 27;
+// PORT_OUT_BLOCK: as PORT_IN_BLOCK, 16-bit words from the process buffer to the port (ATA sector writes).
+pub const SYSCALL_PORT_OUT_BLOCK: usize = 53;
 pub const SYSCALL_TASK_ALIVE: usize = 28;
 pub const SYSCALL_CAP_INFO: usize = 29;
 pub const SYSCALL_IPC_SAVE_REPLY: usize = 31;

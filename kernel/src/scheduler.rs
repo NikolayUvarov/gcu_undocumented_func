@@ -858,6 +858,15 @@ impl Scheduler {
                     Ok(words)
                 }
             }
+            SYSCALL_PORT_OUT_BLOCK => {
+                // Writes 16-bit words (ATA sector) from the process buffer, without a syscall per word.
+                let (buffer, words) = (request.msg[2], request.msg[3]);
+                let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.readable(page * 4096).is_some());
+                if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
+                    for i in 0..words { let source = task.space.readable(buffer + i * 2).unwrap(); port_out(request.arg2 as u16, 2, core::ptr::read_volatile(source as *const u16) as usize); }
+                    Ok(words)
+                }
+            }
             SYSCALL_IRQ_WAIT => match self.cap(slot, request.arg1) {
                 Some(Capability::Interrupt(irq)) if self.irq_bind[irq as usize].is_none() => {
                     interrupts::set_irq_masked(irq, false);

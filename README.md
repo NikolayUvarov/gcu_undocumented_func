@@ -479,6 +479,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
 | 27 | PORT_IN_BLOCK | port-range slot, port; msg[2] = buffer, msg[3] = 16-bit words |
+| 53 | PORT_OUT_BLOCK | as PORT_IN_BLOCK, the words are written from the buffer to the port |
 | 19 / 24 / 25 | IRQ_WAIT / IRQ_BIND / IRQ_ACK | IRQ slot (and endpoint slot for BIND) |
 | 20 | INPUT_EVENT | app byte, focus-owner byte, msg[0] = attention (Ctrl+Z), msg[1]/msg[2] = full event words (0: byte only) — needs the input capability |
 | 52 | SCHED_SET | PID, budget µs; msg[0] = period µs, msg[1] = band or `BAND_KEEP` → 0 — lifecycle owner or process control (band changes: control/platform/restart) |
