@@ -1,6 +1,6 @@
 # 046 — Loader v1: launch sessions with granted capabilities (tools F7)
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T1 · **Blocked by:** 044
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T1 · **Blocked by:** — (044 done)
 
 ## Problem
 

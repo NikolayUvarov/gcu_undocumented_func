@@ -221,6 +221,15 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if rtc(1 | 2 << 8, 0) != 0x81 || rtc(9 | 1 << 8, 0) != 0x80 || rtc(1 | 1 << 8 | 1 << 40, 0) != 0x80 || rtc(1 | 1 << 8, 1) != 0x80 || rtc(1 | 1 << 8, 0) > 1 {
                     asm!("ud2", options(noreturn));
                 }
+                // MIND IDL v0.2: loader rejects buffer calls with a length past the bound or the buffer, or without a buffer.
+                let page = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let buffer = call(mb, abi::SYSCALL_MEM_SHARE, page, 0);
+                core::ptr::write_volatile(page as *mut [u8; 4], [0x88, 0x13, b'a', b'b']); // a name of 5000 bytes
+                let loader = |word: usize, cap: usize| { let raw = mb; (*raw).msg = [cap, 0, word, 0]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
+                if loader(2 | 1 << 8 | 10 << 16, buffer) != 0x80 || loader(1 | 1 << 8 | 8192 << 16, buffer) != 0x80 || loader(1 | 1 << 8, 0) != 0x80 || loader(1 | 1 << 8, buffer) != 0 {
+                    fail();
+                }
+                call(mb, abi::SYSCALL_CAP_DROP, buffer, 0); call(mb, abi::SYSCALL_FREE, page, 0);
                 // Derivation: a mint is never wider than its source; revoking a capability removes its descendants only.
                 let mint = |handle: usize, mask: usize, offset: usize, length: usize| { (*mb).msg = [offset, length, 0, 0]; call(mb, abi::SYSCALL_CAP_MINT, handle, mask) };
                 let rights = |handle: usize| { if call(mb, abi::SYSCALL_CAP_INFO, handle, 0) == abi::CAP_KIND_ENDPOINT { (*mb).msg[2] } else { usize::MAX } };

@@ -496,7 +496,7 @@ This is a page-block API; a `malloc`/Rust `GlobalAlloc` implementation can later
 
 ### Interfaces (MIND IDL)
 
-Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. `rtc` is the first service on MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
+Service interfaces are described in `idl/*.wit`, a WIT subset with a version, size limits and the capability a call may carry ([docs/idl](docs/idl/README.md)). `scripts/mind_idl.py` generates client calls and a server-side `decode` that checks every request (method, version, unused bits, capability kind) into `libmind/src/idl/`. MIND IDL v0.2 adds records, strings and lists with declared bounds, carried in the client's buffer: the server copies the request into private memory before checking it, the client revokes the server's access before reading the reply. `rtc` and `loader` use MIND IDL; the others still use the numeric conventions of `common/abi.rs` (roadmap C8).
 
 ### Runtime checks
 

@@ -38,17 +38,11 @@ pub fn spawn(name: &str, grant: Option<(usize, u8)>) -> Result<u64> {
     check(reply.data[0]).map(|pid| pid as u64)
 }
 
-/// Starts a program from disk with arguments (via the loader service); no endpoint can be passed to the child.
+/// Starts a program from disk with arguments (via the loader service, idl/loader.wit); no endpoint can be passed to the
+/// child.
 pub fn spawn_with_args(name: &str, args: &str) -> Result<u64> {
     if name.is_empty() || name.len() > NAME_MAX || args.len() > ARGS_MAX || name.contains('\0') || args.contains('\0') { return Err(crate::sys::Error::Invalid); }
-    let mut page = crate::mem::Pages::new(4096).ok_or(crate::sys::Error::NoMemory)?;
-    let bytes = page.as_mut_slice();
-    bytes[..name.len()].copy_from_slice(name.as_bytes()); bytes[name.len()] = 0;
-    bytes[name.len() + 1..name.len() + 1 + args.len()].copy_from_slice(args.as_bytes()); bytes[name.len() + 1 + args.len()] = 0;
-    let cap = page.share()?;
-    let reply = crate::ipc::Endpoint::LOADER.call(&crate::ipc::Message::new(0, LOADER_RUN).with_cap(cap, 0), 0);
-    let _ = crate::ipc::drop_cap(cap);
-    check(reply?.data[0]).map(|pid| pid as u64)
+    crate::idl::loader::run(crate::ipc::Endpoint::LOADER, name, args)
 }
 
 /// Arguments the program was started with (the text after the program name), possibly empty.

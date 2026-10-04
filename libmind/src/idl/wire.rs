@@ -1,10 +1,15 @@
-//! MIND IDL v0 wire format (docs/idl/README.md): word 0 = method:8 | major:8 | fields from bit 16, word 1 = fields;
-//! a reply has the status in bits 0..8 of word 0 and the result from bit 16.
+//! MIND IDL wire format (docs/idl/README.md). Word calls: word 0 = method:8 | major:8 | fields from bit 16, word 1 =
+//! fields; a reply has the status in bits 0..8 of word 0 and the result from bit 16. Buffer calls (v0.2): word 0 =
+//! method | major << 8 | request length << 16, the client's buffer travels as the memory capability, the reply is
+//! status | reply length << 16 and its payload is in the same buffer.
+use crate::abi::CAP_KIND_MEMORY;
 use crate::ipc::{self, Endpoint, Message, Received};
+use crate::mem::{Mapping, Pages};
 use crate::sys::{Error, Result};
 
 pub const STATUS_OK: usize = 0;
 pub const STATUS_NONE: usize = 1; // option result: none
+pub const STATUS_ERROR: usize = 2; // result<_, error-code>: the error code is in word 1
 pub const STATUS_INVALID: usize = 0x80; // the request failed the receiver's schema check
 pub const STATUS_VERSION: usize = 0x81; // the receiver serves another major version
 
@@ -59,3 +64,62 @@ pub fn reply(words: [usize; 2]) -> Result<()> { ipc::reply(&Message::new(words[0
 
 /// Answers a request that failed `decode`.
 pub fn reject(reason: Reject) -> Result<()> { reply([if reason == Reject::Version { STATUS_VERSION } else { STATUS_INVALID }, 0]) }
+
+/// Errors of `result<T, error-code>`: the code (a system error code) is in word 1.
+pub fn check_error(reply: &[usize; 2]) -> Result<()> {
+    if reply[0] & 0xFF == STATUS_ERROR { return Err(crate::sys::check(reply[1]).err().unwrap_or(Error::Invalid)); }
+    Ok(())
+}
+
+/// A call whose data travels in `buffer` (request already encoded, `length` bytes). The server's access to the buffer
+/// ends before the reply is read (revoke, MC-2.6): it cannot change the reply while the client decodes it.
+pub fn call_buffer(endpoint: Endpoint, method: usize, buffer: &Pages, length: usize) -> Result<[usize; 2]> {
+    let cap = buffer.share()?;
+    let reply = endpoint.call(&Message::new(method | length << 16, 0).with_cap(cap, 0), 0);
+    let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap);
+    Ok(reply?.data)
+}
+
+/// Checks a buffer reply: Some(length) of the payload, None for an empty option, the error of a fallible function.
+pub fn buffer_reply(reply: &[usize; 2], max: usize, optional: bool, fallible: bool) -> Result<Option<usize>> {
+    match reply[0] & 0xFF {
+        STATUS_OK if reply[1] == 0 && reply[0] >> 16 <= max && reply[0] & 0xFF00 == 0 => Ok(Some(reply[0] >> 16)),
+        STATUS_NONE if optional && reply[0] >> 8 == 0 && reply[1] == 0 => Ok(None),
+        STATUS_ERROR if fallible => { check_error(reply)?; Err(Error::Invalid) }
+        _ => Err(Error::Invalid),
+    }
+}
+
+/// What a server needs to answer one request: the client's buffer (mapped) for buffer calls. Dropping it unmaps the
+/// buffer and frees the received capability.
+pub struct Call { mapping: Option<Mapping>, cap: usize, received: bool }
+impl Call {
+    pub fn words(request: &Received, cap: usize) -> Self { Self { mapping: None, cap, received: request.cap_received } }
+}
+impl Drop for Call {
+    fn drop(&mut self) { drop(self.mapping.take()); if self.received { let _ = ipc::drop_cap(self.cap); } }
+}
+
+/// Server side of a buffer call: checks the header and the buffer, then copies the request into private memory before
+/// anything is decoded (the client could change its buffer meanwhile, MC-2.11). Returns the call and the copy length.
+pub fn take_buffer<const M: usize>(request: &Received, cap: usize, max_reply: usize, copy: &mut [u8; M]) -> core::result::Result<(Call, usize), Reject> {
+    let mut call = Call { mapping: None, cap, received: request.cap_received };
+    let length = request.data[0] >> 16;
+    if request.data[1] != 0 || length > M || length >> 32 != 0 || !request.cap_received || crate::dev::cap_info(cap).0 != CAP_KIND_MEMORY { return Err(Reject::Invalid); }
+    let mapping = Mapping::new(cap).map_err(|_| Reject::Invalid)?;
+    if mapping.len() < length || mapping.len() < max_reply { return Err(Reject::Invalid); }
+    copy[..length].copy_from_slice(&mapping.as_slice()[..length]);
+    call.mapping = Some(mapping);
+    Ok((call, length))
+}
+
+/// Answers a buffer call: `encode` writes the result into the client's buffer.
+pub fn reply_buffer(mut call: Call, encode: impl FnOnce(&mut super::codec::Writer) -> Option<()>) -> Result<()> {
+    let Some(mapping) = call.mapping.as_mut() else { return reply([STATUS_INVALID, 0]) };
+    let mut writer = super::codec::Writer::new(mapping.as_mut_slice());
+    match encode(&mut writer) { Some(()) => { let length = writer.len(); reply([length << 16, 0]) } None => reply([STATUS_ERROR, crate::abi::ERR_NO_MEMORY]) }
+}
+/// Answers with an empty option.
+pub fn reply_none(call: Call) -> Result<()> { drop(call); reply([STATUS_NONE, 0]) }
+/// Answers a fallible function with its error.
+pub fn reply_error(call: Call, error: Error) -> Result<()> { drop(call); reply([STATUS_ERROR, error.code()]) }

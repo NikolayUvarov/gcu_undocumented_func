@@ -189,12 +189,8 @@ pub const VFS_READ: usize = 2;
 pub const VFS_CLOSE: usize = 3;
 pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
-// Program loader: CALL on SLOT_LOADER. msg[2..4] is the program name (up to 16 bytes) and the optional capability
-// is an endpoint for the child's INIT slot; reply msg[2] = PID or error. With msg[2] = 0 and msg[3] = LOADER_LIST
-// the capability is a memory page: the loader writes the program list there and replies with its length.
-pub const LOADER_LIST: usize = 2;
-// With msg[2] = 0 and msg[3] = LOADER_RUN the capability is a memory page with `name\0arguments\0`: start with arguments.
-pub const LOADER_RUN: usize = 1;
+// Program loader: idl/loader.wit (list, run with arguments). Legacy adapter until loader v1: CALL on SLOT_LOADER with
+// the program name packed into msg[2..4] and an optional endpoint for the child's INIT slot; reply msg[2] = PID or error.
 // init: CALL on SLOT_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
 // ERR_BUSY if it is running, ERR_NOT_FOUND if there is no such service.
 

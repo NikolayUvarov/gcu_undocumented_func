@@ -5,8 +5,10 @@
 use core::fmt::Write;
 use mind::abi::*;
 use mind::fs::{self, File};
+use mind::idl::codec::{List, Text};
+use mind::idl::{loader, wire};
 use mind::ipc::{self, Endpoint, Message};
-use mind::mem::{Mapping, Pages};
+use mind::mem::Pages;
 use mind::process::{grant, Image, Quota};
 use mind::sys::Error;
 use mind::util::FixedBuf;
@@ -62,19 +64,17 @@ fn load(name: &[u8], args: &[u8], init: Option<usize>) -> Result<u64, Error> {
     result
 }
 
-// Text for LIST: *.elf programs in the disk root, except the kernel; services are marked.
-fn listing(out: &mut [u8]) -> usize {
-    let mut at = 0;
+// The *.elf programs in the disk root, except the kernel; services are marked.
+fn programs() -> List<loader::Program, 64> {
+    let mut list = List::default();
     let _ = fs::list("", |entry| {
         if entry.is_dir || entry.name.len() < 5 || !entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf") { return; }
         let name = task_name(entry.name);
         if name.as_bytes() == b"kernel" { return; }
-        let mut line = FixedBuf::<64>::new();
         let service = BOOT_SERVICES.iter().any(|s| s.as_bytes() == name.as_bytes());
-        let _ = writeln!(line, "  {:<12} {} BYTES{}", core::str::from_utf8(name.as_bytes()).unwrap_or("?"), entry.size, if service { " (SERVICE)" } else { "" });
-        if at + line.as_bytes().len() <= out.len() { out[at..at + line.as_bytes().len()].copy_from_slice(line.as_bytes()); at += line.as_bytes().len(); }
+        if let Some(name) = Text::new(core::str::from_utf8(name.as_bytes()).unwrap_or("?")) { list.push(loader::Program { name, size: entry.size as u64, service }); }
     });
-    at
+    list
 }
 
 mind::entry!(main);
@@ -87,26 +87,18 @@ fn main(_info: &'static BootInfo) {
             if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
             continue;
         }
-        let code = if request.data == [0, LOADER_LIST] {
-            // Program list into the caller's memory page.
-            match Mapping::new(RECEIVED_CAP) { Ok(mut page) => listing(page.as_mut_slice()), Err(error) => error.code() }
-        } else if request.data == [0, LOADER_RUN] {
-            // Start with arguments: the page holds `name\0arguments\0`.
-            match Mapping::new(RECEIVED_CAP) {
-                Ok(page) => {
-                    let bytes = page.as_slice();
-                    let name_end = bytes.iter().position(|&b| b == 0).unwrap_or(0);
-                    let rest = &bytes[(name_end + 1).min(bytes.len())..];
-                    let args = &rest[..rest.iter().position(|&b| b == 0).unwrap_or(rest.len()).min(ARGS_MAX)];
-                    if name_end == 0 || name_end > NAME_MAX { ERR_INVALID } else { match load(&bytes[..name_end], args, None) { Ok(pid) => pid as usize, Err(error) => error.code() } }
-                }
-                Err(error) => error.code(),
-            }
-        } else {
-            // Spawn: name in two message words, optional endpoint for the child's INIT slot.
-            let (packed, len) = mind::process::unpack_name(request.data);
-            match load(&packed[..len], &[], request.cap_received.then_some(RECEIVED_CAP)) { Ok(pid) => pid as usize, Err(error) => error.code() }
-        };
+        // Requests in idl/loader.wit; the legacy start-with-endpoint request (a program name packed into the words, never
+        // carrying the interface's version byte) remains as a bounded adapter until loader v1 (issue 046).
+        if (request.data[0] >> 8) & 0xFF == loader::VERSION.0 as usize {
+            let _ = match loader::decode(&request, RECEIVED_CAP) {
+                Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
+                Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), None)),
+                Err(reason) => wire::reject(reason),
+            };
+            continue;
+        }
+        let (packed, len) = mind::process::unpack_name(request.data);
+        let code = match load(&packed[..len], &[], request.cap_received.then_some(RECEIVED_CAP)) { Ok(pid) => pid as usize, Err(error) => error.code() };
         if request.cap_received { let _ = ipc::drop_cap(RECEIVED_CAP); }
         let _ = ipc::reply(&Message::new(code, 0));
     }

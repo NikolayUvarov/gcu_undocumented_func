@@ -12,16 +12,31 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import mind_idl  # noqa: E402
 
 HEADER = "package mind:t@1.0.0;\ninterface t {\n"
-SELFTEST = """/// Every v0 feature.
+SELFTEST = """/// Every v0.2 feature.
 package mind:selftest@2.1.0;
 
 interface selftest {
+    /// A record with every field kind.
+    record entry {
+        name: string<32>,
+        size: u64,
+        directory: bool,
+        tags: list<u8, 4>,
+    }
+    record pair { left: entry, right: u16 }
     /// No parameters, no result.
     ping: func();
     flags: func(a: bool, b: u8, c: u16, d: u32, e: u32) -> bool;
     wide: func(a: u64) -> u64;
     give: func(buffer: own<memory>, length: u32) -> option<u16>;
     lend: func(reply-to: borrow<endpoint>);
+    fail: func(code: u32) -> result<u32, error-code>;
+    nothing: func(code: u32) -> result<_, error-code>;
+    open: func(path: string<255>, write: bool) -> result<u64, error-code>;
+    list: func(path: string<255>, limit: u16) -> list<entry, 32>;
+    find: func(names: list<string<16>, 8>) -> option<pair>;
+    put: func(item: entry, more: list<pair, 2>);
+    name: func(id: u32) -> string<64>;
 }
 """
 
@@ -33,7 +48,7 @@ def parse(body):
 class Layout(unittest.TestCase):
     def test_fields_pack_without_straddling(self):
         f = parse("f: func(a: u32, b: u16, c: bool, d: u32, own-buf: own<memory>) -> u64;\n").functions[0]
-        placed = {p.name: (p.word, p.shift) for p in f.params if not p.handle}
+        placed = {p.name: (p.word, p.shift) for p in f.params if p.type[0] == "int"}
         self.assertEqual(placed, {"a": (0, 16), "b": (0, 48), "c": (1, 0), "d": (1, 1)})
         self.assertEqual(f.handle.name, "own_buf")
         self.assertEqual(f.result_field.shift, 0)  # a 64-bit result starts word 1
@@ -48,7 +63,20 @@ class Layout(unittest.TestCase):
             parse("f: func(a: own<memory>, b: borrow<endpoint>);\n")
 
     def test_unknown_types_rejected(self):
-        for body in ("f: func(a: string);\n", "f: func(a: own<socket>);\n", "f: func() -> option<own<memory>>;\n"):
+        for body in ("f: func(a: string);\n", "f: func(a: own<socket>);\n", "f: func() -> option<own<memory>>;\n", "f: func(a: list<u8>);\n"):
+            with self.subTest(body=body), self.assertRaises(mind_idl.IdlError):
+                parse(body)
+
+    def test_buffer_calls(self):
+        interface = parse("record e { a: string<4>, b: u16 }\nf: func(x: list<e, 3>) -> string<10>;\ng: func(y: u8);\n")
+        f, g = interface.functions
+        self.assertTrue(f.buffered and not g.buffered)
+        self.assertEqual((f.request_max, f.reply_max), (2 + 3 * (6 + 2), 12))
+        for body in ("f: func(x: string<4>, h: own<memory>);\n",  # a buffer call carries no other capability
+                     "f: func() -> list<u8, 70000>;\n",            # more than 64 KiB
+                     "f: func(x: list<own<memory>, 2>);\n",
+                     "record r { h: own<memory> }\nf: func(x: r);\n",
+                     "f: func(x: unknown);\n"):
             with self.subTest(body=body), self.assertRaises(mind_idl.IdlError):
                 parse(body)
 
@@ -64,7 +92,8 @@ class Layout(unittest.TestCase):
             for part in ("libmind", "common"):
                 shutil.copytree(ROOT / part, Path(tmp) / part, ignore=shutil.ignore_patterns("target"))
             (Path(tmp) / "idl").mkdir()
-            shutil.copy(ROOT / "idl" / "rtc.wit", Path(tmp) / "idl")
+            for wit in (ROOT / "idl").glob("*.wit"):
+                shutil.copy(wit, Path(tmp) / "idl")
             (Path(tmp) / "idl" / "selftest.wit").write_text(SELFTEST)
             subprocess.run([sys.executable, str(ROOT / "scripts" / "mind_idl.py"), "--root", tmp], check=True, capture_output=True)
             build = subprocess.run(["cargo", "+nightly", "build", "--release", "--target", "x86_64-unknown-none"], cwd=Path(tmp) / "libmind", capture_output=True, text=True)

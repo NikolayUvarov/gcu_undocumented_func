@@ -8,7 +8,7 @@ Only `rtc` uses MIND IDL; the other services use numeric conventions and share h
 
 ## Plan
 
-- Interfaces in `idl/`: `block.wit`, `audio.wit`, `tts.wit`, `loader.wit`, `init.wit` (needs IDL v0.2 from issue 044 for strings and buffers).
+- Interfaces in `idl/`: `block.wit`, `audio.wit`, `tts.wit`, `loader.wit`, `init.wit` (IDL v0.2 from issue 044 is done; `loader.wit` exists).
 - Transfers: the client's buffer as a lease or sealed read-only object where the server only reads; read-write sharing only where declared in the profile.
 - VFS is ported once as VFS v2 together with the tools track (issue 048).
 
@@ -18,4 +18,4 @@ Only `rtc` uses MIND IDL; the other services use numeric conventions and share h
 
 ## Related
 
-[ROADMAP](../ROADMAP.md) C8; [044](044-idl-v02-records-strings.md), [048](048-write-path-ramdisk-vfs2.md).
+[ROADMAP](../ROADMAP.md) C8; [044](../issues-done/044-idl-v02-records-strings.done), [048](048-write-path-ramdisk-vfs2.md).

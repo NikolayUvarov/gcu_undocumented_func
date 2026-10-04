@@ -40,7 +40,7 @@ fn main(_info: &'static BootInfo) {
         // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
         let _ = match rtc::decode(&request, 0) {
-            Ok(rtc::Request::Now) => rtc::reply_now(read_time(cmos).map(|seconds| seconds as u32)),
+            Ok((rtc::Request::Now, call)) => rtc::reply_now(call, read_time(cmos).map(|seconds| seconds as u32)),
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };

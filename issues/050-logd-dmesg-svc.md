@@ -1,6 +1,6 @@
 # 050 — `logd`, `dmesg`, `svc` (tools F10, T3)
 
-**Type:** tool · **Owner:** tools track · **Priority:** P3 · **Status:** open · **Roadmap:** track G, T3 · **Blocked by:** 044
+**Type:** tool · **Owner:** tools track · **Priority:** P3 · **Status:** open · **Roadmap:** track G, T3 · **Blocked by:** — (044 done)
 
 ## Problem
 

@@ -147,16 +147,12 @@ impl Shell {
     }
 
     fn list_programs(&mut self) {
-        let listing = (|| -> Result<(Pages, usize), Error> {
-            let page = Pages::new(4096).ok_or(Error::NoMemory)?;
-            let cap = page.share()?;
-            let reply = Endpoint::LOADER.call(&Message::new(0, LOADER_LIST).with_cap(cap, 0), 0);
-            let _ = mind::ipc::drop_cap(cap);
-            let len = mind::sys::check(reply?.data[0])?;
-            Ok((page, len.min(4096)))
-        })();
-        match listing {
-            Ok((page, len)) => { let _ = writeln!(self.term, "PROGRAMS ON DISK:"); for &byte in &page.as_slice()[..len] { self.term.print_char(byte); } }
+        // idl/loader.wit: a typed list instead of text.
+        match mind::idl::loader::list(Endpoint::LOADER) {
+            Ok(programs) => {
+                let _ = writeln!(self.term, "PROGRAMS ON DISK:");
+                for p in programs.as_slice() { let _ = writeln!(self.term, "  {:<12} {} BYTES{}", p.name.as_str(), p.size, if p.service { " (SERVICE)" } else { "" }); }
+            }
             Err(_) => self.report("CANNOT LIST THE BOOT DISK"),
         }
         let _ = write!(self.term, "SERVICES (STARTED AT BOOT): ");

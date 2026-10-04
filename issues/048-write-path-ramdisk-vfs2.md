@@ -1,6 +1,6 @@
 # 048 — Block write, `ramdisk`, VFS v2 with directory handles (tools F8)
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T2; C8 for VFS · **Blocked by:** 044 (036 done)
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T2; C8 for VFS · **Blocked by:** — (036, 044 done)
 
 ## Problem
 
