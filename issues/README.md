@@ -22,10 +22,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [088](088-text-window-manager.md) | `wm`: window manager for text and pixel programs (dragging, snapping to edges and corners; detach keeps programs running) | tools | P2 | — (157, 156 done) | track G |
 | [089](089-text-clock-faces.md) | Text faces for `clock` and `dzen-clock` (compatibility: text windows, consoles) | tools | P2 | — | track G |
+| [090](090-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088) | track G |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
 | [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell + kernel | P2 | — (extends 154) | track G |
+| [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [200](200-architecture-layer.md) | Architecture layer in the kernel and libmind (x86-64 first, no change in behavior) | porting | P2 | — | track H |
 | [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | 200 | track H |
 | [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
