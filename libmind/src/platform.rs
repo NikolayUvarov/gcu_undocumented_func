@@ -6,7 +6,9 @@ use crate::sys::{check, syscall, Result};
 pub fn cap(kind: usize, a: usize, b: usize) -> Result<usize> { check(syscall(SYSCALL_PLATFORM_CAP, kind, a, [b, 0, 0, 0]).result) }
 
 /// Index of the `nth` PCI function whose class code matches `class` under `mask`.
-pub fn find_device(class: u32, mask: u32, nth: usize) -> Result<usize> { check(syscall(SYSCALL_DEVICE_FIND, class as usize, mask as usize, [nth, 0, 0, 0]).result) }
+pub fn find_device(class: u32, mask: u32, nth: usize) -> Result<usize> { find_device_id(class, mask, 0, nth) }
+/// As `find_device`, also matching the PCI `vendor | device << 16` identifier (0: any).
+pub fn find_device_id(class: u32, mask: u32, id: u32, nth: usize) -> Result<usize> { check(syscall(SYSCALL_DEVICE_FIND, class as usize, mask as usize, [nth, id as usize, 0, 0]).result) }
 
 /// Stops a PCI device's decoding and DMA before its driver is restarted (platform privilege or a BAR capability).
 pub fn quiesce(device: usize) -> Result<()> { check(syscall(SYSCALL_DEVICE_STATE, device, DEVICE_STOP, [0; 4]).result).map(drop) }

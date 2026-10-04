@@ -1,0 +1,37 @@
+# 100 — `virtio_net`: network card driver in ring 3 — done
+
+**Type:** driver · **Owner:** kernel track · **Priority:** P1 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track A (stage III), first step of track D · **Constitution:** MC-1.3, MC-6.3, Appendix B.6 (NIC driver)
+
+## Problem
+
+MIND Core has no network at all (profile: "One node; no network"). Track D (network stack, policy broker, TLS) needs a NIC driver first. Stage III names VirtIO block/net/input as the driver vertical slice.
+
+## Plan
+
+- `virtio_net` service for the VirtIO network device in its legacy (transitional) PCI interface: I/O BAR0, split virtqueues, legacy INTx interrupt. Authority per B.6: the I/O ports of its own device, its IRQ line and a bounded DMA region; nothing else.
+- `DEVICE_FIND` learns to match PCI vendor and device IDs (a QEMU `pc` machine has an e1000 by default, of the same class).
+- Interface `idl/net.wit`: device info (MAC, MTU, link), send one Ethernet frame, receive one frame, wait for a frame (deferred reply from the interrupt), counters. Frames travel in MIND IDL buffers (copied into the driver's private memory, the client's lease revoked before the reply is read).
+- Supervision: `init` stops the device (no decoding, no DMA) and clears the DMA region before a restart, as for AHCI and xHCI.
+- Diagnostics: the shell's `net` command (info, `net arp <ip>`) through a client `init` grants the shell. The only other client will be the network stack (issue 101).
+
+## Acceptance criteria
+
+- In QEMU with `-device virtio-net-pci` and user networking, `net` shows the MAC and link state and `net arp 10.0.2.2` gets the gateway's answer (frames sent and received through the driver).
+- After the driver is killed, `init` quiesces the device, restarts the driver, and `net arp` works again.
+- Without the device the driver reports none; a QEMU e1000 is not taken for a VirtIO device.
+- A QEMU suite covers it and runs in CI; the profile and docs list the driver and its authority.
+
+## Related
+
+[ROADMAP](../ROADMAP.md) tracks A and D; [101](../issues/101-network-stack.md), [102](../issues/102-network-policy-broker.md), [103](../issues/103-tls-service.md).
+
+## Resolution
+
+- **Driver** `virtio_net/src/main.rs`: legacy VirtIO interface (I/O BAR0), feature negotiation (MAC, link status), a receive and a transmit split virtqueue (size from the device, 256 in QEMU) in the first 64 KiB of a 160 KiB DMA region, 32 receive and 16 transmit buffers of 2 KiB, a queue of 16 received frames in its own heap. The legacy interrupt is bound to the service endpoint (the ISR read acknowledges it); the rings are also checked every 20 ms in case a shared line is missed. A reset at start ends any DMA of an earlier instance.
+- **Interface** `idl/net.wit` 1.0: `info`, `send`, `receive`, `wait` (deferred until a frame arrives), `counters`; frames up to 1514 bytes in MIND IDL buffers.
+- **Kernel/ABI:** `DEVICE_FIND` takes `msg[1]` = PCI vendor | device << 16 (`mind::platform::find_device_id`); the kernel records the IDs at enumeration. `virtio_net` is boot service 14 (`BOOT_SERVICES`, 16 images); `SLOT_NET` = 13 is the shell's client.
+- **init:** finds 1AF4:1000 of class 02:00, grants BAR0 ports, the IRQ line, the DMA region and the server endpoint; quiesces the device and clears the region before a restart; lends the shell a client.
+- **Shell:** `net` (MAC, link, MTU, counters) and `net arp <ip>` (a broadcast ARP request from 10.0.2.15, answer within a second) in `shell/src/net.rs`.
+- **Tests:** QEMU suite `net` (in CI): `-device virtio-net-pci` with user networking; MAC 52:54:00:12:34:56 and link up; ARP for 10.0.2.2 answered by 52:55:0A:00:02:02 with sent, received and interrupt counters above zero; no answer for an unused address; after `kill` the device is quiesced before the restart and ARP works again; with QEMU's default e1000 only, the driver is not started and `net` reports no card.
+
+Not done: the modern VirtIO interface and MSI-X ([104](../issues/104-virtio-modern-msix.md)), several cards ([105](../issues/105-multiple-network-cards.md)), checksum and segmentation offloads ([106](../issues/106-network-offloads.md)), a network stack ([101](../issues/101-network-stack.md)).

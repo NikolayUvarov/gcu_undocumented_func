@@ -40,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: boot, display, shell, memory, clock
-            args: --suites boot,display,normal,memory,dzen
+          - name: boot, display, network, shell, memory, clock
+            args: --suites boot,display,net,normal,memory,dzen
           - name: services, storage, audio
             args: --suites services,ahci,audio,tts,listen
           - name: scheduling, isolation, heap

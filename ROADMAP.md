@@ -1,6 +1,6 @@
 # MIND CORE — Roadmap v1.1
 
-**Version:** 1.1 (1.0 → 1.1: S0 and K1 done)  
+**Version:** 1.2 (1.1 → 1.2: stage II steps C1–C8 done; tracks A and D started with the VirtIO network driver)  
 **Date:** 3 October 2026  
 **Based on:** [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md)  
 **Russian version:** [ROADMAP_RU.md](ROADMAP_RU.md) (kept in sync; the English text is the reference)
@@ -96,10 +96,10 @@ graph LR
 
 | Track | Constitution stage | Contents | Can start | Hard dependency for completion |
 |---|---|---|---|---|
-| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II | — |
+| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II; started: `virtio_net` (issue 100), modern VirtIO and MSI-X next (104); the AHCI, xHCI and AC97 drivers already restart after device quiesce | — |
 | **B. State and recovery** | IV | Checksummed block store → CID and immutable blocks → manifests/Merkle-DAG → transactional Head/Refs service → retention/GC → checkpoint/rebind; a recovery set usable without the main store | After II (on a RAM disk) | Durable block path from track A |
 | **C. Update and provenance** | V | Signed manifests and launch records (the manifest requests, it never grants: 3.11); A/B activation with last-known-good; key roles; reproducible toolchain (pinned `rust-toolchain`, `Cargo.lock`); AOT recipe keys | Signing and reproducible builds: now | Durable image storage from track B |
-| **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II | NIC driver from track A; import into track B |
+| **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II; issues 101–103 (stack, policy broker, TLS) | NIC driver from track A (issue 100); import into track B |
 | **E. Marain** | RFC M0–M7 | M0 specification and M1 front end / M2 reference evaluator on a host bench; M3 Wasm component + runtime limits; M4 actors and protocols; M5 state/update; M6 cognitive-plane pilot and comparison with Rust bindings | **M0–M2: now** (host only) | M3–M4: IDL from C5; M5: track B; M6: tracks A/B services |
 | **F. Safety plane** | VI | Control actors, authorized change of limits, justified deadlines, degradation when the cognitive plane fails; no JIT | After II and C7 budgets | Needed drivers (A), durability (B) |
 | **G. User services** | VII | Compositor on display fences, audio, TTS, input methods, UI and localization (English and Russian); system tools — file manager, editor, `top`, memory map, load monitor ([plan](docs/tools/README.md)) | After C8 port; the system tools of the plan are done (issues 052–071, 075–076); remaining tools 080–086; voice ([plan](docs/voice/README.md)): V0–V2 in issues 077–079, needs kernel issues 150, 153, 154 for V2+ and V3 | Only the interfaces they use |
@@ -129,11 +129,11 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Done | S0 profile and models | TCB, threat/fault model, clocks, bootstrap authority written and referenced from the code |
 | Done | K1 policy out of the kernel | Kernel has no shell or driver-selection policy; `init` holds bootstrap authority |
 | Done | K3, K4 clocks and accounted kernel objects | Monotonic clock with stated resolution; per-owner quotas for tasks and endpoints |
-| P1 | C1–C3 capabilities | Stage II capability criteria pass in tests and in the model |
-| P1 | C4–C5 IPC modes and IDL | Bounded queues, MOVE/SHARE_RO/LEASE contracts, generated bindings |
-| P1 | C6–C7 supervision and budgets | Crash of any service is reported to its owner and restarted within a budget |
-| P1 | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked |
-| P2 | C8 port services; then tracks A–G in parallel | Stage II exit criteria met |
+| Done | C1–C8: capabilities, IPC modes, MIND IDL, supervision, budgets, services ported | Stage II capability, IPC and supervision criteria pass in tests (issues 025–039, 044) |
+| P1 | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked (the remaining stage II exit criterion) |
+| P1 | Track A: VirtIO net, then block and input | Drivers restart under the supervisor with device quiesce (issue 100) |
+| P2 | Track D: network stack, policy broker, TLS | Flows as capabilities with quotas (issues 101–103) |
+| P2 | Tracks B, C, E–G in parallel | Per track |
 
 ## 7. Maintenance of this roadmap
 

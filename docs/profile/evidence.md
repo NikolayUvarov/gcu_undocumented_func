@@ -31,6 +31,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | An endpoint badge set by `CAP_MINT` reaches the receiver, is kept by children and cannot be replaced | `isolation` suite, case `i` |
 | Five children sending at once: four wait, the fifth gets `ERR_BUSY`; a reply after the caller's timeout fails with `ERR_PEER`; a memory object moves to a child (the sender's handle dies); revoke removes a capability waiting in a blocked send; a child reading a revoked lease faults | `isolation` suite, cases q, j, z, b, x |
 | A killed AHCI driver is restarted after its device was stopped and its DMA cleared; reads continue through the same endpoint | `ahci` suite |
+| A VirtIO network card driver in ring 3 sends and receives Ethernet frames (ARP with QEMU's gateway), is restarted after its device was stopped and its DMA cleared, and an e1000 of the same PCI class is not taken for it | `net` suite |
 | `init` drops the platform privilege before READY; quotas are reported per task | `services` suite |
 | `STAT` agrees with `ps` (task count) and `heap` (arena used); the shell's address-space map has its known regions; every CPU accounts busy and idle time; an application without the observe privilege is refused | `services` suite; `isolation` case `k` |
 | A client of a quarantined service is not left waiting in a send (init keeps no receive right) | `services` suite |

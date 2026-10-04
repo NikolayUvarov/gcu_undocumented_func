@@ -26,8 +26,9 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
 | `tts` | server endpoint, client endpoint of `audio_gw` |
+| `virtio_net` | server endpoint; if a VirtIO network card (1AF4:1000) is present: its I/O BAR0, its IRQ, 160 KiB DMA |
 | `sysmon` | server endpoint, observe privilege (read-only statistics; only `sysmon` and `logd` get it) |
-| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12); process-control and input privileges; ports 0x3F8–0x3FF |
+| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12), `virtio_net` (slot 13, the `net` diagnostics); process-control and input privileges; ports 0x3F8–0x3FF |
 
 5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–12 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it, a VFS client confined to the directory of the file it is started with (slot 7, made by `vfs_server`'s `scope` from the shell's own handle, never wider) to one that asks for a file (`REQUEST_FILE`, the editor), its own VFS client (slot 7, the user's badge) to one that asks for the user's files (`REQUEST_FILES`, the file manager), and its read-badged `logd` client (slot 12) to one that asks for the log (`REQUEST_LOG`, `dmesg`), and its client of `init` (slot 11) to one that asks for lifecycle control (`REQUEST_LIFECYCLE`: `svc`, `top`); a program that asks for the console starts without a screen.
 

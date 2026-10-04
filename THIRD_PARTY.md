@@ -10,6 +10,8 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `fonts/mind-mono-16.bdf`, generated `common/font16.rs` | Subset of [Terminus Font](https://sourceforge.net/projects/terminus-font/) 4.49.1 (`ter-u16n.bdf` with the font's `alt/dv1.diff` and `alt/ij1.diff`), Copyright (C) 2020 Dimitar Toshkov Zhekov, with Reserved Font Name "Terminus Font" | **SIL Open Font License 1.1** ([text](LICENSES/OFL-1.1.txt), also [fonts/OFL.txt](fonts/OFL.txt)) | A Modified Version under the OFL (a subset of the glyphs, bitmaps unchanged), so it does not use the reserved name: it is called **MIND Mono** ([fonts/README.md](fonts/README.md)). The font stays under the OFL; code that draws with it does not. It is embedded in the programs that draw text with `mind::font16` (shell, `view`, `fm`, `edit`, the monitors and others), so a distributed boot image carries the OFL text in `LICENSES/`. |
 | `tts/data/lexicon_en.txt` | [CMU Pronouncing Dictionary](https://github.com/cmusphinx/cmudict), Copyright (C) 1993-2015 Carnegie Mellon University; word selection by a frequency list from hermitdave/FrequencyWords | **BSD-style** ([text](LICENSES/CMUdict-BSD.txt)) | Converted to the tts phoneme alphabet by `scripts/lexicon_en.py`. Redistributions in source or binary form (it is embedded in `tts.elf`) must reproduce the CMU copyright notice and disclaimer. |
 
+Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.
+
 ## Rust dependencies (fetched by Cargo, not stored here)
 
 | Crate | Used by | Licence |

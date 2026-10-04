@@ -11,6 +11,8 @@
 4. **One file per task**: `NNN-short-name.md`, numbers are never reused. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
 5. Update the tables below in the same commit.
 
+Tasks that need a person (repository settings, legal decisions, coordination of agent sessions) are in [issues-human/](../issues-human/README.md).
+
 ## Open tasks
 
 Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** (077–099) builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`); the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
@@ -24,6 +26,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [084](084-reboot.md) | `reboot` | tools | P2 | 152 | track G, T3 |
 | [085](085-keymap.md) | `keymap`: layout and switch key | tools | P2 | 151 | track G, T3 |
 | [086](086-screenshot.md) | `screenshot` | tools | P2 | 151 | track G, T3 |
+| [101](101-network-stack.md) | Network stack service (IPv4, ARP, ICMP, UDP, TCP) | network | P2 | — (100 done) | track D |
+| [102](102-network-policy-broker.md) | Network policy broker and flow capabilities | network | P2 | 101 | track D |
+| [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | 101, 102 | track D |
+| [104](104-virtio-modern-msix.md) | Modern VirtIO interface and MSI-X interrupts | kernel + driver | P2 | — | track A |
+| [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | 101 | tracks A, D |
+| [106](106-network-offloads.md) | Checksum and segmentation offloads, after measurement | network | P3 | 101, benchmark | track D |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [151](151-shell-grant-slots-13-15.md) | Shell grant slots 13–15: authority view, keyboard control, screen capture | kernel | P2 | — | track G |
 | [152](152-reboot-system-call.md) | `REBOOT` system call | kernel | P2 | — | track G |
@@ -113,5 +121,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [080](../issues-done/080-ipc-tool.done) | `ipc`: endpoints, holders, wait-for graph | done (2026-10-04) |
 | [082](../issues-done/082-find-and-grep.done) | `find` and `grep` | done (2026-10-04) |
 | [083](../issues-done/083-format.done) | `format` for the RAM disk (`vfs.wit` 2.3) | done (2026-10-04) |
+| [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

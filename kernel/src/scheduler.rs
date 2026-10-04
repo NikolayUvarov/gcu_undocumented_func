@@ -790,7 +790,7 @@ impl Scheduler {
             SYSCALL_DEVICE_FIND => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
                     let (class, mask) = (request.arg1 as u32, request.arg2 as u32);
-                    self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
+                    self.devices.iter().enumerate().filter(|(_, d)| d.class & mask == class & mask && (request.msg[1] == 0 || d.id == request.msg[1] as u32)).nth(request.msg[0]).map(|(index, _)| index).ok_or(ERR_NOT_FOUND)
                 }
             }
             SYSCALL_SCHED_SET => match self.find(request.arg1 as u64) {

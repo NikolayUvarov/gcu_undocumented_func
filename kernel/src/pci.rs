@@ -14,7 +14,7 @@ unsafe fn write(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -65,8 +65,9 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
             for function in 0..functions {
                 if read(bus, device, function, 0) & 0xFFFF == 0xFFFF { continue; }
                 let class = read(bus, device, function, 0x08) >> 8;
+                let id = read(bus, device, function, 0); // vendor | device << 16
                 let irq = read(bus, device, function, 0x3C) as u8;
-                devices.push(Device { class, bars: bars(bus, device, function), irq: if irq < 16 { irq } else { 0 }, bus, device, function });
+                devices.push(Device { class, id, bars: bars(bus, device, function), irq: if irq < 16 { irq } else { 0 }, bus, device, function });
             }
         }
     }

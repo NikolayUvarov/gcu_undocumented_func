@@ -65,6 +65,7 @@ USER_CRATES=(
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
+    "virtio_net:virtio_net:virtio_net.elf"
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"
