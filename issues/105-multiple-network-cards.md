@@ -18,4 +18,4 @@
 
 ## Related
 
-[101](101-network-stack.md), [102](102-network-policy-broker.md), [104](104-virtio-modern-msix.md).
+[101](../issues-done/101-network-stack.done), [102](102-network-policy-broker.md), [104](../issues-done/104-virtio-modern-msix.done).

@@ -96,10 +96,10 @@ graph LR
 
 | Track | Constitution stage | Contents | Can start | Hard dependency for completion |
 |---|---|---|---|---|
-| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II; started: `virtio_net` (issue 100), modern VirtIO and MSI-X next (104); the AHCI, xHCI and AC97 drivers already restart after device quiesce | — |
+| **A. Drivers** | III | VirtIO block/net/input; device reset, DMA quiescence and driver restart under the supervisor; then port ATA/AHCI/xHCI/AC97 to the same restart contract; VT-d DMA domains (III-4) | After II; started: `virtio_net` with the modern interface and MSI-X (issues 100, 104); next: VirtIO block and input on `mind::virtio`; the AHCI, xHCI and AC97 drivers already restart after device quiesce | — |
 | **B. State and recovery** | IV | Checksummed block store → CID and immutable blocks → manifests/Merkle-DAG → transactional Head/Refs service → retention/GC → checkpoint/rebind; a recovery set usable without the main store | After II (on a RAM disk) | Durable block path from track A |
 | **C. Update and provenance** | V | Signed manifests and launch records (the manifest requests, it never grants: 3.11); A/B activation with last-known-good; key roles; reproducible toolchain (pinned `rust-toolchain`, `Cargo.lock`); AOT recipe keys | Signing and reproducible builds: now | Durable image storage from track B |
-| **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II; issues 101–103 (stack, policy broker, TLS) | NIC driver from track A (issue 100); import into track B |
+| **D. Babel / Airlock** | VII (Babel) | Network stack, policy broker, TLS service with non-exportable keys, session parsers with minimal authority; FAT and USB media as read-only projections with authorized import (Appendix B.6) | After II; started: network stack `netstack` (101); next: policy broker (102), TLS (103) | NIC driver from track A (issue 100); import into track B |
 | **E. Marain** | RFC M0–M7 | M0 specification and M1 front end / M2 reference evaluator on a host bench; M3 Wasm component + runtime limits; M4 actors and protocols; M5 state/update; M6 cognitive-plane pilot and comparison with Rust bindings | **M0–M2: now** (host only) | M3–M4: IDL from C5; M5: track B; M6: tracks A/B services |
 | **F. Safety plane** | VI | Control actors, authorized change of limits, justified deadlines, degradation when the cognitive plane fails; no JIT | After II and C7 budgets | Needed drivers (A), durability (B) |
 | **G. User services** | VII | Compositor on display fences, audio, TTS, input methods, UI and localization (English and Russian); system tools — file manager, editor, `top`, memory map, load monitor ([plan](docs/tools/README.md)) | After C8 port; the system tools of the plan are done (issues 052–071, 075–076); remaining tools 080–086; voice ([plan](docs/voice/README.md)): V0–V2 in issues 077–079, needs kernel issues 150, 153, 154 for V2+ and V3 | Only the interfaces they use |
@@ -131,8 +131,8 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Done | K3, K4 clocks and accounted kernel objects | Monotonic clock with stated resolution; per-owner quotas for tasks and endpoints |
 | Done | C1–C8: capabilities, IPC modes, MIND IDL, supervision, budgets, services ported | Stage II capability, IPC and supervision criteria pass in tests (issues 025–039, 044) |
 | P1 | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked (the remaining stage II exit criterion) |
-| P1 | Track A: VirtIO net, then block and input | Drivers restart under the supervisor with device quiesce (issue 100) |
-| P2 | Track D: network stack, policy broker, TLS | Flows as capabilities with quotas (issues 101–103) |
+| P1 | Track A: VirtIO block and input on `mind::virtio` | Drivers restart under the supervisor with device quiesce; MSI-X (done for net: 100, 104) |
+| P2 | Track D: policy broker, TLS | Flows as capabilities with quotas (stack done: 101; next 102, 103) |
 | P2 | Tracks B, C, E–G in parallel | Per track |
 
 ## 7. Maintenance of this roadmap

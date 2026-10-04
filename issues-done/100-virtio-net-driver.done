@@ -23,7 +23,7 @@ MIND Core has no network at all (profile: "One node; no network"). Track D (netw
 
 ## Related
 
-[ROADMAP](../ROADMAP.md) tracks A and D; [101](../issues/101-network-stack.md), [102](../issues/102-network-policy-broker.md), [103](../issues/103-tls-service.md).
+[ROADMAP](../ROADMAP.md) tracks A and D; [101](101-network-stack.done), [102](../issues/102-network-policy-broker.md), [103](../issues/103-tls-service.md).
 
 ## Resolution
 
@@ -34,4 +34,4 @@ MIND Core has no network at all (profile: "One node; no network"). Track D (netw
 - **Shell:** `net` (MAC, link, MTU, counters) and `net arp <ip>` (a broadcast ARP request from 10.0.2.15, answer within a second) in `shell/src/net.rs`.
 - **Tests:** QEMU suite `net` (in CI): `-device virtio-net-pci` with user networking; MAC 52:54:00:12:34:56 and link up; ARP for 10.0.2.2 answered by 52:55:0A:00:02:02 with sent, received and interrupt counters above zero; no answer for an unused address; after `kill` the device is quiesced before the restart and ARP works again; with QEMU's default e1000 only, the driver is not started and `net` reports no card.
 
-Not done: the modern VirtIO interface and MSI-X ([104](../issues/104-virtio-modern-msix.md)), several cards ([105](../issues/105-multiple-network-cards.md)), checksum and segmentation offloads ([106](../issues/106-network-offloads.md)), a network stack ([101](../issues/101-network-stack.md)).
+Not done: the modern VirtIO interface and MSI-X ([104](104-virtio-modern-msix.done)), several cards ([105](../issues/105-multiple-network-cards.md)), checksum and segmentation offloads ([106](../issues/106-network-offloads.md)), a network stack ([101](101-network-stack.done)).

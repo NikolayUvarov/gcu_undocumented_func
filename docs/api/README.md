@@ -103,8 +103,9 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel [platform privilege] |
+| 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel; `PLATFORM_DEVICE_MSIX` (device, table entry) gives an interrupt line 16–31 whose MSI-X entry the kernel programs [platform privilege] |
 | 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match, `msg[1]` = PCI vendor \| device << 16 (0: any) → device index |
+| 54 | `DEVICE_CONFIG` | `arg1` = MMIO or port capability over a BAR of a PCI function, `arg2` = offset (< 256) → that function's configuration dword (read only; drivers find their capabilities) |
 | 49 | `DEVICE_STATE` | `arg1` = device index, `arg2` = `DEVICE_STOP` / `DEVICE_START` [platform privilege or a BAR capability of the device] |
 
 ### Observation and process control

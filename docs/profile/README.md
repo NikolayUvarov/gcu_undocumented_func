@@ -18,7 +18,7 @@ This profile states what the current implementation is, what it guarantees, unde
 - x86-64, UEFI (OVMF in QEMU), 1–8 xAPIC CPUs, no SMT siblings in the tested configuration (`-smp N,cores=N,threads=1`).
 - QEMU `pc` machine with IDE, optionally AHCI, xHCI with USB mass storage, AC97; physical machines boot from the USB image but are not part of the evidence.
 - **No IOMMU is used.** Every device that can do DMA can read and write all physical memory.
-- One node. A VirtIO network card (QEMU `virtio-net-pci`) is driven in ring 3 and carries raw Ethernet frames; there is no network stack yet (issue 101), so no network guarantee is claimed.
+- One node. A VirtIO network card (QEMU `virtio-net-pci`) and an IPv4 stack (`netstack`, DHCP, ICMP, DNS, UDP, TCP) run in ring 3. No flow policy exists yet (issue 102): any holder of the stack's endpoint (today only the shell) may reach any destination. No network confidentiality or integrity is claimed (no TLS, issue 103).
 
 ## Conformance
 
@@ -28,7 +28,7 @@ Status: **met** (implemented and tested within this profile; each met row names 
 |---|---|---|
 | MC-1.1, 1.3 minimal kernel, drivers outside | partial | Drivers, file system, loader, audio, TTS, command shell and service policy run in ring 3. The kernel still parses ELF images for `SPAWN` and enumerates PCI (discovery, not policy). |
 | MC-1.4 policy separate from mechanism | partial | `init` decides what each service gets; the kernel validates every resource it mints (legacy port allowlist, enumerated BARs, IRQ lines) regardless of `init`'s correctness. Evidence: `services` suite (services start with exactly init's grants). The kernel's refusal of out-of-profile `PLATFORM_CAP` arguments has no test (only `init` holds the privilege). |
-| MC-1.5 DMA boundary | **not met — declared** | No IOMMU: `ahci`, `usb_storage`, `audio_gw`, `virtio_net` and their devices are in the TCB of every memory-isolation guarantee ([tcb.md](tcb.md)). Isolation from them is not claimed. |
+| MC-1.5 DMA boundary | **not met — declared** | No IOMMU and no interrupt remapping (a device that can write memory can also send any MSI): every MSI-X entry is programmed by the kernel and drivers are not granted the BAR with their MSI-X table, but this is not a boundary against the device; `ahci`, `usb_storage`, `audio_gw`, `virtio_net` and their devices are in the TCB of every memory-isolation guarantee ([tcb.md](tcb.md)). Isolation from them is not claimed. |
 | MC-1.7 accounted creation | partial | Tasks and endpoints are charged to an owner's quota delegated at spawn ([kernel-objects.md](kernel-objects.md)); private heaps and shared mappings have per-task limits; DMA has a global limit. Memory is not charged to owners. |
 | MC-1.8 reuse without residue | partial | All task memory is zeroed on allocation; freed memory is not reused while any mapping or capability refers to it. Devices are not reset on driver restart. |
 | MC-2.1 isolated state | met | Private page tables; sharing only through memory capabilities. Evidence: `isolation` suite cases r, w, t, n; host test `same_virtual_address_maps_private_frames_in_distinct_cr3s`. |
@@ -50,7 +50,7 @@ Status: **met** (implemented and tested within this profile; each met row names 
 | MC-10.2 observability under authority | met | Task logs, console output, task list, faults and CPU data are readable only with the process-control privilege (the shell). Evidence: `isolation` case `k` (`TASK_KILL`, `FOCUS`, `HALT` refused to an application). Statistics (`STAT`, task list, CPU data, kernel heap, faults) need the observe privilege or process control; kill, focus, logs and console output need process control. `STAT` exports no task memory contents, no physical address of task memory and nothing usable as authority (endpoint indices are labels). The `sysmon` service (`idl/sysinfo.wit`) holds the observe privilege and answers only programs a launcher granted its endpoint (`SLOT_SYSINFO`). |
 | MC-10.5 side channels | not claimed | No mitigation is claimed. |
 | MC-11.1 explicit ABI | partial | The ABI is a `repr(C)` mailbox and constants in `common/abi.rs`; there is no versioning. |
-| MC-11.3, 11.11 external formats in adapters | partial | FAT and USB/SCSI parsing run in ring 3 services with only their device capabilities; ELF parsing of applications runs in the kernel. |
+| MC-11.3, 11.11 external formats in adapters | partial | FAT and USB/SCSI parsing run in ring 3 services with only their device capabilities; network frames, IP, TCP, UDP, DHCP and DNS are parsed in `netstack`, which holds only a client of the card driver (B.6); ELF parsing of applications runs in the kernel. |
 
 ## Memory transfers (Appendix B.2)
 

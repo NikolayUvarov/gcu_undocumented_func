@@ -26,6 +26,10 @@ global_asm!(r#"
     .irp n,1,3,4,5,6,9,10,11,12,13,14
         interrupt task_irq_\n, (32 + \n)
     .endr
+    // MSI-X vectors for ring 3 drivers (PLATFORM_DEVICE_MSIX).
+    .irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        interrupt task_msi_\n, (64 + \n)
+    .endr
     interrupt task_ipi_entry, 48
     interrupt task_stop_entry, 49
     interrupt task_wake_entry, 50
@@ -85,6 +89,11 @@ irq_table:
     .irp n,1,3,4,5,6,9,10,11,12,13,14
         .quad task_irq_\n - irq_table
     .endr
+    .global msi_table
+msi_table:
+    .irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        .quad task_msi_\n - msi_table
+    .endr
     .previous
 "#, handler = sym crate::scheduler::interrupt);
 
@@ -96,6 +105,7 @@ unsafe extern "C" {
     pub fn task_syscall_entry();
     pub static exception_table: [u64; 32];
     pub static irq_table: [u64; 11];
+    pub static msi_table: [u64; 16];
 }
 
 pub const IRQ_LINES: [u8; 11] = [1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14];

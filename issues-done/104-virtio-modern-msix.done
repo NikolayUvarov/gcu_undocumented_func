@@ -1,0 +1,35 @@
+# 104 — Modern VirtIO interface and MSI-X interrupts — done
+
+**Type:** kernel + driver · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — · **Roadmap:** track A (stage III) · **Constitution:** MC-1.3, MC-6.3, Appendix B.6
+
+## Problem
+
+`virtio_net` (issue 100) uses the legacy VirtIO interface (I/O BAR0) and the legacy shared interrupt line. The legacy interface is deprecated, is missing on some hypervisors and on modern-only devices (device ID 0x1041), and shared INTx lines make a driver see other devices' interrupts. VirtIO block and input (track A) need the same groundwork.
+
+## Plan
+
+- **Kernel:** let a driver read the capability list of its own PCI function (read-only, no other configuration space), and add MSI-X: the kernel allocates vectors, programs the device's MSI-X table entries through a capability over the table BAR region and delivers each vector to an endpoint like `IRQ_BIND`; vectors are released when the capability is revoked. `STAT` reports them.
+- **Driver library:** `mind::virtio` with the modern transport (common configuration, notification, ISR and device configuration structures in memory BARs, `FEATURES_OK`, `VIRTIO_F_VERSION_1`), shared by net, block and input drivers.
+- **`virtio_net`:** prefers the modern interface, falls back to legacy; one vector per queue plus configuration changes.
+- **init:** grants the BARs named by the VirtIO capabilities and the MSI-X capability instead of the INTx line.
+
+## Acceptance criteria
+
+- The `net` suite passes with `virtio-net-pci,disable-legacy=on` (modern only) and with a transitional device; interrupts arrive through MSI-X (`STAT` shows the vectors) and no INTx line is bound.
+- A driver cannot program MSI-X entries of another device or read another function's configuration space (an `isolation` case).
+- Restart: vectors of a killed driver are released and allocated again for the new instance.
+
+## Related
+
+[100](100-virtio-net-driver.done), [105](../issues/105-multiple-network-cards.md), [ROADMAP](../ROADMAP.md) track A.
+
+## Resolution
+
+- **Kernel, MSI-X:** 16 vectors (0x40–0x4F) are interrupt lines 16–31 next to the PIC lines, with the same binding to an endpoint (`IRQ_BIND`) and the same release when no task holds the line. `PLATFORM_CAP` kind `PLATFORM_DEVICE_MSIX` (device, table entry) allocates a vector, aims the device's MSI-X table entry at the BSP's local APIC, unmasks it and enables MSI-X (which turns the device's legacy line off); the table is written by the kernel only, through its identity mapping made uncached for that 2 MiB page (refused if the firmware memory map lists RAM there). `init` keeps the vector across driver restarts, as it keeps DMA regions. `STAT` lists the allocated vectors as lines 16 and up; their handler only signals the local APIC (an MSI is an edge message).
+- **Kernel, configuration space:** `DEVICE_CONFIG` (54) reads a dword of the configuration space of the PCI function whose BAR the caller holds a capability over; nothing else is readable, nothing is writable.
+- **`mind::virtio`:** the modern transport (vendor capabilities, common configuration, feature negotiation with `VERSION_1`/`FEATURES_OK`, queue setup with three addresses and an MSI-X entry, notification offsets) for this and later VirtIO drivers.
+- **`virtio_net`:** the modern interface when `init` granted a memory BAR (12-byte header, queues of up to 256 entries, MSI-X entry 0 for both queues and configuration changes; the legacy line if it was granted one instead), the legacy interface for an I/O BAR. Its log line names the mode (`MODERN MSI-X`, `MODERN INTX`, `LEGACY INTX`).
+- **`init`:** finds 1AF4:1041 or 1AF4:1000; reads the VirtIO capabilities through a BAR capability; grants only the BAR that holds all four structures and an MSI-X vector (the IRQ line if that fails), or I/O BAR0 and the IRQ line for a legacy-only card.
+- **Tests:** the `net` suite with a transitional card (full scenario, `MODERN MSI-X`), a modern-only card (`disable-legacy=on`) and a legacy-only card (`disable-modern=on`, `LEGACY INTX`): DHCP and ping on each; on the modern ones the driver's interrupts are counted on a line above 15 and it holds no legacy line, also after the driver restart. `isolation` case k: an application gets `ERR_RIGHTS` for `DEVICE_CONFIG` and for MSI-X vectors.
+
+Not done: VirtIO devices whose structures span several BARs (refused: the legacy interface is used if present), MSI (not MSI-X), vectors on CPUs other than the BSP, freeing a vector when its device is no longer used.

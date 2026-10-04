@@ -207,6 +207,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_PORT_IN, 31, 0x60, abi::ERR_RIGHTS),
                     (abi::SYSCALL_PORT_OUT_BLOCK, abi::SLOT_RTC, 0x1F0, abi::ERR_RIGHTS), // no port range, no buffer
                     (abi::SYSCALL_IRQ_WAIT, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_DEVICE_CONFIG, abi::SLOT_RTC, 0, abi::ERR_RIGHTS), // configuration space only through a BAR capability
+                    (abi::SYSCALL_PLATFORM_CAP, abi::PLATFORM_DEVICE_MSIX, 0, abi::ERR_RIGHTS), // MSI-X vectors only through the platform privilege
                     (abi::SYSCALL_MEM_MAP, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_PHYS, abi::SLOT_RTC, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_MEM_SHARE, image, 4096, abi::ERR_INVALID), // code is not shareable

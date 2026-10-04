@@ -18,4 +18,4 @@ VirtIO devices can compute and verify checksums (`VIRTIO_NET_F_CSUM`, `GUEST_CSU
 
 ## Related
 
-[101](101-network-stack.md), [104](104-virtio-modern-msix.md).
+[101](../issues-done/101-network-stack.done), [104](../issues-done/104-virtio-modern-msix.done).

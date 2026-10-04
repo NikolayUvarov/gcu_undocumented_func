@@ -65,6 +65,9 @@ pub fn compositor_pull(slot: usize) -> Result<Frame> {
     check(call(SYSCALL_COMPOSITOR_PULL, slot, 0)).map(|state| match state { 0 => Frame::Unchanged, 1 => Frame::Dirty, _ => Frame::NewSource })
 }
 
+/// A dword of the PCI configuration space of the function whose BAR capability is `slot` (read only, offset < 256).
+pub fn device_config(slot: usize, offset: usize) -> Result<u32> { check(call(SYSCALL_DEVICE_CONFIG, slot, offset)).map(|v| v as u32) }
+
 /// Device registers (MMIO), mapped uncached; accessed by offset.
 pub struct Mmio { map: crate::mem::Mapping }
 
@@ -74,7 +77,10 @@ impl Mmio {
     pub fn is_empty(&self) -> bool { self.map.is_empty() }
     fn at<T>(&self, offset: usize) -> *mut T { (self.map.address() + offset) as *mut T }
     pub fn read8(&self, offset: usize) -> u8 { unsafe { core::ptr::read_volatile(self.at(offset)) } }
+    pub fn read16(&self, offset: usize) -> u16 { unsafe { core::ptr::read_volatile(self.at(offset)) } }
     pub fn read32(&self, offset: usize) -> u32 { unsafe { core::ptr::read_volatile(self.at(offset)) } }
+    pub fn write8(&self, offset: usize, value: u8) { unsafe { core::ptr::write_volatile(self.at(offset), value) } }
+    pub fn write16(&self, offset: usize, value: u16) { unsafe { core::ptr::write_volatile(self.at(offset), value) } }
     pub fn write32(&self, offset: usize, value: u32) { unsafe { core::ptr::write_volatile(self.at(offset), value) } }
     /// 64-bit registers are written as two dwords: low, then high.
     pub fn write64(&self, offset: usize, value: u64) { self.write32(offset, value as u32); self.write32(offset + 4, (value >> 32) as u32); }

@@ -1,0 +1,37 @@
+# 101 — Network stack service (IPv4, ARP, ICMP, UDP, TCP) — done
+
+**Type:** service · **Owner:** network track · **Priority:** P2 · **Status:** done (2026-10-04) · **Blocked by:** — (100 done) · **Roadmap:** track D (stage VII, Babel) · **Constitution:** MC-11.3–11.6, Appendix B.6 (network stack)
+
+## Problem
+
+Programs need flows (UDP sockets, TCP connections), not raw frames. Per B.6 the stack holds packet and flow endpoints with quotas and has no direct power over the device.
+
+## Plan
+
+- `netstack` service, the only client of `virtio_net` (issue 100). Candidate implementation: [smoltcp](https://github.com/smoltcp-rs/smoltcp) (`no_std`, 0BSD licence) behind a MIND IDL interface; record it in `THIRD_PARTY.md`.
+- Configuration by DHCP, with a static fallback; ARP, ICMP echo, UDP, TCP; DNS resolver as a client library or a separate parser.
+- Interface `idl/socket.wit`: open a flow from a capability, send and receive in bounded buffers, close; every flow is an endpoint with quotas (buffers, rate), counted per owner.
+- Tools: `ping`, `nslookup`, a minimal HTTP fetch.
+
+## Acceptance criteria
+
+- In QEMU user networking: DHCP lease, `ping 10.0.2.2`, a UDP DNS query and a TCP connection to a host-forwarded port work in a QEMU suite.
+- A killed stack is restarted by `init`; open flows fail with `ERR_PEER`, new ones work.
+
+## Related
+
+[100](100-virtio-net-driver.done), [102](../issues/102-network-policy-broker.md), [104](104-virtio-modern-msix.done), [105](../issues/105-multiple-network-cards.md).
+
+## Resolution
+
+- **Service** `netstack` (boot service after `virtio_net`; `init` gives it a server endpoint and a client of the card driver, nothing else). smoltcp 0.14 (0BSD) with Ethernet, IPv4, ARP, DHCPv4, ICMP, UDP and TCP; each frame is one `idl/net.wit` call to the driver, polled every 10 ms. DHCP configures the interface; without a lease after 3 s the stack uses QEMU user networking's addresses (10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3) and keeps asking DHCP. Without a card the stack answers every request with `no-network` and looks for the driver every second.
+- **Interface** `idl/socket.wit` 1.0: `config`, `ping`, `resolve` (DNS server and port selectable, 0 = the configured server on 53), UDP (`udp-open`, `udp-send`, `udp-receive`), TCP (`tcp-connect`, `tcp-send`, `tcp-receive`), `close`. `ping`, `resolve` and `tcp-connect` are deferred until the network answers or the timeout passes; the other calls do not block.
+- **Quotas:** 8 sockets per client, 32 in all; TCP buffers 8 KiB each way, UDP 8 datagrams / 8 KiB; sockets of ended clients are freed within a second; a closed TCP socket stays until its data is sent (at most 10 s).
+- **DNS** is a small resolver in the stack (`netstack/src/dns.rs`, every length of the answer checked) instead of smoltcp's DNS socket, which cannot use another port: the tests run their DNS server on an unprivileged port.
+- **Shell:** `ip`, `ping <host>`, `nslookup <name> [server[:port]]`, `fetch <host>[:port] [path]` (HTTP/1.0 GET) through slot 14 (`SLOT_SOCKET`).
+- **Tests:** the `net` suite (CI) with a host HTTP server and a host DNS responder: DHCP lease, three ping answers from 10.0.2.2, a name found and one not found, an HTTP page fetched over TCP, a refused connection, the stack killed and restarted by `init` (ping works again), raw ARP through the driver while the stack is stopped (`svc stop netstack`), the driver killed and restarted after device quiesce with the stack carrying on; without a card `ip` reports no network.
+
+Deviations from the plan:
+- A socket is a handle owned by the client (PID and badge), like VFS handles, not an endpoint per flow. Turning flows into capabilities that can be granted and revoked belongs to the policy broker ([102](../issues/102-network-policy-broker.md)).
+- The stack and the shell's `net arp` both read frames from the driver; the raw diagnostics work only while the stack is stopped.
+- No TCP listening sockets yet (only outgoing connections), no IPv6.

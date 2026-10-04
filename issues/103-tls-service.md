@@ -18,4 +18,4 @@ Secure connections need TLS; MC-11.9 separates access to key material from the r
 
 ## Related
 
-[101](101-network-stack.md), [102](102-network-policy-broker.md).
+[101](../issues-done/101-network-stack.done), [102](102-network-policy-broker.md).

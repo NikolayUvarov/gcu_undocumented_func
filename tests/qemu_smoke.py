@@ -7,12 +7,15 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import codecs
+import http.server
 import math
 import os
 from pathlib import Path
 import queue
 import re
 import shutil
+import socket
+import socketserver
 import struct
 import subprocess
 import tempfile
@@ -22,7 +25,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -2149,39 +2152,122 @@ def large_bss(path):
     path.write_bytes(data)
 
 
+class _Http(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = f"hello from the host: {self.path}\n".encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _dns_server():
+    # A DNS responder on the host's loopback (QEMU user networking reaches it as 10.0.2.2): names under `mind.test`
+    # resolve to 10.0.2.2, everything else does not exist.
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+
+    def serve():
+        while True:
+            try:
+                data, peer = server.recvfrom(512)
+            except OSError:
+                return
+            end = 12
+            while end < len(data) and data[end] != 0:
+                end += data[end] + 1
+            end += 5
+            found = data[12:end - 5].endswith(b"\x04mind\x04test")
+            answer = data[:2] + bytes([0x81, 0x80 if found else 0x83]) + data[4:6] + (b"\x00\x01" if found else b"\x00\x00") + b"\x00" * 4 + data[12:end]
+            if found:
+                answer += b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + bytes([10, 0, 2, 2])
+            server.sendto(answer, peer)
+    threading.Thread(target=serve, daemon=True).start()
+    return server
+
+
+def _msix_only(vm):
+    # The driver's interrupts arrive on an MSI-X vector (lines 16 and up), and it holds no legacy line.
+    driver = vm.services()["virtio_net"]
+    rows = [(int(line), int(count)) for line, count, holder in re.findall(r"IRQ=(\d+) COUNT=(\d+) HOLDER=(\d+)", vm.command("irqs", raw=True)) if int(holder) == driver]
+    assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
+
+
 def net_suite(args, disk):
-    # VirtIO network card in ring 3: frames out and in (ARP to QEMU's user-mode gateway), restart after device quiesce.
+    # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
+    # raw frames from the driver, restart of the driver after device quiesce and of the stack.
+    web = socketserver.TCPServer(("127.0.0.1", 0), _Http)
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+    dns = _dns_server()
+    web_port, dns_port = web.server_address[1], dns.getsockname()[1]
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
-        require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP")
+        require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
-        require(vm.command("net arp 10.0.2.2"), "ARP 10.0.2.2 IS AT 52:55:0A:00:02:02")
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
+        require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
+        require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+        require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
+        require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
+        page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
+        require(page, "HTTP/1.0 200 OK"); require(page, "hello from the host: /mind")
+        require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
-        assert counters and int(counters[1]) >= 1 and int(counters[2]) >= 1 and int(counters[4]) >= 1, counters  # sent, received, interrupts
+        assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
+        _msix_only(vm)
+        # A killed stack is restarted by init and configures itself again.
+        require(vm.command(f"kill {vm.services()['netstack']}", raw=True), "KILLED PID=")
+        require(vm.service_logs("init", "netstack RESTARTED"), "netstack RESTARTED")
+        for _ in range(40):
+            if "3 RECEIVED" in vm.command("ping 10.0.2.2"):
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError("no ping answer after the stack restart")
+        # Raw frames: with the stack stopped, the shell's diagnostics get the ARP answer themselves.
+        require(vm.command("svc stop netstack"), "netstack stopped")
+        require(vm.command("net arp 10.0.2.2"), "ARP 10.0.2.2 IS AT 52:55:0A:00:02:02")
         require(vm.command("net arp 10.0.2.99"), "ARP 10.0.2.99: NO ANSWER")
-        # init stops the device and clears its DMA region before the driver starts again; the shell's client still works.
+        require(vm.command("ping 10.0.2.2"), "NET: NO NETWORK STACK")
+        require(vm.command("svc start netstack"), "netstack started: PID")
+        # init stops the device and clears its DMA region before the driver starts again; the stack carries on.
         require(vm.command(f"kill {vm.services()['virtio_net']}", raw=True), "KILLED PID=")
         log = vm.service_logs("init", "virtio_net RESTARTED")
         assert log.index("virtio_net DEVICE QUIESCED") < log.index("virtio_net RESTARTED"), log
-        for _ in range(20):
-            if "IS AT" in vm.command("net arp 10.0.2.2"):
+        for _ in range(40):
+            if "3 RECEIVED" in vm.command("ping 10.0.2.2"):
                 break
-            time.sleep(.2)
+            time.sleep(.25)
         else:
-            raise AssertionError("no ARP answer after the driver restart")
+            raise AssertionError("no ping answer after the driver restart")
     finally:
         vm.close()
+        web.shutdown(); dns.close()
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
-    # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card.
+    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X).
+    for device, mode in [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]:
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
+        try:
+            require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), mode)
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+            if mode == "MODERN MSI-X":
+                _msix_only(vm)
+        finally:
+            vm.close()
+    # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card; the stack reports no network.
     vm = VM(args, disk.relative_to(ROOT).as_posix())
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
         require(vm.command("net"), "NET: NO NETWORK CARD")
+        require(vm.command("ip"), "IP: NoNetwork")
     finally:
         vm.close()
-    print("PASS: VirtIO network card in ring 3: MAC and link, ARP request and answer through the driver, restart after device quiesce; e1000 not taken", flush=True)
+    print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
+          "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
+          "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
 
 
 def display_suite(args, disk):

@@ -85,3 +85,45 @@ pub unsafe fn enable(device: &Device) {
     let command = read(device.bus, device.device, device.function, 0x04);
     write(device.bus, device.device, device.function, 0x04, command | 0x7);
 }
+
+/// A dword of the device's configuration space (offset < 256, aligned down to 4); reading has no side effects.
+pub unsafe fn config(device: &Device, offset: u8) -> u32 { read(device.bus, device.device, device.function, offset) }
+
+// Offset of the device's capability `id` in configuration space.
+unsafe fn capability(device: &Device, id: u8) -> Option<u8> {
+    if config(device, 0x04) >> 16 & 0x10 == 0 { return None; }
+    let mut at = config(device, 0x34) as u8 & 0xFC;
+    for _ in 0..48 {
+        if at < 0x40 { return None; }
+        let header = config(device, at);
+        if header as u8 == id { return Some(at); }
+        at = (header >> 8) as u8 & 0xFC;
+    }
+    None
+}
+
+/// Address of MSI-X table entry `entry` of the device (in a memory BAR below 4 GiB), or None.
+pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
+    let cap = capability(device, 0x11)?;
+    let control = config(device, cap) >> 16;
+    if entry as u32 > control & 0x7FF { return None; }
+    let table = config(device, cap + 4);
+    let bar = *device.bars.get((table & 7) as usize)?;
+    let at = bar.base.checked_add((table & !7) as u64 + 16 * entry as u64)?;
+    (!bar.io && bar.size != 0 && at + 16 <= 0x1_0000_0000 && at + 16 <= bar.base + bar.size).then_some(at)
+}
+
+/// Points MSI-X table entry `entry` (mapped uncached by the caller) at `vector` on the local APIC `apic`, unmasks it
+/// and enables MSI-X, which turns the legacy line off.
+pub unsafe fn msix(device: &Device, entry: u16, apic: u32, vector: u8) -> Option<()> {
+    let cap = capability(device, 0x11)?;
+    let header = config(device, cap);
+    let control = header >> 16;
+    if entry as u32 > control & 0x7FF { return None; }
+    let at = msix_entry(device, entry)?;
+    enable(device);
+    let entry = at as *mut u32;
+    entry.write_volatile(0xFEE0_0000 | apic << 12); entry.add(1).write_volatile(0); entry.add(2).write_volatile(vector as u32); entry.add(3).write_volatile(0);
+    write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control | 0x8000) & !0x4000) << 16);
+    Some(())
+}

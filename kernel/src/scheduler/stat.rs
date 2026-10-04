@@ -182,8 +182,8 @@ impl Scheduler {
                     irq: self.irq_bind.iter().position(|bound| *bound == Some(ep)).map_or(0, |line| line as u32),
                 });
             },
-            STAT_IRQS => for line in 1..16u8 {
-                if line == 2 { continue; }
+            // PIC lines 1..15, then the MSI-X vectors handed out (lines 16..31).
+            STAT_IRQS => for line in (1..16u8).filter(|&l| l != 2).chain((0..MSI_VECTORS).filter(|&i| self.msi[i].is_some()).map(|i| (MSI_FIRST + i) as u8)) {
                 let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));
                 out.push(StatIrq { line: line as u32, endpoint: self.irq_bind[line as usize].map_or(0, |e| e as u32), masked: interrupts::irq_masked(line) as u32, holders,
                     holder, count: self.accounting.irqs[line as usize] });
