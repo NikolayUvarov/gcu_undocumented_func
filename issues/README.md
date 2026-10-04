@@ -13,10 +13,11 @@
 
 ## Open tasks
 
-Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues. The tools branch has done 040–048 under its own numbers; [051](051-merge-main-into-tools.md) merges it and retires the rows below.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [051](051-merge-main-into-tools.md) | Merge `main` into the tools branch, reconcile duplicate IDL/STAT/input/badges and issue numbers | tools / infra | P0 | — | track G |
 | [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
 | [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
 | [042](042-tui-library.md) | TUI library `mind::tui` | tools | P1 | 040, 041 | track G, T0 |
