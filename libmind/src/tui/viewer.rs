@@ -18,6 +18,8 @@ pub struct Cache<'b, S: Source> { source: S, buf: &'b mut [u8], start: u64, len:
 impl<'b, S: Source> Cache<'b, S> {
     pub fn new(source: S, buf: &'b mut [u8]) -> Self { let size = source.size(); Self { source, buf, start: 0, len: 0, size } }
     pub fn size(&self) -> u64 { self.size }
+    /// The buffer back, for the next file.
+    pub fn into_buffer(self) -> &'b mut [u8] { self.buf }
     pub fn byte(&mut self, at: u64) -> Option<u8> {
         if at >= self.size { return None; }
         if at < self.start || at >= self.start + self.len as u64 {
@@ -71,6 +73,8 @@ impl<'b, S: Source> Viewer<'b, S> {
     }
     pub fn top(&self) -> u64 { self.top }
     pub fn size(&self) -> u64 { self.cache.size() }
+    /// Closes the viewer and gives its window buffer back.
+    pub fn into_buffer(self) -> &'b mut [u8] { self.cache.into_buffer() }
     fn name(&self) -> &str { core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("?") }
 
     // --- text layout -------------------------------------------------------------------------------------------

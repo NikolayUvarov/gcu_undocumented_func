@@ -74,6 +74,7 @@ USER_CRATES=(
     "monitor:memmap:memmap.elf"
     "monitor:load:load.elf"
     "monitor:hw:hw.elf"
+    "fm:fm:fm.elf"
     "beep:beep:beep.elf"
 )
 

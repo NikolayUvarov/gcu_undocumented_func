@@ -56,14 +56,18 @@ impl Server {
                 let mut name = [0u8; 255]; let path_len = path.len(); name[..path_len].copy_from_slice(path);
                 let dir = volume.resolve(&name[..path_len]).ok_or(ERR_NOT_FOUND)?;
                 if !dir.is_dir { return Err(ERR_INVALID); }
-                // Entries: size u32, flags u8 (1 = directory), name length u8, name.
+                // Entries: size u32, flags u8 (VFS_ENTRY_*), name length u8, modified u32, name.
                 let (mut index, mut count, mut at, mut more) = (0usize, 0usize, 0usize, false);
                 volume.walk(&dir, |entry| {
                     if index < offset { index += 1; return true; }
-                    let need = 6 + entry.name.len();
+                    let need = 10 + entry.name.len();
                     if at + need > buffer.len() { more = true; return false; }
-                    buffer[at..at + 4].copy_from_slice(&entry.node.size.to_le_bytes()); buffer[at + 4] = entry.node.is_dir as u8; buffer[at + 5] = entry.name.len() as u8;
-                    buffer[at + 6..at + need].copy_from_slice(entry.name); at += need; count += 1; index += 1; true
+                    let a = entry.attributes;
+                    let flags = entry.node.is_dir as u8 | if a & 0x02 != 0 { VFS_ENTRY_HIDDEN } else { 0 } | if a & 0x04 != 0 { VFS_ENTRY_SYSTEM } else { 0 }
+                        | if a & 0x01 != 0 { VFS_ENTRY_READ_ONLY } else { 0 } | if a & 0x20 != 0 { VFS_ENTRY_ARCHIVE } else { 0 };
+                    buffer[at..at + 4].copy_from_slice(&entry.node.size.to_le_bytes()); buffer[at + 4] = flags; buffer[at + 5] = entry.name.len() as u8;
+                    buffer[at + 6..at + 10].copy_from_slice(&entry.modified.to_le_bytes());
+                    buffer[at + 10..at + need].copy_from_slice(entry.name); at += need; count += 1; index += 1; true
                 });
                 Ok([count, if more { index } else { 0 }])
             }

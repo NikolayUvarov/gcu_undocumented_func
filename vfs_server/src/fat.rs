@@ -4,7 +4,8 @@ use crate::disk::Disk;
 #[derive(Clone, Copy)]
 pub struct Node { pub cluster: u32, pub size: u32, pub is_dir: bool, root: bool }
 
-pub struct Entry<'a> { pub name: &'a [u8], pub node: Node }
+// `attributes`: the FAT attribute byte; `modified`: FAT date << 16 | FAT time.
+pub struct Entry<'a> { pub name: &'a [u8], pub node: Node, pub attributes: u8, pub modified: u32 }
 
 pub struct Volume { disk: Disk, start: u32, bits: u8, sectors_per_cluster: u32, fat_start: u32, root_start: u32, root_sectors: u32, data_start: u32, root_cluster: u32 }
 
@@ -91,7 +92,7 @@ impl Volume {
                 if name == b"." || name == b".." { continue; }
                 let first = u16_at(raw, 26) | if self.bits == 32 { u16_at(raw, 20) << 16 } else { 0 };
                 let node = Node { cluster: first, size: u32_at(raw, 28), is_dir: raw[11] & 0x10 != 0, root: false };
-                if !visit(&Entry { name, node }) { return; }
+                if !visit(&Entry { name, node, attributes: raw[11], modified: u16_at(raw, 24) << 16 | u16_at(raw, 22) }) { return; }
             }
         }
     }

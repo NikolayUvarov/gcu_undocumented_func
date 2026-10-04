@@ -704,6 +704,72 @@ def monitors_check(vm):
         time.sleep(.1)
     assert heap_used(vm) == baseline
     print("PASS: monitors: top (task table = ps, details, sorting, filter, tree), memmap (physical map, arena, a known address space, quotas), load (graphs, total, 10 min), hw (CPUID, framebuffer, PCI, IRQ holders)", flush=True)
+    fm_check(vm)
+
+
+def fm_check(vm):
+    """The file manager: browse into EFI/BOOT and back, view a file, start a program from the panel."""
+    baseline = heap_used(vm)
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    vm.send("fm\n")
+    vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()  # Enter: into docs
+    assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
+    assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
+    assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
+    assert "CURRENT=.." in tool_status(vm, "[FM] LEFT=/docs FULL")
+    # F3 views notes.txt in the built-in viewer; Esc comes back.
+    keys(b"\x1b[B", "CURRENT=notes.txt")
+    keys(b"\x1bOR", "VIEW=1")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert screen[1].startswith(canon("Строка 1: съешь")), screen[1]
+    keys(b"\x1b", "VIEW=0")
+    # ".." goes up with the cursor on the directory left; EFI/BOOT and back.
+    keys(b"\x1b[H\r", "LEFT=/ FULL")
+    assert "CURRENT=docs" in tool_status(vm, "[FM] LEFT=/ FULL")
+    keys(b"\x1b[B", "CURRENT=EFI")
+    keys(b"\r", "LEFT=/EFI FULL")
+    keys(b"\x1b[B", "CURRENT=BOOT")
+    keys(b"\r", "LEFT=/EFI/BOOT FULL")
+    tool_status(vm, "LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter on "..": back to EFI
+    assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
+    assert "CURRENT=BOOT" in tool_status(vm, "[FM] LEFT=/EFI FULL")
+    keys(b"\x7f", "LEFT=/ FULL")
+    # A program started from the panel runs in the background.
+    for _ in range(60):
+        if "CURRENT=clock.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
+            break
+    else:
+        raise AssertionError("clock.elf not reached")
+    keys(b"\r", "CURRENT=clock.elf")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    started = table_row(screen, canon("Started clock.elf as PID"))
+    assert started, screen
+    pid = int(re.search(r"PID (\d+)", started)[1])
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert pid - BASE in task_rows(vm), task_rows(vm)
+    time.sleep(1.2)
+    require(vm.command(f"logs {pid - BASE}"), "[CLOCK] ")
+    require(vm.command(f"kill {pid - BASE}"), "KILLED")
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.1)
+    assert heap_used(vm) == baseline
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel", flush=True)
 
 
 def busy_suite(vm):

@@ -193,6 +193,8 @@ pub const VFS_READ: usize = 2;
 pub const VFS_CLOSE: usize = 3;
 pub const VFS_LIST: usize = 4;
 pub const VFS_STAT: usize = 5;
+// VFS_LIST entries: size u32, flags u8, name length u8, modified u32 (FAT date << 16 | FAT time), name.
+pub const VFS_ENTRY_DIR: u8 = 1; pub const VFS_ENTRY_HIDDEN: u8 = 2; pub const VFS_ENTRY_SYSTEM: u8 = 4; pub const VFS_ENTRY_READ_ONLY: u8 = 8; pub const VFS_ENTRY_ARCHIVE: u8 = 16;
 // Program loader: CALL on SLOT_LOADER. msg[2..4] is the program name (up to 16 bytes) and the optional capability
 // is an endpoint for the child's INIT slot; reply msg[2] = PID or error. With msg[2] = 0 and msg[3] = LOADER_LIST
 // the capability is a memory page: the loader writes the program list there and replies with its length.

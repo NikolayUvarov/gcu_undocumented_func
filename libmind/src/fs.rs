@@ -67,8 +67,14 @@ impl File {
 
 impl Drop for File { fn drop(&mut self) { let _ = request(VFS_CLOSE, self.fd, 0, 0); } }
 
-/// Directory entry.
-pub struct DirEntry<'a> { pub name: &'a [u8], pub size: u32, pub is_dir: bool }
+/// Directory entry: `flags` are `VFS_ENTRY_*`, `modified` is FAT date << 16 | FAT time (see `fat_time`).
+pub struct DirEntry<'a> { pub name: &'a [u8], pub size: u32, pub is_dir: bool, pub flags: u8, pub modified: u32 }
+
+/// A FAT date and time (`DirEntry::modified`) as (year, month, day, hour, minute, second); local time, 2-second steps.
+pub const fn fat_time(modified: u32) -> (u32, u32, u32, u32, u32, u32) {
+    let (date, time) = (modified >> 16, modified & 0xFFFF);
+    (1980 + (date >> 9), (date >> 5) & 0xF, date & 0x1F, time >> 11, (time >> 5) & 0x3F, (time & 0x1F) * 2)
+}
 
 /// Iterates a directory (`""` or `"/"` is the root); returns the number of entries.
 pub fn list(path: &str, mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
@@ -80,8 +86,9 @@ pub fn list(path: &str, mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
         for _ in 0..count {
             let size = u32::from_le_bytes(buffer[at..at + 4].try_into().unwrap());
             let (flags, name_len) = (buffer[at + 4], buffer[at + 5] as usize);
-            visit(&DirEntry { name: &buffer[at + 6..at + 6 + name_len], size, is_dir: flags & 1 != 0 });
-            at += 6 + name_len;
+            let modified = u32::from_le_bytes(buffer[at + 6..at + 10].try_into().unwrap());
+            visit(&DirEntry { name: &buffer[at + 10..at + 10 + name_len], size, is_dir: flags & VFS_ENTRY_DIR != 0, flags, modified });
+            at += 10 + name_len;
         }
         total += count;
         if next == 0 { return Ok(total); }

@@ -138,7 +138,7 @@ let n = file.read(&mut chunk)?;
 mind::fs::list("", |entry| mind::println!("{:?} {}", entry.name, entry.size))?;
 ```
 
-Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
+Each request is a `CALL` carrying a capability for the client's 4 KiB transfer page; the server maps it, copies the path or file data, and unmaps it. A listing gives each entry's size, attributes (`VFS_ENTRY_*`: directory, hidden, system, read-only, archive) and FAT modification time (`mind::fs::fat_time`). Descriptors belong to the client's PID; a request with another process's descriptor fails, and descriptors of dead clients are recycled. `RUN files` lists the boot disk and reads two files. The launchers' `fat:` drive is an IDE disk; the USB image is read through `usb_storage`; NVMe is not supported yet.
 
 ### Audio gateway
 
@@ -339,6 +339,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `RUN pong` — IPC demo: starts `ping`, which sends a string through a shared page with `CALL`; `pong` reads it and replies.
 * `view <file>` — text and hex viewer: UTF-8 text (Cyrillic), ↑/↓/PgUp/PgDn/Space/Home/End, F2 wrap on/off (←/→ shift long lines), F4 hex/text, F5 go to a line, `0x` offset or `N%`, F7 search ignoring case (Shift+F7 next), F1 keys, Esc/F3/F10 exit. The file is read on demand through a 64 KiB window, so large files open at once.
 * `RUN keys` — show the key events a program receives: key code, modifiers, character (Esc exits).
+* `fm [directory]` — file manager (Norton Commander keys): two panels (full: name, size, date, time; brief: names in columns; Ctrl+L information, Ctrl+Q quick view of the file under the cursor in the other panel), Tab switches panels, Enter opens a directory, starts a program (in the background: `FG <pid>` shows it) or views a file in the built-in viewer, Backspace goes up, F3 view, Ins/+/-/* mark, Ctrl+F3–F6 sort by name/extension/time/size, Ctrl+H hidden files, Ctrl+R reread, Ctrl+U swap panels, Alt+F1/F2 volume, Alt+F7 find by mask from the current directory down, F9 menu, F1 keys, F10 or Esc quit. Read-only for now: copy, move, mkdir and delete come with VFS v2.
 * `top` — task monitor: uptime, task states, a busy bar per CPU, load averages, kernel memory, IPC/syscall/interrupt rates; a table with PID, parent, state, CPU, %CPU (from run-time deltas), CPU time, syscalls/s, memory, heap, shared mappings, capabilities and endpoints. P/M/N/T sort by CPU, memory, PID, time; S hides services; t shows the spawn tree; Enter shows a task's details (what it waits for, memory, address space, capabilities, quotas); +/- refresh interval; q or Esc quits.
 * `memmap` — memory map in four views (Tab or 1–4): the physical address space as a coloured bar with the firmware ranges and the platform layout (m merges or shows raw ranges, z zooms to RAM); the kernel arena by use with its limits and fragmentation; the address space of a chosen task with guard pages, heap and shared mappings; task and endpoint quotas as a tree by spawner.
 * `load` — graphs over 30 s (1) or 10 min (2): busy time per CPU (c: all CPUs in one), interrupts, syscalls, IPC messages and context switches per second, kernel arena and tasks; load averages.
@@ -533,6 +534,7 @@ rustc --edition=2021 --test tests/idl_host.rs -o /tmp/mind-core-idl-tests && /tm
 rustc --edition=2021 --test tests/rtc_host.rs -o /tmp/mind-core-rtc-tests && /tmp/mind-core-rtc-tests
 rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests && /tmp/mind-core-sysmon-tests
 rustc --edition=2021 --test tests/monitor_host.rs -o /tmp/mind-core-monitor-tests && /tmp/mind-core-monitor-tests   # top, memmap, load, hw on a fake sysmon
+rustc --edition=2021 --test tests/fm_host.rs -o /tmp/mind-core-fm-tests && /tmp/mind-core-fm-tests   # the file manager on a disk in memory
 python3 tests/idl_test.py   # MIND IDL generator; fails if libmind/src/idl is stale (regenerate: python3 scripts/mind_idl.py)
 python3 tests/font_test.py  # font subset coverage, licence notice; fails if common/font16.rs is stale (python3 scripts/font_gen.py)
 ```
