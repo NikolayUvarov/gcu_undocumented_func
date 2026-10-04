@@ -25,6 +25,9 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |
 | A killed service is restarted by `init` and serves clients started before the failure; after 3 restarts in 60 s it is quarantined until `RUN`; killing `init` halts the system | `services` suite |
 | A send queued for a server that dies fails with `ERR_PEER` instead of waiting for a new instance | `isolation` suite, case `f` |
+| Five children sending at once: four wait, the fifth gets `ERR_BUSY`; a reply after the caller's timeout fails with `ERR_PEER`; a memory object moves to a child (the sender's handle dies); revoke removes a capability waiting in a blocked send; a child reading a revoked lease faults | `isolation` suite, cases q, j, z, b, x |
+| A killed AHCI driver is restarted after its device was stopped and its DMA cleared; reads continue through the same endpoint | `ahci` suite |
+| `init` drops the platform privilege before READY; quotas are reported per task | `services` suite |
 | Drivers with MMIO and DMA capabilities work (AHCI, xHCI) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
 | Audio gateway (AC97 DMA, IRQ over IPC) and text to speech | `audio`, `tts` suites |
 | ELF images: fresh `.bss`, relocations, malformed images rejected; user page tables | Host tests `tests/runtime.rs` |
@@ -33,7 +36,6 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 
 - Behaviour under a malicious DMA device or driver (not claimed).
 - Timing bounds of any kind.
-- Revocation of a mapping held by a task running on another CPU (the TLB shootdown path of `CAP_REVOKE`).
-- The endpoint queue bound (`ERR_BUSY`) and a server's late reply after the caller's timeout (`ERR_PEER`).
-- A successful move of a memory object (only the refused copy is tested); revoke of a capability waiting in a blocked send; a minted port sub-range (applications hold no ports).
+- That the lease holder in case `x` ran on another CPU at the moment of the revoke (the cross-CPU path is exercised only when the scheduler placed it there).
+- A minted port sub-range (applications hold no ports).
 - Playback reaching the audio output in the `listen` suite (QEMU's capture backend has no output file); the kernel's validation of `PLATFORM_CAP` arguments.

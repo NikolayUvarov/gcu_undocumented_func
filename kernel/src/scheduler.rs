@@ -31,7 +31,7 @@ struct Pending { cap: Capability, node: Node, moved_from: Option<usize> }
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control }
+pub enum Capability { Endpoint(usize, u8), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -322,7 +322,7 @@ impl Scheduler {
                 let region = Region::new(bytes, 64 * 1024).map_err(|_| ERR_NO_MEMORY)?;
                 let cap = Capability::Dma(region.ptr() as usize, region.len()); self.dma.push(region); Ok(cap)
             }
-            PLATFORM_PRIVILEGE => match a { CAP_KIND_INPUT => Ok(Capability::Input), CAP_KIND_DISPLAY => Ok(Capability::Display), CAP_KIND_SPAWN => Ok(Capability::Spawn), CAP_KIND_CONTROL => Ok(Capability::Control), _ => Err(ERR_INVALID) },
+            PLATFORM_PRIVILEGE => match a { CAP_KIND_INPUT => Ok(Capability::Input), CAP_KIND_DISPLAY => Ok(Capability::Display), CAP_KIND_SPAWN => Ok(Capability::Spawn), CAP_KIND_CONTROL => Ok(Capability::Control), CAP_KIND_RESTART => Ok(Capability::Restart), _ => Err(ERR_INVALID) },
             _ => Err(ERR_INVALID),
         }
     }
@@ -380,7 +380,7 @@ impl Scheduler {
     // Removes every descendant of `root` from all tables and blocked sends and unmaps the mappings made from them; returns
     // how many capabilities were removed and whether another CPU still runs an affected address space (flush pending).
     fn revoke(&mut self, root: u64, cpu: usize) -> (usize, bool) {
-        let mut ids = [0u64; SLOTS * (CAP_SLOTS + 1) + GHOSTS_MAX]; ids[0] = root; let (mut known, mut removed) = (1, 0);
+        let mut ids = alloc::vec![0u64; SLOTS * (CAP_SLOTS + 1) + GHOSTS_MAX]; ids[0] = root; let (mut known, mut removed) = (1, 0);
         loop {
             let mut changed = false;
             for task in self.tasks.iter_mut().flatten() {
@@ -537,7 +537,8 @@ impl Scheduler {
     // exactly the grant list.
     unsafe fn spawn(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
         if !self.holds(slot, Capability::Spawn) { return Err(ERR_RIGHTS); }
-        let platform = self.holds(slot, Capability::Platform);
+        // Boot images and services: the platform privilege, or the narrower restart privilege init keeps after boot.
+        let platform = self.holds(slot, Capability::Platform) || self.holds(slot, Capability::Restart);
         let task = self.tasks[slot].as_ref().unwrap();
         let length = request.arg2; let (count, flags) = (request.msg[3] & 0xFF, (request.msg[3] >> 8) & 0xFF);
         let quotas = ((request.msg[3] >> 16) & 0xFFFF, (request.msg[3] >> 32) & 0xFFFF);
@@ -590,7 +591,8 @@ impl Scheduler {
                 for (index, task) in self.tasks.iter().enumerate().skip(1) {
                     let Some(task) = task else { continue };
                     if count >= request.arg2 { break; }
-                    let mut info = TaskInfo { pid: task.pid, name: [0; NAME_MAX], state: [b' '; 8], cpu: task.cpu as u32, focus: (self.foreground == index) as u8, service: task.service as u8, screen: task.screen.is_some() as u8, reserved: 0, runs: task.runs, ticks: task.ticks, calls: task.calls };
+                    let mut info = TaskInfo { pid: task.pid, name: [0; NAME_MAX], state: [b' '; 8], cpu: task.cpu as u32, focus: (self.foreground == index) as u8, service: task.service as u8, screen: task.screen.is_some() as u8, reserved: 0, runs: task.runs, ticks: task.ticks, calls: task.calls, quota_tasks: task.quota_tasks as u16, used_tasks: 0, quota_endpoints: task.quota_endpoints as u16, used_endpoints: 0 };
+                    if task.state != State::Exited { info.used_tasks = self.used_tasks(index) as u16; info.used_endpoints = self.used_endpoints(index) as u16; }
                     info.name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
                     let label = if self.current.contains(&index) { "RUNNING" } else { task.state.label() }; info.state[..label.len()].copy_from_slice(label.as_bytes());
                     let bytes = core::slice::from_raw_parts((&info as *const TaskInfo).cast::<u8>(), core::mem::size_of::<TaskInfo>());
@@ -720,6 +722,16 @@ impl Scheduler {
                     }
                 }
             }
+            SYSCALL_DEVICE_STATE => match self.devices.get(request.arg1).copied() {
+                // Whoever holds a capability over one of the device's registers may stop it.
+                Some(device) if self.holds(slot, Capability::Platform) || task.cspace.iter().flatten().any(|c| device.bars.iter().any(|b| b.size != 0 && match *c {
+                    Capability::Mmio(base, size) => !b.io && base as u64 >= b.base && (base + size) as u64 <= b.base + b.size.div_ceil(4096) * 4096,
+                    Capability::IoPorts(base, count) => b.io && base as u64 >= b.base && base as u64 + count as u64 <= b.base + b.size,
+                    _ => false,
+                })) => match request.arg2 { DEVICE_STOP => { pci::quiesce(&device); Ok(0) } DEVICE_START => { pci::enable(&device); Ok(0) } _ => Err(ERR_INVALID) },
+                Some(_) => Err(ERR_RIGHTS),
+                None => Err(ERR_NOT_FOUND),
+            },
             SYSCALL_DEVICE_FIND => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
                     let (class, mask) = (request.arg1 as u32, request.arg2 as u32);
@@ -829,6 +841,7 @@ impl Scheduler {
                     Some(Capability::Reply(..)) => (CAP_KIND_REPLY, 0, 0),
                     Some(Capability::Platform) => (CAP_KIND_PLATFORM, 0, 0),
                     Some(Capability::Control) => (CAP_KIND_CONTROL, 0, 0),
+                    Some(Capability::Restart) => (CAP_KIND_RESTART, 0, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
                 let sealed = match self.cap(slot, request.arg1) { Some(Capability::Memory(physical, size, _)) => self.sealed(physical, size), _ => false };

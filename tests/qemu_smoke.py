@@ -296,7 +296,12 @@ def normal_suite(vm):
     vm.keys("kill 25\n")
     vm.serial()
     assert task_rows(vm) == {}
-    registers = vm.hmp("info registers")
+    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken).
+    for _ in range(10):
+        registers = vm.hmp("info registers")
+        if "HLT=1" in registers:
+            break
+        time.sleep(.02)
     require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
@@ -398,6 +403,23 @@ def isolation_suite(vm):
     time.sleep(.5); vm.collect(); vm.output = ""
     assert parent + 1 not in task_rows(vm), "the child must not wait for a future instance"
     assert f"FAULT PID={parent + 1} " not in vm.command("faults")
+
+    # Cases with children started through loader (they get the parent's endpoint in their INIT slot).
+    def family(key, children, done):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send(key + "\n")
+        require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=20), done)
+        time.sleep(.5); vm.collect(); vm.output = ""
+        rows, faults = task_rows(vm), vm.command("faults")
+        assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
+        return pid, faults
+    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 1, "MOVE OK"), ("b", 1, "REVOKE PENDING OK")]:
+        pid, faults = family(key, children, done)
+        assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
+    # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).
+    pid, faults = family("x", 1, "LEASE REVOKED")
+    assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
@@ -705,7 +727,16 @@ def ahci_suite(vm):
     files_check(vm, 1)
     vm.command("kill 1")
     assert heap_used(vm) == baseline
-    print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads", flush=True)
+    # A killed DMA driver is restarted only after its device was quiesced and its DMA region cleared (MC-6.3);
+    # the VFS keeps reading through the same endpoint.
+    require(vm.command(f"kill {services['ahci']}", raw=True), "KILLED PID=")
+    log = vm.service_logs("init", "ahci RESTARTED")
+    assert log.index("ahci DEVICE QUIESCED") < log.index("ahci RESTARTED"), log
+    require(vm.service_logs("ahci", "[AHCI] PORT 0: "), "[AHCI] PORT 0: ")
+    files = int(re.search(r"PID=(\d+) NAME=files BACKGROUND", vm.command("run files &"))[1])  # the restart took a PID
+    files_check(vm, files)
+    vm.command(f"kill {files}")
+    print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
 def services_suite(vm):
@@ -719,6 +750,11 @@ def services_suite(vm):
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
     require(vm.command("fg -4"), "ERROR:")  # the harness does not translate negative numbers
     vm.send("fg 0\n"); vm.expect("ERROR: EXPECTED ONE POSITIVE PID\nMIND> ")  # the whole reply, prompt included
+    # End of the initial distribution: init gives up the platform privilege before READY.
+    require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
+    # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
+    quotas = vm.command("quotas", raw=True)
+    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/19 \d+/63$", quotas, re.M), quotas
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)

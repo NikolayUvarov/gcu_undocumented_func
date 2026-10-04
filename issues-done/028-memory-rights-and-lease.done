@@ -29,3 +29,5 @@ A memory capability always maps read-write, so every share is `SHARE_RW`. Revoki
 ## Audit (2026-10-04)
 
 Was partial: `MEM_SHARE` accepted the address of a foreign mapping and minted a new root with all rights, which let a read-only lease holder gain write access and escape revocation; a lease dropped after mapping survived revoke; exited tasks still running on another CPU were skipped. Fixed in the audit commit: only own heap blocks are shareable; mappings stay revocable through ghost nodes; revoke includes exited tasks, `TASK_KILL` interrupts a task running on another CPU, and memory is not freed while a TLB flush is pending. Evidence: `isolation` cases `l` (lease dropped after mapping) and `k` (`MEM_SHARE` of a mapping refused). The cross-CPU path is still untested.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): a lease held by a running child is revoked in isolation case `x`; whether that child runs on another CPU at that moment depends on the scheduler.

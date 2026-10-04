@@ -37,3 +37,5 @@ README is maintained together with the code (sections Current Runtime, System se
 ## Audit (2026-10-04)
 
 Done. Plan items not carried out: the OVMF pflash command, links to `issues/` and `knowledge/`, a Linux `03_run_qemu.sh`.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): the Linux launcher `03_run_qemu.sh` (with the OVMF pflash fallback) and the README links to `issues/` and `knowledge/` were added in 033.

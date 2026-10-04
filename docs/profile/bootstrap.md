@@ -30,7 +30,12 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 
 ## Where initial distribution ends
 
-The initial distribution is complete when `init` logs `[INIT] READY` (after starting `shell`). The boundary is **not** a reduction of authority: `init` keeps the platform and spawn privileges because it is also the supervisor: it restarts failed services automatically within a budget (roadmap C6, issue 032) and on request (`RUN <service> &`). This is recorded as a gap against the stage II exit criterion "boot authority is separated": a supervisor that holds only what restarts need is not split out yet. If `init` ends, the kernel halts the system (final recovery boundary, MC-6.8).
+The initial distribution ends when `init` logs `[INIT] PLATFORM PRIVILEGE DROPPED` and `[INIT] READY` (after starting `shell`). Before that, `init` mints a **restart** privilege (it can only spawn boot images and services) and drops the platform privilege (slot 2). From then on:
+- `init` restarts services only from the capabilities it handed out at the first start, which it keeps (copies go to each instance);
+- it stops and restarts their devices through the BAR capabilities it holds (`DEVICE_STATE`);
+- a service whose hardware was missing at boot cannot be started later.
+
+`init` remains the supervisor (roadmap C6, issue 032). If it ends, the kernel halts the system (MC-6.8).
 
 ## Kernel-side validation
 

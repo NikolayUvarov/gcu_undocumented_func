@@ -14,6 +14,62 @@ unsafe fn call(mb: *mut SyscallMailbox, number: usize, a: usize, b: usize) -> us
     asm!("int 0x80");
     (*mb).result
 }
+unsafe fn ipc(mb: *mut SyscallMailbox, number: usize, a: usize, b: usize, msg: [usize; 4]) -> usize {
+    (*mb).msg = msg;
+    call(mb, number, a, b)
+}
+unsafe fn fail() -> ! { asm!("ud2", options(noreturn)) }
+// Sleeps the full time: WAIT ends early while keys are queued, so typed input is drained meanwhile.
+unsafe fn sleep(mb: *mut SyscallMailbox, ms: usize) {
+    let start = call(mb, abi::SYSCALL_UPTIME, 0, 0);
+    loop {
+        let elapsed = call(mb, abi::SYSCALL_UPTIME, 0, 0) - start;
+        if elapsed >= ms { return; }
+        while call(mb, abi::SYSCALL_READ_KEY, 0, 0) != 0 {}
+        call(mb, abi::SYSCALL_WAIT, ms - elapsed, 0);
+    }
+}
+const SECONDS: usize = 1000 << abi::IPC_TIMEOUT_SHIFT;
+// Starts a copy of this program through loader with `endpoint` (write/grant) in its INIT slot.
+unsafe fn spawn_child(mb: *mut SyscallMailbox, endpoint: usize) {
+    if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0, [endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, usize::from_le_bytes(*b"app2\0\0\0\0"), 0]) != 0
+        || (*mb).msg[2] >= abi::ERR_FIRST { fail(); }
+}
+// A child's first call: its reply carries the mode (and maybe a capability, received in slot 2).
+unsafe fn child(mb: *mut SyscallMailbox) {
+    let hello = loop {
+        match ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 2, [0; 4]) { abi::ERR_BUSY => { call(mb, abi::SYSCALL_WAIT, 10, 0); } result => break result }
+    };
+    if hello == abi::ERR_PEER { return; } // case 'f': the parent died while the call was still queued
+    if hello != 0 { fail(); }
+    let (mode, got_cap) = ((*mb).msg[2], (*mb).msg[0]);
+    match mode {
+        1 => match ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT | 3 * SECONDS, 0, [0, 0, 1, 0]) {
+            0 => {}
+            abi::ERR_BUSY => { sleep(mb, 1000); if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 2, 0]) != 0 { fail(); } }
+            _ => fail(),
+        },
+        2 => {
+            if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT | 200 << abi::IPC_TIMEOUT_SHIFT, 0, [0, 0, 3, 0]) != abi::ERR_TIMEOUT { fail(); }
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 4, 0]) != 0 { fail(); }
+        }
+        3 | 5 => {
+            let address = call(mb, abi::SYSCALL_MEM_MAP, 2, 0);
+            if got_cap != 1 || address >= abi::ERR_FIRST { fail(); }
+            let value = core::ptr::read_volatile(address as *const usize);
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if mode == 3 { value } else { 6 }, 0]) != 0 { fail(); }
+            // Mode 5 keeps reading a lease until the owner revokes it (a page fault ends the task).
+            if mode == 5 { loop { core::ptr::read_volatile(address as *const usize); } }
+        }
+        4 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [abi::SLOT_INIT, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 5, 0]) != 0 { fail(); },
+        _ => fail(),
+    }
+}
+// Receives one hello call and replies with the mode and an optional capability.
+unsafe fn greet(mb: *mut SyscallMailbox, endpoint: usize, mode: usize, cap: usize, mask: usize) {
+    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[1] & abi::MSG_FLAG_CALL == 0 { fail(); }
+    if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [cap, mask, mode, 0]) != 0 { fail(); }
+}
 unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
     call(mb, 3, message.as_ptr() as usize, message.len());
 }
@@ -29,11 +85,9 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
         if cs & 3 != 3 || flags & 0x3000 != 0 {
             asm!("ud2", options(noreturn));
         }
-        // Child of case 'f': it waits in a send to its parent's endpoint; when the parent dies the send must fail with
-        // ERR_PEER (MC-6.4) instead of waiting for a future instance. It exits quietly or faults.
+        // A copy started by one of the cases below (it has an endpoint in its INIT slot): see `child`.
         if call(mb, abi::SYSCALL_CAP_INFO, abi::SLOT_INIT, 0) == abi::CAP_KIND_ENDPOINT {
-            let raw = mb; (*raw).msg = [0, 0, 1, 2];
-            if call(raw, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0) != abi::ERR_PEER { asm!("ud2", options(noreturn)); }
+            child(mb);
             return;
         }
         print(mb, b"RING3 IOPL0 READY\r\n");
@@ -147,6 +201,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_TASK_KILL, 1, 0, abi::ERR_RIGHTS), // process control is the shell's
                     (abi::SYSCALL_FOCUS, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_DEVICE_STATE, 0, abi::DEVICE_STOP, abi::ERR_RIGHTS), // stopping a device needs one of its BARs
+                    (abi::SYSCALL_TASK_WATCH, 1, abi::SLOT_RTC, abi::ERR_RIGHTS), // only a lifecycle owner watches, on its own endpoint
                 ];
                 for (number, a, b, expected) in checks {
                     if call(mb, number, a, b) != expected {
@@ -258,13 +314,82 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'f' => {
-                // Start a copy of this program through loader with our endpoint in its INIT slot, let it queue a send,
-                // then exit without receiving.
+                // The child's first call stays queued; we exit without receiving, so it must fail with ERR_PEER (MC-6.4).
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
-                let raw = mb; (*raw).msg = [endpoint, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, usize::from_le_bytes(*b"app2\0\0\0\0"), 0];
-                if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_LOADER, 0) != 0 || (*raw).msg[2] >= abi::ERR_FIRST { asm!("ud2", options(noreturn)); }
-                call(mb, abi::SYSCALL_WAIT, 500, 0);
+                spawn_child(mb, endpoint);
+                sleep(mb, 500);
                 print(mb, b"PARENT EXITS\r\n");
+                return;
+            }
+            b'q' => {
+                // Queue bound (MC-2.5): five children send at once while we do not receive; ENDPOINT_QUEUE wait, one
+                // gets ERR_BUSY and reports later with a 2.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                for _ in 0..5 { spawn_child(mb, endpoint); }
+                let mut replies = [0usize; 5];
+                for reply in replies.iter_mut() {
+                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 { fail(); }
+                    *reply = call(mb, abi::SYSCALL_IPC_SAVE_REPLY, 0, 0);
+                }
+                for reply in replies { if ipc(mb, abi::SYSCALL_IPC_REPLY, reply, 0, [0, 0, 1, 0]) != 0 { fail(); } }
+                sleep(mb, 600);
+                let mut queued = 0;
+                loop {
+                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 { fail(); }
+                    match (*mb).msg[2] { 1 => queued += 1, 2 => break, _ => fail() }
+                }
+                if queued != abi::ENDPOINT_QUEUE { fail(); }
+                print(mb, b"QUEUE BOUND OK\r\n");
+                return;
+            }
+            b'j' => {
+                // A reply after the caller's timeout fails with ERR_PEER.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 2, 0, 0);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 3 { fail(); }
+                sleep(mb, 400);
+                if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 9, 0]) != abi::ERR_PEER { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 4 { fail(); }
+                print(mb, b"LATE REPLY OK\r\n");
+                return;
+            }
+            b'z' => {
+                // A memory object moves to the child: our handle dies, the child reads the contents.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                core::ptr::write_volatile(block as *mut usize, 0x0B1EC7);
+                let object = call(mb, abi::SYSCALL_MEM_DETACH, block, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 3, object, abi::CAP_TRANSFER_MOVE);
+                if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_NONE { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 0x0B1EC7 { fail(); }
+                print(mb, b"MOVE OK\r\n");
+                return;
+            }
+            b'b' => {
+                // Revoking our endpoint removes the child's copy and the copy waiting in its blocked send (through
+                // loader's dropped copy, a ghost node).
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 4, 0, 0);
+                sleep(mb, 300);
+                if call(mb, abi::SYSCALL_CAP_REVOKE, endpoint, 0) != 2 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 3, [0; 4]) != 0 || (*mb).msg[2] != 5 || (*mb).msg[0] != 0 { fail(); }
+                print(mb, b"REVOKE PENDING OK\r\n");
+                return;
+            }
+            b'x' => {
+                // A lease mapped by a child that keeps reading it ends at revoke: the child faults.
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, call(mb, abi::SYSCALL_ALLOC, 4096, 0), 0);
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 5, memory, 0);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
+                sleep(mb, 100);
+                if call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 1 { fail(); }
+                sleep(mb, 300);
+                print(mb, b"LEASE REVOKED\r\n");
                 return;
             }
             _ => {

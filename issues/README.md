@@ -13,11 +13,30 @@
 
 ## Open tasks
 
-| № | Task | Type | Priority | Blocked by | Roadmap |
+Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs` and the core services. The **tools track** builds the user tools after its plan (`docs/tools/README.md`, branch `claude/wizardly-franklin-kec1a9`). A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+
+| № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
+| [034](034-key-events-input-queue.md) | Key events in the per-task input queue (tools F4, kernel part) | kernel | P1 | — | track G, T0 |
+| [035](035-observe-and-stat.md) | OBSERVE privilege, `STAT`, firmware memory map (tools F5) | kernel | P1 | — | track G, T1 |
+| [036](036-endpoint-badges.md) | Endpoint badges (tools F8) | kernel | P2 | — | track G, T2 |
+| [037](037-task-limit.md) | Raise the task limit for new services | kernel | P2 | — | track G |
+| [038](038-scheduling-budgets.md) | Scheduling budgets | kernel | P1 | — | C7 |
+| [039](039-port-services.md) | Port the services to MIND IDL and the C4 memory modes | kernel | P1 | 044 | C8 |
+| [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
+| [041](041-font-8x16.md) | 8×16 font with Cyrillic and box drawing | tools | P1 | — | track G, T0 |
+| [042](042-tui-library.md) | TUI library `mind::tui` | tools | P1 | 040, 041 | track G, T0 |
+| [043](043-keyboard-decoding-and-line-editing.md) | Keyboard decoding, layouts, VT100 input, shell line editing | tools | P1 | 034 | track G, T0 |
+| [044](044-idl-v02-records-strings.md) | MIND IDL v0.2: records, strings, lists in buffers | tools | P1 | — | track G, C8 |
+| [045](045-sysmon-and-monitors.md) | `sysmon` and `top`, `memmap`, `load`, `hw` | tools | P2 | 035, 042, 044 | track G, T1 |
+| [046](046-loader-sessions.md) | Loader v1: launch sessions with granted capabilities | tools | P2 | 044 | track G, T1 |
+| [047](047-viewer-and-fm-readonly.md) | Viewer `view`, file manager `fm` read-only | tools | P2 | 042, 043 | track G, T1 |
+| [048](048-write-path-ramdisk-vfs2.md) | Block write, `ramdisk`, VFS v2 with directory handles | tools | P2 | 036, 044 | track G, T2 |
+| [049](049-editor-and-fm-write.md) | Editor `edit`, `fm` write operations, `df`, `fsck` | tools | P2 | 046, 048 | track G, T2 |
+| [050](050-logd-dmesg-svc.md) | `logd`, `dmesg`, `svc` | tools | P3 | 044 | track G, T3 |
 
 ## Finished tasks (`issues-done/`)
 
@@ -52,5 +71,6 @@
 | [030](../issues-done/030-ipc-bounds-and-cancellation.done) | IPC bounds, timeouts and cancellation | done (2026-10-04) |
 | [031](../issues-done/031-mind-idl-v0.done) | MIND IDL v0: WIT subset, generated bindings, receiver checks (`rtc`) | done (2026-10-04) |
 | [032](../issues-done/032-minimal-supervision.done) | Minimal supervision: exit notices, restart budget, quarantine, fencing | done (2026-10-04) |
+| [033](../issues-done/033-audit-and-supervision-follow-ups.done) | Follow-ups: multi-process tests, device stop, platform privilege dropped, quotas | done (2026-10-04) |
 
 Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

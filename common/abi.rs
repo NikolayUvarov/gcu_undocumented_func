@@ -71,6 +71,12 @@ pub const SYSCALL_MEM_DETACH: usize = 47;
 // TASK_WATCH: arg1 = PID of a task the caller spawned, arg2 = endpoint handle with the read right. When the task ends,
 // a receive on that endpoint gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason | lost notices << 32] (sender PID 0).
 pub const SYSCALL_TASK_WATCH: usize = 48;
+// DEVICE_STATE: arg1 = device index, arg2 = DEVICE_STOP or DEVICE_START (platform privilege, or a capability over one
+// of the device's BARs). STOP turns off I/O and memory decoding and bus mastering, so the device can no longer reach
+// memory by DMA (MC-6.3); START turns them on again for the next driver.
+pub const SYSCALL_DEVICE_STATE: usize = 49;
+pub const DEVICE_STOP: usize = 0;
+pub const DEVICE_START: usize = 1;
 pub const EXIT_NORMAL: usize = 0;
 pub const EXIT_KILLED: usize = 1;
 pub const EXIT_FAULT: usize = 2; // | vector << 8
@@ -94,6 +100,7 @@ pub const CAP_KIND_SPAWN: usize = 9;
 pub const CAP_KIND_REPLY: usize = 10;
 pub const CAP_KIND_PLATFORM: usize = 11;
 pub const CAP_KIND_CONTROL: usize = 12;
+pub const CAP_KIND_RESTART: usize = 13; // spawn boot images and services again, nothing else (init after boot)
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -111,7 +118,7 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
-pub const CAP_SLOTS: usize = 32;
+pub const CAP_SLOTS: usize = 64;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;
@@ -158,7 +165,7 @@ pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
 // capability, a caller stops waiting and the server's later reply fails with ERR_PEER.
 pub const IPC_TIMEOUT_SHIFT: usize = 32;
 // Senders waiting on one endpoint; one more fails with ERR_BUSY at once (back-pressure).
-pub const ENDPOINT_QUEUE: usize = 8;
+pub const ENDPOINT_QUEUE: usize = 4;
 // At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
@@ -208,11 +215,11 @@ pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port rang
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
-pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN or _CONTROL
+pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match; result = device index.
 
 // TASK_LIST fills an array of TaskInfo (arg1 = address, arg2 = capacity) and returns the count.
-#[derive(Clone, Copy)] #[repr(C)] pub struct TaskInfo { pub pid: u64, pub name: [u8; NAME_MAX], pub state: [u8; 8], pub cpu: u32, pub focus: u8, pub service: u8, pub screen: u8, pub reserved: u8, pub runs: u64, pub ticks: u64, pub calls: u64 }
+#[derive(Clone, Copy)] #[repr(C)] pub struct TaskInfo { pub pid: u64, pub name: [u8; NAME_MAX], pub state: [u8; 8], pub cpu: u32, pub focus: u8, pub service: u8, pub screen: u8, pub reserved: u8, pub runs: u64, pub ticks: u64, pub calls: u64, pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16 }
 // FAULTS fills an array of FaultInfo (arg1 = address, arg2 = capacity) and returns the count.
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct FaultInfo { pub pid: u64, pub cpu: u64, pub vector: u64, pub error: u64, pub rip: u64, pub address: u64 }
 // FOCUS: arg1 = PID (0 = the caller), arg2 = 1 to keep the task's buffered console output; result = PID.

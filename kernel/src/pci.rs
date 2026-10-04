@@ -68,6 +68,12 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     devices
 }
 
+// Stops a device before its driver is restarted: no decoding, no bus mastering (no DMA).
+pub unsafe fn quiesce(device: &Device) {
+    let command = read(device.bus, device.device, device.function, 0x04);
+    write(device.bus, device.device, device.function, 0x04, command & !0x7);
+}
+
 // Enables I/O, memory decoding and bus mastering once a resource of the device is handed to a driver.
 pub unsafe fn enable(device: &Device) {
     let command = read(device.bus, device.device, device.function, 0x04);

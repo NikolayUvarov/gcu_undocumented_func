@@ -1,0 +1,57 @@
+# 033 — Follow-ups of the audit and of C6
+
+**Type:** architecture/tests · **Priority:** P1 · **Status:** done (2026-10-04) · **Roadmap:** step 3, C4 and C6 · **Constitution:** MC-2.5, MC-3.12, MC-6.3, MC-6.4, MC-6.6, MC-1.7
+
+## Problem
+
+After the audit and C6, several statements had no test or were not done:
+- the endpoint queue bound and the late reply;
+- a successful move of a memory object;
+- revoke of a capability in a blocked send;
+- revoke of a lease held by a running task;
+- DMA quiescing before a driver restart;
+- `init` keeping the platform privilege forever;
+- `ps` showing no quotas;
+- the 010 items (Linux launcher, links to `issues/` and `knowledge/`).
+
+## Plan
+
+- Multi-process cases in the isolation fixture: children started through loader with the parent's endpoint in their INIT slot.
+- `DEVICE_STATE` to stop and restart a device's decoding and DMA; `init` stops the device and clears the DMA region before a driver restart; the block client re-attaches to a new driver instance.
+- `init` keeps the capabilities of each service's first start, mints a restart privilege and drops the platform privilege before READY.
+- Quotas in `TaskInfo` and a `quotas` shell command; `03_run_qemu.sh`.
+
+## Acceptance criteria
+
+- New isolation cases and suite checks pass; all QEMU suites, the USB smoke, host and IDL tests pass.
+
+## Related
+
+[026](026-derivation-and-revocation.done), [028](028-memory-rights-and-lease.done), [029](029-memory-objects-move-seal.done), [030](030-ipc-bounds-and-cancellation.done), [032](032-minimal-supervision.done), [010](010-docs-sync.done).
+
+## Resolution
+
+**Multi-process tests.** Isolation cases with children started through loader:
+- `f`: a queued send is fenced;
+- `q`: five senders, `ENDPOINT_QUEUE` lowered to 4 so the bound is reachable within the application limit; four wait, the fifth gets `ERR_BUSY`;
+- `j`: a late reply gets `ERR_PEER`;
+- `z`: a memory object moves and the sender's handle dies;
+- `b`: revoke removes a capability waiting in a blocked send, through loader's dropped copy (a ghost node);
+- `x`: a child that keeps reading a lease faults after the owner revokes it.
+
+A fixture `sleep` that ignores typed input fixed a false failure: `WAIT` ends early while keys are queued.
+
+**Devices.** `DEVICE_STATE` (49) stops or starts a device. It needs the platform privilege or a capability over one of the device's BARs. `init` stops the device and clears the DMA region before a driver restart and starts the device again just before spawning it. The block client remembers the driver instance (the PID that accepted its buffer) and re-attaches and repeats an idempotent read when a reply comes from another PID. The `ahci` suite kills the driver and reads files afterwards.
+
+**Authority.** `CAP_SLOTS` is now 64. `init` keeps each service's first-start capabilities as a plan and grants copies. Before READY it mints a restart privilege (`CAP_KIND_RESTART`: spawning boot images only) and drops the platform privilege. The services suite checks `PLATFORM PRIVILEGE DROPPED` and restarts afterwards.
+
+**Quotas.** `TaskInfo` carries task and endpoint quotas (used/limit), shown by the shell's `quotas` command and checked in the services suite.
+
+**Other.**
+- `03_run_qemu.sh` for Linux, with OVMF pflash fallback; README links to `issues/` and `knowledge/`.
+- Negative checks: an application cannot stop a device or watch a task.
+- The idle-HLT check of the normal suite samples up to 10 times.
+
+All 13 QEMU suites, the USB smoke, 23 host tests and the IDL tests pass.
+
+Still not covered: placement of the lease holder on another CPU in case `x` is up to the scheduler; minted port sub-ranges.

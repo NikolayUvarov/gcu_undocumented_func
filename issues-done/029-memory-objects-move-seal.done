@@ -28,3 +28,5 @@ Shared memory always stays a heap block of its creator, who keeps a writable map
 ## Audit (2026-10-04)
 
 Was partial: through the `MEM_SHARE` hole (see 028) an object could be made copyable, and freed-but-referenced blocks were not limited. Fixed in the audit commit: the hole is closed; detached and freed-but-referenced memory is charged to the owner's heap quota while it lives, and the 16 MiB limit applies to `MEM_DETACH`. `sealed` now also counts task screens as writers. A successful move of an object is still untested.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): a successful move of a memory object is tested (isolation case `z`).

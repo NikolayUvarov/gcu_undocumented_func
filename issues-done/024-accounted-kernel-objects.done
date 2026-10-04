@@ -31,3 +31,5 @@ Each task has a task quota and an endpoint quota delegated at `SPAWN` (`msg[3]` 
 ## Audit (2026-10-04)
 
 Done, with one plan item not carried out: `ps` does not show quotas (`TaskInfo` has no quota fields), and the shell prints the constant application limit.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): the `quotas` shell command now shows each task's quotas (033).

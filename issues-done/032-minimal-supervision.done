@@ -40,3 +40,5 @@ Tests:
 All 13 QEMU suites, the USB smoke, host and IDL tests pass.
 
 Not done (recorded in the profile): a supervisor separate from the bootstrap authority, DMA quiescing before a driver restart (MC-6.3), idempotency rules (MC-6.6), lifecycle owners for applications beyond loader's accounting.
+
+Follow-up (2026-10-04, [033](033-audit-and-supervision-follow-ups.done)): DMA quiescing before a driver restart, re-attachment of block clients and dropping the platform privilege after boot are done in 033.

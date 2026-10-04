@@ -39,7 +39,10 @@ pub fn serve(kind: usize, mut driver: Option<&mut dyn Driver>) -> ! {
 }
 
 /// Block device behind a driver's IPC endpoint (client side).
-pub struct Device { endpoint: Endpoint, buffer: Pages, sectors: u64, kind: usize }
+/// The driver instance is the PID that accepted the buffer. A reply from another PID means the driver was restarted
+/// (MC-6.4): the buffer is attached to the new instance and the read is repeated, which is safe because reads are
+/// idempotent (MC-6.6).
+pub struct Device { endpoint: Endpoint, buffer: Pages, sectors: u64, kind: usize, instance: u64 }
 
 impl Device {
     /// Waits for the driver to be ready; Err(NotFound) if there is no drive.
@@ -47,19 +50,32 @@ impl Device {
         let info = endpoint.call(&Message::new(BLOCK_INFO, 0), 0)?;
         let sectors = check(info.data[0])? as u64;
         let buffer = Pages::new(BUFFER).ok_or(Error::NoMemory)?;
-        let cap = buffer.share()?;
-        let attached = endpoint.call(&Message::new(BLOCK_ATTACH, 0).with_cap(cap, 0), 0);
+        let mut device = Self { endpoint, buffer, sectors, kind: info.data[1], instance: 0 };
+        device.attach()?;
+        Ok(device)
+    }
+    // Hands the transfer buffer to the current driver instance.
+    fn attach(&mut self) -> Result<()> {
+        let cap = self.buffer.share()?;
+        let attached = self.endpoint.call(&Message::new(BLOCK_ATTACH, 0).with_cap(cap, 0), 0);
         let _ = ipc::drop_cap(cap); // the driver keeps its own copy of the capability
-        check(attached?.data[0])?;
-        Ok(Self { endpoint, buffer, sectors, kind: info.data[1] })
+        let attached = attached?;
+        check(attached.data[0])?;
+        self.instance = attached.sender;
+        Ok(())
     }
     pub fn sectors(&self) -> u64 { self.sectors }
     /// Device kind (BLOCK_KIND_*), to tell drives apart.
     pub fn kind(&self) -> usize { self.kind }
     /// Reads up to BLOCK_MAX_SECTORS sectors; the slice is valid until the next read.
     pub fn read(&mut self, lba: u64, count: usize) -> Result<&[u8]> {
-        let reply = self.endpoint.call(&Message::new(BLOCK_READ | count.min(BLOCK_MAX_SECTORS) << 8, lba as usize), 0)?;
-        let got = check(reply.data[0])?;
+        let request = Message::new(BLOCK_READ | count.min(BLOCK_MAX_SECTORS) << 8, lba as usize);
+        let mut reply = self.endpoint.call(&request, 0);
+        if reply.as_ref().is_ok_and(|r| r.sender != self.instance) || reply.as_ref().is_err_and(|e| *e == Error::Peer) {
+            self.attach()?;
+            reply = self.endpoint.call(&request, 0);
+        }
+        let got = check(reply?.data[0])?;
         Ok(&self.buffer.as_slice()[..got * BLOCK_SECTOR])
     }
 }
