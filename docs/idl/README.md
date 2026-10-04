@@ -92,7 +92,7 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`) | 1.0.0 |
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt) | 1.0.0 |
-| [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge) | 2.0.0 |
+| [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge; 2.1 adds `interfaces`, one per card) | 2.1.0 |
 | [`idl/netpolicy.wit`](../../idl/netpolicy.wit) | `netpolicy` (a grant is handed over by a word call, `take`, which carries the capability) | 1.0.0 |
 | [`idl/tls.wit`](../../idl/tls.wit) | `tls` (a client lends its flow with a word call, `attach`, that carries the capability as a parameter; the handshake runs inside `connect`) | 1.0.0 |
 | [`idl/keystore.wit`](../../idl/keystore.wit) | `keystore` (no call returns the private key; `sign` only for the signer's badge, a purpose and a budget) | 1.0.0 |

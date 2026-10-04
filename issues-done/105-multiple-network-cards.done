@@ -1,0 +1,40 @@
+# 105 — Several network cards — done
+
+**Type:** service policy + driver · **Owner:** network track · **Priority:** P3 · **Status:** done (2026-10-04) · **Blocked by:** 101 · **Roadmap:** tracks A and D · **Constitution:** MC-1.4, MC-6.4, Appendix B.6
+
+## Problem
+
+`init` starts one `virtio_net` for the first card it finds; a boot service is one name with one instance. A machine with two networks (or MIND Core acting as a gateway) needs one driver instance per card and a stack with several interfaces.
+
+## Plan
+
+- **init:** a driver service may have several instances, one per matching device (`DEVICE_FIND` with n-th match), each with its own device capabilities, DMA region, endpoint and restart budget; `svc` and `STAT` name instances (`virtio_net#0`, `virtio_net#1`).
+- **Stack (issue 101):** several interfaces with their own addresses, routes and DHCP; the stack is the only client of every card driver.
+- **Policy:** which card a flow may use is part of the policy broker's grants (issue 102).
+
+## Acceptance criteria
+
+- In QEMU with two VirtIO cards on two user-mode networks: both get addresses, traffic goes out through the right card per route, killing one driver leaves the other card working, and the restarted instance gets its own device back.
+
+## Related
+
+[101](101-network-stack.done), [102](102-network-policy-broker.done), [104](104-virtio-modern-msix.done).
+
+## Resolution
+
+- **init:** a service is a *unit*: one per boot image plus the further instances in `SERVICE_INSTANCES` (`common/abi.rs`; now `virtio_net#1`). A unit has its own plan, PID, device, DMA region, endpoint keeper and restart budget, and runs its image (`Image::Boot`) under its own task name. Instance *n* of `virtio_net` drives the *n*-th VirtIO network card in PCI order; init starts it right after the first instance. `svc`, `idl/init.wit` `list` and the shell name instances; `RUN virtio_net#1 &` starts one.
+- **netstack** (`socket.wit` 2.1): one interface per card driver (clients in slots 2 and 3):
+  - each interface has its own smoltcp interface, socket set and DHCP; the static QEMU fallback applies to the first card only;
+  - a flow goes out through the interface whose network holds the destination, otherwise through the first one with a gateway (the default interface, which `config` describes);
+  - a UDP socket moves to the interface its next destination is routed through;
+  - `interfaces` lists every card with its address and frame counters; log lines name the card (`... ON CARD 1`).
+- **Shell:** `ip` adds a line per card with `SENT=` and `RECEIVED=`.
+- **Test:** `net` suite with two cards on two user-mode networks (10.0.2.0/24 and 10.0.3.0/24):
+  - both drivers start, each with its own MAC, and both interfaces get DHCP leases;
+  - ping and HTTP to 10.0.3.2 go out through the second card, HTTP to 10.0.2.2 through the first (frame counters);
+  - after the second driver is killed, the first card keeps working, and the restarted instance (after quiesce) drives its own card again.
+- **Not done:**
+  - Which card a flow may use is not yet part of the broker's grants. Flows follow routes, and the grants restrict destinations.
+  - There are no static routes beyond the per-card networks and the default interface.
+  - Only two instances are declared.
+

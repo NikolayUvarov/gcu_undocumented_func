@@ -90,7 +90,15 @@ pub fn ip(out: &mut impl Write) {
             let _ = write!(out, " DNS "); dotted(out, c.dns); let _ = writeln!(out, " ({})", if c.dhcp { "DHCP" } else { "STATIC" });
         }
         Ok(Err(error)) => failed(out, "IP", error),
-        Err(_) => stack_failed(out),
+        Err(_) => { stack_failed(out); return }
+    }
+    // Every card (issue 105): its address and the frames it carried.
+    if let Ok(Ok(interfaces)) = socket::interfaces(STACK) {
+        for i in interfaces.as_slice() {
+            let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
+            let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
+            let _ = writeln!(out, " SENT={} RECEIVED={}", i.sent, i.received);
+        }
     }
 }
 
