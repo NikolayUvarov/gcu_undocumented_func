@@ -1,6 +1,6 @@
 # 045 — `sysmon` service and the monitors `top`, `memmap`, `load`, `hw` (tools F9, T1)
 
-**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T1 · **Blocked by:** 035, 042, 044
+**Type:** tool · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Roadmap:** track G, T1 · **Blocked by:** 042, 044 (035 done)
 
 ## Problem
 

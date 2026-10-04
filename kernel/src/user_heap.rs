@@ -9,6 +9,7 @@ struct Block {
     size: usize,
     node: u64, // derivation node of the capability a foreign mapping was made from
     writable: bool,
+    device: bool,
 }
 
 pub struct Heap {
@@ -43,7 +44,7 @@ impl Heap {
         let address = self.find_hole(size)?;
         let memory = Region::new(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
-        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true });
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false });
         self.bytes += size;
         Some(address)
     }
@@ -56,7 +57,7 @@ impl Heap {
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, writable, false).ok()?; }
-        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device });
+        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device, device });
         self.shared += size;
         Some(address)
     }
@@ -84,6 +85,14 @@ impl Heap {
             self.shared -= block.size; self.blocks[index] = None; any = true;
         }
         any
+    }
+
+    // Statistics (STAT): private bytes and blocks, mapped foreign bytes, and what a heap-window address belongs to.
+    pub fn bytes(&self) -> usize { self.bytes }
+    pub fn shared_bytes(&self) -> usize { self.shared }
+    pub fn block_count(&self) -> usize { self.blocks.iter().flatten().count() }
+    pub fn kind_at(&self, address: usize) -> Option<(bool, bool)> {
+        self.blocks.iter().flatten().find(|b| address >= b.address && address < b.address + b.size).map(|b| (b.memory.is_some(), b.device))
     }
 
     // Whether a foreign mapping was made from capability node `id`.

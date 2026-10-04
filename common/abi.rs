@@ -10,7 +10,7 @@ pub const MAX_APPS: usize = 8; // init's policy: live applications loader may st
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], }
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, }
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -107,6 +107,7 @@ pub const CAP_KIND_REPLY: usize = 10;
 pub const CAP_KIND_PLATFORM: usize = 11;
 pub const CAP_KIND_CONTROL: usize = 12;
 pub const CAP_KIND_RESTART: usize = 13; // spawn boot images and services again, nothing else (init after boot)
+pub const CAP_KIND_OBSERVE: usize = 14; // read-only statistics: STAT, TASK_LIST, CPU_INFO, KERNEL_HEAP, FAULTS
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -280,3 +281,50 @@ pub const AUDIO_RECORD_STOP: usize = 8;
 // Speech synthesis: capability to a page of UTF-8 text, msg[2]=TTS_SAY|length<<8, msg[3]=pitch Hz|rate %<<16 (0 for default).
 pub const TTS_SAY: usize = 1;
 pub const AUDIO_RATE: usize = 48_000;
+
+// STAT (observe or control privilege): arg1 = class, arg2 = buffer, msg[0] = capacity in bytes, msg[1] = argument
+// (a PID for VMAP and CAPS). The buffer receives a StatHeader and then up to (capacity - header) / record_size
+// records; the result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
+// Nothing returned is authority: endpoint indices are labels no system call accepts, and no task memory contents or
+// physical addresses of task memory are exported (MC-10.2).
+pub const SYSCALL_STAT: usize = 51;
+pub const STAT_VERSION: u32 = 1;
+pub const STAT_TASKS: usize = 1;
+pub const STAT_CPUS: usize = 2;
+pub const STAT_MEMORY: usize = 3;
+pub const STAT_PHYSMAP: usize = 4;
+pub const STAT_VMAP: usize = 5;
+pub const STAT_CAPS: usize = 6;
+pub const STAT_ENDPOINTS: usize = 7;
+pub const STAT_IRQS: usize = 8;
+pub const STAT_DEVICES: usize = 9;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatHeader { pub version: u32, pub record_size: u32, pub count: u32, pub total: u32 }
+// What a task waits for (StatTask.wait); wait_on is the endpoint index, IRQ line or the server's PID.
+pub const WAIT_NONE: u8 = 0; pub const WAIT_SEND: u8 = 1; pub const WAIT_RECEIVE: u8 = 2; pub const WAIT_REPLY: u8 = 3;
+pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: u8 = 6; pub const WAIT_EXITED: u8 = 7; pub const WAIT_RUNNING: u8 = 8;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatTask {
+    pub pid: u64, pub parent: u64, pub name: [u8; NAME_MAX], pub wait: u8, pub cpu: u8, pub service: u8, pub screen: u8, pub wait_on: u32,
+    pub run_ns: u64, pub runs: u64, pub ticks: u64, pub calls: u64, pub sends: u64, pub receives: u64, pub started_ns: u64,
+    pub heap_bytes: u64, pub heap_blocks: u32, pub caps: u32, pub shared_bytes: u64, pub retained_bytes: u64,
+    pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
+    pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub reserved: u32,
+}
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64 }
+// Kernel arena (bytes) by category, and the global limits.
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatMemory {
+    pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64,
+    pub heaps: u64, pub objects: u64, pub dma: u64, pub dma_limit: u64, pub objects_limit: u64, pub tasks: u64, pub endpoints: u64,
+}
+// Physical layout: firmware memory map entries (kind = UEFI memory type) and the platform layout (kind >= PHYS_PLATFORM).
+pub const PHYS_PLATFORM: u32 = 0x100; pub const PHYS_ARENA: u32 = 0x100; pub const PHYS_FRAMEBUFFER: u32 = 0x101;
+pub const PHYS_BOOT_IMAGE: u32 = 0x102; pub const PHYS_AP_TRAMPOLINE: u32 = 0x103; pub const PHYS_PCI_BAR: u32 = 0x104;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatPhys { pub kind: u32, pub index: u32, pub start: u64, pub pages: u64 }
+// Address-space regions of a task (VMAP).
+pub const REGION_IMAGE: u32 = 1; pub const REGION_STACK: u32 = 2; pub const REGION_SCREEN: u32 = 3; pub const REGION_INFO: u32 = 4;
+pub const REGION_MAILBOX: u32 = 5; pub const REGION_EXIT: u32 = 6; pub const REGION_HEAP: u32 = 7; pub const REGION_SHARED: u32 = 8; pub const REGION_DEVICE: u32 = 9;
+pub const REGION_READ: u32 = 1; pub const REGION_WRITE: u32 = 2; pub const REGION_EXECUTE: u32 = 4;
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatRegion { pub start: u64, pub size: u64, pub kind: u32, pub flags: u32 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCap { pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub size: u64, pub badge: u32, pub reserved: u32, pub node: u64, pub parent: u64 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatEndpoint { pub index: u32, pub receivers: u32, pub waiting_senders: u32, pub waiting_receivers: u32, pub creator: u64, pub messages: u64, pub busy: u64, pub timeouts: u64 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub reserved: u32, pub holder: u64, pub count: u64 }
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatDevice { pub class: u32, pub irq: u32, pub bar_sizes: [u64; 6], pub holder: u64 }

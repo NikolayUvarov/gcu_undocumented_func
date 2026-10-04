@@ -9,7 +9,9 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, ProgramImage}; mod elf_reloc;
+use abi::{BootInfo, ProgramImage, StatPhys}; mod elf_reloc;
+
+const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
 
@@ -108,10 +110,18 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let (boot_info, kernel_stack) = {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize; let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24; if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() { let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap(); for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } } }
-        let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap(); let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap(); let mode = gop.current_mode_info(); let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>(); let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
+        let gop_handle = boot_services.get_handle_for_protocol::<GraphicsOutput>().unwrap(); let mut gop = boot_services.open_protocol_exclusive::<GraphicsOutput>(gop_handle).unwrap(); let mode = gop.current_mode_info(); let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>(); let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0 }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
     };
-    let (_system_table, _memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA); unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
+    let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
+    // The final memory map, after boot services are gone, as the kernel will see the machine.
+    unsafe {
+        let info = boot_info as *mut BootInfo; let capacity = MEMORY_MAP_PAGES * 4096 / core::mem::size_of::<StatPhys>();
+        for (index, entry) in memory_map.entries().take(capacity).enumerate() {
+            (*info).memory_map.cast_mut().add(index).write(StatPhys { kind: entry.ty.0, index: index as u32, start: entry.phys_start, pages: entry.page_count });
+            (*info).memory_map_len = index + 1;
+        }
+    } unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
 }
 #[panic_handler] fn panic(info: &PanicInfo) -> ! { let _ = writeln!(Serial, "\r\nBOOT PANIC: {}\r", info); halt() }
 #[no_mangle] pub extern "C" fn wcslen(mut s: *const u16) -> usize { let mut len = 0; unsafe { while *s != 0 { len += 1; s = s.add(1); } } len }

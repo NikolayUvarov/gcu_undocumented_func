@@ -127,6 +127,8 @@ pub unsafe fn init() {
 static PIC_MASK: AtomicU16 = AtomicU16::new(0xFFF8);
 
 // Masks or unmasks a PIC line; called with the scheduler lock held.
+pub fn irq_masked(irq: u8) -> bool { PIC_MASK.load(Ordering::Relaxed) & (1 << irq) != 0 }
+
 pub unsafe fn set_irq_masked(irq: u8, masked: bool) {
     let bit = 1u16 << irq;
     let mask = if masked { PIC_MASK.fetch_or(bit, Ordering::Relaxed) | bit } else { PIC_MASK.fetch_and(!bit, Ordering::Relaxed) & !bit };

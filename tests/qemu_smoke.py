@@ -752,6 +752,17 @@ def services_suite(vm):
     vm.send("fg 0\n"); vm.expect("ERROR: EXPECTED ONE POSITIVE PID\nMIND> ")  # the whole reply, prompt included
     # End of the initial distribution: init gives up the platform privilege before READY.
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
+    # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
+    tasks = vm.command("stat tasks", raw=True)
+    assert int(re.search(r"STAT TASKS VERSION=1 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])
+    heap_now = int(re.search(r"HEAP: USED=(\d+)", vm.command("heap", raw=True))[1])
+    assert abs(stat_used - heap_now) < 256 * 1024, (stat_used, heap_now)
+    layout = vm.command(f"stat vmap {vm.services()['shell']}", raw=True)
+    for region in ("IMAGE R-X", "STACK RW-", "SCREEN RW-", "INFO R--", "MAILBOX RW-"):
+        require(layout, region)
+    cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
+    assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
     # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
     quotas = vm.command("quotas", raw=True)
     assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/31 \d+/127$", quotas, re.M), quotas
@@ -823,6 +834,9 @@ def services_suite(vm):
     kill_rtc(); kill_rtc(); kill_rtc()
     require(vm.service_logs("init", "QUARANTINED"), "rtc QUARANTINED: 3 RESTARTS IN 60 S")
     assert "rtc" not in vm.services(), "a quarantined service stays down"
+    # Its client is not left waiting in a send to the dead endpoint (init keeps no receive right).
+    time.sleep(.5)
+    assert not re.search(r" hello WAIT=1:", vm.command("stat tasks", raw=True)), "client blocked on a quarantined service"
     require(vm.command("run rtc &"), "NAME=rtc")
     clock_resumes()
     vm.command("kill 6")

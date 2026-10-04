@@ -20,7 +20,6 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [035](035-observe-and-stat.md) | OBSERVE privilege, `STAT`, firmware memory map (tools F5) | kernel | P1 | — | track G, T1 |
 | [038](038-scheduling-budgets.md) | Scheduling budgets | kernel | P1 | — | C7 |
 | [039](039-port-services.md) | Port the services to MIND IDL and the C4 memory modes | kernel | P1 | 044 | C8 |
 | [040](040-program-heap.md) | Program heap `mind::alloc` | tools | P1 | — | track G, T0 |
@@ -28,7 +27,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [042](042-tui-library.md) | TUI library `mind::tui` | tools | P1 | 040, 041 | track G, T0 |
 | [043](043-keyboard-decoding-and-line-editing.md) | Keyboard decoding, layouts, VT100 input, shell line editing | tools | P1 | — | track G, T0 |
 | [044](044-idl-v02-records-strings.md) | MIND IDL v0.2: records, strings, lists in buffers | tools | P1 | — | track G, C8 |
-| [045](045-sysmon-and-monitors.md) | `sysmon` and `top`, `memmap`, `load`, `hw` | tools | P2 | 035, 042, 044 | track G, T1 |
+| [045](045-sysmon-and-monitors.md) | `sysmon` and `top`, `memmap`, `load`, `hw` | tools | P2 | 042, 044 | track G, T1 |
 | [046](046-loader-sessions.md) | Loader v1: launch sessions with granted capabilities | tools | P2 | 044 | track G, T1 |
 | [047](047-viewer-and-fm-readonly.md) | Viewer `view`, file manager `fm` read-only | tools | P2 | 042, 043 | track G, T1 |
 | [048](048-write-path-ramdisk-vfs2.md) | Block write, `ramdisk`, VFS v2 with directory handles | tools | P2 | 044 | track G, T2 |
@@ -70,6 +69,7 @@ Two tracks work in parallel. The **kernel track** owns `kernel/`, `common/abi.rs
 | [032](../issues-done/032-minimal-supervision.done) | Minimal supervision: exit notices, restart budget, quarantine, fencing | done (2026-10-04) |
 | [033](../issues-done/033-audit-and-supervision-follow-ups.done) | Follow-ups: multi-process tests, device stop, platform privilege dropped, quotas | done (2026-10-04) |
 | [034](../issues-done/034-key-events-input-queue.done) | Key events in the per-task input queue | done (2026-10-04) |
+| [035](../issues-done/035-observe-and-stat.done) | OBSERVE privilege, `STAT`, firmware memory map | done (2026-10-04) |
 | [036](../issues-done/036-endpoint-badges.done) | Endpoint badges | done (2026-10-04) |
 | [037](../issues-done/037-task-limit.done) | Task limit 32, 127 endpoints | done (2026-10-04) |
 

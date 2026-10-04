@@ -29,3 +29,12 @@ Every task has a task quota and an endpoint quota, delegated by its spawner at `
 - Memory is not part of the quotas: tasks, private heaps and DMA regions are paid from the global kernel heap; per-task limits (heap 16 MiB, shared mappings 48 MiB) bound a single task, not an owner's subtree.
 - Capability slots are a fixed per-task table rather than a quota.
 - No CPU budgets or scheduling contexts (roadmap C7).
+
+## Statistics
+
+`STAT` copies bounded snapshots under the scheduler lock: at most 32 tasks, 4 CPUs (up to 8), 127 endpoints, 15 IRQ lines, the enumerated PCI functions, 64 capability slots per task, and the firmware memory map (up to 16 pages of entries). A `VMAP` walk visits only present page tables (at most 128 per task). The kernel counts:
+- per task: run time (TSC, at every switch), runs, ticks, system calls, IPC sends and receives;
+- per CPU: busy and idle time, interrupts, switches;
+- per endpoint: messages, `ERR_BUSY` refusals, timeouts;
+- per IRQ line: interrupts.
+

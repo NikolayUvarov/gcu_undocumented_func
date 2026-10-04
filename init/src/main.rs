@@ -7,7 +7,7 @@ use mind::abi::*;
 use mind::dev::cap_info;
 use mind::ipc::{self, Endpoint, Message};
 use mind::platform;
-use mind::process::{grant, Image, Quota};
+use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::{Error, Result};
 
 const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
@@ -72,7 +72,9 @@ impl Init {
         self.keepers[index] = Some(keeper);
         Ok(keeper)
     }
-    fn server(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, ALL) }
+    // The server's receive capability is minted fresh for each instance and moved into it (see `spawn`): init keeps
+    // only the keeper, so a dead or quarantined server's clients get ERR_PEER and nothing queues for the next one.
+    fn server(&mut self, _minted: &mut Minted, name: &str) -> Result<usize> { self.keeper(name) }
     fn client(&mut self, minted: &mut Minted, name: &str) -> Result<usize> { let keeper = self.keeper(name)?; minted.endpoint(keeper, CLIENT) }
 
     // Before a driver is restarted (MC-6.3): its device stops DMA, then the DMA region is cleared, so the new instance
@@ -178,7 +180,14 @@ impl Init {
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
         let name = BOOT_SERVICES[index];
-        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &plan.grants.list[..plan.grants.count], plan.flags, plan.quota)?;
+        let mut grants = plan.grants; let mut receiver = None;
+        if let Some(keeper) = self.keepers[index] {
+            for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == SLOT_SERVICE) {
+                let slot = ipc::mint(keeper, ALL, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, ALL); receiver = Some(slot);
+            }
+        }
+        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], plan.flags, plan.quota)
+            .inspect_err(|_| { if let Some(slot) = receiver { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         // init is the lifecycle owner of every service and receives its exit notice (MC-6.8).
         if mind::process::watch(pid, Endpoint::SERVICE).is_err() { mind::println!("[INIT] {} NOT WATCHED", name); }

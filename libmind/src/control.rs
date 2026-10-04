@@ -28,3 +28,16 @@ pub fn cpu(index: usize) -> Option<(u32, bool, usize)> {
 /// Kernel heap (used, free, test allocation fully released).
 pub fn kernel_heap() -> (usize, usize, bool) { let raw = syscall(SYSCALL_KERNEL_HEAP, 0, 0, [0; 4]); (raw.result, raw.arg2, raw.msg[2] != 0) }
 pub fn halt() -> ! { call(SYSCALL_HALT, 0, 0); loop { core::hint::spin_loop(); } }
+
+/// STAT (observe or control privilege): fills `buffer` with a header and records of `class`; `argument` is a PID for
+/// VMAP and CAPS. Returns the header; read the records with `records`.
+pub fn stat(class: usize, argument: usize, buffer: &mut [u8]) -> Result<StatHeader> {
+    check(syscall(SYSCALL_STAT, class, buffer.as_mut_ptr() as usize, [buffer.len(), argument, 0, 0]).result)?;
+    Ok(unsafe { core::ptr::read_unaligned(buffer.as_ptr().cast::<StatHeader>()) })
+}
+/// The records a STAT call wrote into `buffer` (checked against the header's record size and the buffer length).
+pub fn records<'a, T: Copy + 'a>(buffer: &'a [u8], header: StatHeader) -> impl Iterator<Item = T> + 'a {
+    let (start, size) = (core::mem::size_of::<StatHeader>(), core::mem::size_of::<T>());
+    let count = if header.record_size as usize == size { (header.count as usize).min((buffer.len() - start) / size) } else { 0 };
+    (0..count).map(move |i| unsafe { core::ptr::read_unaligned(buffer.as_ptr().add(start + i * size).cast::<T>()) })
+}
