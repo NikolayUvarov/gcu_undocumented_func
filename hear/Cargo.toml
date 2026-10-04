@@ -1,12 +1,13 @@
 [package]
-name = "tts"
+name = "hear"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
+# Offline voice command recognizer (docs/voice V1, issue 078): mind::voice with the phonetics shared with tts.
 [dependencies]
-libmind = { path = "../libmind" }
+libmind = { path = "../libmind", features = ["alloc"] }
 phonetics = { path = "../phonetics" }
 
 [profile.release]

@@ -1,0 +1,17 @@
+# Voice commands of MIND CORE (docs/voice, issue 078): what `hear` recognizes and the shell's voice control (079) acts
+# on. A line `INTENT: phrase | phrase | ...` gives the phrases of an intent; `{slot}` in a phrase stands for any word
+# of that slot. A line `slot NAME: words = value, words = value, ...` lists a slot's words and what each means (the
+# value defaults to the words). Phrases are spelled as the synthesizer reads them; Russian and English mix freely.
+
+slot tool: файлы = fm, файловый менеджер = fm, редактор = edit, процессы = top, задачи = top, память = memmap, загрузку = load, оборудование = hw, журнал = dmesg, службы = svc, files = fm, file manager = fm, editor = edit, processes = top, tasks = top, memory = memmap, load = load, hardware = hw, log = dmesg, services = svc
+
+open: открой {tool} | запусти {tool} | покажи {tool} | open {tool} | start {tool} | show {tool}
+time: который час | сколько времени | what time is it
+date: какое сегодня число | какой сегодня день | what is the date | what day is it
+help: что ты умеешь | помощь | what can you do | help
+yes: да | конечно | yes | sure
+no: нет | no
+cancel: отмена | стоп | cancel | stop
+close: закрой программу | close the program
+repeat: повтори | repeat that
+reboot: перезагрузи систему | restart the system

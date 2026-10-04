@@ -72,6 +72,7 @@ USER_CRATES=(
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"
+    "hear:hear:hear.elf"
     "files:files:files.elf"
     "keys:keys:keys.elf"
     "view:view:view.elf"
@@ -119,10 +120,12 @@ for entry in "${USER_CRATES[@]}"; do
     cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
-# Licences travel with the image: tts.elf embeds third-party dictionaries, the text programs the MIND Mono font
-# (THIRD_PARTY.md).
+# Licences travel with the image: tts.elf and hear.elf embed third-party dictionaries, the text programs the MIND Mono
+# font (THIRD_PARTY.md). The voice recognizer reads its model and grammar from voice/ (issue 078).
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
+mkdir -p "$BUILD_SCRIPT_DIR/usb_root/voice"
+cp "$BUILD_SCRIPT_DIR"/voice/model.bin "$BUILD_SCRIPT_DIR"/voice/commands.txt "$BUILD_SCRIPT_DIR/usb_root/voice/"
 
 trap - ERR
 finish

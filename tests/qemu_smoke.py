@@ -2186,16 +2186,18 @@ def audio_suite(vm, wav):
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
+# For `hear` (issue 078): two commands and a phrase outside the grammar.
+COMMANDS = ("открой файлы", "what time is it", "сегодня хорошая погода")
 
 
-def speech_wav():
+def speech_wav(phrases=SPEECH):
     """The phrases from the host build of tts, 1 s apart in faint noise, as 48 kHz stereo like the microphone gives;
     returns the WAV and where each phrase starts (ms)."""
     import random
     exe = Path(tempfile.gettempdir()) / "voice-tts-host"
     subprocess.run(["rustc", "--edition=2021", "-O", str(ROOT / "tests/tts_host.rs"), "-o", str(exe)], check=True)
     mono, starts = [0] * 8000, []
-    for phrase in SPEECH:
+    for phrase in phrases:
         out = Path(tempfile.gettempdir()) / "voice-phrase.wav"
         subprocess.run([str(exe), phrase, str(out)], check=True, capture_output=True)
         data = out.read_bytes()[44:]
@@ -2278,9 +2280,22 @@ def listen_suite(vm, starts):
     require(vm.command("run listen --wav &"), "PID=8 NAME=listen BACKGROUND")
     require(logs(8), "USAGE: LISTEN [SECONDS] | LISTEN --vad [SECONDS] | LISTEN [--vad] --wav FILE")
     vm.command("kill 8")
+    # hear (issue 078): commands recognized in a WAV file, the phrase outside the grammar refused; the microphone's
+    # silence holds nothing.
+    vm.send("hear --wav commands.wav\n")
+    heard = vm.expect("MIND> ", timeout=180, after="hear --wav commands.wav\n")
+    require(heard, 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
+    require(heard, 'HEARD "what time is it" INTENT=time CONFIDENCE=')
+    require(heard, "NOT UNDERSTOOD (CLOSEST")
+    assert heard.count("HEARD") == 2 and heard.count("NOT UNDERSTOOD") == 1, heard
+    vm.send("hear 1\n")
+    require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "NOTHING HEARD")
+    require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
+    require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] | HEAR --wav FILE")
     assert "FAULT PID=" not in vm.command("faults")
     print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in), playback, program arguments, run by name, "
-          f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms)", flush=True)
+          f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
+          "voice commands recognized by hear", flush=True)
 
 
 def tts_suite(vm, wav, asr_model=None):
@@ -2611,6 +2626,7 @@ def main():
             (disk / "EFI/BOOT").mkdir(parents=True)
             for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
                 shutil.copyfile(ROOT / "usb_root" / name, disk / name)
+            shutil.copytree(ROOT / "usb_root/voice", disk / "voice")  # the voice recognizer's model and grammar
             if suite == "services":
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
@@ -2619,6 +2635,7 @@ def main():
             if suite == "listen":
                 speech, starts = speech_wav()
                 (disk / "speech.wav").write_bytes(speech)
+                (disk / "commands.wav").write_bytes(speech_wav(COMMANDS)[0])
             if suite == "tools":
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())

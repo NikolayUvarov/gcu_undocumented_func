@@ -1,6 +1,6 @@
 # 079 — Voice V2: voice control in the shell
 
-**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** 078 · **Roadmap:** track G · **Constitution:** Art. 8.1–8.2, 11.5, MC-3.7, MC-3.11
+**Type:** feature · **Owner:** tools track · **Priority:** P1 · **Status:** open · **Blocked by:** — (078 done) · **Roadmap:** track G · **Constitution:** Art. 8.1–8.2, 11.5, MC-3.7, MC-3.11
 
 ## Problem
 
@@ -22,4 +22,4 @@ With a recognizer (078) the system can hear commands but cannot act on them or a
 
 ## Related
 
-[078](078-voice-command-recognizer.md), [154](154-push-to-talk-routing.md), [docs/voice](../docs/voice/README.md).
+[078](../issues-done/078-voice-command-recognizer.done), [154](154-push-to-talk-routing.md), [docs/voice](../docs/voice/README.md).

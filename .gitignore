@@ -6,6 +6,8 @@ target/
 # --- Intermediate firmware binaries ---
 # Flat images embedded in the bootloader (02_build.sh)
 *.bin
+# The voice recognizer's model is a source file (trained by scripts/voice_train.rs, issue 078).
+!voice/model.bin
 # Built bootloader and modules laid out into usb_root
 *.efi
 *.EFI

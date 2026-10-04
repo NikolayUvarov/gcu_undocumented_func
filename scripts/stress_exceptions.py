@@ -11,7 +11,7 @@ from pathlib import Path
 import sys
 
 VOWELS = "аеёиоуыэюя"
-DICTIONARY = Path(__file__).resolve().parents[1] / "tts/data/stress_ru.txt"
+DICTIONARY = Path(__file__).resolve().parents[1] / "phonetics/data/stress_ru.txt"
 
 
 def stressed(form):
@@ -21,7 +21,7 @@ def stressed(form):
     return sum(1 for c in form[:upper[0]] if c in VOWELS)
 
 
-# Same heuristic as in tts/src/text.rs: "ё" is stressed; ending in a consonant -> last syllable, in a vowel -> penultimate.
+# Same heuristic as in phonetics/src/text.rs: "ё" is stressed; ending in a consonant -> last syllable, in a vowel -> penultimate.
 def heuristic(word):
     count = sum(1 for c in word if c in VOWELS)
     if "ё" in word:

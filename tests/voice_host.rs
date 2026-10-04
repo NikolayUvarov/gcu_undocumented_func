@@ -1,17 +1,28 @@
-//! Host tests of the voice front end (libmind/src/voice/front.rs): WAV parsing, conversion to 16 kHz mono and speech
-//! detection on speech from our own synthesizer (tts/src), in silence and in white noise.
+//! Host tests of the voice front end and recognizer (libmind/src/voice): WAV parsing, conversion to 16 kHz mono and
+//! speech detection (issue 077); features, the model file, the grammar and recognition of commands (issue 078) — on
+//! speech from our own synthesizer (tts/src), in silence and in white noise. Build with -O: recognition is timed.
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../libmind/src/voice/front.rs"]
 mod front;
+#[path = "../libmind/src/voice/features.rs"]
+mod features;
+#[path = "../libmind/src/voice/model.rs"]
+mod model;
+#[path = "../libmind/src/voice/grammar.rs"]
+mod grammar;
+#[path = "../libmind/src/voice/recognizer.rs"]
+mod recognizer;
 #[path = "../tts/src/dsp.rs"]
 mod dsp;
-#[path = "../tts/src/phonemes.rs"]
+#[path = "../phonetics/src/phonemes.rs"]
 mod phonemes;
 #[path = "../tts/src/synth.rs"]
 mod synth;
-#[path = "../tts/src/text.rs"]
+#[path = "../phonetics/src/text.rs"]
 mod text;
+#[path = "../scripts/voice_corpus.rs"]
+mod corpus;
 
 use front::{Detector, Resampler, Source, Stream, Utterance, Wav, WavError};
 
@@ -277,4 +288,139 @@ fn level_follows_loudness() {
     let (loud, quiet) = (detect(&signal), detect(&quieter));
     assert_eq!((loud.len(), quiet.len()), (1, 1));
     assert!((loud[0].level - quiet[0].level - 12).abs() <= 1, "{} vs {} dBFS", loud[0].level, quiet[0].level);
+}
+
+// ---- Recognition (issue 078) ----
+
+fn read(path: &str) -> Vec<u8> {
+    // Tests run from the repository root (CI) or from tests/.
+    std::fs::read(path).or_else(|_| std::fs::read(format!("../{}", path))).unwrap_or_else(|e| panic!("{}: {}", path, e))
+}
+
+fn grammar_text() -> String { String::from_utf8(read("voice/commands.txt")).unwrap() }
+
+fn recognizer() -> recognizer::Recognizer {
+    let model = model::Model::parse(&read("voice/model.bin")).expect("voice/model.bin");
+    let grammar = grammar::Grammar::parse(&grammar_text(), &mut corpus::pronounce).unwrap();
+    recognizer::Recognizer::new(model, grammar).unwrap()
+}
+
+/// Speech of `text` at `pitch` and `rate` in white noise 20 dB below it, with silence around it.
+fn noisy(text: &str, pitch: i64, rate: i64, seed: u64) -> Vec<i16> {
+    let (speech, labels) = corpus::speak(text, pitch, rate);
+    corpus::record(&speech, &labels, corpus::Take { lead_ms: 200, trail_ms: 200, gain: 0.4, snr: Some(20.0) }, &mut corpus::Rng(seed)).0
+}
+
+/// Runs `jobs` on four threads.
+fn parallel<T: Send, R: Send>(jobs: Vec<T>, work: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let mut parts: Vec<Vec<(usize, T)>> = (0..4).map(|_| Vec::new()).collect();
+    for (i, job) in jobs.into_iter().enumerate() { parts[i % 4].push((i, job)); }
+    let mut out: Vec<(usize, R)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = parts.into_iter().map(|part| { let work = &work; scope.spawn(move || part.into_iter().map(|(i, j)| (i, work(j))).collect::<Vec<_>>()) }).collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    out.sort_by_key(|(i, _)| *i);
+    out.into_iter().map(|(_, r)| r).collect()
+}
+
+#[test]
+fn features_of_a_tone() {
+    let f = features::Features::new();
+    let tone: Vec<i16> = (0..16_000).map(|i| (16_000.0 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / 16_000.0).sin()) as i16).collect();
+    let mel = f.log_mel(&tone);
+    assert_eq!(mel.len(), features::Features::frames(16_000) * features::BANDS);
+    assert_eq!(features::Features::frames(16_000), 98);
+    let frame = &mel[40 * features::BANDS..41 * features::BANDS];
+    let peak = (0..features::BANDS).max_by_key(|&b| frame[b]).unwrap();
+    assert!((11..=13).contains(&peak), "1 kHz falls in band {}: {:?}", peak, frame);
+    assert!(frame[peak] - frame[0] > 400 && frame[peak] - frame[39] > 400, "the other bands are 40 dB lower: {:?}", frame);
+    // 60 dB quieter: the peak 60 dB lower; digital silence sits at the floor.
+    let quiet: Vec<i16> = tone.iter().map(|&s| s / 1000).collect();
+    assert!((f.log_mel(&quiet)[40 * features::BANDS + peak] as i32 - (frame[peak] as i32 - 600)).abs() <= 30, "60 dB quieter");
+    assert!(f.log_mel(&[0; 1000]).iter().all(|&v| v == 200));
+    let mut normalized = mel.clone();
+    features::normalize(&mut normalized);
+    assert!((0..features::BANDS).all(|b| (0..98).map(|t| normalized[t * features::BANDS + b] as i64).sum::<i64>().abs() < 98));
+}
+
+#[test]
+fn model_file_is_checked() {
+    let bytes = read("voice/model.bin");
+    let model = model::Model::parse(&bytes).unwrap();
+    assert_eq!(model.classes.len(), phonemes::PHONES.len() + 1);
+    assert_eq!(model.class("sil"), Some(phonemes::PHONES.len()));
+    assert!(bytes.len() <= 3 << 20, "at most 3 MB");
+    let mut broken = bytes.clone();
+    broken[100] ^= 1;
+    assert_eq!(model::Model::parse(&broken).err(), Some(model::ModelError::Checksum));
+    assert_eq!(model::Model::parse(&bytes[..50]).err(), Some(model::ModelError::Checksum));
+    assert_eq!(model::Model::parse(b"MINDVOX2xxxxxxxx").err(), Some(model::ModelError::Magic));
+}
+
+#[test]
+fn grammar_fills_slots() {
+    let text = "slot tool: файлы = fm, editor = edit\nopen: открой {tool} | open {tool}\n# a comment\ntime: который час\n";
+    let g = grammar::Grammar::parse(text, &mut corpus::pronounce).unwrap();
+    let phrases: Vec<(&str, &str, Vec<(String, String)>)> = g.phrases.iter().map(|p| (p.text.as_str(), p.intent.as_str(), p.slots.clone())).collect();
+    assert_eq!(phrases.len(), 5);
+    assert_eq!(phrases[0], ("открой файлы", "open", vec![("tool".into(), "fm".into())]));
+    assert_eq!(phrases[3], ("open editor", "open", vec![("tool".into(), "edit".into())]));
+    assert_eq!(phrases[4], ("который час", "time", vec![]));
+    assert!(g.phrases[0].tokens.contains(&grammar::Token::Pause), "a pause may be between words");
+    assert!(matches!(grammar::Grammar::parse("open: открой {thing}", &mut corpus::pronounce), Err(grammar::GrammarError::UnknownSlot(1, _))));
+    assert!(matches!(grammar::Grammar::parse("no colon here", &mut corpus::pronounce), Err(grammar::GrammarError::Syntax(1, _))));
+    assert!(matches!(grammar::Grammar::parse("two words: x", &mut corpus::pronounce), Err(grammar::GrammarError::Syntax(1, _))));
+    // The real grammar reads.
+    let g = grammar::Grammar::parse(&grammar_text(), &mut corpus::pronounce).unwrap();
+    assert!(g.phrases.len() > 100 && g.phrases.iter().any(|p| p.text == "what time is it"));
+}
+
+#[test]
+fn recognizes_every_phrase_of_the_grammar() {
+    // Every phrase at three pitches and two rates in 20 dB noise (voices and noise unlike the training's seeds).
+    let r = recognizer();
+    let jobs: Vec<(usize, i64, i64, u64)> = (0..r.grammar.phrases.len()).flat_map(|i| [95, 122, 150].into_iter().flat_map(move |p| [85, 115].into_iter().map(move |rate| (i, p, rate, (i as u64) << 16 | (p as u64) << 8 | rate as u64)))).collect();
+    let results = parallel(jobs.clone(), |(i, pitch, rate, seed)| {
+        let heard = r.recognize(&noisy(&r.grammar.phrases[i].text, pitch, rate, seed)).unwrap();
+        heard.phrase().is_some_and(|p| r.grammar.phrases[p].intent == r.grammar.phrases[i].intent && r.grammar.phrases[p].slots == r.grammar.phrases[i].slots)
+    });
+    let right = results.iter().filter(|&&ok| ok).count();
+    let missed: Vec<String> = jobs.iter().zip(&results).filter(|(_, &ok)| !ok).map(|(j, _)| format!("{} @{}/{}", r.grammar.phrases[j.0].text, j.1, j.2)).collect();
+    println!("recognized {}/{}; missed: {:?}", right, results.len(), missed);
+    assert!(right * 100 >= results.len() * 90, "{}/{} recognized; missed {:?}", right, results.len(), missed);
+}
+
+/// Phrases outside the grammar, both languages, some close to commands.
+const OUTSIDE: [&str; 50] = [
+    "сегодня хорошая погода", "я люблю читать книги", "мама мыла раму", "где находится вокзал", "приходи завтра вечером", "открой дверь пожалуйста",
+    "покажи мне карту", "запусти двигатель", "сколько тебе лет", "который этаж", "какая сегодня погода", "помоги мне с задачей", "это очень интересно",
+    "давай пойдём гулять", "у меня есть кошка", "закрой окно", "повтори урок", "перезагрузи страницу", "нет худа без добра", "конец рабочего дня",
+    "солнце светит ярко", "поезд отправляется в пять", "чай остыл", "напиши письмо другу", "время идёт быстро",
+    "the weather is nice today", "i like reading books", "where is the station", "come back tomorrow", "open the door please", "show me the map",
+    "start the engine", "how old are you", "which floor is it", "help me with this", "this is interesting", "let us go for a walk", "i have a cat",
+    "close the window", "repeat the lesson", "restart the page", "the sun is bright", "the train leaves at five", "the tea is cold",
+    "write a letter", "time flies", "good morning everyone", "what a beautiful day", "turn left at the corner", "the quick brown fox",
+];
+
+#[test]
+fn rejects_phrases_outside_the_grammar() {
+    let r = recognizer();
+    let jobs: Vec<(usize, i64, i64)> = OUTSIDE.iter().enumerate().map(|(i, _)| (i, [95, 122, 150][i % 3], [85, 115][i % 2])).collect();
+    let results = parallel(jobs, |(i, pitch, rate)| { let heard = r.recognize(&noisy(OUTSIDE[i], pitch, rate, 1000 + i as u64)).unwrap(); (OUTSIDE[i], heard.phrase().map(|p| r.grammar.phrases[p].text.clone())) });
+    let accepted: Vec<_> = results.iter().filter(|(_, p)| p.is_some()).collect();
+    println!("accepted {} of {}: {:?}", accepted.len(), results.len(), accepted);
+    assert!(accepted.len() * 10 <= OUTSIDE.len(), "at most 10 % accepted: {:?}", accepted);
+}
+
+#[test]
+fn recognition_of_8_seconds_takes_under_a_second() {
+    let r = recognizer();
+    let mut samples = Vec::new();
+    while samples.len() < 8 * 16_000 { samples.extend(noisy("открой файловый менеджер и покажи процессы", 120, 100, 5)); }
+    samples.truncate(8 * 16_000);
+    let started = std::time::Instant::now();
+    let heard = r.recognize(&samples).unwrap();
+    let took = started.elapsed();
+    println!("8 s recognized in {:?} ({} frames)", took, heard.decoded.frames);
+    if !cfg!(debug_assertions) { assert!(took.as_secs_f64() < 1.0, "{:?}", took); }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "phonetics"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# Text to phonemes for Russian and English (letter-to-sound rules, a stress dictionary, an English lexicon) and the
+# phoneme set: shared by the speech synthesizer (tts) and the voice command recognizer (hear).
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

@@ -3,17 +3,17 @@
 version = 4
 
 [[package]]
+name = "hear"
+version = "0.1.0"
+dependencies = [
+ "libmind",
+ "phonetics",
+]
+
+[[package]]
 name = "libmind"
 version = "0.2.0"
 
 [[package]]
 name = "phonetics"
 version = "0.1.0"
-
-[[package]]
-name = "tts"
-version = "0.1.0"
-dependencies = [
- "libmind",
- "phonetics",
-]

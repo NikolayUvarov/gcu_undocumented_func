@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Builds tts/data/lexicon_en.txt: pronunciations of frequent English words from CMUdict (BSD, github.com/cmusphinx/cmudict).
+"""Builds phonetics/data/lexicon_en.txt: pronunciations of frequent English words from CMUdict (BSD, github.com/cmusphinx/cmudict).
 
 Selection uses a frequency list of "word count" lines (e.g. en_50k.txt from hermitdave/FrequencyWords): the first N words.
-Notation is the tts lexicon alphabet (tts/src/text.rs): a o u e i = vowels, @ = schwa, & = [æ], ' = stress before a vowel,
+Notation is the tts lexicon alphabet (phonetics/src/text.rs): a o u e i = vowels, @ = schwa, & = [æ], ' = stress before a vowel,
 I U A R = [ɪ ʊ ʌ ɝ], S Z C T D = [ʃ ʒ tʃ θ ð], j = [j], h = aspiration. Apostrophes are dropped from words (as the synthesizer reads them: don't -> dont).
     python3 scripts/lexicon_en.py cmudict.dict en_50k.txt [N]
 """
 from pathlib import Path
 import sys
 
-LEXICON = Path(__file__).resolve().parents[1] / "tts/data/lexicon_en.txt"
+LEXICON = Path(__file__).resolve().parents[1] / "phonetics/data/lexicon_en.txt"
 # ARPAbet -> tts alphabet; the synthesizer has no [ŋ]: n. Stressed AH = [ʌ], unstressed = schwa.
 PHONES = {
     "AA": "a", "AE": "&", "AH": "@", "AO": "o", "AW": "au", "AY": "aj", "EH": "e", "ER": "R", "EY": "ej", "IH": "I", "IY": "i",

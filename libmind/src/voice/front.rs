@@ -92,7 +92,7 @@ impl Source for Wav {
 // Soft-float helpers for the filter design (once per stream; `core` has no sin, sqrt).
 const PI: f64 = core::f64::consts::PI;
 
-fn sin(x: f64) -> f64 {
+pub(crate) fn sin(x: f64) -> f64 {
     let turns = (x / (2.0 * PI)) as i64; // no `%` for floats without libm
     let mut x = x - turns as f64 * 2.0 * PI;
     if x > PI { x -= 2.0 * PI } else if x < -PI { x += 2.0 * PI }

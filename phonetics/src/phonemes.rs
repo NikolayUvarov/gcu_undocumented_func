@@ -5,6 +5,24 @@ pub enum Ph { A, O, U, E, I, Y, Schwa, Ae, Ih, Uh, Ah, Er, J, W, L, R, M, N, P, 
 #[derive(Clone, Copy, Debug)]
 pub struct Unit { pub ph: Ph, pub soft: bool, pub stress: bool }
 
+/// The recognizer's phone alphabet (`mind::voice`): one name per phoneme, soft and hard consonants alike; pauses and
+/// the end of a phrase are silence, which has no name here.
+pub const PHONES: [&str; 37] = ["a", "o", "u", "e", "i", "y", "@", "&", "I", "U", "^", "3", "j", "w", "l", "r", "m", "n", "p", "b", "t", "d", "k", "g",
+                                "f", "v", "s", "z", "sh", "zh", "shch", "x", "h", "ts", "ch", "th", "dh"];
+
+impl Ph {
+    /// This phoneme's name in `PHONES`; None for a pause or the end of a phrase.
+    pub fn name(self) -> Option<&'static str> {
+        let index = match self {
+            Ph::A => 0, Ph::O => 1, Ph::U => 2, Ph::E => 3, Ph::I => 4, Ph::Y => 5, Ph::Schwa => 6, Ph::Ae => 7, Ph::Ih => 8, Ph::Uh => 9, Ph::Ah => 10, Ph::Er => 11,
+            Ph::J => 12, Ph::W => 13, Ph::L => 14, Ph::R => 15, Ph::M => 16, Ph::N => 17, Ph::P => 18, Ph::B => 19, Ph::T => 20, Ph::D => 21, Ph::K => 22, Ph::G => 23,
+            Ph::F => 24, Ph::V => 25, Ph::S => 26, Ph::Z => 27, Ph::Sh => 28, Ph::Zh => 29, Ph::Shch => 30, Ph::X => 31, Ph::H => 32, Ph::Ts => 33, Ph::Ch => 34,
+            Ph::Th => 35, Ph::Dh => 36, Ph::Pause(_) | Ph::End(_) => return None,
+        };
+        Some(PHONES[index])
+    }
+}
+
 impl Ph {
     pub fn vowel(self) -> bool { matches!(self, Ph::A | Ph::O | Ph::U | Ph::E | Ph::I | Ph::Y | Ph::Schwa | Ph::Ae | Ph::Ih | Ph::Uh | Ph::Ah | Ph::Er) }
     pub fn voiceless(self) -> bool { matches!(self, Ph::P | Ph::T | Ph::K | Ph::F | Ph::S | Ph::Sh | Ph::Shch | Ph::X | Ph::H | Ph::Ts | Ph::Ch | Ph::Th) }

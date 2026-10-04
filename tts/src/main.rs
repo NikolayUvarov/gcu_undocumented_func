@@ -3,9 +3,10 @@
 // tts: speech synthesis in ring 3. Text (UTF-8) arrives in a page shared by the client; speech is synthesized
 // by a 16 kHz formant synthesizer, upsampled to 48 kHz stereo and streamed to audio_gw.
 mod dsp;
-mod phonemes;
 mod synth;
-mod text;
+
+// Text to phonemes is shared with the voice recognizer (issue 078).
+use phonetics::{phonemes, text};
 
 use mind::abi::*;
 use mind::audio::Stream;

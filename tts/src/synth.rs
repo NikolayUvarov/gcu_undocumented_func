@@ -82,10 +82,15 @@ impl State {
 }
 
 /// Speaks phonemes; `sink` receives 16 kHz mono in chunks of up to 80 samples.
-pub fn speak(units: &[Unit], voice: Voice, sink: &mut dyn FnMut(&[i16])) {
+pub fn speak(units: &[Unit], voice: Voice, sink: &mut dyn FnMut(&[i16])) { speak_labeled(units, voice, &mut |chunk, _| sink(chunk)); }
+
+/// `speak`, telling for every chunk which unit it belongs to (its index in `units`): the phone labels the voice
+/// recognizer is trained with (scripts/voice_train.rs).
+pub fn speak_labeled(units: &[Unit], voice: Voice, sink: &mut dyn FnMut(&[i16], usize)) {
     let mut state = State::new();
     let base = voice.pitch.clamp(60, 300);
     for (index, unit) in units.iter().enumerate() {
+        let sink = &mut |chunk: &[i16]| sink(chunk, index);
         let rest = &units[index + 1..];
         let back = rest.iter().find(|u| u.ph.vowel()).is_some_and(|u| matches!(u.ph, Ph::A | Ph::O | Ph::U | Ph::Y | Ph::Uh | Ph::Ah));
         // The last vowel of a phrase is lengthened and carries the final intonation.

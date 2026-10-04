@@ -3,11 +3,11 @@
 #![allow(dead_code)]
 #[path = "../tts/src/dsp.rs"]
 mod dsp;
-#[path = "../tts/src/phonemes.rs"]
+#[path = "../phonetics/src/phonemes.rs"]
 mod phonemes;
 #[path = "../tts/src/synth.rs"]
 mod synth;
-#[path = "../tts/src/text.rs"]
+#[path = "../phonetics/src/text.rs"]
 mod text;
 
 fn main() {

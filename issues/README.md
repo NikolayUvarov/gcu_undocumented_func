@@ -19,8 +19,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [078](078-voice-command-recognizer.md) | Voice V1: offline command recognizer (`hear`) | tools | P1 | — (077 done) | track G |
-| [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | 078 | track G |
+| [079](079-voice-control-in-the-shell.md) | Voice V2: voice control in the shell (`voice`, intents, confirmations, spoken replies) | tools | P1 | — (078 done) | track G |
 | [087](087-tts-idle-tone.md) | `tts`: a quiet tone stays after every phrase (fixed-point limit cycle) | tools | P3 | — | track G |
 | [103](103-tls-service.md) | TLS service with non-exportable keys | network | P3 | — (102 done) | track D |
 | [105](105-multiple-network-cards.md) | Several network cards: driver instances per card, stack interfaces | network | P3 | — (101 done) | tracks A, D |
@@ -110,6 +109,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [075](../issues-done/075-stat-fields-for-the-monitors.done) | `STAT` fields the monitors lost in the merge (`STAT_VERSION` 2) | done (2026-10-04) |
 | [076](../issues-done/076-monitors-show-restored-stat-fields.done) | The monitors show the restored `STAT` fields (`sysinfo.wit` 2.0) | done (2026-10-04) |
 | [077](../issues-done/077-voice-audio-front-end.done) | Voice V0: audio front end (`mind::voice`, `listen --vad/--wav`) | done (2026-10-04) |
+| [078](../issues-done/078-voice-command-recognizer.done) | Voice V1: offline command recognizer (`hear`, `mind::voice` model and grammar) | done (2026-10-04) |
 | [080](../issues-done/080-ipc-tool.done) | `ipc`: endpoints, holders, wait-for graph | done (2026-10-04) |
 | [081](../issues-done/081-caps-tool.done) | `caps`: capabilities and the derivation tree (`sysinfo.wit` 3.0 authority) | done (2026-10-04) |
 | [082](../issues-done/082-find-and-grep.done) | `find` and `grep` | done (2026-10-04) |
