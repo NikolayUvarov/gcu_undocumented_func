@@ -4,7 +4,9 @@
 // which boot services start, in which order, and exactly which capabilities each one receives.
 use mind::abi::*;
 use mind::dev::cap_info;
-use mind::ipc::{self, Endpoint, Message};
+use mind::idl::{lifecycle, wire};
+use mind::ipc::{self, Endpoint};
+use mind::mem::Mapping;
 use mind::platform;
 use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::{Error, Result};
@@ -16,6 +18,13 @@ const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
+const RECEIVED: usize = 9; // the buffer a lifecycle request lends
+const INIT_PID: u64 = 1; // the kernel's first task
+// What each boot service holds, for `svc` (the grants below, in short).
+const HOLDS: [&str; BOOT_IMAGES] = ["platform and spawn privileges", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1; input",
+    "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA", "xHCI registers; 256 KiB DMA", "8 MiB of memory",
+    "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA", "an audio client", "observe privilege",
+    "screen; process control; input; COM1"];
 
 // Capabilities minted for one spawn; moved into the child, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -52,7 +61,7 @@ impl Grants {
 }
 
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself).
-struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES] }
+struct Init { pids: [u64; BOOT_IMAGES], dma: [Option<usize>; BOOT_IMAGES], keepers: [Option<usize>; BOOT_IMAGES], starts: [u32; BOOT_IMAGES] }
 
 impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
@@ -171,8 +180,63 @@ impl Init {
         let quota = if name == "loader" { Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 } } else { Quota::default() };
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(index), &grants.list[..grants.count], flags, quota)?;
         self.pids[index] = pid;
+        self.starts[index] += 1;
         mind::println!("[INIT] STARTED {} PID={}", name, pid);
         Ok(pid)
+    }
+}
+
+// The lifecycle interface (idl/lifecycle.wit): init is the lifecycle owner (roadmap C6). Stopping uses the process
+// control privilege init mints for itself; init and the shell are never stopped.
+impl Init {
+    fn index(name: &str) -> core::result::Result<usize, lifecycle::Error> {
+        BOOT_SERVICES.iter().position(|s| s.eq_ignore_ascii_case(name)).ok_or(lifecycle::Error::NotFound)
+    }
+    fn start_service(&mut self, index: usize) -> core::result::Result<u64, lifecycle::Error> {
+        if index == 0 || self.running(index) { return Err(lifecycle::Error::Running); }
+        match self.start(index) {
+            Ok(pid) => Ok(pid),
+            Err(Error::NotFound) => Err(lifecycle::Error::NoDevice),
+            Err(error) => { mind::println!("[INIT] {} FAILED: {:?}", BOOT_SERVICES[index], error); Err(lifecycle::Error::Failed) }
+        }
+    }
+    fn stop_service(&mut self, index: usize) -> core::result::Result<(), lifecycle::Error> {
+        if index == 0 || BOOT_SERVICES[index] == "shell" { return Err(lifecycle::Error::Denied); }
+        if !self.running(index) { return Err(lifecycle::Error::Stopped); }
+        let pid = self.pids[index];
+        mind::control::kill(pid).map_err(|_| lifecycle::Error::Failed)?;
+        for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
+        mind::println!("[INIT] STOPPED {} PID={}", BOOT_SERVICES[index], pid);
+        Ok(())
+    }
+    fn serve(&mut self, request: lifecycle::Request, bytes: &mut [u8]) -> mind::Result<()> {
+        use lifecycle::Request;
+        let name = |bytes: &[u8], payload| lifecycle::args_start(bytes, payload).map(|n| { let mut owned = [0u8; NAME_MAX]; let len = n.len().min(NAME_MAX); owned[..len].copy_from_slice(&n.as_bytes()[..len]); (owned, len) });
+        match request {
+            Request::List { .. } => {
+                let entries: [lifecycle::Service; BOOT_IMAGES] = core::array::from_fn(|i| lifecycle::Service {
+                    name: BOOT_SERVICES[i], pid: if i == 0 { INIT_PID } else { self.pids[i] }, starts: if i == 0 { 1 } else { self.starts[i] },
+                    running: i == 0 || self.running(i), holds: HOLDS[i] });
+                lifecycle::reply_list(bytes, Ok(&entries[..]))
+            }
+            Request::Start { payload, .. } | Request::Stop { payload, .. } | Request::Restart { payload, .. } => {
+                let (owned, len) = match name(bytes, payload) { Ok(n) => n, Err(reason) => return wire::reject(reason) };
+                let text = core::str::from_utf8(&owned[..len]).unwrap_or("");
+                let index = Self::index(text);
+                match request {
+                    Request::Start { .. } => lifecycle::reply_start(index.and_then(|i| self.start_service(i))),
+                    Request::Stop { .. } => lifecycle::reply_stop(index.and_then(|i| self.stop_service(i))),
+                    _ => lifecycle::reply_restart(index.and_then(|i| { if i == 0 || BOOT_SERVICES[i] == "shell" { return Err(lifecycle::Error::Denied); } if self.running(i) { self.stop_service(i)?; } self.start_service(i) })),
+                }
+            }
+            Request::StopTask { pid } => {
+                let service = pid == INIT_PID || (1..BOOT_IMAGES).any(|i| self.pids[i] == pid && self.running(i));
+                let result = if service { Err(lifecycle::Error::Denied) } else if !mind::process::alive(pid) { Err(lifecycle::Error::NotFound) } else {
+                    mind::control::kill(pid).map_err(|_| lifecycle::Error::NotFound)
+                };
+                lifecycle::reply_stop_task(result)
+            }
+        }
     }
 }
 
@@ -180,7 +244,7 @@ fn service_index(name: &str) -> usize { BOOT_SERVICES.iter().position(|s| *s == 
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES] };
+    let mut init = Init { pids: [0; BOOT_IMAGES], dma: [None; BOOT_IMAGES], keepers: [None; BOOT_IMAGES], starts: [0; BOOT_IMAGES] };
     // Boot order is the BOOT_SERVICES order: logd first, drivers before vfs_server, loader before the shell.
     for index in 1..BOOT_IMAGES {
         match init.start(index) {
@@ -195,17 +259,20 @@ fn main(_info: &'static BootInfo) {
         }
     }
     mind::println!("[INIT] READY");
-    // Requests from the shell: start a boot service by name (msg[2..4]).
+    // Process control, to stop services and applications on request (init is their lifecycle owner).
+    if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
+    // Lifecycle requests (idl/lifecycle.wit) from the shell and the programs it lends init's endpoint to.
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
-        if !request.is_call { continue; }
-        let (packed, len) = mind::process::unpack_name(request.data);
-        let index = BOOT_SERVICES.iter().position(|s| s.as_bytes().eq_ignore_ascii_case(&packed[..len]));
-        let code = match index.map(|index| init.start(index)) {
-            None => ERR_NOT_FOUND,
-            Some(Ok(pid)) => pid as usize,
-            Some(Err(error)) => error.code(),
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        let decoded = lifecycle::decode(&request, RECEIVED);
+        let mut mapping = if request.cap_received { Mapping::new(RECEIVED).ok() } else { None };
+        let mut empty = [0u8; 0];
+        let bytes: &mut [u8] = match mapping.as_mut() { Some(m) => m.as_mut_slice(), None => &mut empty };
+        let _ = match decoded {
+            Ok(call) => init.serve(call, bytes),
+            Err(reason) => wire::reject(reason),
         };
-        let _ = ipc::reply(&Message::new(code, 0));
+        drop(mapping);
+        if request.cap_received { let _ = ipc::drop_cap(RECEIVED); }
     }
 }

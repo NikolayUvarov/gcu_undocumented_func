@@ -35,7 +35,8 @@ fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
 }
 
 #[derive(Default)]
-struct Fake { tasks: Vec<Task>, now: u64, ranges: Vec<Range>, samples: Vec<Sample>, slow_requested: Vec<(bool, u16)>, vmap_requests: Vec<u64>, devices: Vec<Device>, irqs: Vec<Irq> }
+struct Fake { tasks: Vec<Task>, now: u64, ranges: Vec<Range>, samples: Vec<Sample>, slow_requested: Vec<(bool, u16)>, vmap_requests: Vec<u64>, devices: Vec<Device>, irqs: Vec<Irq>,
+              lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String> }
 
 impl Source for Fake {
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> { Ok(self.tasks.clone()) }
@@ -61,6 +62,18 @@ impl Source for Fake {
     }
     fn load(&mut self) -> Result<Load, Problem> { Ok(Load { one: 12, five: 8, fifteen: 1, uptime_ms: 3_723_000, fast_ms: 100, slow_ms: 1000, ..Load::default() }) }
     fn now_ns(&self) -> u64 { self.now }
+    fn stop(&mut self, task: &Task) -> Result<(), String> {
+        if !self.lifecycle { return Err(String::from(NO_LIFECYCLE)); }
+        if task.name == "init" { return Err(String::from("init and the shell cannot be stopped")); }
+        self.stopped.push(task.pid);
+        self.tasks.retain(|t| t.pid != task.pid);
+        Ok(())
+    }
+    fn restart(&mut self, name: &str) -> Result<u64, String> {
+        if !self.lifecycle { return Err(String::from(NO_LIFECYCLE)); }
+        self.restarted.push(name.into());
+        Ok(99)
+    }
 }
 
 fn system() -> Fake {
@@ -197,7 +210,8 @@ fn details_window_and_keys() {
     assert_eq!(top.key(code(KEY_ESC), &mut source), Flow::Redraw);
     assert!(top.details.is_none());
     top.key(chr('k'), &mut source);
-    assert!(top.notice.as_deref().unwrap().contains("KILL"));
+    assert!(top.status().ends_with("CONFIRM=STOP"));
+    top.key(code(KEY_ESC), &mut source);
     assert_eq!(top.key(chr('+'), &mut source), Flow::Redraw);
     assert_eq!(top.interval_ms(), 2000);
     top.key(chr('-'), &mut source);
@@ -206,6 +220,59 @@ fn details_window_and_keys() {
     assert_eq!(top.interval_ms(), 500);
     assert_eq!(top.key(chr('q'), &mut source), Flow::Quit);
     assert_eq!(top.key(code(KEY_ESC), &mut source), Flow::Quit);
+}
+
+#[test]
+fn stop_and_restart_through_init() {
+    let mut source = system();
+    source.lifecycle = true;
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    let _ = draw(&mut top, 100, 30);
+    top.key(chr('N'), &mut source);
+    top.key(code(KEY_END), &mut source);
+    top.key(code(KEY_UP), &mut source);
+    assert_eq!(top.selected_pid(), Some(12));
+    // r is for services; k asks first, and Cancel is the default.
+    top.key(chr('r'), &mut source);
+    assert!(top.notice.as_deref().unwrap().starts_with("Only boot services restart"));
+    top.key(chr('k'), &mut source);
+    assert!(top.status().ends_with("CONFIRM=STOP"), "{}", top.status());
+    let screen = draw(&mut top, 100, 30);
+    assert!(screen.iter().any(|l| l.contains("Stop busy (PID 12)?")) && screen.iter().any(|l| l.contains("[ Cancel ]")), "{:#?}", screen);
+    top.key(code(KEY_ENTER), &mut source);
+    assert!(source.stopped.is_empty() && top.confirm.is_none());
+    top.key(chr('k'), &mut source);
+    top.key(code(KEY_LEFT), &mut source);
+    assert_eq!(top.key(code(KEY_ENTER), &mut source), Flow::Refresh);
+    assert_eq!(source.stopped, [12]);
+    assert_eq!(top.notice.as_deref(), Some("busy (PID 12) stopped"));
+    top.refresh(&mut source).unwrap();
+    assert!(top.tasks.iter().all(|t| t.pid != 12));
+    // A service restarts.
+    top.key(code(KEY_HOME), &mut source);
+    top.key(code(KEY_DOWN), &mut source);
+    assert_eq!(top.selected_pid(), Some(5));
+    top.key(chr('r'), &mut source);
+    assert!(top.status().ends_with("CONFIRM=RESTART"));
+    let screen = draw(&mut top, 100, 30);
+    assert!(screen.iter().any(|l| l.contains("Restart loader (PID 5)?")), "{:#?}", screen);
+    top.key(code(KEY_LEFT), &mut source);
+    top.key(code(KEY_ENTER), &mut source);
+    assert_eq!(source.restarted, ["loader"]);
+    assert_eq!(top.notice.as_deref(), Some("loader restarted as PID 99"));
+    // init refuses; without a lifecycle client the reason is shown.
+    top.key(code(KEY_HOME), &mut source);
+    top.key(chr('k'), &mut source);
+    top.key(code(KEY_LEFT), &mut source);
+    top.key(code(KEY_ENTER), &mut source);
+    assert_eq!(top.notice.as_deref(), Some("Stop init: init and the shell cannot be stopped"));
+    source.lifecycle = false;
+    top.key(code(KEY_DOWN), &mut source);
+    top.key(chr('k'), &mut source);
+    top.key(code(KEY_LEFT), &mut source);
+    top.key(code(KEY_ENTER), &mut source);
+    assert!(top.notice.as_deref().unwrap().ends_with(NO_LIFECYCLE), "{:?}", top.notice);
 }
 
 #[test]

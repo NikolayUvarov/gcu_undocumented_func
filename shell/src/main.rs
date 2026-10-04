@@ -11,7 +11,7 @@ use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_event, Ports};
-use mind::idl::{loader, wire};
+use mind::idl::{lifecycle, loader, wire};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
 use mind::ipc::{Endpoint, Message};
@@ -111,12 +111,19 @@ impl Shell {
     // Boot services are (re)started by init. Applications are started by the loader in a launch session: the shell, as
     // the user's agent, gives a program what it asks for in its ELF and the shell itself holds (MC-3.11): a sysmon
     // client for `REQUEST_SYSINFO`, its own VFS client (writes on `ram:` and in `data/`) for `REQUEST_FILE`, its log
-    // client (reads the system log) for `REQUEST_LOG`. Nothing is granted by program name.
+    // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`.
+    // Nothing is granted by program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> {
         if service {
             if !args.is_empty() { return Err(Error::Invalid); }
-            let words = mind::process::pack_name(name).ok_or(Error::Invalid)?;
-            return Endpoint::INIT.call(&Message::new(words[0], words[1]), 0).and_then(|reply| mind::sys::check(reply.data[0])).map(|pid| pid as u64);
+            let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
+            let shared = self.shared.as_mut().ok_or(Error::NoMemory)?;
+            return match lifecycle::start(Endpoint::INIT, shared.buffer(), name)? {
+                Ok(pid) => Ok(pid),
+                Err(lifecycle::Error::Running) => Err(Error::Other(ERR_BUSY)),
+                Err(lifecycle::Error::NotFound | lifecycle::Error::NoDevice) => Err(Error::NotFound),
+                Err(_) => Err(Error::Invalid),
+            };
         }
         let name = core::str::from_utf8(name).map_err(|_| Error::Invalid)?;
         let args = core::str::from_utf8(args).map_err(|_| Error::Invalid)?;
@@ -128,7 +135,7 @@ impl Shell {
         let needs = loader::inspect(Endpoint::LOADER, shared.buffer(), name)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, shared.buffer(), name, args)?.map_err(failed)?;
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
-        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG)] {
+        for (asked, slot, cap) in [(needs.sysinfo, SLOT_SYSINFO, SLOT_SYSINFO), (needs.file, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG), (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT)] {
             if !asked { continue; }
             if let Err(error) | Ok(Err(error)) = lend(slot, cap) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }

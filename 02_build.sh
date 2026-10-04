@@ -81,6 +81,7 @@ USER_CRATES=(
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
     "dmesg:dmesg:dmesg.elf"
+    "svc:svc:svc.elf"
     "beep:beep:beep.elf"
 )
 

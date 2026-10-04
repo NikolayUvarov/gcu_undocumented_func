@@ -18,7 +18,6 @@
 | [009](009-gop-pixel-format.md) | Honour `PixelFormat` and select a GOP mode | bug/robustness | medium | — | Stage I |
 | [011](011-reproducible-toolchain.md) | Reproducible build: `rust-toolchain.toml`, `Cargo.lock`, workspace | infra | low | — | Track C (can start now) |
 | [018](018-kernel-panic-diagnostics.md) | Kernel panic prints message and location | robustness | medium | — | Assurance |
-| [050](050-svc-lifecycle.md) | `svc` and lifecycle control | feature | P1 | 038; C6 | G, C6 |
 | [051](051-scoped-file-grants.md) | Scoped file grants for launched programs | security/architecture | P1 | — | G (tools F7) |
 
 ## Finished tasks (`issues-done/`)
@@ -71,5 +70,6 @@
 | [047](../issues-done/047-editor.done) | Editor `edit` | edit: piece table with undo, search/replace, menu and dialogs; saves via name.tmp; REQUEST_FILE lends the user's VFS client |
 | [048](../issues-done/048-fm-write-df-fsck.done) | `fm` write operations, `df`, `fsck` | fm: copy/move/mkdir/delete jobs on A: and ram:, built-in editor; df; fsck (vfs.wit 2.1 check) |
 | [049](../issues-done/049-logd-dmesg.done) | `logd` and `dmesg` | logd: ring with stamped sources, rate limit, read badge; println lines of services go there; dmesg; logger |
+| [050](../issues-done/050-svc-lifecycle.done) | `svc` and lifecycle control | lifecycle.wit served by init; svc; top stops and restarts |
 
 Issues 032–050 implement the [system tools plan](../docs/tools/README.md). Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

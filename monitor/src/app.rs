@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
-use mind::idl::{sysinfo, wire};
+use mind::idl::{lifecycle, sysinfo, wire};
 use mind::ipc::Endpoint;
 use mind::tui::widgets::message;
 use mind::tui::{Terminal, DARK};
@@ -29,7 +29,29 @@ impl Client {
     pub fn new() -> Option<Self> { wire::Shared::new(32 * 1024).ok().map(|shared| Self { shared }) }
 }
 
+// A reply of init's lifecycle interface as text for the notice line.
+fn lifecycle_error(error: lifecycle::Error) -> String {
+    String::from(match error {
+        lifecycle::Error::NotFound => "no such task", lifecycle::Error::Running => "it runs already", lifecycle::Error::Stopped => "it does not run",
+        lifecycle::Error::Denied => "init and the shell cannot be stopped", lifecycle::Error::NoDevice => "its device is missing", lifecycle::Error::Failed => "init could not do it",
+    })
+}
+
+fn lifecycle_call<T>(reply: mind::Result<core::result::Result<T, lifecycle::Error>>) -> Result<T, String> {
+    match reply {
+        Ok(result) => result.map_err(lifecycle_error),
+        Err(mind::Error::Invalid) | Err(mind::Error::Rights) => Err(String::from(NO_LIFECYCLE)),
+        Err(error) => Err(alloc::format!("init did not answer ({:?})", error)),
+    }
+}
+
+const LIFECYCLE: Endpoint = Endpoint(mind::abi::SLOT_LIFECYCLE);
+
 impl Source for Client {
+    fn stop(&mut self, task: &Task) -> Result<(), String> {
+        if task.service() { lifecycle_call(lifecycle::stop(LIFECYCLE, self.shared.buffer(), &task.name)) } else { lifecycle_call(lifecycle::stop_task(LIFECYCLE, task.pid)) }
+    }
+    fn restart(&mut self, name: &str) -> Result<u64, String> { lifecycle_call(lifecycle::restart(LIFECYCLE, self.shared.buffer(), name)) }
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> {
         let list = take(sysinfo::tasks(Endpoint::SYSINFO, self.shared.buffer()))?;
         Ok(list.iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sent, received: t.received, started_ns: t.started_ns,

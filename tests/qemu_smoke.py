@@ -1354,7 +1354,65 @@ def services_suite(vm):
     require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
-    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs, the system log", flush=True)
+    lifecycle_check(vm)
+    print("PASS: boot services, monotonic clock, single instances, IPC call/reply with memory caps, peer death, VFS list/read over ATA driver + FAT, programs loaded from disk by loader, service restart for existing clients, reclaim, launch sessions with requested capabilities, console programs, the system log, lifecycle control (svc, top)", flush=True)
+
+
+def lifecycle_check(vm):
+    """init's lifecycle interface (idl/lifecycle.wit): svc lists, restarts, stops and starts services, refuses init and
+    the shell; clients reach a restarted service; top stops an application after asking."""
+    import datetime
+    pids = vm.services()
+    listing = vm.command("svc", raw=True)
+    require(listing, "SERVICE         PID  STARTS  STATE    HOLDS")
+    assert re.search(r"^init\s+1\s+1\s+running\s+platform and spawn privileges$", listing, re.M), listing
+    assert re.search(fr"^logd\s+{pids['logd']}\s+1\s+running\s+observe privilege$", listing, re.M), listing
+    assert re.search(r"^ahci\s+0\s+0\s+stopped\s+AHCI registers", listing, re.M), listing
+    # A restarted rtc: a new PID, one more start, and the shell's client reaches it.
+    starts = int(re.search(r"^rtc\s+\d+\s+(\d+)", listing, re.M)[1])
+    # (the harness shows new PIDs as ordinals: add BASE for the real one)
+    new = int(re.search(r"rtc restarted: PID (\d+)", vm.command("svc restart rtc"))[1]) + BASE
+    assert new != pids["rtc"] and new == vm.services()["rtc"], (new, pids)
+    assert re.search(fr"^rtc\s+{new}\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
+    today = datetime.date.today()
+    date = vm.command("date")
+    assert any(f"DATE: {d.isoformat()} " in date for d in (today, today - datetime.timedelta(days=1), today + datetime.timedelta(days=1))), date
+    # Stop and start; what may not be stopped; a missing device; usage.
+    require(vm.command("svc stop shell"), "svc: stop shell: init and the shell cannot be stopped")
+    require(vm.command("svc stop init"), "svc: stop init: init and the shell cannot be stopped")
+    require(vm.command("svc stop tts"), "tts stopped")
+    assert "tts" not in vm.services()
+    require(vm.command("svc stop tts"), "svc: stop tts: it does not run")
+    require(vm.command("svc start tts"), "tts started: PID")
+    require(vm.command("svc start tts"), "svc: start tts: it runs already")
+    require(vm.command("svc start ahci"), "svc: start ahci: its device is missing")
+    require(vm.command("svc restart nothing"), "svc: restart nothing: no such service or task")
+    require(vm.command("svc stop 1"), "svc: stop 1: init and the shell cannot be stopped")
+    require(vm.command("svc frobnicate"), "usage: svc")
+    # An application stopped by PID, and one stopped from top (k, then Stop).
+    first = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) + BASE
+    require(vm.command(f"svc stop {first}", raw=True), f"{first} stopped")
+    assert first - BASE not in task_rows(vm)
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) + BASE
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    vm.send("N")
+    vm.expect("[TOP] SORT=PID")
+    vm.send_bytes(b"\x1b[F")  # End: top itself, the newest task
+    status_line(vm, "SORT=PID", raw=True)
+    vm.send_bytes(b"\x1b[A")
+    assert f"SELECTED={clock} " in status_line(vm, "SORT=PID", raw=True)
+    vm.send("k")
+    assert "CONFIRM=STOP" in status_line(vm, "SORT=PID", raw=True)
+    vm.send_bytes(b"\x1b[D")
+    status_line(vm, "CONFIRM=STOP", raw=True)
+    vm.send_bytes(b"\r")
+    assert "CONFIRM=NONE" in status_line(vm, "SORT=PID", raw=True)
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert not re.search(fr"^{clock} clock ", vm.command("ps", raw=True), re.M)
+    require(vm.command("dmesg -s init"), f"[INIT] STOPPED rtc PID={pids['rtc'] - BASE}")
 
 
 def dmesg_check(vm):

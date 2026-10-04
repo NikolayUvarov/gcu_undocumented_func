@@ -81,7 +81,14 @@ pub trait Source {
     fn load(&mut self) -> Result<Load, Problem>;
     /// Monotonic nanoseconds (the kernel's clock: the same base as `Task::started_ns`).
     fn now_ns(&self) -> u64;
+    /// Stops a task through init's lifecycle interface (idl/lifecycle.wit): a service by name, an application by PID.
+    fn stop(&mut self, _task: &Task) -> Result<(), String> { Err(String::from(NO_LIFECYCLE)) }
+    /// Restarts a service through init; returns its new PID.
+    fn restart(&mut self, _name: &str) -> Result<u64, String> { Err(String::from(NO_LIFECYCLE)) }
 }
+
+/// What stop and restart say without a lifecycle client.
+pub const NO_LIFECYCLE: &str = "no lifecycle control: start the tool from the shell";
 
 /// What a key did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

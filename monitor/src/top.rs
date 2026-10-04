@@ -3,7 +3,7 @@ use crate::abi::*;
 use crate::keys::{Code, Key};
 use crate::model::*;
 use crate::text;
-use crate::tui::widgets::{dialog, ListState};
+use crate::tui::widgets::{buttons_key, dialog, message, ListState};
 use crate::tui::{Grid, Style, Theme};
 use alloc::format;
 use alloc::string::String;
@@ -46,6 +46,9 @@ pub struct Top {
     pub notice: Option<String>,
     online: usize,
     height: usize, // table rows on screen at the last draw
+    /// k or r asked for: (restart, PID, name, service) and the selected button.
+    pub confirm: Option<(bool, u64, String, bool)>,
+    choice: usize,
 }
 
 impl Default for Top { fn default() -> Self { Self::new() } }
@@ -54,7 +57,7 @@ impl Top {
     pub fn new() -> Self {
         Self { tasks: Vec::new(), usage: Vec::new(), previous: Vec::new(), previous_ns: 0, busy: Vec::new(), memory: Memory::default(), load: Load::default(),
                rates: Rates::default(), sort: Sort::Cpu, hide_services: false, tree: false, list: ListState::default(), selected: None, details: None,
-               interval_ms: 1000, notice: None, online: 0, height: 10 }
+               interval_ms: 1000, notice: None, online: 0, height: 10, confirm: None, choice: 1 }
     }
 
     /// New task records at `now_ns`: CPU use and syscall rate from the deltas since the previous ones; a task seen
@@ -251,9 +254,13 @@ impl Tool for Top {
                 x += width + 1;
             }
         }
-        let hint = self.notice.clone().unwrap_or_else(|| String::from("P/M/N/T sort  S services  t tree  Enter details  +/- interval  q quit"));
+        let hint = self.notice.clone().unwrap_or_else(|| String::from("P/M/N/T sort  S services  t tree  Enter details  k stop  r restart  +/- interval  q quit"));
         grid.fill(crate::tui::Rect::new(0, h - 1, w, 1), ' ', theme.status);
         grid.text(1, h - 1, &hint, theme.status);
+        if let Some((restart, pid, name, _)) = &self.confirm {
+            let line = format!("{} {} (PID {})?", if *restart { "Restart" } else { "Stop" }, name, pid);
+            message(grid, if *restart { "Restart" } else { "Stop" }, &[line.as_str()], &[if *restart { "Restart" } else { "Stop" }, "Cancel"], self.choice, theme);
+        }
         if let Some(details) = &self.details {
             let lines = Self::details_lines(details, self.previous_ns);
             let width = (lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) + 4).min(w);
@@ -264,6 +271,20 @@ impl Tool for Top {
 
     fn key(&mut self, key: Key, source: &mut dyn Source) -> Flow {
         self.notice = None;
+        if let Some((restart, pid, name, _)) = self.confirm.clone() {
+            match buttons_key(key, &mut self.choice, 2) {
+                Some(Some(0)) => {
+                    self.confirm = None;
+                    let result = if restart { source.restart(&name).map(|new| format!("{} restarted as PID {}", name, new)) } else {
+                        match self.tasks.iter().find(|t| t.pid == pid).cloned() { Some(task) => source.stop(&task).map(|_| format!("{} (PID {}) stopped", name, pid)), None => Err(String::from("it is gone")) }
+                    };
+                    self.notice = Some(result.unwrap_or_else(|error| format!("{} {}: {}", if restart { "Restart" } else { "Stop" }, name, error)));
+                    return Flow::Refresh;
+                }
+                Some(_) => { self.confirm = None; return Flow::Redraw; }
+                None => return Flow::Redraw,
+            }
+        }
         if self.details.is_some() {
             if matches!(key.code(), Code::Esc | Code::Enter) || matches!(key.latin(), Some('q')) || key.code() == Code::F(10) { self.details = None; return Flow::Redraw; }
             return Flow::Ignored;
@@ -285,8 +306,12 @@ impl Tool for Top {
             Some('s') | Some('S') => { self.hide_services = !self.hide_services; self.follow(); Flow::Redraw }
             Some('+') | Some('=') => { self.interval_ms = INTERVALS.iter().copied().find(|&i| i > self.interval_ms).unwrap_or(self.interval_ms); Flow::Redraw }
             Some('-') => { self.interval_ms = INTERVALS.iter().rev().copied().find(|&i| i < self.interval_ms).unwrap_or(self.interval_ms); Flow::Redraw }
-            Some('k') | Some('K') | Some('r') | Some('R') => {
-                self.notice = Some(String::from("Use KILL <pid> in the shell; stop and restart through init come with the lifecycle interface"));
+            Some(c @ ('k' | 'K' | 'r' | 'R')) => {
+                let restart = c.eq_ignore_ascii_case(&'r');
+                let Some(task) = self.selected.and_then(|pid| self.tasks.iter().find(|t| t.pid == pid)) else { return Flow::Ignored };
+                if restart && !task.service() { self.notice = Some(String::from("Only boot services restart; k stops an application")); return Flow::Redraw; }
+                self.confirm = Some((restart, task.pid, task.name.clone(), task.service()));
+                self.choice = 1; // Cancel unless chosen
                 Flow::Redraw
             }
             _ => Flow::Ignored,
@@ -297,7 +322,8 @@ impl Tool for Top {
 
     fn status(&self) -> String {
         let sort = match self.sort { Sort::Cpu => "CPU", Sort::Memory => "MEM", Sort::Pid => "PID", Sort::Time => "TIME" };
-        format!("SORT={} TREE={} HIDE={} SELECTED={} DETAILS={} ROWS={}", sort, self.tree as u8, self.hide_services as u8, self.selected.unwrap_or(0),
-                self.details.as_ref().map_or(0, |d| d.task.pid), self.rows().len())
+        let confirm = match &self.confirm { None => "NONE", Some((true, ..)) => "RESTART", Some((false, ..)) => "STOP" };
+        format!("SORT={} TREE={} HIDE={} SELECTED={} DETAILS={} ROWS={} CONFIRM={}", sort, self.tree as u8, self.hide_services as u8, self.selected.unwrap_or(0),
+                self.details.as_ref().map_or(0, |d| d.task.pid), self.rows().len(), confirm)
     }
 }

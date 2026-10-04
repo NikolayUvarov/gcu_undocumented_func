@@ -141,7 +141,7 @@ pub const SLOT_CONTROL: usize = 7;
 pub const SLOT_INPUT: usize = 8;
 pub const SLOT_SERIAL: usize = 9;
 // Capabilities a launcher grants on request (the shell holds them; loader v1 passes them on): system information
-// from sysmon, and (later) service lifecycle control.
+// from sysmon, and lifecycle control (a client of init, idl/lifecycle.wit).
 pub const SLOT_SYSINFO: usize = 10;
 pub const SLOT_LIFECYCLE: usize = 11;
 // For `REQUEST_FILE`: the launcher's own VFS client (the shell's may write on `ram:` and in `data/`), so a program
@@ -216,8 +216,8 @@ pub const VFS_ENTRY_DIR: u8 = 1; pub const VFS_ENTRY_HIDDEN: u8 = 2; pub const V
 pub const LOADER_LIST: usize = 2;
 // With msg[2] = 0 and msg[3] = LOADER_RUN the capability is a memory page with `name\0arguments\0`: start with arguments.
 pub const LOADER_RUN: usize = 1;
-// init: CALL on SLOT_INIT with the service name in msg[2..4] starts that boot service; reply msg[2] = PID,
-// ERR_BUSY if it is running, ERR_NOT_FOUND if there is no such service.
+// init serves the lifecycle of boot services and applications on its endpoint (idl/lifecycle.wit): list, start, stop,
+// restart, stop an application. The shell holds a client in SLOT_INIT and lends it in SLOT_LIFECYCLE.
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
 // index (boot images need the platform privilege), msg[1] = ELF length, msg[2] = address of a Grant array,
