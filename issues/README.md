@@ -27,7 +27,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
-| [159](159-shared-interrupt-lines.md) | Shared interrupt lines reach every driver on them (AC97 and the network card share line 11) | kernel | P2 | — | stage II |
 | [200](200-architecture-layer.md) | Architecture layer in the kernel and libmind (x86-64 first, no change in behavior) | porting | P2 | — | track H |
 | [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | 200 | track H |
 | [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
@@ -144,6 +143,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [154](../issues-done/154-push-to-talk-routing.done) | Push-to-talk routing: keys taken from the focused program for a listener (`INPUT_LISTEN`) | done (2026-10-05) |
 | [156](../issues-done/156-ps2-mouse.done) | PS/2 mouse: pointer events for the focused program | done (2026-10-04) |
 | [157](../issues-done/157-window-broker.done) | `windows`: window broker, windows that outlive the window manager | done (2026-10-04) |
+| [159](../issues-done/159-shared-interrupt-lines.done) | Shared interrupt lines reach every driver on them | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 

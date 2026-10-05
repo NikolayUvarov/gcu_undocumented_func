@@ -11,7 +11,7 @@
 | Memory object | Objects and freed-but-referenced blocks: 256 MiB in total for `MEM_DETACH` | `MEM_DETACH`; `FREE` of a block others still hold | Frame pool; charged to the detaching or freeing task's memory quota while it lives; after it exits, to nobody (bounded by the 256 MiB total) |
 | Frame pool | The free conventional RAM below 4 GiB in the firmware map, up to 16 ranges (about 400 MiB in a 512 MiB QEMU machine) | Kernel at boot (issue 150) | Task memory: images, stacks, screens, heap blocks, memory objects |
 | DMA region | 8 MiB in total, 64 KiB aligned; kept for the platform's lifetime | `PLATFORM_CAP(PLATFORM_DMA)` (init) | Kernel heap |
-| IRQ binding | One endpoint per line 1–15 (not 2) | `IRQ_BIND` | Fixed table |
+| IRQ binding | Up to 4 endpoints per line 1–15 (not 2) and per MSI-X vector: shared PCI lines reach every bound driver, the line stays masked until all have acknowledged; a binder that ends is dropped | `IRQ_BIND` | Fixed table |
 | Input queue | 64 event words per task (key, modifiers, press/release, character, legacy byte), oldest dropped | `INPUT_EVENT` | Per task |
 | Log and console queues | 4096 bytes each per task, oldest dropped; the unread console output of the last focused or screenless task that exited is kept until the next such exit | `LOG` | Per task |
 | Fault records | 16, ring buffer | User exceptions | Global |

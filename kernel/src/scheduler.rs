@@ -82,6 +82,10 @@ struct Task {
     // the task that pays above it (its spawner, or the spawner's payer once the spawner ended; MC-3.13, issue 150).
     memory_quota: usize, memory_tree: usize, payer: Option<(usize, u64)>,
 }
+// A driver bound to an interrupt line (IRQ_BIND): its endpoint, the binder, an interrupt it has not received yet, and
+// one it has not acknowledged. A shared line stays masked until every binder acknowledged (issue 159).
+#[derive(Clone, Copy, PartialEq)]
+struct IrqBinding { ep: usize, slot: usize, pid: u64, pending: bool, unacked: bool }
 // An INPUT_LISTEN registration: the key and modifiers, the listening task, and whether a taken press awaits release.
 #[derive(Clone, Copy)]
 struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
@@ -94,7 +98,7 @@ struct Scheduler {
     listeners: [Option<Listener>; INPUT_LISTENERS], // keys taken out of the focused stream (INPUT_LISTEN)
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
-    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
+    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -132,7 +136,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -369,9 +373,15 @@ impl Scheduler {
         }
         // The IRQ binding is removed once nobody owns the line capability anymore.
         for irq in 0..LINES {
-            if self.irq_bind[irq].is_some() && !self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.contains(&Some(Capability::Interrupt(irq as u8)))) {
-                self.irq_bind[irq] = None; self.irq_pending[irq] = false; unsafe { interrupts::set_irq_masked(irq as u8, true); }
+            // A binder that ended no longer holds the line back.
+            let mut changed = false;
+            for i in 0..IRQ_SHARERS {
+                if let Some(b) = self.irq_bind[irq][i] { if !self.tasks[b.slot].as_ref().is_some_and(|t| t.pid == b.pid && t.state != State::Exited) { self.irq_bind[irq][i] = None; changed = true; } }
             }
+            let bound = self.irq_bind[irq].iter().any(Option::is_some);
+            if (bound || changed) && !self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.contains(&Some(Capability::Interrupt(irq as u8)))) {
+                self.irq_bind[irq] = [None; IRQ_SHARERS]; self.irq_pending[irq] = false; unsafe { interrupts::set_irq_masked(irq as u8, true); }
+            } else if changed && bound && self.irq_bind[irq].iter().flatten().all(|b| !b.unacked) { unsafe { interrupts::set_irq_masked(irq as u8, false); } }
         }
         for region in released { let _ = self.retire(region, None); }
         // Nothing is freed while a CPU may still hold a stale translation of revoked memory.
@@ -388,7 +398,7 @@ impl Scheduler {
         if self.orphans.is_empty() && self.orphans.capacity() != 0 { self.orphans = Vec::new(); } // an empty list holds no heap memory
         let mut used = [false; ENDPOINTS]; used[..FIRST_ENDPOINT].fill(true);
         for task in self.tasks.iter().flatten() { for cap in task.cspace.iter().flatten().chain(task.pending_cap.as_ref().map(|p| &p.cap)) { if let Capability::Endpoint(id, _, _) = cap { used[*id] = true; } } }
-        for ep in self.irq_bind.iter().flatten() { used[*ep] = true; }
+        for b in self.irq_bind.iter().flatten().flatten() { used[b.ep] = true; }
         for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
         self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
         self.endpoints = used;
@@ -551,7 +561,7 @@ impl Scheduler {
     fn blocked(&self, state: State) -> Option<usize> { (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
     // Someone alive can still receive on the endpoint (otherwise a send would wait forever).
     fn receivable(&self, ep: usize) -> bool {
-        self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))) || self.irq_bind.contains(&Some(ep))
+        self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
     }
 
     // Delivers the message of a blocked or current sender to the receiver.
@@ -591,8 +601,14 @@ impl Scheduler {
     // Line interrupt: already masked; wakes the driver or records the event.
     unsafe fn raise_irq(&mut self, irq: usize) {
         self.accounting.irqs[irq] += 1;
-        if let Some(ep) = self.irq_bind[irq] {
-            if let Some(receiver) = self.blocked(State::BlockedRecv(ep)) { self.notify_irq(receiver, irq); } else { self.irq_pending[irq] = true; }
+        // Every driver on a shared line hears it; the line stays masked until each has acknowledged.
+        if self.irq_bind[irq].iter().any(Option::is_some) {
+            for i in 0..IRQ_SHARERS {
+                let Some(mut b) = self.irq_bind[irq][i] else { continue };
+                b.unacked = true;
+                if let Some(receiver) = self.blocked(State::BlockedRecv(b.ep)) { self.notify_irq(receiver, irq); } else { b.pending = true; }
+                self.irq_bind[irq][i] = Some(b);
+            }
             return;
         }
         let mut woken = false;
@@ -624,7 +640,8 @@ impl Scheduler {
     unsafe fn ipc_recv(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox) -> Result<Option<usize>, usize> {
         let Some(Capability::Endpoint(ep, rights, _)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
-        if let Some(irq) = (0..LINES).find(|&i| self.irq_bind[i] == Some(ep) && self.irq_pending[i]) { self.irq_pending[irq] = false; self.notify_irq(slot, irq); return Ok(None); }
+        let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
+        if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
@@ -988,7 +1005,7 @@ impl Scheduler {
                 }
             }
             SYSCALL_IRQ_WAIT => match self.cap(slot, request.arg1) {
-                Some(Capability::Interrupt(irq)) if self.irq_bind[irq as usize].is_none() => {
+                Some(Capability::Interrupt(irq)) if self.irq_bind[irq as usize].iter().all(Option::is_none) => {
                     interrupts::set_irq_masked(irq, false);
                     if core::mem::take(&mut self.irq_pending[irq as usize]) { Ok(0) } else {
                         core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), 0);
@@ -998,10 +1015,29 @@ impl Scheduler {
                 _ => Err(ERR_RIGHTS),
             },
             SYSCALL_IRQ_BIND => match (self.cap(slot, request.arg1), self.cap(slot, request.arg2)) {
-                (Some(Capability::Interrupt(irq)), Some(Capability::Endpoint(ep, rights, _))) if rights & CAP_READ != 0 => { self.irq_bind[irq as usize] = Some(ep); interrupts::set_irq_masked(irq, false); Ok(0) }
+                (Some(Capability::Interrupt(irq)), Some(Capability::Endpoint(ep, rights, _))) if rights & CAP_READ != 0 => {
+                    // A binder binds again in place (a restart reuses its slot); up to IRQ_SHARERS drivers share a line.
+                    let line = &mut self.irq_bind[irq as usize]; let pid = task.pid;
+                    match line.iter().position(|b| b.is_some_and(|b| b.slot == slot && b.pid == pid)).or_else(|| line.iter().position(Option::is_none)) {
+                        Some(i) => {
+                            line[i] = Some(IrqBinding { ep, slot, pid, pending: false, unacked: false });
+                            if line.iter().flatten().all(|b| !b.unacked) { interrupts::set_irq_masked(irq, false); }
+                            Ok(0)
+                        }
+                        None => Err(ERR_NO_SLOT),
+                    }
+                }
                 _ => Err(ERR_RIGHTS),
             },
-            SYSCALL_IRQ_ACK => match self.cap(slot, request.arg1) { Some(Capability::Interrupt(irq)) => { interrupts::set_irq_masked(irq, false); Ok(0) } _ => Err(ERR_RIGHTS) },
+            SYSCALL_IRQ_ACK => match self.cap(slot, request.arg1) {
+                Some(Capability::Interrupt(irq)) => {
+                    let pid = task.pid;
+                    for b in self.irq_bind[irq as usize].iter_mut().flatten() { if b.slot == slot && b.pid == pid { b.unacked = false; } }
+                    if self.irq_bind[irq as usize].iter().flatten().all(|b| !b.unacked) { interrupts::set_irq_masked(irq, false); }
+                    Ok(0)
+                }
+                _ => Err(ERR_RIGHTS),
+            },
             SYSCALL_INPUT_EVENT => {
                 // Only a holder of the input capability (keyboard driver, shell for the UART) may inject input.
                 if !self.holds(slot, Capability::Input) { Err(ERR_RIGHTS) } else {

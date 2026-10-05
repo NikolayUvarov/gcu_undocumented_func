@@ -9,7 +9,7 @@ Reported by the user: `say "text"` speaks the phrase, then its window stays and 
 ## Plan
 
 - `audio_gw` must not depend on its interrupt to make progress: while a client waits, look at the ring every 20 ms, clear what is pending and answer whoever has room.
-- The kernel's side — every driver on a shared line gets the interrupt — is kernel issue [159](../issues/159-shared-interrupt-lines.md).
+- The kernel's side — every driver on a shared line gets the interrupt — is kernel issue [159](159-shared-interrupt-lines.done).
 
 ## Acceptance criteria
 
@@ -24,4 +24,4 @@ Reported by the user: `say "text"` speaks the phrase, then its window stays and 
 
 ## Related
 
-[159](../issues/159-shared-interrupt-lines.md) (kernel), [017](017-tts-on-audio-gateway.done).
+[159](159-shared-interrupt-lines.done) (kernel), [017](017-tts-on-audio-gateway.done).

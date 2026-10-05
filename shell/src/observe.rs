@@ -71,7 +71,10 @@ pub fn irqs(out: &mut impl Write) {
     let mut buffer = [0u8; 1024];
     let Ok(records) = stat::read(STAT_IRQS, 0, &mut buffer) else { return };
     for i in records.iter::<StatIrq>() {
-        let _ = writeln!(out, "IRQ={} COUNT={} HOLDER={} HOLDERS={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.holders, i.endpoint, i.masked != 0);
+        let _ = write!(out, "IRQ={} COUNT={} HOLDER={} HOLDERS={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.holders, i.endpoint, i.masked != 0);
+        // Every driver bound to a shared line (issue 159).
+        if i.endpoints[1] != 0 { let _ = write!(out, " ENDPOINTS="); for (n, ep) in i.endpoints.iter().filter(|&&e| e != 0).enumerate() { let _ = write!(out, "{}{}", if n > 0 { "," } else { "" }, ep); } }
+        let _ = writeln!(out);
     }
 }
 

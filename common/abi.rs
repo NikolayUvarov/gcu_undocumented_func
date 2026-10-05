@@ -70,6 +70,10 @@ pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 pub const SYSCALL_IPC_CALL: usize = 22;
 pub const SYSCALL_IPC_REPLY: usize = 23;
 pub const SYSCALL_IRQ_BIND: usize = 24;
+// IRQ_BIND: arg1 = interrupt handle, arg2 = endpoint (read right). Up to IRQ_SHARERS drivers bind one line (PCI INTx
+// lines are shared): each gets every interrupt of the line, which stays masked until each has called IRQ_ACK. A binder
+// binding again replaces its binding; one that ends is dropped. IRQ_WAIT works only on a line nobody bound (issue 159).
+pub const IRQ_SHARERS: usize = 4;
 pub const SYSCALL_IRQ_ACK: usize = 25;
 pub const SYSCALL_MEM_PHYS: usize = 26;
 pub const SYSCALL_PORT_IN_BLOCK: usize = 27;
@@ -412,6 +416,7 @@ pub const REGION_READ: u32 = 1; pub const REGION_WRITE: u32 = 2; pub const REGIO
 // init, which keeps the copies it granted; `holders` counts the tasks holding one. `irq`: the line bound, 0 if none.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatEndpoint { pub index: u32, pub receivers: u32, pub waiting_senders: u32, pub waiting_receivers: u32, pub creator: u64, pub messages: u64, pub busy: u64, pub timeouts: u64,
     pub server: u64, pub holders: u32, pub irq: u32 }
-#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub holders: u32, pub holder: u64, pub count: u64 }
+// `endpoints`: every endpoint bound to the line (0: none); `endpoint` is the first (issue 159).
+#[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatIrq { pub line: u32, pub endpoint: u32, pub masked: u32, pub holders: u32, pub holder: u64, pub count: u64, pub endpoints: [u32; IRQ_SHARERS] }
 // `location`: bus << 8 | device << 3 | function; `io_bars`: bit i set if BAR i is an I/O port range.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatDevice { pub class: u32, pub irq: u32, pub bar_sizes: [u64; 6], pub holder: u64, pub location: u32, pub io_bars: u32 }

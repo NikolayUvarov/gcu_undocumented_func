@@ -2395,8 +2395,8 @@ def speech_wav(phrases=SPEECH):
 
 
 def listen_suite(vm, starts):
-    # The network card the launchers add shares the sound card's interrupt line, which the kernel delivers to one
-    # driver only (issue 159): audio_gw then plays without interrupts, looking at the ring while a client waits (096).
+    # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
+    # audio_gw would also play without interrupts, looking at the ring while a client waits (096).
     lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
     assert len(lines) == 2, lines
     shared = len(set(lines.values())) == 1
@@ -2418,6 +2418,11 @@ def listen_suite(vm, starts):
     require(output, "STARTED PID=2 NAME=say FOREGROUND")
     # Two short words, not the default greeting (2.5-9 s): the text argument reached say.
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    if shared:
+        # Both drivers are bound to the line and audio_gw got interrupts while say spoke (issue 159).
+        line = lines["audio (AC97)"]
+        assert re.search(fr"^IRQ={line} COUNT=\d+ .* ENDPOINTS=\d+,\d+", vm.command("irqs", raw=True), re.M), vm.command("irqs", raw=True)
+        require(vm.service_logs("audio_gw", "[AUDIO] IRQ COUNT"), "[AUDIO] IRQ COUNT")
     assert 200 < spoken < 2000, spoken
     # Run by name: a plain word starts the program in the foreground with the rest as arguments.
     vm.send("say hi\n")
@@ -2482,7 +2487,7 @@ def listen_suite(vm, starts):
     vm.command(f"kill {pid}")
     voice_control(vm)
     assert "FAULT PID=" not in vm.command("faults")
-    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card' if shared else ''}, program arguments, run by name, "
+    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card, both drivers interrupted' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
           "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)

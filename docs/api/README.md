@@ -96,7 +96,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 27 | `PORT_IN_BLOCK` | `arg1` = handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (≤ 2048) → words read |
 | 53 | `PORT_OUT_BLOCK` | as `PORT_IN_BLOCK`; the words are written from the buffer → words written |
 | 19 | `IRQ_WAIT` | `arg1` = IRQ handle; blocks until the line fires |
-| 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages |
+| 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages; up to `IRQ_SHARERS` (4) drivers share a line, each gets every interrupt, and the line stays masked until each has called `IRQ_ACK` |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
 | 20 | `INPUT_EVENT` | routes decoded input [input privilege] |
 | 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen → 0 unchanged, 1 dirty, 2 new screen (read-only capability) [display privilege] |
