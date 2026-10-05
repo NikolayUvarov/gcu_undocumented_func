@@ -311,7 +311,7 @@ pub unsafe fn start(info: &BootInfo) {
 
 extern "C" fn ap_entry(index: usize) -> ! {
     unsafe {
-        paging::enable_protection();
+        paging::enable_protection(false);
         load(index);
         crate::interrupts::load();
         lapic_init(false);

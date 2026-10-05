@@ -46,7 +46,7 @@ class VM:
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image.
         self.disk = disk
-        self.cpus = args.cpus
+        self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
         storage = (["-drive", f"{source},if=none,id=usbdisk",
@@ -58,6 +58,7 @@ class VM:
             [args.qemu, "-bios", args.firmware, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
+             *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -1079,7 +1080,9 @@ def busy_suite(vm):
     time.sleep(1)
     after, elapsed = run(), time.monotonic() - started
     assert (after - before) > 0.3 * elapsed * 1000, (before, after, elapsed)
-    require(vm.command("logs 1"), "BUSY FIXTURE")
+    fixture = vm.command("logs 1")
+    require(fixture, "BUSY FIXTURE")
+    avx_expected(vm, fixture)
     # Scheduling budget (C7): 20 ms per 100 ms keeps the busy loop near 20 % of its CPU (enforced at the 10 ms tick).
     require(vm.command("budget 1 20 100"), "BUDGET PID=1 20 MS PER 100 MS")
     def run_ms():
@@ -1098,10 +1101,22 @@ def busy_suite(vm):
     print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
 
 
+def avx_expected(vm, fixture=None):
+    """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
+    cpus = vm.command("cpus")
+    model = getattr(vm.args, "cpu_model", None)
+    if model == "max":
+        assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
+        assert fixture is None or "CALLS, AVX" in fixture, fixture
+    elif model is None:
+        assert len(re.findall(r"FPU=FXSAVE", cpus)) == vm.cpus, cpus
+
+
 def smp_suite(vm):
     baseline = heap_used(vm)
     cpus = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", cpus)) == vm.cpus, cpus
+    avx_expected(vm)
     # Two non-yielding SIMD loops per core force real preemption on every CPU.
     count = min(vm.cpus * 2, 8)
     for pid in range(1, count + 1):
@@ -3334,6 +3349,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
     parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
     parser.add_argument("--firmware", default="OVMF.fd")
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")

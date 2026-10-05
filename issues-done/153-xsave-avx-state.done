@@ -1,0 +1,29 @@
+# 153 — XSAVE: AVX state per task — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P3 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G (voice V3) · **Constitution:** MC-2.1
+
+## Problem
+
+Task contexts save SSE state with FXSAVE; AVX/AVX2 registers are not saved, so programs must not use them. Speech models (voice V3, [docs/voice](../docs/voice/README.md)) run several times faster with AVX2.
+
+## Plan
+
+- Enable `CR4.OSXSAVE` and XCR0 for x87/SSE/AVX when CPUID reports them; save and restore with `XSAVE`/`XRSTOR` (`XSAVEOPT` when present) in a context area sized from CPUID leaf 0xD; keep FXSAVE on CPUs without XSAVE.
+- `BootInfo`/`STAT_CPUS` report the enabled feature set; `hw` shows it.
+- `smp` suite: two tasks on one CPU keep distinct YMM values across switches.
+
+## Acceptance criteria
+
+- The `smp` and `busy` suites pass with AVX tasks on 1 and 4 CPUs (QEMU `-cpu max`); CPUs without AVX keep working.
+
+## Related
+
+[docs/voice](../docs/voice/README.md) (V3).
+
+## Resolution
+
+- **Kernel:** when CPUID reports XSAVE and AVX, the BSP sets `CR4.OSXSAVE` and XCR0 = x87 | SSE | AVX (`paging::XCR0`), and every AP does the same (`kernel/src/paging.rs`). The context area is 1024 bytes, 64-byte aligned (`kernel/src/context.rs`): the entry path saves with `XSAVE` and restores with `XRSTOR`, or with `FXSAVE`/`FXRSTOR` on CPUs without them. The size of the enabled state (CPUID 0xD) is checked against the area at boot.
+- **A pitfall found on the way:** XSAVE writes only the header bits of the components it saves. Stack bytes left in the rest of the 64-byte header made the next XRSTOR fault, so the entry path clears the header first.
+- **Not done:** `XSAVEOPT` — its modified-state tracking assumes the area is restored where it was saved, but contexts are copied into each task's record.
+- **Reporting:** `StatCpu.xsave` (the saved components, 0 with FXSAVE); `cpus` shows `FPU=XSAVE+AVX` or `FPU=FXSAVE`. `hw` can show it (tools track).
+- **Tests:** the busy fixture keeps distinct values in both halves of `ymm0` when the CPU has AVX, so two such tasks on one CPU would fault if AVX state were not saved. `busy` and `smp` pass with `--cpu-model max` on 4 and on 1 CPU (new CI jobs), and with the default CPU (FXSAVE; checked by `FPU=FXSAVE`).
