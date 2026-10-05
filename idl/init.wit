@@ -16,8 +16,8 @@ interface init {
     /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
     /// (already running), not-found (no such service or no device), rights (cannot be started after boot).
     run: func(name: string<16>) -> result<u64, error-code>;
-    /// The boot services in boot order (1.1).
-    list: func() -> result<list<service, 24>, error>;
+    /// The boot services and their further instances in boot order (1.1; up to 32 since issue 205).
+    list: func() -> result<list<service, 32>, error>;
     /// Stops a running service; init does not restart it until it is started again, and its clients' calls fail with
     /// ERR_PEER meanwhile (1.1).
     stop: func(name: string<16>) -> result<_, error>;

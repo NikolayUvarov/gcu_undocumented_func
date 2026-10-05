@@ -57,6 +57,8 @@ jobs:
             args: --suites keys,shell,tools,windows,wm,tablet
           - name: files and block writes
             args: --suites vfs,edit,disk,block
+          - name: NVMe boot disk
+            args: --disk nvme --suites vfs
           - name: one CPU
             args: --cpus 1 --suites smp,isolation,heap,services
           # A CPU with AVX: its state is saved per task with XSAVE (issue 153).
@@ -134,6 +136,9 @@ jobs:
           - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)
             suites: normal,smp,net
             machine: virt,gic-version=2,highmem=off
+          - group: NVMe boot disk
+            suites: vfs
+            disk: nvme
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
@@ -147,7 +152,7 @@ jobs:
         run: python3 tests/aarch64_smoke.py
       - name: QEMU suites on virt, four CPUs
         if: ${{ matrix.suites }}
-        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }}
+        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }}
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
