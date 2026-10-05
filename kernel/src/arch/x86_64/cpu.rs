@@ -336,3 +336,6 @@ pub unsafe fn wait_for_interrupt() { asm!("sti", "hlt", "cli"); }
 pub unsafe fn disable_interrupts() { asm!("cli"); }
 /// Stops this CPU for good.
 pub unsafe fn halt_here() -> ! { asm!("cli"); loop { asm!("hlt"); } }
+
+/// What the processor offers programs (BootInfo.cpu_features).
+pub fn features() -> u64 { if unsafe { core::arch::x86_64::__cpuid(1) }.ecx & (1 << 30) != 0 { crate::abi::FEATURE_ENTROPY } else { 0 } }

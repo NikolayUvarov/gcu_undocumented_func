@@ -86,7 +86,7 @@ macro_rules! entry {
     ($main:path) => {
         #[no_mangle]
         #[link_section = ".text._start"]
-        pub extern "sysv64" fn _start(info: &'static $crate::abi::BootInfo, mailbox: *mut $crate::abi::SyscallMailbox) -> ! {
+        pub extern "C" fn _start(info: &'static $crate::abi::BootInfo, mailbox: *mut $crate::abi::SyscallMailbox) -> ! {
             unsafe { $crate::sys::init(mailbox) };
             $crate::log::prepare();
             let main: fn(&'static $crate::abi::BootInfo) = $main;

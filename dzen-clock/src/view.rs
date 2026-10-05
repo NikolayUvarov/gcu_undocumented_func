@@ -50,6 +50,7 @@ mod tests {
             pixel_format: PIXEL_BGR,
             pixel_masks: [0; 3],
             acpi_rsdp: 0,
+            cpu_features: 0,
         };
         let view = View::new(&info);
         view.clear();
