@@ -18,7 +18,7 @@ const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
-const MSI_FIRST: usize = 16; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
+use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 // Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
 // The PIC, PIT and PCI configuration ports stay with the kernel.
@@ -467,7 +467,7 @@ impl Scheduler {
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
-        let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
+        let exit = Region::new(4096, 4096)?; let stub = context::exit_stub(paging::USER_MAILBOX as u64); unsafe { core::ptr::copy_nonoverlapping(stub.as_ptr(), exit.ptr(), stub.len()); } let user_sp = unsafe { context::prepare_stack(stack.ptr() as usize, STACK_SIZE) };
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
@@ -1127,35 +1127,34 @@ pub fn spawn_init() -> Result<u64, &'static str> {
 
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {
-        let registers = context::registers(sp); let vector = registers[15]; let cpu = cpu::id();
-        if vector == 0x31 { cpu::halt_here(); }
-        if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
-        let irq = if (33..48).contains(&vector) { Some(vector as usize - 32) } else if (0x40..0x50).contains(&vector) { Some(MSI_FIRST + vector as usize - 0x40) } else { None };
-        if vector == 32 { interrupts::advance(); interrupts::pic_eoi(0); cpu::eoi(); cpu::tick_others(); }
-        else if let Some(irq) = irq.filter(|&irq| irq < MSI_FIRST) { interrupts::set_irq_masked(irq as u8, true); interrupts::pic_eoi(irq as u8); cpu::eoi(); } // the driver will unmask the line
-        else if irq.is_some() { cpu::eoi(); } // MSI-X: an edge message, nothing to mask
-        else if vector == 48 || vector == 50 { cpu::eoi(); }
-
+        let cpu = cpu::id();
+        let event = context::event(sp);
+        match event {
+            Event::Stop => cpu::halt_here(),
+            Event::KernelFault { code, pc, error } => { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(code); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(pc); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(error); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
+            _ => {}
+        }
         locked(|| {
             let s = scheduler(); let slot = s.current[cpu]; s.accounting.interrupts[cpu] += 1;
-            let next = (|| {
-            if let Some(irq) = irq { s.raise_irq(irq); return s.select(sp, cpu); }
-            if vector == 32 || vector == 48 {
-                cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
-                if s.expire(now) { s.wake_idle(cpu); }
-                if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
-                return s.select(sp, cpu);
-            }
-            if vector == 50 { return if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp }; }
-            if vector < 32 {
-                let address = if vector == 14 { cpu::fault_address() } else { 0 };
-                let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
-                s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector, error: registers[16], rip: registers[17], address });
-                s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (vector as usize) << 8); return s.select(sp, cpu);
-            }
-            if slot == 0 { return s.select(sp, cpu); }
-            if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
-            s.syscall(slot, sp, cpu)
+            let next = (|| match event {
+                Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
+                Event::Tick => {
+                    cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
+                    if s.expire(now) { s.wake_idle(cpu); }
+                    if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
+                    s.select(sp, cpu)
+                }
+                Event::Wake => if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp },
+                Event::Fault { code, error, pc, address } => {
+                    let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
+                    s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector: code, error, rip: pc, address });
+                    s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (code as usize) << 8); s.select(sp, cpu)
+                }
+                _ => {
+                    if slot == 0 { return s.select(sp, cpu); }
+                    if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
+                    s.syscall(slot, sp, cpu)
+                }
             })();
             s.wake_idle(cpu);
             next
