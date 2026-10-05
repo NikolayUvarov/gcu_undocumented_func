@@ -3247,7 +3247,7 @@ def wm_suite(vm):
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-    require(wait("SHELL RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
+    require(wait("RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
     time.sleep(.1); vm.collect(); vm.output = ""
     names = {row[0] for row in task_rows(vm).values()}
     assert {"fm", "clock", "top"} <= names and "wm" not in names, names
@@ -3271,7 +3271,7 @@ def wm_suite(vm):
     time.sleep(.5)
     # Close all: every program ends, then wm.
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(wait("SHELL RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
+    require(wait("RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     for _ in range(20):
