@@ -55,6 +55,11 @@ impl Disk for Vfs {
         let failed = |e: loader::Error| alloc::format!("{:?}", e);
         let lost = |e: mind::Error| alloc::format!("{:?}", e);
         let needs = loader::inspect(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
+        // In a window, a console program runs in a window of `console`, which shows what it prints (issue u004).
+        if needs.console && mind::windowed::active() {
+            let line = alloc::format!("{} {}", path, args);
+            return self.run("console", line.trim()).map(|started| Started { place: Place::InConsole, ..started });
+        }
         let requests = loader::inspect_requests(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, path, args).map_err(lost)?.map_err(failed)?;
         let holds = |slot: usize| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT;

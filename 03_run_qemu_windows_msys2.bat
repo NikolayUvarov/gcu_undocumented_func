@@ -1,5 +1,6 @@
 @echo off
-rem Sound: AC97 card for audio_gw through DirectSound; VirtIO network card; RDRAND for the TLS and key services.
+rem Sound: AC97 card for audio_gw through DirectSound; VirtIO network card; RDRAND for the TLS and key services;
+rem a VirtIO tablet, so the system's pointer follows the host's (issue 161).
 echo Starting MIND CORE in QEMU...
 
 rem Look for QEMU in the standard MSYS2 folders (UCRT64 or MinGW64)

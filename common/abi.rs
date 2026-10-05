@@ -4,8 +4,8 @@
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
 pub const BOOT_IMAGES: usize = 23;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "virtio_blk.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "virtio_input.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "virtio_blk.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
@@ -217,6 +217,10 @@ pub const SLOT_WINDOWS: usize = 21;
 pub const SLOT_WINDOW_MANAGER: usize = 22;
 // In an application: its client of the window broker (8 is the input privilege only in the shell).
 pub const SLOT_WINDOW: usize = 8;
+// In an application: where what it prints goes besides the kernel's log (issue 162) — an endpoint of the program that
+// started it (`console`), which shows it; mind::process::log sends it there, 15 bytes a message (9 is the serial port
+// only in the shell).
+pub const SLOT_CONSOLE: usize = 9;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 23;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
@@ -322,25 +326,27 @@ pub fn pointer_event(buttons: u8, dx: i32, dy: i32, wheel: i32) -> usize {
     let field = (dx.clamp(-256, 255) as u32 & 0x1FF) | (dy.clamp(-256, 255) as u32 & 0x1FF) << 9 | (wheel.clamp(-8, 7) as u32 & 0xF) << 18;
     input_event(0, KEY_POINTER, buttons, true, field)
 }
-// An absolute pointer (a tablet, issue 160): bit 38 set, the character field holds the position in 1/4096 of the screen
-// (bits 0-11 x, 12-23 y) and bits 34-37 the wheel. Bit 33 is mind::window::POINTER_AT (a window's cell, issue u001).
-pub const POINTER_ABSOLUTE: usize = 1 << 38;
-pub const POINTER_SCALE: u32 = 4096;
-pub fn pointer_at_event(buttons: u8, x: u32, y: u32, wheel: i32) -> usize {
-    let field = x.min(POINTER_SCALE - 1) | y.min(POINTER_SCALE - 1) << 12;
-    input_event(0, KEY_POINTER, buttons, true, field) | POINTER_ABSOLUTE | (wheel.clamp(-8, 7) as usize & 0xF) << 34
-}
-/// (buttons, dx, dy, wheel) of a pointer event; an absolute one moves by 0.
+/// (buttons, dx, dy, wheel) of a pointer event.
 pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
     let field = event_char(event);
     let signed = |value: u32, bits: u32| ((value << (32 - bits)) as i32) >> (32 - bits);
-    if event & POINTER_ABSOLUTE != 0 { return (event_mods(event), 0, 0, signed((event >> 34 & 0xF) as u32, 4)); }
     (event_mods(event), signed(field & 0x1FF, 9), signed(field >> 9 & 0x1FF, 9), signed(field >> 18 & 0xF, 4))
 }
-/// The position (x, y in 1/POINTER_SCALE of the screen) of an absolute pointer event.
-pub fn pointer_position(event: usize) -> Option<(u32, u32)> {
-    let field = event_char(event);
-    (event & POINTER_ABSOLUTE != 0).then_some((field & 0xFFF, field >> 12 & 0xFFF))
+// An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
+// movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
+// kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
+// tablet: the host's pointer in a virtual machine); in a window's queue it is a cell of the window's content (issue u001).
+pub const POINTER_ABSOLUTE: usize = 1 << 33;
+pub const POINTER_SCALE: usize = 4096;
+pub fn pointer_absolute(buttons: u8, x: usize, y: usize, wheel: i32) -> usize {
+    let field = (x.min(POINTER_SCALE - 1) | y.min(POINTER_SCALE - 1) << 12) as u32;
+    input_event(0, KEY_POINTER, buttons, true, field) | POINTER_ABSOLUTE | (wheel.clamp(-8, 7) as usize & 0xF) << 34
+}
+/// (buttons, x, y, wheel) of an absolute pointer event; None for any other event.
+pub fn pointer_absolute_fields(event: usize) -> Option<(u8, usize, usize, i32)> {
+    if event_key(event) != KEY_POINTER || event & POINTER_ABSOLUTE == 0 { return None; }
+    let field = event_char(event) as usize;
+    Some((event_mods(event), field & 0xFFF, field >> 12 & 0xFFF, (((event >> 34 & 0xF) as i32) << 28) >> 28))
 }
 pub const MOD_SHIFT: u8 = 1; pub const MOD_CTRL: u8 = 2; pub const MOD_ALT: u8 = 4; pub const MOD_CAPS: u8 = 8;
 pub const INPUT_QUEUE: usize = 64;

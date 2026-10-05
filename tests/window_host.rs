@@ -105,13 +105,14 @@ fn cursor_resize_and_pixels() {
 
 #[test]
 fn pointer_events_of_a_window() {
-    use abi::{event_key, pointer_event, pointer_fields, KEY_POINTER, POINTER_LEFT};
+    use abi::{event_key, pointer_absolute_fields, pointer_event, KEY_POINTER, POINTER_LEFT, POINTER_SCALE};
     let word = window::pointer_at(POINTER_LEFT, 77, 21, -1);
     assert_eq!(event_key(word), KEY_POINTER);
     assert_eq!(window::pointer_position(word), Some((77, 21)));
-    assert_eq!(pointer_fields(word), (POINTER_LEFT, 77, 21, -1));
-    assert_eq!(window::pointer_position(window::pointer_at(0, 300, 255, 0)), Some((255, 255)), "kept within the field");
-    // The kernel's pointer events carry motion, not a cell.
+    assert_eq!(pointer_absolute_fields(word), Some((POINTER_LEFT, 77, 21, -1)));
+    assert_eq!(window::pointer_position(window::pointer_at(0, 300, 5000, 9)), Some((300, POINTER_SCALE - 1)), "kept within the field");
+    assert_eq!(pointer_absolute_fields(window::pointer_at(0, 1, 2, 9)), Some((0, 1, 2, 7)), "the wheel too");
+    // The kernel's mouse events carry motion, not a position.
     assert_eq!(window::pointer_position(pointer_event(0, 5, -3, 0)), None);
-    assert_eq!(window::pointer_position(window::POINTER_AT), None, "not a pointer event");
+    assert_eq!(window::pointer_position(abi::POINTER_ABSOLUTE), None, "not a pointer event");
 }

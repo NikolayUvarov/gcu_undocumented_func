@@ -4,16 +4,16 @@
 //! A program in a window (`mind::windowed`, issue 088) reads the events the window manager queues in its surface.
 use crate::abi::*;
 use crate::sys::call;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicUsize, Ordering};
 
 static MODIFIERS: AtomicU8 = AtomicU8::new(0);
-// The pointer on a screen (issue u001): its pixel within the grid's area, which `pointer_area` sets, and whether a
-// pointer event came (until then nothing shows it).
+// The pointer on a screen (issues u001, 161): its pixel within the grid's area, which `pointer_area` sets (the screen's
+// size and where the grid is on it), and whether a pointer event came (until then nothing shows it).
 static POINTER_X: AtomicUsize = AtomicUsize::new(0);
 static POINTER_Y: AtomicUsize = AtomicUsize::new(0);
-static AREA_W: AtomicUsize = AtomicUsize::new(0);
-static AREA_H: AtomicUsize = AtomicUsize::new(0);
+static AREA: [AtomicUsize; 6] = [const { AtomicUsize::new(0) }; 6]; // screen width, height; grid x, y, width, height
 static POINTER_SEEN: AtomicBool = AtomicBool::new(false);
+static MOVED: [AtomicIsize; 2] = [const { AtomicIsize::new(0) }; 2]; // how far the last pointer event moved it
 
 /// The modifiers (MOD_SHIFT, MOD_CTRL, MOD_ALT) held, as the last modifier event read reported them: a key bar shows
 /// what F1–F10 do with them. The PS/2 keyboard reports a modifier going down or up on its own; a terminal sends a
@@ -25,40 +25,48 @@ fn seen(word: usize) -> usize { if crate::keys::is_modifier(event_key(word)) { M
 pub use crate::keys::{Code, Key};
 
 // The next event word: the focused task's, or what the window manager queued for the program's window; 0 if none.
-// The kernel's pointer events move the pointer of the screen, whoever reads them.
+// The kernel's pointer events move the pointer of the screen, whoever reads them: a mouse's by its movement, a
+// tablet's to the share of the screen it names (issue 161).
 fn next_word() -> usize {
-    let word = if crate::windowed::active() { crate::windowed::event() } else { call(SYSCALL_READ_INPUT, 0, 0) };
-    if event_key(word) == KEY_POINTER && crate::window::pointer_position(word).is_none() {
-        let (_, dx, dy, _) = pointer_fields(word);
-        // A tablet (issue 160) puts the pointer at its position, a mouse moves it.
-        if let Some((x, y)) = crate::abi::pointer_position(word) {
-            POINTER_X.store(x as usize * AREA_W.load(Ordering::Relaxed) / POINTER_SCALE as usize, Ordering::Relaxed);
-            POINTER_Y.store(y as usize * AREA_H.load(Ordering::Relaxed) / POINTER_SCALE as usize, Ordering::Relaxed);
-        }
-        let follow = |at: &AtomicUsize, area: &AtomicUsize, d: i32| {
-            let limit = area.load(Ordering::Relaxed).max(1) as i64 - 1;
-            at.store((at.load(Ordering::Relaxed) as i64 + d as i64).clamp(0, limit) as usize, Ordering::Relaxed);
+    if crate::windowed::active() { return crate::windowed::event(); }
+    let word = call(SYSCALL_READ_INPUT, 0, 0);
+    if event_key(word) == KEY_POINTER {
+        let area = |i: usize| AREA[i].load(Ordering::Relaxed);
+        let place = |at: &AtomicUsize, value: i64, size: usize, moved: &AtomicIsize| {
+            let value = value.clamp(0, size.max(1) as i64 - 1) as usize;
+            moved.store(value as isize - at.swap(value, Ordering::Relaxed) as isize, Ordering::Relaxed);
         };
-        follow(&POINTER_X, &AREA_W, dx);
-        follow(&POINTER_Y, &AREA_H, dy);
+        match pointer_absolute_fields(word) {
+            Some((_, x, y, _)) => {
+                place(&POINTER_X, (x * area(0) / POINTER_SCALE) as i64 - area(2) as i64, area(4), &MOVED[0]);
+                place(&POINTER_Y, (y * area(1) / POINTER_SCALE) as i64 - area(3) as i64, area(5), &MOVED[1]);
+            }
+            None => {
+                let (_, dx, dy, _) = pointer_fields(word);
+                place(&POINTER_X, POINTER_X.load(Ordering::Relaxed) as i64 + dx as i64, area(4), &MOVED[0]);
+                place(&POINTER_Y, POINTER_Y.load(Ordering::Relaxed) as i64 + dy as i64, area(5), &MOVED[1]);
+            }
+        }
         POINTER_SEEN.store(true, Ordering::Relaxed);
     }
     word
 }
 
-/// The area the pointer of a screen moves in: `width` × `height` pixels of 8 × 16 cells (`Terminal` sets its grid's).
-/// The pointer starts in the middle.
-pub fn pointer_area(width: usize, height: usize) {
-    AREA_W.store(width, Ordering::Relaxed);
-    AREA_H.store(height, Ordering::Relaxed);
+/// The area the pointer of a screen moves in: on a screen of `screen` pixels, the grid at (x, y), `width` × `height`
+/// pixels of 8 × 16 cells (`Terminal` sets its grid's). The pointer starts in the middle.
+pub fn pointer_area(screen: (usize, usize), x: usize, y: usize, width: usize, height: usize) {
+    for (at, value) in AREA.iter().zip([screen.0, screen.1, x, y, width, height]) { at.store(value, Ordering::Relaxed); }
     POINTER_X.store(width / 2, Ordering::Relaxed);
     POINTER_Y.store(height / 2, Ordering::Relaxed);
 }
 
-/// The cell the pointer of the screen is on, once a pointer event came (a window's manager draws its own pointer).
-pub fn pointer_cell() -> Option<(usize, usize)> {
-    POINTER_SEEN.load(Ordering::Relaxed).then(|| (POINTER_X.load(Ordering::Relaxed) / 8, POINTER_Y.load(Ordering::Relaxed) / 16))
+/// The pixel of the grid the pointer of the screen is on, once a pointer event came.
+pub fn pointer_pixel() -> Option<(usize, usize)> {
+    POINTER_SEEN.load(Ordering::Relaxed).then(|| (POINTER_X.load(Ordering::Relaxed), POINTER_Y.load(Ordering::Relaxed)))
 }
+
+/// The cell the pointer of the screen is on, once a pointer event came (a window's manager draws its own pointer).
+pub fn pointer_cell() -> Option<(usize, usize)> { pointer_pixel().map(|(x, y)| (x / 8, y / 16)) }
 
 /// Next key press of the calling (focused) task; releases and events without a decoded key are skipped.
 pub fn read_key() -> Option<Key> {
@@ -129,19 +137,12 @@ impl KeyEvent {
     pub fn to_word(self) -> usize { input_event(self.byte, self.key, self.mods, self.pressed, self.ch.map_or(0, |c| c as u32)) }
 }
 
-/// A pointer event (issues 156, 160, u001): buttons held (`POINTER_*`), movement (dy grows downwards), wheel steps
-/// (negative: away from the user, to scroll up) and the cell the pointer is on. In a window the window manager says
-/// the cell and the movement is 0; on a screen the cell follows the movement within `pointer_area`, or a tablet's
-/// position, `at` = (x, y) in 1/POINTER_SCALE of the screen.
+/// A pointer event (issues 156, u001, 161): buttons held (`POINTER_*`), movement in pixels (dy grows downwards),
+/// wheel steps (negative: away from the user, to scroll up) and the cell the pointer is on. In a window the window
+/// manager says the cell and the movement is 0; on a screen the cell follows a mouse's movement, or is where a tablet
+/// puts it, within `pointer_area`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32, pub x: usize, pub y: usize, pub at: Option<(u32, u32)> }
-
-impl Pointer {
-    /// The position on a screen of `width` × `height` pixels, for a tablet event.
-    pub fn position(&self, width: usize, height: usize) -> Option<(usize, usize)> {
-        self.at.map(|(x, y)| (x as usize * width / POINTER_SCALE as usize, y as usize * height / POINTER_SCALE as usize))
-    }
-}
+pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32, pub x: usize, pub y: usize }
 
 /// A key or a pointer event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,11 +162,15 @@ pub fn read_input() -> Option<Input> {
     match next_word() {
         0 => None,
         word if event_key(word) == KEY_POINTER => {
-            let (buttons, dx, dy, wheel) = pointer_fields(word);
-            Some(Input::Pointer(match crate::window::pointer_position(word) {
-                Some((x, y)) => Pointer { buttons, dx: 0, dy: 0, wheel, x, y, at: None },
-                None => { let (x, y) = pointer_cell().unwrap_or((0, 0)); Pointer { buttons, dx, dy, wheel, x, y, at: crate::abi::pointer_position(word) } }
-            }))
+            if crate::windowed::active() {
+                let (buttons, x, y, wheel) = pointer_absolute_fields(word)?;
+                return Some(Input::Pointer(Pointer { buttons, dx: 0, dy: 0, wheel, x, y }));
+            }
+            // next_word moved the pointer of the screen already.
+            let (buttons, wheel) = match pointer_absolute_fields(word) { Some((buttons, _, _, wheel)) => (buttons, wheel), None => { let (b, _, _, w) = pointer_fields(word); (b, w) } };
+            let (x, y) = pointer_cell().unwrap_or((0, 0));
+            let (dx, dy) = (MOVED[0].load(Ordering::Relaxed) as i32, MOVED[1].load(Ordering::Relaxed) as i32);
+            Some(Input::Pointer(Pointer { buttons, dx, dy, wheel, x, y }))
         }
         word => Some(Input::Key(KeyEvent::from_word(seen(word)))),
     }

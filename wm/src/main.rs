@@ -9,6 +9,7 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use mind::abi::*;
 use mind::gfx::Screen;
@@ -21,6 +22,7 @@ use mind::mem::Mapping;
 use mind::tui::{Rect, Terminal, DARK};
 use mind::window::{Kind, Surface, STATE_CLOSE, TITLE};
 use wm::desk::{Action, Content, Mode, Win, Wm};
+use wm::menu::{self, Kind as ProgramKind};
 
 mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO);
 
@@ -61,6 +63,27 @@ fn title(surface: &Surface) -> String {
     String::from(core::str::from_utf8(&bytes[..len]).unwrap_or(""))
 }
 
+// The desktop menu's programs (issue u003): those on the boot disk that are not services, by what they ask for. The
+// loader reads each one's request from its file (about 30 ms each), so a few are looked at between events.
+struct Programs { pending: Vec<String>, found: Vec<(String, ProgramKind)>, since: usize }
+
+impl Programs {
+    fn new() -> Self {
+        let pending = loader::list(Endpoint::LOADER).map(|list| list.as_slice().iter().filter(|p| !p.service).map(|p| String::from(p.name.as_str())).collect()).unwrap_or_default();
+        Self { pending, found: Vec::new(), since: mind::time::uptime_ms() }
+    }
+    // Looks at up to `count` more; true when the last one was looked at.
+    fn step(&mut self, count: usize) -> bool {
+        for name in self.pending.drain(..count.min(self.pending.len())) {
+            let Ok(Ok(requests)) = loader::inspect_requests(Endpoint::LOADER, &name) else { continue };
+            let kind = if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { ProgramKind::Manager }
+                       else if requests & mind::process::REQUEST_CONSOLE != 0 { ProgramKind::Console } else { ProgramKind::Window };
+            self.found.push((name, kind));
+        }
+        self.pending.is_empty()
+    }
+}
+
 // Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds.
 fn launch(command: &str) -> Result<String, String> {
     let (name, args) = command.split_once(' ').map_or((command, ""), |(n, a)| (n, a.trim()));
@@ -68,7 +91,8 @@ fn launch(command: &str) -> Result<String, String> {
     let lost = || format!("cannot start {}: the loader does not answer", name);
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
-    if needs.console { return Err(format!("{} is a console program: run it in the shell", name)); }
+    // A console program runs in a window of `console`, which shows what it prints (issue u004).
+    if needs.console { return launch(&format!("console {}", command)).map_err(|_| format!("{} is a console program, and there is no console to run it in: run it in the shell", name)); }
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{} is a window manager", name)); }
     if !matches!(api::client(BROKER, RECEIVE), Ok(Ok(()))) { return Err(String::from("the window broker gives no client")); }
     let session = match loader::begin(Endpoint::LOADER, name, args) {
@@ -170,9 +194,10 @@ impl Manager {
                 live.wake();
             }
         }
+        let area = self.wm.desk.area();
         for (z, w) in self.wm.desk.windows.iter().enumerate() {
             if self.saved.iter().any(|&(id, rect, at)| id == w.id && rect == w.rect && at == z) { continue; }
-            let place = Placement { x: w.rect.x as u16, y: w.rect.y as u16, columns: w.rect.w as u16, rows: w.rect.h as u16, z: z as u16, minimized: false, maximized: w.restore.is_some() };
+            let place = Placement { x: w.rect.x as u16, y: w.rect.y as u16, columns: w.rect.w as u16, rows: w.rect.h as u16, z: z as u16, minimized: false, maximized: w.rect == area };
             let _ = api::place(BROKER, w.id, &place);
             self.saved.retain(|&(id, ..)| id != w.id);
             self.saved.push((w.id, w.rect, z));
@@ -284,7 +309,10 @@ fn main(info: &'static BootInfo) {
         if let Err(error) = &result { mind::println!("[WM] {}", error); }
         manager.wm.notice = Some(result.unwrap_or_else(|e| e));
     }
+    let mut programs = Some(Programs::new());
+    manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
     mind::input::pointer(true);
+    // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
     let mut shown_pointer: Option<(usize, usize)> = None;
     let mut buttons = 0u8;
@@ -306,15 +334,8 @@ fn main(info: &'static BootInfo) {
                     }
                 }
                 Input::Pointer(p) => {
-                    // A tablet (issue 160) gives the position, a mouse the movement.
-                    match p.position(screen.width, screen.height) {
-                        Some((x, y)) => { px = x; py = y; }
-                        None => {
-                            px = (px as i64 + p.dx as i64).clamp(0, screen.width as i64 - 1) as usize;
-                            py = (py as i64 + p.dy as i64).clamp(0, screen.height as i64 - 1) as usize;
-                        }
-                    }
-                    manager.wm.pointer(px.saturating_sub(x0) / 8, py.saturating_sub(y0) / 16, p.buttons, p.wheel)
+                    if let Some((gx, gy)) = mind::input::pointer_pixel() { (px, py) = (x0 + gx, y0 + gy); }
+                    manager.wm.pointer(p.x, p.y, p.buttons, p.wheel)
                 }
             };
             // Keys, clicks and the wheel are logged; moves of the mouse are not (a drag is logged when it ends).
@@ -346,6 +367,16 @@ fn main(info: &'static BootInfo) {
                 }
             }
             if log { mind::println!("[WM] {}", manager.wm.status()); }
+        }
+        // The menu's programs, a few at a time while nothing else happens (the menu is not changed while it is open).
+        if !busy && !matches!(manager.wm.mode, Mode::Menu(_)) {
+            if let Some(p) = programs.as_mut() {
+                if p.step(2) {
+                    manager.wm.programs = menu::catalogue(&p.found);
+                    mind::println!("[WM] PROGRAMS: {} IN {} CATEGORIES IN {} MS", p.found.len(), manager.wm.programs.len(), mind::time::uptime_ms() - p.since);
+                    programs = None;
+                }
+            }
         }
         manager.modifiers(mind::input::modifiers());
         let now = mind::time::uptime_ms();

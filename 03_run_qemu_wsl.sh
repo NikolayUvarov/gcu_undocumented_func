@@ -50,7 +50,8 @@ AUDIO=()
 [[ "${MIND_AUDIO:-dsound}" == none ]] || AUDIO=(-audiodev "${MIND_AUDIO:-dsound},id=snd0" -device AC97,audiodev=snd0)
 NET=()
 [[ "${MIND_NET:-user}" == none ]] || NET=(-nic "user,model=virtio-net-pci")
-# Pointer: a VirtIO tablet, an absolute device, so QEMU needs no pointer grab (MIND_POINTER=ps2: the PS/2 mouse only).
+# A VirtIO tablet: the system's pointer follows the host's, so it reaches every edge of the screen and the host never
+# takes the pointer back halfway (issue 161; MIND_POINTER=ps2: the PS/2 mouse only).
 POINTER=()
 [[ "${MIND_POINTER:-tablet}" == ps2 ]] || POINTER=(-device virtio-tablet-pci)
 exec "$QEMU_BIN" \

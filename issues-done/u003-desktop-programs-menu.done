@@ -1,0 +1,26 @@
+# u003 — wm: a menu of the programs by category on a right click on the desktop — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Asked by the user: a right click on the desktop should show the available programs as a hierarchical menu. Until now a program was started in `wm` only by typing its name (Alt+R), so one had to know it.
+
+## Plan
+
+- The programs come from the loader (`list`, then each one's request, `inspect_requests`): services are not listed, window managers are left out, console programs run inside `console` (issue u004) when it is on the disk and are left out otherwise. The loader reads each request from the file (about 30 ms each), so `wm` looks at two programs at a time between events instead of making its first frame wait 1.6 s.
+- Categories in a fixed order — Files, System, Clocks, Sound and voice, Network — then Other for programs not named; `clock` and `dzen-clock` get a second entry for their text faces (issue 089).
+- A right click on the desktop opens the menu there (Alt+P at the top left); the mouse on a category opens its programs beside it, to the left when there is no room on the right; a click on a program starts it in a window as Alt+R does. Keys: ↑ ↓, → or Enter into a category, Enter starts, ← back, Esc closes; a click elsewhere closes it. The menu stays on the screen near its edges.
+
+## Acceptance criteria
+
+- Host: the catalogue with and without `console`; opening by a right click (not a left one) and by Alt+P; hover and the submenu; a click and Enter starting a program; ← and Esc; a click elsewhere; the menu near the bottom right corner.
+- QEMU (`tablet` suite): a right click on the desktop opens the menu, the mouse on Clocks opens its programs, a click starts `clock` in a window.
+
+## Resolution
+
+- `wm/src/menu.rs` (new): `Item`, `Kind`, `catalogue`, `Menu` (`rects`, `hit`, `highlight`, `pointer`, `key`, `draw`, `path`).
+- `wm/src/desk.rs`: `Mode::Menu`, `Wm::programs`; a right click on the desktop and Alt+P open it; the status line shows `MENU=Category>program`; the top bar and the help name it.
+- `wm/src/main.rs`: `Programs` looks at the programs two at a time while idle and logs `[WM] PROGRAMS: n IN m CATEGORIES IN t MS`.
+- Tests: `tests/wm_host.rs` (`the_programs_by_category`, `the_desktop_menu`), QEMU `tablet` suite.
+- Docs: docs/tools §4.9 (English and Russian), README (`wm`).

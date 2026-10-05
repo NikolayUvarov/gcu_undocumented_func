@@ -129,6 +129,10 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [098](../issues-done/098-pong-shows-the-exchange.done) | `pong` kept the string it read on screen for 10 ms only; it stays now, with the number of calls, and Esc works between calls | done (2026-10-05) |
 | [099](../issues-done/099-fm-starts-programs-in-windows.done) | fm in a window of `wm` starts programs in windows of their own (it lends its broker client, files and system information) | done (2026-10-05) |
 | [u001](../issues-done/u001-mouse-in-windows-and-fm.done) | The mouse inside windows (`wm` passes clicks, drags and the wheel to the program at the cell of its content) and in fm (click, double click, right click, wheel, key bar; the pointer cell on a screen) | done (2026-10-05) |
+| [u002](../issues-done/u002-restore-and-unsnap-windows.done) | wm: `[▲]` maximizes, `[⇕]` gives a maximized or snapped window its frame back; dragging a snapped title off the edge does too | done (2026-10-05) |
+| [u003](../issues-done/u003-desktop-programs-menu.done) | wm: a right click on the desktop (or Alt+P) opens the programs by category; a click starts one in a window | done (2026-10-05) |
+| [u004](../issues-done/u004-console.done) | `console`: a terminal for programs in a window or on a screen; console programs started in `wm` or `fm` run in it | done (2026-10-05) |
+| [u005](../issues-done/u005-beep-without-a-screen.done) | `beep` without a screen: `beep 440` sounds 500 ms, `beep 440 200 0 100 880 300` a series (0 Hz: a pause) | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
@@ -143,11 +147,13 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [156](../issues-done/156-ps2-mouse.done) | PS/2 mouse: pointer events for the focused program | done (2026-10-04) |
 | [157](../issues-done/157-window-broker.done) | `windows`: window broker, windows that outlive the window manager | done (2026-10-04) |
 | [159](../issues-done/159-shared-interrupt-lines.done) | Shared interrupt lines reach every driver on them | done (2026-10-05) |
-| [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator | done (2026-10-05) |
+| [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator (the porting stream's; the same work as 161, merged into it; the open 160 above is another issue) | merged into 161 (2026-10-05) |
 | [200](../issues-done/200-architecture-layer.done) | Architecture layer in the kernel and libmind (x86-64 first) | done (2026-10-05) |
 | [201](../issues-done/201-aarch64-boot.done) | aarch64 on QEMU `virt`: boot to init | done (2026-10-05) |
 | [202](../issues-done/202-aarch64-devices.done) | aarch64 devices: PCIe ECAM and the ITS, VirtIO block/net/input, PL011, PL031, display | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
+| [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
+| [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

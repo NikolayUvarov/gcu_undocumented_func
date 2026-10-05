@@ -4,21 +4,14 @@
 //! each checks what it reads: the other side may be broken or hostile. No file here depends on the kernel: host tests
 //! build it.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use crate::abi::{event_key, pointer_event, pointer_fields, KEY_POINTER};
+use crate::abi::{pointer_absolute, pointer_absolute_fields};
 
-/// A pointer event of a window (issue u001): the window manager queues it with the position in the window's cells,
-/// where the kernel's pointer events carry the motion; this bit (free in the event word) tells them apart.
-pub const POINTER_AT: usize = 1 << 33;
-
-/// A pointer event at cell (x, y) of a window's content (up to 255 × 255), with the buttons held and the wheel.
-pub fn pointer_at(buttons: u8, x: usize, y: usize, wheel: i32) -> usize { pointer_event(buttons, x.min(255) as i32, y.min(255) as i32, wheel) | POINTER_AT }
+/// A pointer event of a window (issue u001): the window manager queues an absolute pointer event (`common/abi.rs`,
+/// issue 161) whose position is the cell of the window's content.
+pub fn pointer_at(buttons: u8, x: usize, y: usize, wheel: i32) -> usize { pointer_absolute(buttons, x, y, wheel) }
 
 /// The cell a window pointer event names, if `word` is one.
-pub fn pointer_position(word: usize) -> Option<(usize, usize)> {
-    if event_key(word) != KEY_POINTER || word & POINTER_AT == 0 { return None; }
-    let (_, x, y, _) = pointer_fields(word);
-    (x >= 0 && y >= 0).then_some((x as usize, y as usize))
-}
+pub fn pointer_position(word: usize) -> Option<(usize, usize)> { pointer_absolute_fields(word).map(|(_, x, y, _)| (x, y)) }
 
 /// The badge of the broker's manager client (the shell lends it for `REQUEST_WINDOW_MANAGER`).
 pub const BADGE_MANAGER: u16 = 1;

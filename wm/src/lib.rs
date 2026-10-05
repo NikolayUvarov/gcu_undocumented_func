@@ -6,3 +6,4 @@ extern crate alloc;
 pub use mind::{keys, tui};
 
 pub mod desk;
+pub mod menu;

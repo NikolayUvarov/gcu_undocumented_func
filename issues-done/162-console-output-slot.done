@@ -1,0 +1,26 @@
+# 162 — A launcher may take what a program prints: `SLOT_CONSOLE` — done
+
+**Type:** ABI + loader · **Owner:** kernel track (done from the tools branch, which needed it for `console`, u004) · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.3, MC-3.11, MC-10.2
+
+## Problem
+
+A console program (`uptime`, `df`, `grep`, …) prints into the kernel's per-task queues; only a holder of process control — the shell — may read another task's output (`CONSOLE_READ`, `TASK_LOGS`). A terminal program in a window (`console`, issue u004) starts programs through the loader, as `wm` and `fm` do, and holds no process control, nor should it (MC-10.2): it could not show what its programs print. The kernel cannot tell who asked the loader for a program either, so "the parent may read" is not a rule it could apply.
+
+## Plan
+
+- **ABI:** `SLOT_CONSOLE` (9) in an application: an endpoint of the program that started it. Slot 9 is used by applications for nothing else (it is the serial port only in the shell, where init puts a port range, not an endpoint).
+- **Loader:** a launcher may fill it in a launch session, as `SLOT_WINDOW` (`grant`).
+- **libmind:** `mind::output` — whether slot 9 holds an endpoint is looked at once, before `main` (`mind::entry!`), so a service that later receives capabilities in slot 9 is not affected; `mind::process::log` (`print!`, `println!`) then sends each piece of output there as well, 15 bytes a message (the length in the first byte); a receiver that does not take a message within 500 ms loses the rest of that piece, one that ended (or refuses) gets no more. The kernel's queues keep the output as before (`logs`, the serial port).
+- No change in the kernel.
+
+## Acceptance criteria
+
+- Host: the message format for empty, short, Cyrillic and long output; a bad length is cut.
+- QEMU: `console` shows what `uptime` and `grep` print (`tools` suite, on a screen) and what `uptime` prints in a window of `wm` (`tablet` suite).
+
+## Resolution
+
+- `common/abi.rs`: `SLOT_CONSOLE`. `loader/src/main.rs`: the slot is among those a launcher may fill.
+- `libmind/src/output.rs` (new): `CHUNK`, `pack`, `unpack`, `prepare`, `send`; `libmind/src/lib.rs` (`entry!` calls `output::prepare`), `libmind/src/process.rs` (`log` sends).
+- Tests: `tests/console_host.rs` (`output_messages`), QEMU `tools` and `tablet` suites.
+- Docs: docs/api (application slots), README.

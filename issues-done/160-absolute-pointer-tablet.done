@@ -25,3 +25,7 @@ The PS/2 mouse (156) is a relative device: QEMU must grab the host pointer to tu
 ## Related
 
 [156](156-ps2-mouse.done), [088](../issues/088-text-window-manager.md), [202](202-aarch64-devices.done) (VirtIO input on aarch64).
+
+## Merged into 161
+
+The tools stream did the same work in parallel as [161](161-absolute-pointer-virtio-tablet.done) and reached main first. In the merge (2026-10-05) its encoding (`POINTER_ABSOLUTE` bit 33, `pointer_absolute`, `pointer_absolute_fields`, the cell events of windows), its `mind::input` and wm, its launchers and its tablet suite were kept; this issue's driver additions went into its `virtio_input`: up to two devices, the VirtIO keyboard (issue 202) and the keyboard service. The number 160 was taken meanwhile by an open issue of the tools stream (focus for a started program).

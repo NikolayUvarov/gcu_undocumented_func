@@ -6,10 +6,12 @@ pub fn exit() -> ! {
     loop { core::hint::spin_loop(); }
 }
 
-/// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`).
+/// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`;
+/// and to the program that started it if it lent an endpoint for that: `mind::output`).
 pub fn log(bytes: &[u8]) {
     for chunk in bytes.chunks(4096) { call(SYSCALL_LOG, chunk.as_ptr() as usize, chunk.len()); }
     crate::log::capture(bytes);
+    crate::output::send(bytes);
 }
 
 /// Sink for `print!`/`println!`.

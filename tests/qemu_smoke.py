@@ -7,6 +7,7 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import codecs
+import json
 import http.server
 import math
 import json
@@ -26,8 +27,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell")
+# System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
 BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
@@ -48,10 +49,14 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
-        # `snapshot` writes reach the image.
+        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through a QMP socket (`tablet_at`).
         self.disk = disk
+        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock" if tablet else None
+        self.qmp_file = None
+        if tablet:
+            extra = (*extra, "-device", "virtio-tablet-pci", "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -92,6 +97,32 @@ class VM:
         except BaseException:
             self.close()
             raise
+
+    def qmp(self, command, **arguments):
+        # One QMP command (the tablet's events: input-send-event); the reply.
+        if self.qmp_file is None:
+            connection = socket.socket(socket.AF_UNIX)
+            connection.connect(str(self.qmp_path))
+            self.qmp_file = connection.makefile("rw")
+            self.qmp_file.readline()  # the greeting
+            self.qmp("qmp_capabilities")
+        self.qmp_file.write(json.dumps({"execute": command, **({"arguments": arguments} if arguments else {})}) + "\n")
+        self.qmp_file.flush()
+        while True:
+            reply = json.loads(self.qmp_file.readline())
+            if "return" in reply or "error" in reply:
+                assert "error" not in reply, reply
+                return reply["return"]
+
+    def tablet_at(self, x, y, width=1280, height=800):
+        # The host's pointer at pixel (x, y) of the screen, through the tablet (0..32767 across it).
+        self.qmp("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": (2 * x + 1) * 32768 // (2 * width)}},
+                                             {"type": "abs", "data": {"axis": "y", "value": (2 * y + 1) * 32768 // (2 * height)}}])
+
+    def tablet_click(self, button="left", wait=.08):
+        for down in (True, False):
+            self.qmp("input-send-event", events=[{"type": "btn", "data": {"down": down, "button": button}}])
+            time.sleep(wait)
 
     def services(self):
         # Real service PIDs from the ps table (the harness does not translate its rows).
@@ -203,9 +234,13 @@ class VM:
             path.unlink(missing_ok=True)
 
     def close(self):
+        if self.qmp_file is not None:
+            self.qmp_file.close()
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
+        if self.qmp_path is not None:
+            shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
         self.collect()
 
 
@@ -452,49 +487,6 @@ def normal_suite(vm):
     vm.serial()
     assert heap_used(vm) == baseline
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
-
-
-def tablet_suite(args, disk):
-    """Issue 160: a VirtIO tablet, an absolute pointer, needs no grab; its events carry the position."""
-    path = Path(tempfile.gettempdir()) / f"mind-core-qmp-{os.getpid()}.sock"
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-device", "virtio-tablet-pci", "-qmp", f"unix:{path},server=on,wait=off"])
-    try:
-        require(vm.service_logs("virtio_input", "TABLET READY"), "[VIRTIO_INPUT] TABLET READY")
-        vm.send("run keys\n")
-        vm.expect("[KEYS] READY")
-        start = len(vm.log)
-        # The monitor's mouse_move is relative only: absolute events go through QMP (0..0x7FFF on each axis).
-        qmp = socket.socket(socket.AF_UNIX); qmp.connect(str(path)); reader = qmp.makefile("r")
-        def execute(command, arguments=None):
-            qmp.sendall(json.dumps({"execute": command, **({"arguments": arguments} if arguments else {})}).encode() + b"\n")
-            while "return" not in (reply := json.loads(reader.readline())) and "error" not in reply:
-                pass
-            assert "error" not in reply, reply
-        reader.readline()  # greeting
-        execute("qmp_capabilities")
-        events = [[{"type": "abs", "data": {"axis": "x", "value": 16383}}, {"type": "abs", "data": {"axis": "y", "value": 8191}}],
-                  [{"type": "btn", "data": {"down": True, "button": "left"}}], [{"type": "btn", "data": {"down": False, "button": "left"}}],
-                  [{"type": "btn", "data": {"down": True, "button": "wheel-down"}}], [{"type": "btn", "data": {"down": False, "button": "wheel-down"}}]]
-        for batch in events:
-            execute("input-send-event", {"events": batch})
-            time.sleep(.15)
-        qmp.close()
-        time.sleep(.3)
-        vm.collect()
-        got = re.findall(r"\[KEYS\] (pointer [^\r\n]*)", vm.log[start:])
-        positions = [tuple(map(int, m)) for m in re.findall(r"at=(\d+),(\d+)", " ".join(got))]
-        assert positions and all(0 <= x < 4096 and 0 <= y < 4096 for x, y in positions), got
-        assert any(abs(x - 2048) < 64 and abs(y - 1024) < 64 for x, y in positions), got
-        assert any(line.startswith("pointer buttons=1 at=") for line in got), got
-        assert any(line.endswith("wheel=1") or line.endswith("wheel=-1") for line in got), got
-        vm.send_bytes(b"\x1b")
-        vm.expect("EXITED. SHELL RESUMED.")
-        print("PASS: VirtIO tablet: absolute positions in 1/4096 of the screen, buttons and wheel reach the focused program; no pointer grab needed", flush=True)
-    finally:
-        vm.close()
-        log = Path(tempfile.gettempdir()) / "mind-core-tablet.log"
-        log.write_text(vm.log)
-        print(f"QEMU log: {log}", flush=True)
 
 
 def keys_suite(vm):
@@ -1097,6 +1089,31 @@ def fm_check(vm):
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
           "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
     vfs_check(vm)
+    console_check(vm)
+
+
+def console_check(vm):
+    """console (issues u004, 162): a terminal for programs on a screen of its own; a console program it starts prints
+    into it through the endpoint it lends, and keys typed there start more."""
+    vm.send("console uptime\n")
+    require(vm.expect("[CONSOLE] ENDED uptime"), "[CONSOLE] RUN uptime PID")
+    vm.send_bytes("grep -i -c строка docs/notes.txt\r".encode())
+    vm.expect("[CONSOLE] ENDED grep")
+    vm.send_bytes(b"nosuch\r")
+    vm.expect("[CONSOLE] nosuch: no such program")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert screen[1] == canon("> uptime").ljust(len(screen[1])) and screen[2].startswith(canon("up 0:")), screen[:4]
+    assert any(row.startswith(canon("> grep -i -c строка docs/notes.txt")) for row in screen), screen
+    assert any(row.rstrip() == "300" for row in screen), screen
+    assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
+    assert screen[-1].startswith(canon("> ")), screen[-1]
+    vm.send_bytes(b"exit\r")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, exit returns to the shell", flush=True)
 
 
 def vfs_check(vm):
@@ -2515,7 +2532,12 @@ def audio_suite(vm, wav):
     require(output, "[BEEP] DEVICE=true RATE=48000")
     require(output, "[BEEP] PCM QUEUED 24000 FRAMES")
     time.sleep(1.5)
-    vm.command("kill 1")
+    # beep with notes (issue u005): a console program, no screen; frequency and duration pairs, 0 Hz a pause.
+    require(vm.command("beep 10"), "BEEP: 10 HZ: A FREQUENCY IS 20-20000 HZ, OR 0 FOR A PAUSE")
+    played = vm.command("beep 440 200 0 100 880 300")
+    require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
+    require(played, "[BEEP] DONE")
+    assert task_rows(vm) == {}, "beep ended with its sound"
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -2524,7 +2546,10 @@ def audio_suite(vm, wav):
     left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "AC97 produced no audio"
-    seconds = (loud[-1] - loud[0]) / rate
+    # The demo, then after a second of silence the notes.
+    gap = next(k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate)
+    demo, notes = loud[:gap], loud[gap:]
+    seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
     def power(start, hz):
@@ -2532,9 +2557,16 @@ def audio_suite(vm, wav):
         return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate))
                        for i, x in enumerate(window))) / len(window)
     for index, hz in enumerate((523, 659, 784)):
-        start = loud[0] + int(rate * (0.05 + 0.15 * index))
+        start = demo[0] + int(rate * (0.05 + 0.15 * index))
         assert power(start, hz) > 5 * max(power(start, other) for other in (523, 659, 784) if other != hz), hz
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
+    seconds = (notes[-1] - notes[0]) / rate
+    assert 0.55 < seconds < 0.65, seconds  # 200 ms, a 100 ms pause, 300 ms
+    first, second = notes[0] + int(rate * 0.08), notes[0] + int(rate * 0.4)
+    assert power(first, 440) > 5 * power(first, 880) and power(second, 880) > 5 * power(second, 440)
+    pause = notes[0] + int(rate * 0.22)
+    assert not any(left[pause:pause + int(rate * 0.06)]), "the pause is silent"
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
+          "beep's notes (440 Hz, a pause, 880 Hz) without a screen", flush=True)
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
@@ -3388,6 +3420,15 @@ def wm_suite(vm):
         require(fm_log, line)
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
+    # Snapped windows give their frame back (issue u002): fm's [⇕] the one it had before Alt+M snapped it; the clock,
+    # snapped to the left half by the drag above, its own size when its title is dragged off the edge.
+    point(80 + 80 - 7, 1)
+    mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+    assert rects[fm] == (0, 20, 80, 24), rects
+    assert rects[clock] == (0, 1, 80, 48), rects
+    point(20, 1)
+    mode, focus, rects = mouse("mouse_button 1", *mouse_moves(30 * 8, 10 * 16), "mouse_button 0", lines=2)
+    assert focus == clock and rects[clock] == (40, 11, 42, 13), (focus, rects)
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3406,7 +3447,7 @@ def wm_suite(vm):
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-    require(wait("RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "DETACHED: 3 WINDOWS KEPT")  # the shell's mirror may break a line
     time.sleep(.1); vm.collect(); vm.output = ""
     names = {row[0] for row in task_rows(vm).values()}
     assert {"fm", "clock", "top"} <= names and "wm" not in names, names
@@ -3430,7 +3471,7 @@ def wm_suite(vm):
     time.sleep(.5)
     # Close all: every program ends, then wm.
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(wait("RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     for _ in range(20):
@@ -3440,8 +3481,77 @@ def wm_suite(vm):
     assert heap_used(vm) == baseline
     print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
-          "in fm's window; programs get only what wm holds; "
+          "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+
+
+def tablet_suite(vm):
+    """The VirtIO tablet (issue 161): the host's pointer as a position, so the system's pointer is where the host's is
+    and reaches the edges of the screen — fm's key bar in the bottom right corner, wm's buttons at the right edge."""
+    require(vm.service_logs("virtio_input", "[VIRTIO_INPUT] "), "[VIRTIO_INPUT] QEMU Virtio Tablet X=0..32767 Y=0..32767")
+
+    def click(x, y, text, button="left"):
+        # A click on cell (x, y); the log once `text` came.
+        start = len(vm.log)
+        vm.tablet_at(x * 8 + 4, y * 16 + 8)
+        time.sleep(.05)
+        vm.tablet_click(button)
+        return logged(vm, start, text)
+
+    # fm on its own screen: a click puts the cursor on the entry under the host's pointer; 10 Quit in the corner ends it.
+    vm.send("fm\n")
+    vm.expect("[FM] READY")
+    time.sleep(.3)
+    require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry
+    require(click(159, 49, "[FM] DONE"), "[FM] POINTER 159,49 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    # wm: top in the top right quarter; its [▲] maximizes it, [×] next to the screen's right edge closes it.
+    start = len(vm.log)
+    vm.send("wm fm, top\n")
+    out = logged(vm, start, "[WM] READY")
+    for _ in range(100):
+        out = logged(vm, start, "[WM] READY")
+        if len(re.findall(r"\[WM\] WINDOW \d+ PID", out)) >= 2:
+            break
+        time.sleep(.1)
+    top_pid = re.search(r"\[WM\] STARTED top PID (\d+)", out)[1]
+    top = int(re.search(fr"\[WM\] WINDOW (\d+) PID {top_pid} ", out)[1])
+    time.sleep(1)
+    out = click(153, 1, f"{top}@0,1,160x48")
+    assert re.search(fr"FOCUS={top} .*POINTER=153,1", out), out[-600:]
+    start = len(vm.log)
+    require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
+    logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
+    assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
+    # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
+    # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
+    logged(vm, 0, "[WM] PROGRAMS: ")
+    assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
+    vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
+    time.sleep(.2)
+    require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    # A console program started in wm runs in a window of console, which shows what it prints (issue u004).
+    start = len(vm.log)
+    for key in ("alt-r", "u", "p", "t", "i", "m", "e", "ret"):
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.08)
+    vm.serial(enter=False)
+    require(logged(vm, start, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("> uptime") in row for row in screen) and any(canon("║up 0:") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
+    start = len(vm.log)
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; uptime from Alt+R in a console window", flush=True)
 
 
 def windows_suite(vm):
@@ -3578,7 +3688,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -3591,7 +3701,7 @@ def main():
         BOOT_DRIVE, BOOT_DRIVER = "VIRTIO", "virtio_blk"
         args.qemu, args.cpus = args.qemu or "qemu-system-aarch64", args.cpus or 1
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
-    suites = ["boot", "display", "net", "tls", "netbench", "tablet", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3667,15 +3777,12 @@ def main():
             if suite == "netbench":
                 netbench_suite(args, disk)
                 continue
-            if suite == "tablet":
-                tablet_suite(args, disk)
-                continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ())
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else (), tablet=suite == "tablet")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
@@ -3686,7 +3793,8 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite,
+                     "tablet": tablet_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"
