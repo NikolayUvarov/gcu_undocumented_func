@@ -65,13 +65,13 @@ impl Sink for MemSink {
     }
 }
 
-struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String> }
+struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String> }
 
 const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new() };
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new() };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
         for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
                                     ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
@@ -100,7 +100,10 @@ impl Disk for Mem {
         let broken = self.broken.iter().any(|b| b.eq_ignore_ascii_case(path));
         self.file(path).map(|bytes| { let good = if broken { bytes.len() / 2 } else { bytes.len() }; Box::new(MemFile { data: bytes, good }) as Box<dyn Source> })
     }
-    fn run(&mut self, path: &str) -> Result<u64, String> { self.runs.push(path.into()); Ok(42) }
+    fn run(&mut self, path: &str, args: &str) -> Result<u64, String> {
+        if path.eq_ignore_ascii_case("nothing") { return Err("NotFound".into()); }
+        self.runs.push(path.into()); self.args.push(args.into()); Ok(42)
+    }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         if !Self::allowed(path) { return Err(Failure::Denied); }
         if !self.is_dir(&parent(path).0) { return Err(Failure::NotFound); }
@@ -168,6 +171,12 @@ fn draw(fm: &mut Fm, cols: usize, rows: usize) -> Vec<String> {
     (0..rows).map(|y| (0..cols).map(|x| grid.get(x, y).ch).collect()).collect()
 }
 
+fn draw_cursor(fm: &mut Fm, cols: usize, rows: usize) -> (Vec<String>, Option<(usize, usize)>) {
+    let mut cells = vec![Cell::BLANK; cols * rows];
+    let mut grid = Grid::new(&mut cells, cols, rows);
+    let cursor = fm.draw(&mut grid, &CLASSIC);
+    ((0..rows).map(|y| (0..cols).map(|x| grid.get(x, y).ch).collect()).collect(), cursor)
+}
 fn screen_has(screen: &[String], text: &str) -> bool { screen.iter().any(|l| l.contains(text)) }
 
 #[test]
@@ -199,6 +208,9 @@ fn masks_and_paths() {
     assert_eq!(resolve("RAM:", "RAM:x"), "ram:x");
     assert_eq!(resolve("ram:a", "/b"), "ram:b");
     assert_eq!(resolve("", "/b"), "b");
+    assert_eq!(resolve("docs/old", ".."), "docs");
+    assert_eq!(resolve("docs", "../EFI/./BOOT"), "EFI/BOOT");
+    assert_eq!(resolve("ram:x", "../.."), "ram:");
     assert_eq!(fat_time(STAMP), (2026, 10, 4, 12, 34, 56));
     assert_eq!(panel::date_time(STAMP), ("2026-10-04".into(), "12:34".into()));
     assert_eq!(panel::short_size(123_456), "120K");
@@ -411,6 +423,131 @@ fn key_bars_follow_the_modifiers() {
     // A read-only file: the notice covers the bar until a key, but holding Shift shows what the keys do.
     assert!(bar(&mut fm, 0).starts_with("READ-ONLY: on the boot disk only data/ may be changed"), "{}", bar(&mut fm, 0));
     assert!(bar(&mut fm, MOD_SHIFT).contains("2Save as"));
+}
+
+#[test]
+fn command_line_and_hidden_panels() {
+    let mut disk = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    // Typing goes to the command line under the panels; the cursor is there.
+    typed(&mut fm, &mut disk, "cd docs");
+    assert!(fm.status().ends_with(" CMD=cd docs"), "{}", fm.status());
+    let (screen, cursor) = draw_cursor(&mut fm, 100, 30);
+    assert!(screen[28].starts_with("A:/> cd docs"), "{}", screen[28]);
+    assert_eq!(cursor, Some((12, 28)));
+    // Left, Backspace, End edit the line, not the panel; Enter runs it.
+    fm.key(code(KEY_LEFT), &mut disk);
+    fm.key(code(KEY_BACKSPACE), &mut disk);
+    typed(&mut fm, &mut disk, "c");
+    fm.key(code(KEY_END), &mut disk);
+    assert!(fm.status().ends_with(" CMD=cd docs"), "{}", fm.status());
+    assert_eq!(fm.key(code(KEY_ENTER), &mut disk), Outcome::Redraw);
+    assert_eq!(fm.panels[0].path, "docs");
+    assert!(fm.command.is_empty());
+    // cd .. comes back with the cursor on the directory left; cd alone goes to the volume root; a missing one is said.
+    typed(&mut fm, &mut disk, "cd old");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.panels[0].path, "docs/old");
+    typed(&mut fm, &mut disk, "cd ..");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!((fm.panels[0].path.as_str(), fm.panels[0].current().unwrap().name.as_str()), ("docs", "old"));
+    typed(&mut fm, &mut disk, "cd");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.panels[0].path, "");
+    typed(&mut fm, &mut disk, "cd nowhere");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.panels[0].path, "");
+    assert!(fm.notice.as_deref().unwrap().starts_with("cd: A:/nowhere: NotFound"), "{:?}", fm.notice);
+    // Esc clears a line; with an empty line it still quits.
+    typed(&mut fm, &mut disk, "abc");
+    assert_eq!(fm.key(code(KEY_ESC), &mut disk), Outcome::Redraw);
+    assert!(fm.command.is_empty());
+    // + - * mark on an empty line, and are typed after something.
+    fm.key(chr('*'), &mut disk);
+    assert!(fm.panels[0].marked.len() > 1);
+    fm.key(chr('*'), &mut disk);
+    assert!(fm.panels[0].marked.is_empty());
+    fm.key(chr(' '), &mut disk);
+    assert!(fm.command.is_empty());
+    // A program with arguments: a name of this directory becomes its path; Alt+Enter adds the name under the cursor.
+    typed(&mut fm, &mut disk, "cd docs");
+    fm.key(code(KEY_ENTER), &mut disk);
+    fm.panels[0].arrange(Some("notes.txt"));
+    typed(&mut fm, &mut disk, "grep -i x");
+    fm.key(Key(event(KEY_ENTER, 0, MOD_ALT)), &mut disk);
+    assert_eq!(fm.command.as_str(), "grep -i x notes.txt ");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!((disk.runs.last().unwrap().as_str(), disk.args.last().unwrap().as_str()), ("grep", "-i x docs/notes.txt"));
+    assert!(fm.notice.as_deref().unwrap().contains("as PID 42"), "{:?}", fm.notice);
+    typed(&mut fm, &mut disk, "cd /");
+    fm.key(code(KEY_ENTER), &mut disk);
+    typed(&mut fm, &mut disk, "top");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(disk.runs.last().unwrap(), "top.elf", "a program of this directory runs from it");
+    typed(&mut fm, &mut disk, "nothing");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Cannot start nothing: NotFound"), "{:?}", fm.notice);
+    // edit and view open the built-in editor and viewer; a directory is refused.
+    typed(&mut fm, &mut disk, "view readme.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.viewing());
+    fm.key(f(10), &mut disk);
+    typed(&mut fm, &mut disk, "edit ram:new.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.status().starts_with("EDITOR "), "{}", fm.status());
+    assert!(!fm.editor.as_ref().unwrap().read_only);
+    fm.key(f(10), &mut disk);
+    typed(&mut fm, &mut disk, "edit readme.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.editor.as_ref().unwrap().read_only, "an existing file keeps its protection");
+    fm.key(f(10), &mut disk);
+    typed(&mut fm, &mut disk, "edit docs");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.editor.is_none() && fm.notice.as_deref() == Some("edit: A:/docs is a directory"), "{:?}", fm.notice);
+
+    // Ctrl+O hides both panels: the place shows what the command line did, the cursor is on the line.
+    assert_eq!(fm.key(ctrl('o'), &mut disk), Outcome::Redraw);
+    assert!(fm.status().ends_with(" HIDDEN=LR"), "{}", fm.status());
+    let (screen, cursor) = draw_cursor(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "A:/docs> grep -i x notes.txt") && screen_has(&screen, "Started grep as PID 42"), "{:#?}", screen);
+    assert!(screen_has(&screen, "edit: A:/docs is a directory") && !screen_has(&screen, "║"), "no panel: {:#?}", screen);
+    assert_eq!(cursor, Some((5, 28)));
+    // Panel keys do nothing while both are hidden; commands still run.
+    let before = fm.panels[0].list.selected;
+    fm.key(code(KEY_DOWN), &mut disk);
+    assert_eq!(fm.panels[0].list.selected, before);
+    typed(&mut fm, &mut disk, "cd docs");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.panels[0].path, "docs");
+    fm.key(ctrl('o'), &mut disk);
+    assert!(!fm.status().contains("HIDDEN"), "{}", fm.status());
+    // Ctrl+F1 / Ctrl+F2: one side; a hidden active panel gives the cursor to the other one.
+    let ctrl_f = |n: u16| Key(event(KEY_F1 + n - 1, 0, MOD_CTRL));
+    fm.key(ctrl_f(1), &mut disk);
+    assert!(fm.status().ends_with(" HIDDEN=L") && fm.status().contains("ACTIVE=R"), "{}", fm.status());
+    let screen = draw(&mut fm, 100, 30);
+    let half = |line: &String, right: bool| -> String { line.chars().skip(if right { 50 } else { 0 }).take(50).collect() };
+    assert!(half(&screen[0], false).starts_with("A:/> cd docs") && half(&screen[0], true).contains("═ A:/ ═") && !half(&screen[5], false).contains('║'), "{:#?}", screen);
+    fm.key(code(KEY_TAB), &mut disk);
+    assert!(fm.status().contains("ACTIVE=R"), "Tab does not go to a hidden panel: {}", fm.status());
+    fm.key(ctrl_f(1), &mut disk);
+    fm.key(ctrl_f(2), &mut disk);
+    assert!(fm.status().ends_with(" HIDDEN=R") && fm.status().contains("ACTIVE=L"), "{}", fm.status());
+    fm.key(ctrl_f(2), &mut disk);
+    // Ctrl+P: the other panel.
+    fm.key(ctrl('p'), &mut disk);
+    assert!(fm.status().ends_with(" HIDDEN=R"), "{}", fm.status());
+    fm.key(ctrl('p'), &mut disk);
+    assert!(!fm.status().contains("HIDDEN"), "{}", fm.status());
+    // Ctrl+O with one panel hidden hides both; again shows both.
+    fm.key(ctrl('p'), &mut disk);
+    fm.key(ctrl('o'), &mut disk);
+    assert!(fm.status().ends_with(" HIDDEN=LR"), "{}", fm.status());
+    fm.key(ctrl('o'), &mut disk);
+    assert!(!fm.status().contains("HIDDEN"), "{}", fm.status());
+    // Every state draws on small screens.
+    for (cols, rows) in [(20, 8), (40, 12), (100, 30)] { fm.key(ctrl('o'), &mut disk); let _ = draw(&mut fm, cols, rows); fm.key(ctrl_f(2), &mut disk); let _ = draw(&mut fm, cols, rows); }
 }
 
 fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }

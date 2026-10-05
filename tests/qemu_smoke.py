@@ -867,6 +867,8 @@ def fm_check(vm):
     def keys(data, text):
         vm.send_bytes(data)
         return status_line(vm, text)
+    def poke(text):
+        return keys(b"\x18", text)  # Ctrl+X: bound to nothing (a letter would go to the command line)
     vm.send("fm\n")
     vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
     time.sleep(.3)
@@ -875,7 +877,7 @@ def fm_check(vm):
     assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
     assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
     assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
-    assert "CURRENT=.." in tool_status(vm, "[FM] LEFT=/docs FULL")
+    assert "CURRENT=.." in poke("[FM] LEFT=/docs FULL")
     # F3 views notes.txt in the built-in viewer; Esc comes back.
     keys(b"\x1b[B", "CURRENT=notes.txt")
     keys(b"\x1bOR", "VIEW=1")
@@ -886,17 +888,17 @@ def fm_check(vm):
     keys(b"\x1b", "VIEW=0")
     # ".." goes up with the cursor on the directory left; EFI/BOOT and back.
     keys(b"\x1b[H\r", "LEFT=/ FULL")
-    assert "CURRENT=docs" in tool_status(vm, "[FM] LEFT=/ FULL")
+    assert "CURRENT=docs" in poke("[FM] LEFT=/ FULL")
     keys(b"\x1b[B", "CURRENT=EFI")
     keys(b"\r", "LEFT=/EFI FULL")
     keys(b"\x1b[B", "CURRENT=BOOT")
     keys(b"\r", "LEFT=/EFI/BOOT FULL")
-    tool_status(vm, "LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
+    poke("LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()  # Enter on "..": back to EFI
     assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
-    assert "CURRENT=BOOT" in tool_status(vm, "[FM] LEFT=/EFI FULL")
+    assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel runs in the background.
     for _ in range(60):
@@ -911,6 +913,31 @@ def fm_check(vm):
     started = table_row(screen, canon("Started clock.elf as PID"))
     assert started, screen
     pid = int(re.search(r"PID (\d+)", started)[1])
+    # The command line (issue 097): typing goes under the panels, Enter runs it (cd, edit, view, a program with its
+    # arguments); Ctrl+O hides both panels and shows what it did there, Ctrl+F1 / Ctrl+F2 one, Ctrl+P the other.
+    keys(b"cd docs", "CMD=cd docs")
+    keys(b"\r", "LEFT=/docs FULL")
+    keys(b"\x0f", "HIDDEN=LR")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter on an empty line with the panels hidden: nothing
+    assert any(line.startswith(canon("A:/> cd docs")) for line in screen) and not any(canon("║") in line for line in screen[:-2]), screen
+    assert screen[-2].startswith(canon("A:/docs>")), screen[-2]
+    keys(b"cd ..", "CMD=cd ..")
+    keys(b"\r", "LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
+    assert "HIDDEN" not in keys(b"\x0f", "CURRENT=docs"), "Ctrl+O shows the panels again"
+    vm.send_bytes(b"\x1b[1;5P")
+    assert "ACTIVE=R" in status_line(vm, "HIDDEN=L", whole=True), "Ctrl+F1 hides the left panel; the right one is active"
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(line.startswith(canon("A:/docs> cd ..")) for line in screen) and canon("║") in screen[1][40:], screen
+    assert screen[-1].startswith(canon("1Help")), "a terminal's Ctrl does not stay in the key bar: " + screen[-1]
+    assert "HIDDEN" not in keys(b"\x10", "ACTIVE=R"), "Ctrl+P shows the other panel again"
+    keys(b"\t", "ACTIVE=L")
+    keys(b"view docs/notes.txt", "CMD=view docs/notes.txt")
+    keys(b"\r", "VIEW=1")
+    keys(b"\x1b", "VIEW=0")
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -923,7 +950,7 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel", flush=True)
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P", flush=True)
     vfs_check(vm)
 
 

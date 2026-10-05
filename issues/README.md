@@ -132,6 +132,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
 | [095](../issues-done/095-list-by-mask.done) | `list a*`: the programs whose names match a mask (`mind::mask` without allocation) | done (2026-10-04) |
 | [096](../issues-done/096-audio-without-interrupts.done) | `say` and `listen` hung when the sound card shared its interrupt line (`audio_gw` looks at its ring while a client waits) | done (2026-10-05) |
+| [097](../issues-done/097-fm-command-line-and-hidden-panels.done) | fm: the command line under the panels (`cd`, `edit`, `view`, programs with arguments) and hiding panels with Ctrl+O, Ctrl+F1/F2, Ctrl+P | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

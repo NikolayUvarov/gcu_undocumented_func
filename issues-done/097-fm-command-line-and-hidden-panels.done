@@ -1,0 +1,27 @@
+# 097 — fm: the command line under the panels and hiding panels as in Midnight Commander — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: in `fm` no command can be typed on the bottom line, and the keys that hide panels do nothing; they have to be the ones Midnight Commander uses. The line above the key bar only showed where the active panel was (`A:/>`); typed letters were dropped. Ctrl+O, Ctrl+F1, Ctrl+F2 and Ctrl+P were not bound.
+
+## Plan
+
+- The line above the key bar becomes a command line: typed text goes there, Enter runs it, Esc clears it. `cd`, `edit` and `view` are done by fm itself; anything else is a program started with its arguments.
+- Ctrl+O hides or shows both panels; Ctrl+F1 / Ctrl+F2 the left / right one; Ctrl+P the other one (Midnight and Norton Commander). Where panels are hidden, fm shows what the command line did.
+- fm has no process control, so it cannot show a started program's output or bring it to the front: say so, and point to `FG <pid>`.
+
+## Acceptance criteria
+
+- Host: typing, editing (← → Home End Backspace Delete), Enter, Esc; `cd dir`, `cd ..` (the cursor on the directory left), `cd` (the volume root), a missing directory; `edit` (a new file, a read-only file stays read-only, a directory refused), `view`; a program of the current directory with arguments that name entries; Alt+Enter; `+ - *` and Space on an empty line; Ctrl+O, Ctrl+F1, Ctrl+F2, Ctrl+P with the status (`HIDDEN=L|R|LR`), the active panel never hidden while the other is shown, the output drawn in the place of hidden panels; every state on small screens.
+- QEMU (`tools` suite): `cd docs` typed on the serial line, Ctrl+O shows the output and no panel, `cd ..`, Ctrl+F1 hides the left panel only, Ctrl+P shows it again, `view docs/notes.txt` opens the viewer.
+
+## Resolution
+
+- `fm/src/fm.rs`: `command: InputLine`, `hidden: [bool; 2]` and the output lines (the last 200). `command_key` runs before the panel keys: Ctrl+O / Ctrl+P / Ctrl+F1 / Ctrl+F2, Alt+Enter or Ctrl+Enter (the name under the cursor), Enter / Esc / editing keys while the line is not empty, and printable characters (`+ - *` and Space on an empty line keep their panel meaning). `execute` does `cd`, `edit`, `view` and otherwise starts the program — one of the active directory (with or without `.elf`) from there, another name through the loader — with the arguments that name entries of the active panel turned into their paths. While both panels are hidden, panel keys do nothing; Tab and Ctrl+F1/F2 never leave the cursor on a hidden panel. `draw` shows the output where panels are hidden, the prompt `A:/docs> ` with the typed text, and returns its cursor. The status line ends with `CMD=…` and `HIDDEN=…` when they apply. F1 lists the new keys; the Ctrl key bar names Ctrl+F1/F2 (`LPanel`, `RPanel`).
+- `Disk::run` takes the arguments (`fm/src/main.rs` passes them to `loader::begin`). `panel::resolve` understands `.` and `..`, so `cd ..` and copy targets like `../x` work.
+- `mind::input::modifiers()` follows only modifier events: a terminal's Ctrl+F1 left Ctrl in the key bar for good, as a terminal never reports the release.
+- Not done: the output of programs started from fm (fm has no process control; a shell service that runs a command for fm and returns its output would give it), and the grants the shell gives (file and network clients) — such programs are better started from the shell.
+- Tests: `tests/fm_host.rs` `command_line_and_hidden_panels` and `..` in `masks_and_paths`; QEMU `tools` suite (`fm_check`; its status poke is Ctrl+X now — a letter would be typed into the command line).
+- Docs: README (`fm`), docs/tools §4.1 (EN/RU), fm's `--help` text.

@@ -86,7 +86,7 @@ pub fn resolve(current: &str, typed: &str) -> String {
     if !v.is_empty() { return format!("{}{}", v.to_lowercase(), clean(rest)); }
     if typed.starts_with('/') { return format!("{}{}", volume(current).0, clean(typed)); }
     let mut path = String::from(current);
-    for part in typed.split('/').filter(|p| !p.is_empty()) { path = join(&path, part); }
+    for part in typed.split('/').filter(|p| !p.is_empty() && *p != ".") { path = if part == ".." { parent(&path).0 } else { join(&path, part) }; }
     path
 }
 

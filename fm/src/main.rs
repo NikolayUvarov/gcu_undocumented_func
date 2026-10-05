@@ -48,9 +48,9 @@ impl Disk for Vfs {
         Ok(entries)
     }
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> { File::open(path).ok().map(|file| Box::new(DiskFile(file)) as Box<dyn Source>) }
-    fn run(&mut self, path: &str) -> Result<u64, String> {
+    fn run(&mut self, path: &str, args: &str) -> Result<u64, String> {
         let failed = |e: loader::Error| alloc::format!("{:?}", e);
-        let session = loader::begin(Endpoint::LOADER, path, "").map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)?;
+        let session = loader::begin(Endpoint::LOADER, path, args).map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)?;
         loader::commit(Endpoint::LOADER, session).map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
@@ -70,7 +70,7 @@ impl Disk for Vfs {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
+    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
     let mut disk = Vfs;

@@ -44,8 +44,8 @@ pub trait Disk {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
-    /// Starts a program (in the background); returns its PID.
-    fn run(&mut self, path: &str) -> Result<u64, String>;
+    /// Starts a program (in the background) with arguments; returns its PID.
+    fn run(&mut self, path: &str, args: &str) -> Result<u64, String>;
     /// A file to write: an existing one is emptied if `replace`, else `Failure::Exists`.
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure>;
     /// Makes a directory and missing parents (an existing one is fine).
@@ -82,6 +82,7 @@ impl Source for Bytes<'_> {
 }
 
 const PREVIEW: usize = 8 * 1024;
+const OUTPUT_MAX: usize = 200; // lines of the command line's output kept
 const FIND_MAX: usize = 500;
 /// Bytes copied per step of a job (the screen and the keys are served between steps).
 pub const SLICE: usize = 64 * 1024;
@@ -95,10 +96,14 @@ const COMMAND_ITEMS: [&str; 2] = ["Find file  Alt+F7", "Swap panels  Ctrl+U"];
 const OPTION_ITEMS: [&str; 1] = ["Hidden and system files  Ctrl+H"];
 const MENU_ITEMS: [&[&str]; 5] = [&PANEL_ITEMS, &FILES_ITEMS, &COMMAND_ITEMS, &OPTION_ITEMS, &PANEL_ITEMS];
 const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "", "View", "Edit", "Copy", "RenMov", "Mkdir", "Delete", "PullDn", "Quit"],
-                                         shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["", "", "Name", "Ext", "Time", "Size", "", "", "", ""],
+                                         shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["LPanel", "RPanel", "Name", "Ext", "Time", "Size", "", "", "", ""],
                                          alt: ["Left", "Right", "", "", "", "", "Find", "", "", ""] };
 
-const HELP: [&str; 13] = [
+const HELP: [&str; 17] = [
+    "Typing goes to the command line: Enter runs it — cd <dir>, edit or view <file>,",
+    "  a program with arguments; Esc clears it; Alt+Enter adds the name under the cursor",
+    "Ctrl+O — hide or show the panels; Ctrl+F1 / Ctrl+F2 — the left / right panel;",
+    "  Ctrl+P — the other panel",
     "Tab — other panel; Enter — open a directory, run a program, view a file",
     "Backspace — parent directory; ↑ ↓ PgUp PgDn Home End (← → in brief mode)",
     "F3 — view; F4 — edit (Shift+F4: a new file); F9 — menu; F10 or Esc — quit",
@@ -274,6 +279,11 @@ pub struct Fm<'b> {
     volumes: [String; 2], // the volume line of each panel for the information panel
     /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bars show what the keys do with them.
     pub modifiers: u8,
+    /// The command line under the panels: typed text goes there, Enter runs it.
+    pub command: InputLine,
+    /// Panels hidden with Ctrl+O, Ctrl+F1, Ctrl+F2 or Ctrl+P: their place shows what the command line did.
+    pub hidden: [bool; 2],
+    output: Vec<String>,
 }
 
 impl<'b> Fm<'b> {
@@ -281,7 +291,7 @@ impl<'b> Fm<'b> {
     pub fn new(window: &'b mut [u8], disk: &mut dyn Disk) -> Self {
         let mut fm = Self { panels: [Panel::new(Mode::Full), Panel::new(Mode::Brief)], active: 0, menu: MenuBar::new(&MENU_TITLES, &MENU_ITEMS), dialog: None, notice: None,
                             job: None, editor: None, viewer: None, window: Some(window), quick: vec![0; PREVIEW], preview: None, volumes: [String::new(), String::new()],
-                            modifiers: 0 };
+                            modifiers: 0, command: InputLine::new(), hidden: [false; 2], output: Vec::new() };
         fm.load(0, "", None, disk);
         fm.load(1, "", None, disk);
         fm
@@ -432,7 +442,7 @@ impl<'b> Fm<'b> {
         if entry.is_up() { self.up(disk); }
         else if entry.dir { self.load(self.active, &path, None, disk); }
         else if entry.is_program() {
-            self.notice = Some(match disk.run(&path) {
+            self.notice = Some(match disk.run(&path, "") {
                 Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", entry.name, pid, pid),
                 Err(error) => format!("Cannot start {}: {}", entry.name, error),
             });
@@ -589,6 +599,93 @@ impl<'b> Fm<'b> {
         Outcome::Redraw
     }
 
+    // What the command line did, for the place of hidden panels.
+    fn say(&mut self, text: String) {
+        if self.output.len() >= OUTPUT_MAX { self.output.remove(0); }
+        self.output.push(text);
+    }
+
+    // A hidden panel is not the active one while the other is shown.
+    fn fix_active(&mut self, disk: &mut dyn Disk) {
+        if self.hidden[self.active] && !self.hidden[1 - self.active] { self.active = 1 - self.active; self.update_preview(disk); }
+    }
+
+    // The command line and the panel switches (Ctrl+O, Ctrl+F1, Ctrl+F2, Ctrl+P, as in Midnight and Norton Commander).
+    // None: the key is not for them.
+    fn command_key(&mut self, key: Key, disk: &mut dyn Disk) -> Option<Outcome> {
+        if key.is_ctrl('o') { let shown = !self.hidden[0] || !self.hidden[1]; self.hidden = [shown, shown]; self.fix_active(disk); return Some(Outcome::Redraw); }
+        if key.is_ctrl('p') { self.hidden[1 - self.active] = !self.hidden[1 - self.active]; return Some(Outcome::Redraw); }
+        match key.code() {
+            Code::F(n @ 1..=2) if key.ctrl() => { let side = n as usize - 1; self.hidden[side] = !self.hidden[side]; self.fix_active(disk); return Some(Outcome::Redraw); }
+            Code::Enter if key.alt() || key.ctrl() => {
+                let name = self.panels[self.active].current().filter(|e| !e.is_up()).map(|e| e.name.clone())?;
+                if !self.command.is_empty() && !self.command.as_str().ends_with(' ') { self.command.insert(' '); }
+                for ch in name.chars().chain(Some(' ')) { self.command.insert(ch); }
+                return Some(Outcome::Redraw);
+            }
+            Code::Enter if !self.command.is_empty() => { self.execute(disk); return Some(Outcome::Redraw); }
+            Code::Esc if !self.command.is_empty() => { self.command.clear(); return Some(Outcome::Redraw); }
+            Code::Left | Code::Right | Code::Home | Code::End | Code::Backspace | Code::Delete if !self.command.is_empty() => { self.command.key(key); return Some(Outcome::Redraw); }
+            _ => {}
+        }
+        let ch = key.text()?;
+        // On an empty line these keep their panel meaning: + - * mark, a space does nothing.
+        if self.command.is_empty() && matches!(ch, '+' | '-' | '*' | ' ') { return None; }
+        self.command.insert(ch);
+        Some(Outcome::Redraw)
+    }
+
+    // Enter on the command line: cd, edit, view here; anything else is a program started with its arguments (names of
+    // the active panel's entries become their paths).
+    fn execute(&mut self, disk: &mut dyn Disk) {
+        let line = String::from(self.command.as_str().trim());
+        self.command.clear();
+        let here = self.panels[self.active].path.clone();
+        self.say(format!("{}> {}", display(&here), line));
+        let (word, rest) = match line.split_once(' ') { Some((word, rest)) => (word, rest.trim()), None => (line.as_str(), "") };
+        let failed = match word.to_ascii_lowercase().as_str() {
+            "cd" => {
+                let target = if rest.is_empty() { String::from(panel::volume(&here).0) } else { resolve(&here, rest) };
+                match disk.list(&target) {
+                    Ok(_) => {
+                        // Going up puts the cursor on the directory left.
+                        let (up, name) = parent(&here);
+                        let focus = (!is_root(&here) && up.eq_ignore_ascii_case(&target)).then_some(name);
+                        self.load(self.active, &target, focus.as_deref(), disk);
+                        None
+                    }
+                    Err(error) => Some(format!("cd: {}: {}", display(&target), error)),
+                }
+            }
+            "edit" | "view" if !rest.is_empty() => {
+                let path = resolve(&here, rest);
+                if disk.list(&path).is_ok() { Some(format!("{}: {} is a directory", word, display(&path))) }
+                else if word.eq_ignore_ascii_case("view") { self.view(&path, disk); None }
+                else { let exists = disk.open(&path).is_some(); self.edit(&path, !exists, disk); None }
+            }
+            _ => {
+                let panel = &self.panels[self.active];
+                let entry = |name: &str| panel.items.iter().find(|e| !e.is_up() && e.name.eq_ignore_ascii_case(name));
+                // A program of this directory (with or without .elf) runs from here; another name is the loader's.
+                let elf = format!("{}.elf", word);
+                let program = match entry(word).or_else(|| entry(&elf)).filter(|e| e.is_program()) {
+                    Some(e) => join(&here, &e.name),
+                    None if word.contains('/') || word.contains(':') => resolve(&here, word),
+                    None => String::from(word),
+                };
+                let args: Vec<String> = rest.split_whitespace().map(|arg| entry(arg).map_or_else(|| String::from(arg), |e| join(&here, &e.name))).collect();
+                let text = match disk.run(&program, &args.join(" ")) {
+                    Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", word, pid, pid),
+                    Err(error) => format!("Cannot start {}: {}", word, error),
+                };
+                self.notice = Some(text.clone());
+                self.say(text);
+                None
+            }
+        };
+        if let Some(text) = failed { self.notice = Some(text.clone()); self.say(text); }
+    }
+
     fn panel_command(&mut self, side: usize, item: usize, disk: &mut dyn Disk) {
         let panel = &mut self.panels[side];
         match item {
@@ -734,11 +831,13 @@ impl<'b> Fm<'b> {
             return Outcome::Redraw;
         }
         self.notice = None;
+        if let Some(outcome) = self.command_key(key, disk) { return outcome; }
         let side = self.active;
+        if self.hidden[side] && !matches!(key.code(), Code::F(1) | Code::F(9) | Code::F(10) | Code::Esc | Code::Tab) { return Outcome::Ignored; }
         if self.panels[side].key(key) { self.update_preview(disk); return Outcome::Redraw; }
         match key.code() {
             Code::F(10) | Code::Esc => return Outcome::Quit,
-            Code::Tab => { self.active = 1 - self.active; self.update_preview(disk); return Outcome::Redraw; }
+            Code::Tab => { self.active = 1 - self.active; self.fix_active(disk); self.update_preview(disk); return Outcome::Redraw; }
             Code::Enter => { self.open(disk); return Outcome::Redraw; }
             Code::Backspace => { self.up(disk); return Outcome::Redraw; }
             Code::Insert => { self.panels[side].toggle_mark(); self.update_preview(disk); return Outcome::Redraw; }
@@ -864,20 +963,40 @@ impl<'b> Fm<'b> {
         let left = w / 2;
         for side in 0..2 {
             let area = if side == 0 { Rect::new(0, 0, left, height) } else { Rect::new(left, 0, w - left, height) };
+            if self.hidden[side] { continue; }
             match self.panels[side].mode {
                 Mode::Info if side != self.active => self.info(grid, area, theme),
                 Mode::Quick if side != self.active => self.quick_view(grid, area, theme),
                 _ => { let active = side == self.active; self.panels[side].draw(grid, area, theme, active); }
             }
         }
-        // The line above the key bar: a notice, or where the active panel is.
-        let line = self.notice.clone().unwrap_or_else(|| format!("{}>", display(&self.panels[self.active].path)));
-        grid.text_padded(0, h - 2, &line, w, if self.notice.is_some() { theme.marked } else { theme.fkey_number });
+        // Where panels are hidden: what the command line did, the latest lines last.
+        let output = match self.hidden {
+            [true, true] => Some(Rect::new(0, 0, w, height)), [true, false] => Some(Rect::new(0, 0, left, height)),
+            [false, true] => Some(Rect::new(left, 0, w - left, height)), [false, false] => None,
+        };
+        if let Some(area) = output {
+            let start = self.output.len().saturating_sub(area.h);
+            for (i, text) in self.output[start..].iter().enumerate() { grid.text_max(area.x, area.y + i, text, area.w, theme.panel); }
+            if self.output.is_empty() { grid.text_max(area.x, area.y, "Ctrl+O shows the panels again", area.w, theme.dim); }
+        }
+        // The line above the key bar: a notice, or the command line with where the active panel is.
+        let mut cursor = None;
+        match &self.notice {
+            Some(notice) if self.command.is_empty() => grid.text_padded(0, h - 2, notice, w, theme.marked),
+            _ => {
+                let prompt = format!("{}> ", display(&self.panels[self.active].path));
+                let x = prompt.chars().count().min(w.saturating_sub(8));
+                grid.text_max(0, h - 2, &prompt, x, theme.fkey_number);
+                let column = self.command.draw(grid, x, h - 2, w - x, theme.fkey_number);
+                if !self.command.is_empty() || self.hidden == [true, true] { cursor = Some((column, h - 2)); }
+            }
+        }
         fkey_bar(grid, h - 1, KEYS.labels(self.modifiers), theme);
         if self.menu.open { self.menu.draw(grid, 0, theme); }
         if let Some(job) = self.job.as_ref() { Self::draw_job(job, grid, theme); return None; }
         match self.dialog.as_mut() {
-            None => None,
+            None => if self.menu.open { None } else { cursor },
             Some(Dialog::Help) => { message(grid, "fm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); None }
             Some(Dialog::Message { title, lines }) => { let refs: Vec<&str> = lines.iter().map(|l| l.as_str()).collect(); message(grid, title, &refs, &["OK"], 0, theme); None }
             Some(Dialog::Mask { select, line }) => Some(input_dialog(grid, if *select { "Select" } else { "Unselect" }, "Files matching (* and ?, several with ,):", line, 50, theme)),
@@ -934,6 +1053,8 @@ impl<'b> Fm<'b> {
         format!("LEFT=/{} {} RIGHT=/{} {} ACTIVE={} CURRENT={} MARKED={} DIALOG={} MENU={} VIEW={} JOB={}", self.panels[0].path, mode(&self.panels[0]), self.panels[1].path,
                 mode(&self.panels[1]), if self.active == 0 { "L" } else { "R" }, panel.current().map_or("", |e| e.name.as_str()), panel.marked.len(), dialog,
                 self.menu.open as u8, self.viewer.as_ref().map_or(0, |v| v.top() as usize + 1), job)
+            + &if self.command.is_empty() { String::new() } else { format!(" CMD={}", self.command.as_str()) }
+            + match self.hidden { [false, false] => "", [true, false] => " HIDDEN=L", [false, true] => " HIDDEN=R", [true, true] => " HIDDEN=LR" }
     }
 }
 

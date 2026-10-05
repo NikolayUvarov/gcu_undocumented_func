@@ -7,12 +7,12 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 static MODIFIERS: AtomicU8 = AtomicU8::new(0);
 
-/// The modifiers (MOD_SHIFT, MOD_CTRL, MOD_ALT) held at the last input event read: a key bar shows what F1–F10 do
-/// with them. The PS/2 keyboard reports a modifier going down or up on its own; a terminal only with a key.
+/// The modifiers (MOD_SHIFT, MOD_CTRL, MOD_ALT) held, as the last modifier event read reported them: a key bar shows
+/// what F1–F10 do with them. The PS/2 keyboard reports a modifier going down or up on its own; a terminal sends a
+/// modifier only with a key and never its release, so its keys leave the modifiers alone (they would stick).
 pub fn modifiers() -> u8 { MODIFIERS.load(Ordering::Relaxed) & (MOD_SHIFT | MOD_CTRL | MOD_ALT) }
 
-// Pointer events carry buttons in the modifier byte: they leave the modifiers alone.
-fn seen(word: usize) -> usize { if event_key(word) != 0 && event_key(word) != KEY_POINTER { MODIFIERS.store(event_mods(word), Ordering::Relaxed); } word }
+fn seen(word: usize) -> usize { if crate::keys::is_modifier(event_key(word)) { MODIFIERS.store(event_mods(word), Ordering::Relaxed); } word }
 
 pub use crate::keys::{Code, Key};
 
