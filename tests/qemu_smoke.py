@@ -2299,6 +2299,11 @@ def speech_wav(phrases=SPEECH):
 
 
 def listen_suite(vm, starts):
+    # The network card the launchers add shares the sound card's interrupt line, which the kernel delivers to one
+    # driver only (issue 159): audio_gw then plays without interrupts, looking at the ring while a client waits (096).
+    lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
+    assert len(lines) == 2, lines
+    shared = len(set(lines.values())) == 1
     # QEMU's "none" backend feeds the AC97 microphone with silence at the real rate ("wav" has no capture).
     require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
     log = ""
@@ -2381,7 +2386,7 @@ def listen_suite(vm, starts):
     vm.command(f"kill {pid}")
     voice_control(vm)
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback, program arguments, run by name, "
+    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
           "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
@@ -3128,8 +3133,11 @@ def main():
                 netbench_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
+            # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
+            # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
-                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")
+                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ())
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)

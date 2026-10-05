@@ -1,0 +1,27 @@
+# 096 — `say` and `listen` hang when the sound card shares its interrupt line — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P1 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: `say "text"` speaks the phrase, then its window stays and Esc does nothing; `listen` hangs in playback the same way. The launchers (`03_run_qemu*.sh`, `.bat`) give QEMU a VirtIO network card besides the AC97; on QEMU's i440FX both get interrupt line 11, and the kernel delivers a line to one bound endpoint only — `virtio_net`'s (`irqs`: `IRQ=11 HOLDER=12 HOLDERS=3 ENDPOINT=12`). `audio_gw` saw no interrupt again, so a client waiting for ring space (`wait`, answered from the playback interrupt) was never answered: `tts` stayed in its call, `say` in its call to `tts` (`stat tasks`: `tts WAIT=3:10`, `say WAIT=3:11`), `listen` in `play_all` — none of them reads keys meanwhile, hence Esc.
+
+## Plan
+
+- `audio_gw` must not depend on its interrupt to make progress: while a client waits, look at the ring every 20 ms, clear what is pending and answer whoever has room.
+- The kernel's side — every driver on a shared line gets the interrupt — is kernel issue [159](../issues/159-shared-interrupt-lines.md).
+
+## Acceptance criteria
+
+- QEMU with the launchers' devices (AC97 and a VirtIO network card): `say` exits after the phrase, `listen` plays back and ends; the `listen` suite runs with that network card.
+
+## Resolution
+
+- `audio_gw`: while a `wait` is parked the service endpoint is received with a 20 ms timeout (`POLL_MS`); on a timeout it clears the status flags, unmasks its line (`ack`) and answers every waiter that now has room — the playback interrupt does no more than that. `clear_status` repeats until no flag is left, so a buffer that completes between reading and clearing the status does not keep an edge-triggered line high.
+- Measured with the user's devices before the fix: `say` hangs with `tts` waiting on `audio_gw`, `listen` never prints `PLAYED BACK`; after it: `say "hello world"` ends in 0.9 s, `listen 1` plays back and ends.
+- The diagnosis also ruled out a fault of the ring arithmetic: with QEMU's audio pulled in 100 ms bursts (`timer-period`) a 2.7 s phrase takes 9.8 s to play, slow but never stuck.
+- Tests: the QEMU `listen` suite runs with `-nic user,model=virtio-net-pci` and checks that the sound card and the network card are both there (and says when they share the line); all its audio checks — capture, playback, `say`, `hear`, voice control — pass on the shared line.
+
+## Related
+
+[159](../issues/159-shared-interrupt-lines.md) (kernel), [017](017-tts-on-audio-gateway.done).
