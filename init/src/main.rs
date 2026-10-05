@@ -274,8 +274,9 @@ impl Init {
         // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each; the shell
         // serves voice control on one endpoint of its own (issue 079).
         let quota = match name {
-            "loader" => Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16 },
-            "shell" => Quota { tasks: 0, endpoints: 1 },
+            // The applications' memory is charged to loader too: it may use all of init's (issue 150).
+            "loader" => Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16, memory_mib: SPAWN_MEMORY_ALL as u16 },
+            "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             _ => Quota::default(),
         };
         let plan = Plan { grants, flags, quota };

@@ -1,4 +1,4 @@
-use crate::abi::{HEAP_MAX_BLOCKS, HEAP_MAX_BYTES, SHARED_MAX_BYTES};
+use crate::abi::{HEAP_MAX_BLOCKS, SHARED_MAX_BYTES};
 use crate::memory::Region;
 use crate::paging::{Space, PAGE, USER_END, USER_HEAP};
 
@@ -17,11 +17,16 @@ pub struct Heap {
     bytes: usize,
     pub retained: usize, // freed or detached blocks others still hold, charged until released
     shared: usize,
+    limit: usize, // the task's memory quota: private and retained bytes together
 }
 
 impl Heap {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Self { blocks: core::array::from_fn(|_| None), bytes: 0, retained: 0, shared: 0 }
+        Self::with_limit(crate::abi::HEAP_MAX_BYTES)
+    }
+    pub fn with_limit(limit: usize) -> Self {
+        Self { blocks: core::array::from_fn(|_| None), bytes: 0, retained: 0, shared: 0, limit }
     }
 
     fn find_hole(&self, size: usize) -> Option<usize> {
@@ -39,10 +44,10 @@ impl Heap {
     pub fn allocate(&mut self, space: &mut Space, requested: usize) -> Option<usize> {
         if requested == 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
-        if size > HEAP_MAX_BYTES.saturating_sub(self.bytes + self.retained) { return None; }
+        if size > self.limit.saturating_sub(self.bytes + self.retained) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        let memory = Region::new(size, PAGE).ok()?;
+        let memory = Region::task(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
         self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false });
         self.bytes += size;
@@ -130,6 +135,7 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::abi::HEAP_MAX_BYTES;
 
     #[test]
     fn holes_are_reused_and_frees_are_checked() {

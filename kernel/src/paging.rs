@@ -10,13 +10,13 @@ pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
 pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
-pub const USER_END: usize = USER_IMAGE + 0x1000_0000; // 160 MiB heap window: private quota + frame/IPC mappings
+pub const USER_END: usize = USER_IMAGE + 0x4000_0000; // 928 MiB heap window: private quota + frame/IPC mappings (issue 150)
 const PRESENT: u64 = 1;
 const WRITE: u64 = 2;
 const USER: u64 = 4;
 const NX: u64 = 1 << 63;
 const UNCACHED: u64 = 0x18; // PCD | PWT: uncached device registers
-const TABLES: usize = 128; // enough for the heap window with shared frame buffers
+const TABLES: usize = 640; // the whole heap window mapped (each table one page of the arena)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
@@ -82,8 +82,7 @@ pub unsafe fn activate(root: usize) {
 }
 
 pub struct Space {
-    tables: [Option<Region>; TABLES],
-    count: usize,
+    tables: alloc::vec::Vec<Region>,
 }
 
 #[cfg(test)]
@@ -141,21 +140,21 @@ mod tests {
         space
             .map(USER_HEAP + PAGE, 0x100000, PAGE, true, false)
             .unwrap();
-        let count = space.count;
+        let count = space.table_count();
         assert!(space
             .map(USER_HEAP, 0x200000, PAGE * 2, true, false)
             .is_err());
-        assert_eq!(space.count, count);
+        assert_eq!(space.table_count(), count);
         assert!(space.readable(USER_HEAP).is_none());
         assert_eq!(space.readable(USER_HEAP + PAGE), Some(0x100000));
         space
             .map(USER_HEAP + PAGE * 3, 0x300000, PAGE, true, false)
             .unwrap();
         space.unmap(USER_HEAP + PAGE, PAGE);
-        assert_eq!(space.count, count);
+        assert_eq!(space.table_count(), count);
         assert_eq!(space.readable(USER_HEAP + PAGE * 3), Some(0x300000));
         space.unmap(USER_HEAP + PAGE * 3, PAGE);
-        assert_eq!(space.count, 1); // shared kernel tables were never owned
+        assert_eq!(space.table_count(), 1); // shared kernel tables were never owned
         assert!(space.readable(USER_HEAP + PAGE * 3).is_none());
     }
 }
@@ -163,8 +162,7 @@ mod tests {
 impl Space {
     pub fn new() -> Result<Self, &'static str> {
         let mut space = Self {
-            tables: core::array::from_fn(|_| None),
-            count: 0,
+            tables: alloc::vec::Vec::new(),
         };
         let root = space.table()?;
         unsafe {
@@ -173,19 +171,19 @@ impl Space {
         Ok(space)
     }
     fn table(&mut self) -> Result<usize, &'static str> {
-        if self.count == self.tables.len() {
+        if self.tables.len() == TABLES {
             return Err("PAGE TABLE LIMIT");
         }
         let table = Region::new(PAGE, PAGE)?;
         let pointer = table.ptr() as usize;
-        self.tables[self.count] = Some(table);
-        self.count += 1;
+        self.tables.try_reserve(1).map_err(|_| "OUT OF MEMORY")?;
+        self.tables.push(table);
         Ok(pointer)
     }
     /// Page tables owned by this space (each one page of the kernel arena).
-    pub fn table_count(&self) -> usize { self.count }
+    pub fn table_count(&self) -> usize { self.tables.len() }
     pub fn root(&self) -> usize {
-        self.tables[0].as_ref().unwrap().ptr() as usize
+        self.tables[0].ptr() as usize
     }
 
     pub fn map(
@@ -290,8 +288,7 @@ impl Space {
     fn unmap_with(&mut self, start: usize, size: usize, reclaim: bool) {
         assert!(start >= USER_IMAGE && start % PAGE == 0);
         assert!(start.checked_add(size).is_some_and(|end| end <= USER_END));
-        let mut retired: [Option<Region>; TABLES] = core::array::from_fn(|_| None);
-        let mut retired_count = 0;
+        let mut retired: alloc::vec::Vec<Region> = alloc::vec::Vec::new();
         for offset in (0..size).step_by(PAGE) {
             let address = start + offset;
             let mut table = self.root();
@@ -325,16 +322,16 @@ impl Space {
                 unsafe {
                     parents[level].write(0);
                 }
-                let index = (1..self.count)
-                    .find(|&i| self.tables[i].as_ref().unwrap().ptr() as usize == child)
+                let index = (1..self.tables.len())
+                    .find(|&i| self.tables[i].ptr() as usize == child)
                     .unwrap();
-                retired[retired_count] = self.tables[index].take();
-                retired_count += 1;
-                self.count -= 1;
-                self.tables.swap(index, self.count);
+                retired.push(self.tables.swap_remove(index));
             }
         }
         self.flush();
+        // The list keeps the capacity growth would give its length, so arena use depends only on the tables held.
+        let capacity = self.tables.len().next_power_of_two().max(4);
+        if self.tables.capacity() > capacity { self.tables.shrink_to(capacity); }
         // retired drops here, after invalidating paging-structure caches too.
     }
 

@@ -13,6 +13,7 @@ pub fn free(out: &mut impl Write) {
     let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
     let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
     let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
+    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
 }
 
 pub fn cpus(out: &mut impl Write) {
@@ -70,7 +71,10 @@ pub fn irqs(out: &mut impl Write) {
     let mut buffer = [0u8; 1024];
     let Ok(records) = stat::read(STAT_IRQS, 0, &mut buffer) else { return };
     for i in records.iter::<StatIrq>() {
-        let _ = writeln!(out, "IRQ={} COUNT={} HOLDER={} HOLDERS={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.holders, i.endpoint, i.masked != 0);
+        let _ = write!(out, "IRQ={} COUNT={} HOLDER={} HOLDERS={} ENDPOINT={} MASKED={}", i.line, i.count, i.holder, i.holders, i.endpoint, i.masked != 0);
+        // Every driver bound to a shared line (issue 159).
+        if i.endpoints[1] != 0 { let _ = write!(out, " ENDPOINTS="); for (n, ep) in i.endpoints.iter().filter(|&&e| e != 0).enumerate() { let _ = write!(out, "{}{}", if n > 0 { "," } else { "" }, ep); } }
+        let _ = writeln!(out);
     }
 }
 

@@ -93,6 +93,7 @@ impl Scheduler {
                     band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
                     budget_ns: task.budget_ns, period_ns: task.period_ns,
                     kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
+                    memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
                 });
             },
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
@@ -112,6 +113,7 @@ impl Scheduler {
                 }
                 m.objects = self.orphans.iter().map(|o| o.region.len() as u64).sum();
                 m.dma = self.dma.iter().map(|r| r.len() as u64).sum();
+                let (frames, frames_free) = crate::frames::stats(); m.frames = frames as u64; m.frames_free = frames_free as u64;
                 m.endpoints = (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]).count() as u64;
                 out.push(m);
             }
@@ -179,14 +181,16 @@ impl Scheduler {
                     creator: self.endpoint_owner[ep].map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
                     server: holder(&|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0)).0,
                     holders: holder(&|c| matches!(c, Capability::Endpoint(id, ..) if *id == ep)).1,
-                    irq: self.irq_bind.iter().position(|bound| *bound == Some(ep)).map_or(0, |line| line as u32),
+                    irq: self.irq_bind.iter().position(|line| line.iter().flatten().any(|b| b.ep == ep)).map_or(0, |line| line as u32),
                 });
             },
             // PIC lines 1..15, then the MSI-X vectors handed out (lines 16..31).
             STAT_IRQS => for line in (1..16u8).filter(|&l| l != 2).chain((0..MSI_VECTORS).filter(|&i| self.msi[i].is_some()).map(|i| (MSI_FIRST + i) as u8)) {
                 let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));
-                out.push(StatIrq { line: line as u32, endpoint: self.irq_bind[line as usize].map_or(0, |e| e as u32), masked: interrupts::irq_masked(line) as u32, holders,
-                    holder, count: self.accounting.irqs[line as usize] });
+                let mut endpoints = [0u32; IRQ_SHARERS];
+                for (out, b) in endpoints.iter_mut().zip(self.irq_bind[line as usize].iter().flatten()) { *out = b.ep as u32; }
+                out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: interrupts::irq_masked(line) as u32, holders,
+                    holder, count: self.accounting.irqs[line as usize], endpoints });
             },
             STAT_DEVICES => for device in self.devices.iter() {
                 let (mut bar_sizes, mut io_bars) = ([0u64; 6], 0u32);

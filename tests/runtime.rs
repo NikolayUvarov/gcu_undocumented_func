@@ -18,6 +18,12 @@ mod elf;
 mod elf_reloc;
 #[path = "../kernel/src/memory.rs"]
 mod memory;
+// The kernel's frame pool is not set up on the host: task memory comes from the allocator.
+mod frames {
+    pub fn ready() -> bool { false }
+    pub fn allocate(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
+    pub unsafe fn free(_: core::ptr::NonNull<u8>, _: core::alloc::Layout) {}
+}
 #[path = "../kernel/src/paging.rs"]
 mod paging;
 #[path = "../libmind/src/idl/codec.rs"]

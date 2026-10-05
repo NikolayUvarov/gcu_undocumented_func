@@ -255,6 +255,34 @@ def require(text, fragment):
     assert fragment in text, (fragment, text)
 
 
+def hold_frames(vm, frames, leave_mib):
+    """Starts memtest instances that hold all but about `leave_mib` of the frame pool; returns their PIDs."""
+    holders, left = [], frames - leave_mib * 1024 * 1024
+    while (mib := min(144, left // (1024 * 1024)) // 16 * 16) > 0:
+        output = vm.command(f"run memtest hold {mib} &")
+        holders.append(int(re.search(r"STARTED PID=(\d+)", output)[1]))
+        for _ in range(80):
+            if f"HELD {mib} MiB" in vm.command(f"logs {holders[-1]}"):
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError(f"memtest did not hold {mib} MiB")
+        left -= mib * 1024 * 1024
+    return holders
+
+
+def frames_free(vm):
+    # Free bytes of the frame pool for task memory (issue 150), once two readings agree.
+    previous = None
+    for _ in range(20):
+        free = int(re.search(r"FRAMES=\d+ FRAMES_FREE=(\d+)", vm.command("free"))[1])
+        if free == previous:
+            return free
+        previous = free
+        time.sleep(.1)
+    raise AssertionError("frame pool use did not settle")
+
+
 def heap_used(vm):
     # IDL clients allocate a buffer per call (log lines of the services, for instance), so a reading can catch one in
     # flight: the value counts once two readings in a row agree.
@@ -1177,29 +1205,57 @@ def isolation_suite(vm):
 
 
 def memory_suite(vm):
-    baseline = heap_used(vm)
+    baseline, frames = heap_used(vm), frames_free(vm)
+    # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of it, so spawns run out.
+    holders = hold_frames(vm, frames, 40)
     pids = []
-    for _ in range(8):
-        before = heap_used(vm)
+    for _ in range(8 - len(holders)):
+        before, frames_before = heap_used(vm), frames_free(vm)
         output = vm.command("run app2 &")
         if "OUT OF MEMORY" in output:
-            assert heap_used(vm) == before, "partial spawn must roll back all allocations"
+            assert heap_used(vm) == before and frames_free(vm) == frames_before, "partial spawn must roll back all allocations"
             break
         match = re.search(r"STARTED PID=(\d+)", output)
         assert match, output
         pids.append(int(match[1]))
     else:
         raise AssertionError("large-BSS fixture did not exercise allocation failure")
-    assert 1 < len(pids) < 8, pids
+    assert 1 < len(pids) < 8 - len(holders), pids
     first = task_rows(vm)
     time.sleep(.3)
     second = task_rows(vm)
     assert all(int(second[p][-1]) > int(first[p][-1]) for p in pids)
-    for pid in pids:
+    for pid in pids + holders:
         vm.command(f"kill {pid}")
-    assert heap_used(vm) == baseline
+    assert heap_used(vm) == baseline and frames_free(vm) == frames
     require(vm.command("run clock &"), "NAME=clock BACKGROUND")
+    memory_beyond_the_arena(vm)
     print("PASS: out-of-memory rollback, surviving tasks and later successful launch", flush=True)
+
+
+def memory_beyond_the_arena(vm):
+    """Issue 150: task memory comes from the frame pool, not the 64 MiB arena; a program asks for its quota."""
+    used, frames = heap_used(vm), frames_free(vm)
+    vm.send("memtest alloc 128\n")
+    output = vm.expect("MIND> ", timeout=120, after="memtest alloc 128\n")
+    require(output, "[MEMTEST] HELD 128 MiB INTACT=true")
+    require(output, "[MEMTEST] BEYOND QUOTA: REFUSED")
+    require(output, "[MEMTEST] FREED")
+    assert frames_free(vm) == frames and heap_used(vm) == used
+    # A 64 MiB sealed object mapped read-only by two tasks; the frames come back when both let go.
+    vm.send("memtest share 64\n")
+    output = vm.expect("MIND> ", timeout=120, after="memtest share 64\n")
+    require(output, "[MEMTEST] SEALED=true")
+    require(output, "[MEMTEST] PARENT MAPPED 64 MiB INTACT=true")
+    require(output, "[MEMTEST] CHILD MAPPED 64 MiB READ-ONLY SEALED=true INTACT=true SAME SUM=true")
+    require(output, "[MEMTEST] SHARE DONE")
+    for _ in range(40):
+        if frames_free(vm) == frames:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("the shared object's frames were not returned")
+    print("PASS: 128 MiB of heap beyond the arena within the requested quota (one block more refused); a 64 MiB sealed object mapped by two tasks; frames returned", flush=True)
 
 
 def heap_suite(vm):
@@ -1275,16 +1331,19 @@ def heap_suite(vm):
         pid = start()
         vm.background(pid)
         clients.append(pid)
+    # The frame pool (issue 150) is larger than four quotas: memtest holds all but about 40 MiB of it.
+    hogs = hold_frames(vm, frames_free(vm), 40)
+    next_pid += len(hogs)
     holders, failed = [], []
     for pid in clients:
-        before = heap_used(vm)
+        before, frames_before = heap_used(vm), frames_free(vm)
         foreground(pid)
         vm.send("b\n")
         output = vm.expect("HEAP ALLOCATION FINISHED")
         vm.background(pid)
         if "OOM" in output:
             failed.append(pid)
-            assert heap_used(vm) == before, "failed allocation changed heap usage"
+            assert heap_used(vm) == before and frames_free(vm) == frames_before, "failed allocation changed heap usage"
         else:
             require(output, "QUOTA HELD")
             holders.append(pid)
@@ -1295,7 +1354,7 @@ def heap_suite(vm):
     vm.send("b\n")
     require(vm.expect("HEAP ALLOCATION FINISHED"), "HEAP QUOTA HELD")
     vm.background(failed[0])
-    for pid in clients:
+    for pid in clients + hogs:
         vm.command(f"kill {pid}")
     assert heap_used(vm) == clock_baseline
     assert int(task_rows(vm)[1][-1]) > int(first[1][-1])
@@ -2337,8 +2396,8 @@ def speech_wav(phrases=SPEECH):
 
 
 def listen_suite(vm, starts):
-    # The network card the launchers add shares the sound card's interrupt line, which the kernel delivers to one
-    # driver only (issue 159): audio_gw then plays without interrupts, looking at the ring while a client waits (096).
+    # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
+    # audio_gw would also play without interrupts, looking at the ring while a client waits (096).
     lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
     assert len(lines) == 2, lines
     shared = len(set(lines.values())) == 1
@@ -2360,6 +2419,11 @@ def listen_suite(vm, starts):
     require(output, "STARTED PID=2 NAME=say FOREGROUND")
     # Two short words, not the default greeting (2.5-9 s): the text argument reached say.
     spoken = int(re.search(r"\[SAY\] SPOKE (\d+) MS", output)[1])
+    if shared:
+        # Both drivers are bound to the line and audio_gw got interrupts while say spoke (issue 159).
+        line = lines["audio (AC97)"]
+        assert re.search(fr"^IRQ={line} COUNT=\d+ .* ENDPOINTS=\d+,\d+", vm.command("irqs", raw=True), re.M), vm.command("irqs", raw=True)
+        require(vm.service_logs("audio_gw", "[AUDIO] IRQ COUNT"), "[AUDIO] IRQ COUNT")
     assert 200 < spoken < 2000, spoken
     # Run by name: a plain word starts the program in the foreground with the rest as arguments.
     vm.send("say hi\n")
@@ -2424,7 +2488,7 @@ def listen_suite(vm, starts):
     vm.command(f"kill {pid}")
     voice_control(vm)
     assert "FAULT PID=" not in vm.command("faults")
-    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card' if shared else ''}, program arguments, run by name, "
+    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card, both drivers interrupted' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
           "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)

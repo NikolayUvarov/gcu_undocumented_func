@@ -44,7 +44,7 @@ Required authority is in brackets; "none" means every task may call it.
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block, 0 on failure (quota `HEAP_MAX_BYTES`, `HEAP_MAX_BLOCKS`) |
+| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`) |
 | 9 | `FREE` | `arg1` = block address; memory still referenced elsewhere is kept until released and stays charged to the owner |
 | 15 | `MEM_SHARE` | `arg1` = address of an own heap block → handle of a memory capability (read, write, grant) |
 | 16 | `MEM_MAP` | `arg1` = memory, DMA or MMIO handle → mapped address; `arg2` = size. Read-only without `CAP_WRITE`; MMIO uncached |
@@ -96,7 +96,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 27 | `PORT_IN_BLOCK` | `arg1` = handle, `arg2` = port, `msg[2]` = buffer, `msg[3]` = 16-bit words (≤ 2048) → words read |
 | 53 | `PORT_OUT_BLOCK` | as `PORT_IN_BLOCK`; the words are written from the buffer → words written |
 | 19 | `IRQ_WAIT` | `arg1` = IRQ handle; blocks until the line fires |
-| 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages |
+| 24 | `IRQ_BIND` | `arg1` = IRQ handle, `arg2` = endpoint with read right: the line arrives as `MSG_FLAG_IRQ` messages; up to `IRQ_SHARERS` (4) drivers share a line, each gets every interrupt, and the line stays masked until each has called `IRQ_ACK` |
 | 25 | `IRQ_ACK` | `arg1` = IRQ handle; unmasks the line |
 | 20 | `INPUT_EVENT` | routes decoded input [input privilege] |
 | 21 | `COMPOSITOR_PULL` | `arg1` = slot for the focused screen → 0 unchanged, 1 dirty, 2 new screen (read-only capability) [display privilege] |
