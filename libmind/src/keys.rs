@@ -58,6 +58,15 @@ impl Key {
         if let Some(i) = RU_SHIFT.iter().position(|&c| c == ch) { return Some(US_SHIFT[i] as char); }
         Some(ch)
     }
+    /// The character key as the US layout puts it, lower case, whatever modifiers are held: Alt+R is `r` in either
+    /// layout (shortcuts of a window manager, issue 088).
+    pub fn letter(self) -> Option<char> {
+        if self.code() != Code::Char { return None; }
+        let ch = self.char()?;
+        let ch = if ch.is_ascii() { ch } else if let Some(i) = RU.iter().position(|&c| c == ch) { US[i] as char }
+                 else if let Some(i) = RU_SHIFT.iter().position(|&c| c == ch) { US_SHIFT[i] as char } else { ch };
+        Some(ch.to_ascii_lowercase())
+    }
 }
 
 /// What a decoder produced.

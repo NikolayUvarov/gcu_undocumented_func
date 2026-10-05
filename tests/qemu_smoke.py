@@ -151,9 +151,10 @@ class VM:
         self.send(command + "\n")
         return self.expect("(qemu)")
 
-    def serial(self):
+    def serial(self, enter=True):
+        # The newline after leaving the monitor reaches the program in front as Enter; `enter=False` leaves it out.
         if self.monitor:
-            self.send("\x01c\n")
+            self.send("\x01c\n" if enter else "\x01c")
             self.monitor = False
             time.sleep(.1)
             self.collect()
@@ -2961,6 +2962,173 @@ def netbench_suite(args, disk):
           "upload, UDP round trips, CPU time of netstack and the drivers, offload off and on", flush=True)
 
 
+def wm_suite(vm):
+    """The window manager (issue 088): fm, clock and top in three windows on one screen (text frames and content, the
+    clock's pixels); keys reach only the window in front; halves, quarters, maximize and snapping by keys and by
+    dragging a title with the mouse; a program started from wm gets only what wm holds; leaving wm and killing it keep
+    the programs running and the next wm shows them where they were; close all ends them."""
+    baseline = heap_used(vm)
+    windows_re = re.compile(r'\[WM\] WINDOW (\d+) PID (\d+) (TEXT|PIXELS) (\d+)X(\d+) "[^"]*" AT (\d+),(\d+) (\d+)X(\d+)')
+    seen = []  # everything wm logged, PIDs as the suites number them
+    read = [len(vm.log)]  # how far into the log: lines printed while in the QEMU monitor count too
+
+    def wait(text=None, lines=1, timeout=12):
+        # Until `text` and `lines` state lines (one per key) have come; returns what came.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            vm.collect()
+            fresh = vm.log[read[0]:]
+            done = to_ordinal(ANSI.sub("", fresh[:fresh.rfind("\n") + 1]).replace("\r", ""))
+            if done.count("[WM] MODE=") >= lines and (text is None or text in done):
+                read[0] += fresh.rfind("\n") + 1  # a line still coming stays for the next wait
+                seen.append(done)
+                return done
+            time.sleep(.02)
+        raise AssertionError(f"Timeout waiting for {text!r}: {vm.log[read[0]:][-3000:]}")
+
+    def until(text):
+        # `text` was logged already, or comes.
+        if text not in "".join(seen):
+            wait(text, lines=0)
+
+    def state():
+        # The windows bottom to top as {id: (x, y, w, h)}, the focus and the mode, from the last state line.
+        mode, focus, windows = re.findall(r"\[WM\] MODE=(\w+) FOCUS=(\S+) WINDOWS=(.*?)(?: POINTER=\S+)?$", "".join(seen), re.M)[-1]
+        rects = {int(i): tuple(map(int, (x, y, w, h))) for i, x, y, w, h in re.findall(r"(\d+)@(\d+),(\d+),(\d+)x(\d+)", windows)}
+        return mode, (int(focus) if focus != "-" else None), rects
+
+    def keys(*names, text=None):
+        # PS/2 keys from the QEMU monitor (Alt combinations cannot come over the UART); back without an Enter.
+        for name in names:
+            vm.hmp(f"sendkey {name}")
+            time.sleep(.08)
+        vm.serial(enter=False)
+        wait(text, lines=len(names))
+        return state()
+
+    def front(window):
+        # Alt+Tab until `window` is in front.
+        return keys(*["alt-tab"] * (list(state()[2]).index(window) + 1))
+
+    vm.send("wm fm, clock, top\n")
+    out = wait()
+    while len(windows_re.findall("".join(seen))) < 3:
+        out = wait("[WM] WINDOW", lines=0)
+    out = "".join(seen)
+    started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
+    wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
+    windows = {int(m[0]): m for m in windows_re.findall(out)}
+    by_name = {name: next(i for i, m in windows.items() if m[1] == pid) for name, pid in started.items()}
+    fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
+    # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
+    # lifecycle client, which wm does not hold.
+    require(out, f"STARTED fm PID {started['fm']} WITH window,files")
+    require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
+    assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
+    time.sleep(1.5)  # the text programs drew at the size of their frames
+    mode, focus, rects = front(clock)  # the clock in front: no key of the harness reaches a program that uses it
+    assert focus == clock and mode == "NORMAL", (focus, rects)
+    # The screen: the top bar, text frames with their titles and content, the clock's pixels in its frame.
+    screen = screen_text(vm)
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    assert screen[0].startswith(canon(" wm │ Alt+Tab next")), screen[0]
+    x, y, w, h = rects[fm]
+    assert canon(" fm A:/ ") in screen[y][x:x + w] and canon("Name") in screen[y + 2][x:x + w], screen[y:y + 3]
+    x, y, w, h = rects[top]
+    assert canon(" top ") in screen[y][x:x + w] and any(canon("PID NAME") in row[x:x + w] for row in screen[y:y + h]), screen[y:y + h]
+    width = int(size.split()[0])
+    x, y, w, h = rects[clock]
+    green = sum(pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))
+                for py in range((y + 1) * 16, (y + h - 1) * 16) for px in range((x + 1) * 8, (x + w - 1) * 8))
+    assert green > 500, green  # the clock's digits, drawn by clock into its pixel window
+    assert canon(" clock ") in screen[y][x:x + w], screen[y]
+    # Keys reach only the window in front: fm gets "cd docs", top nothing.
+    mode, focus, rects = front(fm)
+    assert focus == fm, (focus, rects)
+    vm.send_bytes(b"cd docs\r")
+    wait(lines=8)
+    vm.background(wm_pid)
+    fm_log = vm.command(f"logs {started['fm']}")
+    require(fm_log, "CMD=cd docs")
+    require(fm_log, "LEFT=/docs FULL")
+    assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
+    vm.send(f"fg {wm_pid}\n")
+    vm.expect(f"FOREGROUND PID={wm_pid}")
+    # Halves, quarters, maximize and back.
+    assert keys("alt-right")[2][fm] == (80, 1, 80, 48)
+    assert keys("alt-3")[2][fm] == (0, 25, 80, 24)
+    assert keys("alt-ret")[2][fm] == (0, 1, 160, 48)
+    assert keys("alt-ret")[2][fm] == (0, 25, 80, 24)
+    # Alt+M: off the left edge and back; Enter snaps it to the left half.
+    mode, focus, rects = keys("alt-m", *["up"] * 5, *["right"] * 10)
+    assert mode == "MOVE" and rects[fm] == (10, 20, 80, 24), (mode, rects)
+    mode, focus, rects = keys("ctrl-left", "ctrl-left", "ret")
+    assert mode == "NORMAL" and rects[fm] == (0, 1, 80, 48), (mode, rects)
+    # The mouse: the pointer starts in the middle of the screen (cell 80, 25); the clock's title is dragged to the
+    # left edge, below the top, and let go: it snaps to the left half.
+    x, y, w, h = rects[clock]
+    dx, dy = (x + 4) * 8 + 4 - 640, y * 16 + 8 - 400
+    for move in [f"mouse_move {dx // 4} 0"] * 4 + [f"mouse_move 0 {dy // 4}"] * 4 + ["mouse_button 1"] + ["mouse_move -100 0"] * 8 + ["mouse_move 0 80"] * 2 + ["mouse_button 0"]:
+        vm.hmp(move)
+        time.sleep(.12)
+    vm.serial(enter=False)
+    wait(lines=2)
+    mode, focus, rects = state()
+    assert focus == clock and rects[clock] == (0, 1, 80, 48), (focus, rects)
+    # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
+    keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
+    caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
+    while not any(m[1] == caps_pid for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    caps = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == caps_pid)
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("No access to sysmon") in row for row in screen), screen
+    keys("alt-w", text=f"CLOSE {caps}")
+    until(f"GONE {caps}")
+    # Leaving: the programs keep running; the next wm shows them where they were.
+    places = state()[2]
+    assert set(places) == {fm, clock, top}, places
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    require(wait("EXITED. SHELL RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    names = {row[0] for row in task_rows(vm).values()}
+    assert {"fm", "clock", "top"} <= names and "wm" not in names, names
+
+    def again():
+        read[0] = len(vm.log)
+        vm.send("wm\n")
+        out = wait("[WM] READY", lines=0)
+        restored = {int(m[0]): tuple(map(int, m[5:9])) for m in windows_re.findall(out)}
+        assert restored == places, (restored, places)
+        return int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
+
+    second = again()
+    # A killed wm is detached by the broker: the programs still run, and the next wm shows them.
+    time.sleep(.5)
+    vm.background(second)
+    require(vm.command(f"kill {second}"), "KILLED")
+    time.sleep(1.5)
+    assert {"fm", "clock", "top"} <= {row[0] for row in task_rows(vm).values()}
+    again()
+    time.sleep(.5)
+    # Close all: every program ends, then wm.
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(wait("EXITED. SHELL RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    for _ in range(20):
+        if heap_used(vm) == baseline:
+            break
+        time.sleep(.2)
+    assert heap_used(vm) == baseline
+    print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
+          "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse; programs get only what wm holds; "
+          "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+
+
 def windows_suite(vm):
     # Window broker (issue 157): windows outlive their manager; a new manager gets them back where they were; one
     # manager at a time; close all ends the programs; a plain client cannot act as manager or read others' windows.
@@ -3091,13 +3259,13 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3137,6 +3305,9 @@ def main():
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
+            if suite == "wm":
+                (disk / "docs").mkdir()
+                (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite == "tools":
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
@@ -3184,7 +3355,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

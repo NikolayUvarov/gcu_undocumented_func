@@ -30,4 +30,4 @@ For compatibility each needs a text face too.
 
 ## Related
 
-[088](088-text-window-manager.md), [155](155-virtual-consoles.md), [157](../issues-done/157-window-broker.done).
+[088](../issues-done/088-text-window-manager.done), [155](155-virtual-consoles.md), [157](../issues-done/157-window-broker.done).

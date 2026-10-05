@@ -4,7 +4,6 @@ use crate::model::*;
 use alloc::string::String;
 use alloc::vec::Vec;
 use mind::abi::BootInfo;
-use mind::gfx::Screen;
 use mind::idl::{init as lifecycle, sysinfo};
 use mind::ipc::Endpoint;
 use mind::tui::widgets::message;
@@ -131,7 +130,7 @@ impl Source for Client {
 
 /// Runs `tool` on the program's screen until it quits. `name` prefixes the log lines (`[TOP] READY`).
 pub fn run(info: &'static BootInfo, name: &str, tool: &mut dyn Tool) {
-    let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
+    let Some(mut term) = Terminal::open(info, &name.to_ascii_lowercase()) else { return };
     let Some(mut client) = Client::new() else { mind::println!("[{}] OUT OF MEMORY", name); return };
     let mut problem = tool.refresh(&mut client).err();
     mind::println!("[{}] READY {}x{}{}", name, term.cols(), term.rows(), if problem == Some(Problem::NoAccess) { " NO ACCESS TO SYSMON" } else { "" });

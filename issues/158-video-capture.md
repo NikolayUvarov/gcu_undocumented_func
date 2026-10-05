@@ -37,4 +37,4 @@ MIND Core can speak (`tts`) and hear (`listen`, voice V0–V2), but it cannot se
 
 ## Related
 
-[093](093-screen-recording.md), [088](088-text-window-manager.md), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).
+[093](093-screen-recording.md), [088](../issues-done/088-text-window-manager.done), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).

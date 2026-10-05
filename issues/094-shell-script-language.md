@@ -47,4 +47,4 @@ The shell runs one command at a time from the keyboard or the UART. Nothing can 
 
 ## Related
 
-[RFC 001 Marain](../constitution/EN/RFC_001_Marain_v0.4.md), [155](155-virtual-consoles.md), [088](088-text-window-manager.md), [docs/tools](../docs/tools/README.md).
+[RFC 001 Marain](../constitution/EN/RFC_001_Marain_v0.4.md), [155](155-virtual-consoles.md), [088](../issues-done/088-text-window-manager.done), [docs/tools](../docs/tools/README.md).

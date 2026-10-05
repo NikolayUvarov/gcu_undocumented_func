@@ -72,7 +72,8 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
 }
 
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
-// child's slots). A program that asked to be a console program gets no screen.
+// child's slots). A program that asked to be a console program gets no screen, nor one its launcher starts in a window
+// (a broker client in SLOT_WINDOW, issue 088): it draws into the window's surface; a window manager keeps its screen.
 fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     let (file, task) = open(name)?;
     let size = file.size();
@@ -94,7 +95,8 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     text[..task.as_bytes().len()].copy_from_slice(task.as_bytes());
     let mut len = task.as_bytes().len();
     if !args.is_empty() { text[len + 1..len + 1 + args.len()].copy_from_slice(args); len += 1 + args.len(); }
-    let screen = if flags & mind::process::REQUEST_CONSOLE != 0 { 0 } else { SPAWN_SCREEN };
+    let windowed = extra.iter().any(|&(slot, _)| slot as usize == SLOT_WINDOW) && flags & mind::process::REQUEST_WINDOW_MANAGER == 0;
+    let screen = if flags & mind::process::REQUEST_CONSOLE != 0 || windowed { 0 } else { SPAWN_SCREEN };
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, &grants[..count], screen, Quota { tasks: 0, endpoints: APP_ENDPOINTS });
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns

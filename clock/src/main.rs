@@ -8,7 +8,9 @@ fn time_text(seconds: usize) -> [u8; 8] { let hour = seconds / 3600; let minute 
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("clock — a digital clock from the RTC on its own screen.\nUsage: clock\nEsc: exit.");
+    mind::about!("clock — a digital clock from the RTC on its own screen, or in a window under wm.\nUsage: clock\nEsc: exit.");
+    // Started by a window manager: a 320 × 176 window instead of the screen (issue 088).
+    let info = mind::windowed::pixels(info, 320, 176, "clock");
     let Some(screen) = Screen::new(info) else { return };
     screen.clear(BACKGROUND);
     screen.text(24, 24, b"CLOCK (IPC RTC)", 2, FOREGROUND, Some(BACKGROUND));

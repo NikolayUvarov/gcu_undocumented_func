@@ -38,6 +38,7 @@ pub mod tts;
 pub mod tui;
 pub mod util;
 pub mod window;
+pub mod windowed;
 #[cfg(feature = "alloc")]
 pub mod pattern;
 #[cfg(feature = "alloc")]

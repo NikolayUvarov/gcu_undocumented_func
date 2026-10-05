@@ -13,7 +13,6 @@ use edit::buffer::LIMIT;
 use edit::editor::{Editor, Outcome};
 use mind::abi::*;
 use mind::fs::{self, Dir, Error, File};
-use mind::gfx::Screen;
 use mind::ipc::Endpoint;
 use mind::tui::{Terminal, CLASSIC};
 
@@ -81,7 +80,7 @@ fn main(info: &'static mind::BootInfo) {
         Ok(loaded) => loaded,
         Err(error) => { mind::println!("[EDIT] CANNOT OPEN {}", error); return; }
     };
-    let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
+    let Some(mut term) = Terminal::open(info, "edit") else { return };
     let mut editor = Editor::new(text, path, read_only);
     mind::println!("[EDIT] READY {} RO={}", editor.status(), read_only as u8);
     loop {

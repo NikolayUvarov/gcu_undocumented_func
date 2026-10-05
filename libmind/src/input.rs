@@ -1,6 +1,7 @@
 //! Keyboard input of the focused program: event words (`common/abi.rs`: legacy byte, key, modifiers, pressed,
 //! character) from the PS/2 driver and the UART, decoded in ring 3 (`mind::keys`). `read_key` gives key presses,
 //! `read_event` every event; `modifiers` tells which of Shift, Ctrl and Alt are held, as far as the events said.
+//! A program in a window (`mind::windowed`, issue 088) reads the events the window manager queues in its surface.
 use crate::abi::*;
 use crate::sys::call;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -16,10 +17,13 @@ fn seen(word: usize) -> usize { if crate::keys::is_modifier(event_key(word)) { M
 
 pub use crate::keys::{Code, Key};
 
+// The next event word: the focused task's, or what the window manager queued for the program's window; 0 if none.
+fn next_word() -> usize { if crate::windowed::active() { crate::windowed::event() } else { call(SYSCALL_READ_INPUT, 0, 0) } }
+
 /// Next key press of the calling (focused) task; releases and events without a decoded key are skipped.
 pub fn read_key() -> Option<Key> {
     loop {
-        match call(SYSCALL_READ_INPUT, 0, 0) { 0 => return None, word => if let Some(key) = Key::from_event(seen(word)) { return Some(key); } }
+        match next_word() { 0 => return None, word => if let Some(key) = Key::from_event(seen(word)) { return Some(key); } }
     }
 }
 
@@ -33,11 +37,12 @@ pub fn wait_key(ms: usize) -> Option<Key> {
     read_key()
 }
 
-/// Waits for a key; None as soon as the modifiers held are no longer `shown` (a key bar to draw again).
+/// Waits for a key; None as soon as the modifiers held are no longer `shown` (a key bar to draw again), or the window
+/// manager asked for another size (the program draws again at that size).
 pub fn wait_key_or_modifiers(shown: u8) -> Option<Key> {
     loop {
         if let Some(key) = wait_key(1000) { return Some(key); }
-        if modifiers() != shown { return None; }
+        if modifiers() != shown || crate::windowed::resize_pending() { return None; }
     }
 }
 
@@ -77,7 +82,7 @@ pub fn pointer(enable: bool) { call(SYSCALL_INPUT_POINTER, enable as usize, 0); 
 
 /// Next key or pointer event of the active program, if any.
 pub fn read_input() -> Option<Input> {
-    match call(SYSCALL_READ_INPUT, 0, 0) {
+    match next_word() {
         0 => None,
         word if event_key(word) == KEY_POINTER => { let (buttons, dx, dy, wheel) = pointer_fields(word); Some(Input::Pointer(Pointer { buttons, dx, dy, wheel })) }
         word => Some(Input::Key(KeyEvent::from_word(seen(word)))),

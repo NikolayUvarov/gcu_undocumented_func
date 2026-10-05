@@ -3,7 +3,6 @@
 // view: text and hex viewer for a file on the disk (mind::tui::viewer). `view <path>`; F1 lists the keys.
 use mind::abi::BootInfo;
 use mind::fs::File;
-use mind::gfx::Screen;
 use mind::mem::Pages;
 use mind::tui::viewer::{Action, Source, Viewer};
 use mind::tui::{Terminal, CLASSIC};
@@ -23,7 +22,7 @@ fn main(info: &'static BootInfo) {
         Ok(file) => file,
         Err(error) => { mind::println!("[VIEW] CANNOT OPEN {}: {:?}", path, error); return; }
     };
-    let Some(mut term) = Screen::new(info).and_then(Terminal::new) else { return };
+    let Some(mut term) = Terminal::open(info, "view") else { return };
     let Some(mut window) = Pages::new(64 * 1024) else { mind::println!("[VIEW] OUT OF MEMORY"); return };
     let size = file.size();
     let mut viewer = Viewer::new(Disk(file), window.as_mut_slice(), path);
