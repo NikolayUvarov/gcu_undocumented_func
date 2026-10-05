@@ -1543,7 +1543,8 @@ def dzen_suite(vm):
     vm.expect("ORBIT SIMPLE")
     time.sleep(.3)
     screen = look()[0]
-    assert sum(row.count(canon("●")) for row in screen) == 1 and sum(row.count(canon("·")) for row in screen) > 10, screen
+    # The dot reads back as ● or as its inverse ◘: a cell of two colours is matched with either as the foreground.
+    assert sum(row.count(canon("●")) + row.count(canon("◘")) for row in screen) == 1 and sum(row.count(canon("·")) for row in screen) > 10, screen
     vm.send("d\n")
     vm.expect("DIGITS OFF")
     vm.send("h\n")
