@@ -380,7 +380,7 @@ fn entry(name: &str, node: &Node) -> vfs::Entry {
     vfs::Entry { name: text(name), size: node.size, modified: node.modified, attributes, directory: node.is_dir() }
 }
 
-fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", mind::block::KIND_RAM => "RAM", _ => "?" } }
+fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", BLOCK_KIND_VIRTIO => "VIRTIO", mind::block::KIND_RAM => "RAM", _ => "?" } }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {

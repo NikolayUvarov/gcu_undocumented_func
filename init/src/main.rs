@@ -21,13 +21,14 @@ const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "xHCI registers; 256 KiB DMA", "VirtIO block BAR; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "tablet BAR and MSI-X vector; input; 16 KiB DMA", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
+const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
@@ -172,13 +173,23 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
+            "virtio_blk" => {
+                // The first VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001): its BAR with the
+                // modern structures and a DMA region; requests are polled, so no interrupt line.
+                let device = [0x1042_1AF4, 0x1001_1AF4].iter().find_map(|&id| platform::find_device_id(0, 0, id, 0).ok()).ok_or(Error::NotFound)?;
+                self.devices[index] = Some(device);
+                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
+                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, VIRTIO_BLK_DMA_BYTES)?, 0);
+            }
             "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, "ramdisk")?, ALL),
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
-                for driver in ["ata", "ahci", "usb_storage"] {
-                    if self.running(service_index(driver)) { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
+                for driver in ["ata", "ahci", "usb_storage", "virtio_blk"] {
+                    if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
                 self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;

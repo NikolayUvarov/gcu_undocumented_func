@@ -6,7 +6,7 @@ use crate::sys::{Error, Result};
 
 /// Badge of the block client that may write; init mints it for vfs_server only.
 pub const BADGE_WRITE: u16 = 1;
-/// Device kind of the RAM disk, after BLOCK_KIND_ATA, _AHCI and _USB.
+/// Device kind of the RAM disk, after BLOCK_KIND_ATA, _AHCI and _USB (BLOCK_KIND_VIRTIO follows it).
 pub const KIND_RAM: usize = 4;
 
 /// Storage driver with 512-byte sectors.

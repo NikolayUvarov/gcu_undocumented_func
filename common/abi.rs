@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 22;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "virtio_input.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 23;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "virtio_blk.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "virtio_input.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
@@ -179,8 +179,8 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started; then the RAM disk and an
-// rtc client (calendar time for directory entries).
+// For vfs_server, slots 2..5 are block driver endpoints (the first three of ata, ahci, usb_storage, virtio_blk that
+// run); then the RAM disk and an rtc client (calendar time for directory entries).
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
 pub const SLOT_RAMDISK: usize = 5;
@@ -231,6 +231,7 @@ pub const HANDLE_GENERATION_SHIFT: usize = 8;
 pub const BLOCK_KIND_ATA: usize = 1;
 pub const BLOCK_KIND_AHCI: usize = 2;
 pub const BLOCK_KIND_USB: usize = 3;
+pub const BLOCK_KIND_VIRTIO: usize = 5; // after mind::block::KIND_RAM (4)
 
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
 // The mask narrows endpoint rights only; other capabilities keep their rights (narrow memory with CAP_MINT first).

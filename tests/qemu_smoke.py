@@ -26,8 +26,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell")
+# System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net exist only when their device is present.
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)

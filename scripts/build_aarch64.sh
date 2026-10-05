@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
-SERVICES=(init logd rtc loader sysmon keystore compositor ramdisk vfs_server netstack netpolicy tls windows virtio_input shell)
+SERVICES=(init logd rtc virtio_blk loader sysmon keystore compositor ramdisk vfs_server netstack netpolicy tls windows virtio_input shell)
 TARGET=aarch64-unknown-none-softfloat
 rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT"
 (cd "$ROOT/bootloader" && cargo build --release --target aarch64-unknown-uefi)
