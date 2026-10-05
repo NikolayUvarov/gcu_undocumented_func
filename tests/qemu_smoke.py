@@ -45,12 +45,16 @@ def to_ordinal(text):
 class VM:
     def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
-        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through a QMP socket (`tablet_at`).
+        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
+        # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
+        # and line ends came in the middle of lines the guest printed.
         self.disk = disk
-        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock" if tablet else None
+        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
+        self.monitor_used, self.monitor_cpu = False, None
+        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         if tablet:
-            extra = (*extra, "-device", "virtio-tablet-pci", "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
+            extra = (*extra, "-device", "virtio-tablet-pci")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -70,7 +74,6 @@ class VM:
         self.queue = queue.Queue()
         self.output = ""
         self.log = ""
-        self.monitor = False
         threading.Thread(target=self._read, daemon=True).start()
         if not prompt:
             return
@@ -86,7 +89,12 @@ class VM:
         # One QMP command (the tablet's events: input-send-event); the reply.
         if self.qmp_file is None:
             connection = socket.socket(socket.AF_UNIX)
-            connection.connect(str(self.qmp_path))
+            for _ in range(100):  # QEMU creates the socket as it starts
+                try:
+                    connection.connect(str(self.qmp_path))
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    time.sleep(.05)
             self.qmp_file = connection.makefile("rw")
             self.qmp_file.readline()  # the greeting
             self.qmp("qmp_capabilities")
@@ -168,7 +176,7 @@ class VM:
         raise AssertionError(f"Timeout waiting for {text!r}: {clean[-3000:]}")
 
     def send(self, text, raw=False):
-        if not self.monitor and not raw:
+        if not raw:
             text = to_real(text)
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
@@ -186,21 +194,26 @@ class VM:
     def command(self, text, raw=False):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw or self.monitor else to_real(text)) + "\n")
+        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
-        if not self.monitor:
-            self.send("\x01c\n")
-            self.expect("(qemu)")
-            self.monitor = True
-        self.send(command + "\n")
-        return self.expect("(qemu)")
+        # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
+        # commands look at, as it does in the monitor. Paced as typing it into the monitor at 10 ms a byte was (and
+        # entering the monitor first): the suites' waits grew around that time.
+        time.sleep(.01 * (len(command) + 1) + (0 if self.monitor_used else .03))
+        self.monitor_used = True
+        if cpu := re.fullmatch(r"cpu (\d+)", command):
+            self.monitor_cpu = int(cpu[1])
+            return ""
+        return self.qmp("human-monitor-command", **{"command-line": command}, **({} if self.monitor_cpu is None else {"cpu-index": self.monitor_cpu}))
 
     def serial(self, enter=True):
-        # The newline after leaving the monitor reaches the program in front as Enter; `enter=False` leaves it out.
-        if self.monitor:
-            self.send("\x01c\n" if enter else "\x01c")
-            self.monitor = False
+        # After monitor commands: Enter reaches the program in front, as it did when leaving the monitor on the
+        # serial line (`enter=False` leaves it out); what came meanwhile is not waited for.
+        if self.monitor_used:
+            if enter:
+                self.send("\n")
+            self.monitor_used = False
             time.sleep(.1)
             self.collect()
             self.output = ""
@@ -236,8 +249,7 @@ class VM:
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
-        if self.qmp_path is not None:
-            shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
+        shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
         self.collect()
 
 
