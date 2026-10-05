@@ -13,9 +13,12 @@ mod util;
 mod tui;
 #[path = "../wm/src/desk.rs"]
 mod desk;
+#[path = "../wm/src/menu.rs"]
+mod menu;
 
 use abi::*;
-use desk::{Action, Content, Desk, Hit, Win, Wm};
+use desk::{Action, Content, Desk, Hit, Mode, Win, Wm};
+use menu::{catalogue, Item, Kind};
 use keys::{event, Key};
 use tui::{Cell, Grid, Rect, DARK};
 
@@ -392,4 +395,98 @@ fn desk_of_four_on(cols: usize, rows: usize) -> Desk {
     desk.add(pixels(4, "dzen-clock", 400, 320));
     desk.add(text(5, "edit"));
     desk
+}
+
+fn programs(with_console: bool) -> Vec<(String, Kind)> {
+    let mut list: Vec<(String, Kind)> = [("fm", Kind::Window), ("edit", Kind::Window), ("top", Kind::Window), ("clock", Kind::Window), ("uptime", Kind::Console),
+                                         ("wm", Kind::Manager), ("app", Kind::Window), ("zzz", Kind::Console)].iter().map(|&(n, k)| (n.to_string(), k)).collect();
+    if with_console { list.push(("console".to_string(), Kind::Window)); }
+    list
+}
+
+fn labels(items: &[Item]) -> Vec<String> { items.iter().map(|i| i.label.clone()).collect() }
+
+#[test]
+fn the_programs_by_category() {
+    // Console programs need `console` to run in a window; window managers never go in the menu.
+    let menu = catalogue(&programs(false));
+    assert_eq!(labels(&menu), ["Files", "System", "Clocks", "Other"]);
+    assert_eq!(labels(&menu[0].children), ["fm", "edit"]);
+    assert_eq!(labels(&menu[1].children), ["top"]);
+    assert_eq!(labels(&menu[2].children), ["clock", "clock --text"]);
+    assert_eq!(menu[2].children[1].command.as_deref(), Some("clock --text"));
+    assert_eq!(labels(&menu[3].children), ["app"]);
+    let menu = catalogue(&programs(true));
+    assert_eq!(labels(&menu[1].children), ["console", "top", "uptime"]);
+    assert_eq!(menu[1].children[2].command.as_deref(), Some("console uptime"));
+    assert_eq!(labels(&menu[3].children), ["app", "zzz"]);
+    assert_eq!(labels(&catalogue(&[])), ["No programs found"]);
+}
+
+#[test]
+fn the_desktop_menu() {
+    let mut wm = Wm::new(160, 50);
+    wm.programs = catalogue(&programs(false));
+    wm.desk.add(text(1, "fm"));
+    // A right click on the desktop opens it there; a left click there does not.
+    assert_eq!(wm.desk.hit(100, 30), Hit::Desktop);
+    wm.pointer(100, 30, 1, 0);
+    wm.pointer(100, 30, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    assert_eq!(wm.pointer(100, 30, 2, 0), Action::Redraw);
+    wm.pointer(100, 30, 0, 0);
+    assert!(wm.status().starts_with("MODE=MENU") && wm.status().ends_with("MENU="), "{}", wm.status());
+    // The categories below the click; the mouse on one opens its programs beside it.
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    let row = |grid: &Grid, y: usize| (0..160).map(|x| grid.get(x, y).ch).collect::<String>();
+    assert!(row(&grid, 31).contains("│ Files"), "{}", row(&grid, 31));
+    assert!(row(&grid, 32).contains(" System ►"), "{}", row(&grid, 32));
+    wm.pointer(103, 32, 0, 0);
+    assert!(wm.status().ends_with("MENU=System"), "{}", wm.status());
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    let at = row(&grid, 32).find("top").expect("the System programs beside it");
+    let x = row(&grid, 32)[..at].chars().count();
+    assert!(x > 110, "{}", row(&grid, 32));
+    wm.pointer(x, 32, 0, 0);
+    assert!(wm.status().ends_with("MENU=System>top"), "{}", wm.status());
+    // A click on a program starts it in a window and closes the menu.
+    assert_eq!(wm.pointer(x, 32, 1, 0), Action::Run("top".into()));
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    wm.pointer(x, 32, 0, 0);
+    // A click elsewhere closes it; the keys: Alt+P opens it, ↓ → ↓ Enter start the second program of the first category.
+    wm.pointer(100, 30, 2, 0);
+    wm.pointer(100, 30, 0, 0);
+    assert_eq!(wm.pointer(10, 40, 1, 0), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    wm.pointer(10, 40, 0, 0);
+    wm.key(alt_char('p'));
+    assert!(wm.status().starts_with("MODE=MENU"));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_RIGHT));
+    assert!(wm.status().ends_with("MENU=Files>fm"), "{}", wm.status());
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Run("edit".into()));
+    // ← goes back a level, Esc closes.
+    wm.key(alt_char('p'));
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_RIGHT));
+    assert!(wm.status().ends_with("MENU=Other>app"), "{}", wm.status());
+    wm.key(key(KEY_LEFT));
+    assert!(wm.status().ends_with("MENU=Other"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    // Near the bottom right corner the menu stays on the screen and its programs open to the left.
+    wm.pointer(158, 47, 2, 0);
+    wm.pointer(158, 47, 0, 0);
+    let Mode::Menu(open) = &wm.mode else { panic!("{}", wm.status()) };
+    let rects = open.rects(&wm.programs, 160, 50);
+    assert!(rects[0].right() <= 160 && rects[0].bottom() <= 49, "{:?}", rects);
+    let first = rects[0];
+    wm.pointer(first.x + 2, first.y + 1, 0, 0);
+    let Mode::Menu(open) = &wm.mode else { panic!() };
+    let rects = open.rects(&wm.programs, 160, 50);
+    assert!(rects.len() == 2 && rects[1].x < first.x && rects[1].bottom() <= 49, "{:?}", rects);
 }

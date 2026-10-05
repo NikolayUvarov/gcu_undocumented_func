@@ -3463,12 +3463,20 @@ def tablet_suite(vm):
     assert re.search(fr"FOCUS={top} .*POINTER=153,1", out), out[-600:]
     require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
+    # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
+    # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
+    logged(vm, 0, "[WM] PROGRAMS: ")
+    assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
+    vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
+    time.sleep(.2)
+    require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(logged(vm, start, "RESUMED.", timeout=12), "CLOSE ALL: 1 WINDOWS")
+    require(logged(vm, start, "RESUMED.", timeout=12), "CLOSE ALL: 2 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge", flush=True)
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
+          "the desktop menu opened by a right click, a program started from its Clocks submenu", flush=True)
 
 
 def windows_suite(vm):

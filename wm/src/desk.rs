@@ -2,6 +2,7 @@
 //! corner — stacked bottom to top with the top one focused; moving and resizing by keys and by the mouse; snapping to
 //! halves, quarters and the whole screen; what each cell of the screen shows. No system calls: tests/wm_host.rs.
 use crate::keys::{Code, Key};
+use crate::menu::{self, Menu};
 use crate::tui::widgets::{message, Edit, InputLine};
 use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
 use alloc::format;
@@ -308,14 +309,15 @@ enum Drag {
     Resize { id: u32 },
 }
 
-pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help }
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu) }
 
-pub const HELP: [&str; 14] = [
+pub const HELP: [&str; 15] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+M — move and resize: arrows move, Shift+arrows resize, Enter ends (at an edge it snaps), Esc goes back",
     "Alt+W or Alt+F4 — close the window (its program ends)",
     "Alt+R — run a program in a new window: fm, top, clock, dzen-clock, edit <file>, …",
+    "Alt+P or a right click on the desktop — the programs by category: a click or Enter starts one",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
@@ -338,10 +340,12 @@ pub struct Wm {
     buttons: u8,
     /// The window whose content got a button's press: it gets the mouse until every button is up.
     grab: Option<u32>,
+    /// The desktop menu's programs by category (issue u003), from the boot disk.
+    pub programs: Vec<menu::Item>,
 }
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new() } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -352,6 +356,13 @@ impl Wm {
                     Edit::Submit => { let command = String::from(line.as_str().trim()); self.mode = Mode::Normal; if command.is_empty() { Action::Redraw } else { Action::Run(command) } }
                     Edit::Cancel => { self.mode = Mode::Normal; Action::Redraw }
                     _ => Action::Redraw,
+                };
+            }
+            Mode::Menu(open) => {
+                return match open.key(&self.programs, key) {
+                    menu::Outcome::Stay => Action::Redraw,
+                    menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
+                    menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
                 };
             }
             Mode::Move { id, before, restore } => {
@@ -398,6 +409,7 @@ impl Wm {
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
             (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+            (_, Some('p')) => { self.mode = Mode::Menu(Menu::new(0, 1)); Action::Redraw }
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
             (_, Some(n @ '1'..='4')) => { if let Some(id) = focus { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
@@ -419,6 +431,14 @@ impl Wm {
             if buttons == 0 { self.grab = None; }
             return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
         }
+        if let Mode::Menu(open) = &mut self.mode {
+            let (cols, rows) = (self.desk.cols, self.desk.rows);
+            return match open.pointer(&self.programs, cols, rows, x, y, pressed || other_pressed) {
+                menu::Outcome::Stay => Action::Redraw,
+                menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
+                menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
+            };
+        }
         if (pressed || other_pressed || wheel != 0) && !matches!(self.mode, Mode::Normal) { return Action::Redraw; }
         if pressed || (other_pressed && self.drag.is_none()) {
             return match self.desk.hit(x, y) {
@@ -433,6 +453,8 @@ impl Wm {
                 Hit::Corner(id) if pressed => { self.desk.raise(id); self.desk.forget_restore(id); self.drag = Some(Drag::Resize { id }); Action::Redraw }
                 Hit::Content(id) => { self.desk.raise(id); self.grab = Some(id); self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw) }
                 Hit::Border(id) | Hit::Title(id) | Hit::Corner(id) | Hit::Close(id) | Hit::Zoom(id) => { self.desk.raise(id); Action::Redraw }
+                // A right click on the desktop: the programs (issue u003).
+                Hit::Desktop if buttons & 2 != 0 => { self.mode = Mode::Menu(Menu::new(x, y)); Action::Redraw }
                 Hit::Desktop => Action::Redraw,
             };
         }
@@ -472,7 +494,7 @@ impl Wm {
         Some(Action::Pointer { id, x, y, buttons, wheel })
     }
 
-    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP" } }
+    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU" } }
 
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
@@ -482,11 +504,12 @@ impl Wm {
         let bar = Style::new(0x101820, 0x80A0C0);
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
         grid.text(1, 0, "wm", Style::new(0x000000, 0x80A0C0));
-        grid.text_max(4, 0, "│ Alt+Tab next │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ Alt+Q leave", cols.saturating_sub(4), bar);
+        grid.text_max(4, 0, "│ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ Alt+Q leave", cols.saturating_sub(4), bar);
         if let Some(w) = self.desk.focused() { let title = format!(" {} ", w.title); grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
         let status_y = grid.rows.saturating_sub(1);
         let status = match (&self.mode, &self.notice) {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
+            (Mode::Menu(_), _) => String::from("PROGRAMS: a click or Enter starts one in a window; arrows move; Esc or a click elsewhere: close"),
             (_, Some(notice)) => notice.clone(),
             _ if self.desk.windows.is_empty() => String::from("No windows. Enter or Alt+R: run a program in a window; F1 or Alt+H: keys; Alt+Q: leave"),
             _ => format!("{} windows; keys go to \"{}\"", self.desk.windows.len(), self.desk.focused().map_or("", |w| w.title.as_str())),
@@ -496,6 +519,7 @@ impl Wm {
         match &mut self.mode {
             Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); shown = None; }
             Mode::Run(line) => { shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
+            Mode::Menu(open) => { open.draw(&self.programs, grid, theme); shown = None; }
             _ => {}
         }
         // A dialog over a pixel window: its cells are no longer the window's.
@@ -508,6 +532,7 @@ impl Wm {
     /// The state line after each event.
     pub fn status(&self) -> String {
         let pointer = self.pointer.map_or(String::new(), |(x, y)| format!(" POINTER={},{}", x, y));
-        format!("MODE={} {}{}", self.mode_name(), self.desk.status(), pointer)
+        let menu = match &self.mode { Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)), _ => String::new() };
+        format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)
     }
 }

@@ -9,6 +9,7 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use mind::abi::*;
 use mind::gfx::Screen;
@@ -21,6 +22,7 @@ use mind::mem::Mapping;
 use mind::tui::{Rect, Terminal, DARK};
 use mind::window::{Kind, Surface, STATE_CLOSE, TITLE};
 use wm::desk::{Action, Content, Mode, Win, Wm};
+use wm::menu::{self, Kind as ProgramKind};
 
 mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO);
 
@@ -59,6 +61,27 @@ fn title(surface: &Surface) -> String {
     let mut bytes = [0u8; TITLE];
     let len = surface.title(&mut bytes);
     String::from(core::str::from_utf8(&bytes[..len]).unwrap_or(""))
+}
+
+// The desktop menu's programs (issue u003): those on the boot disk that are not services, by what they ask for. The
+// loader reads each one's request from its file (about 30 ms each), so a few are looked at between events.
+struct Programs { pending: Vec<String>, found: Vec<(String, ProgramKind)>, since: usize }
+
+impl Programs {
+    fn new() -> Self {
+        let pending = loader::list(Endpoint::LOADER).map(|list| list.as_slice().iter().filter(|p| !p.service).map(|p| String::from(p.name.as_str())).collect()).unwrap_or_default();
+        Self { pending, found: Vec::new(), since: mind::time::uptime_ms() }
+    }
+    // Looks at up to `count` more; true when the last one was looked at.
+    fn step(&mut self, count: usize) -> bool {
+        for name in self.pending.drain(..count.min(self.pending.len())) {
+            let Ok(Ok(requests)) = loader::inspect_requests(Endpoint::LOADER, &name) else { continue };
+            let kind = if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { ProgramKind::Manager }
+                       else if requests & mind::process::REQUEST_CONSOLE != 0 { ProgramKind::Console } else { ProgramKind::Window };
+            self.found.push((name, kind));
+        }
+        self.pending.is_empty()
+    }
 }
 
 // Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds.
@@ -285,6 +308,8 @@ fn main(info: &'static BootInfo) {
         if let Err(error) = &result { mind::println!("[WM] {}", error); }
         manager.wm.notice = Some(result.unwrap_or_else(|e| e));
     }
+    let mut programs = Some(Programs::new());
+    manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
@@ -341,6 +366,16 @@ fn main(info: &'static BootInfo) {
                 }
             }
             if log { mind::println!("[WM] {}", manager.wm.status()); }
+        }
+        // The menu's programs, a few at a time while nothing else happens (the menu is not changed while it is open).
+        if !busy && !matches!(manager.wm.mode, Mode::Menu(_)) {
+            if let Some(p) = programs.as_mut() {
+                if p.step(2) {
+                    manager.wm.programs = menu::catalogue(&p.found);
+                    mind::println!("[WM] PROGRAMS: {} IN {} CATEGORIES IN {} MS", p.found.len(), manager.wm.programs.len(), mind::time::uptime_ms() - p.since);
+                    programs = None;
+                }
+            }
         }
         manager.modifiers(mind::input::modifiers());
         let now = mind::time::uptime_ms();

@@ -132,6 +132,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [099](../issues-done/099-fm-starts-programs-in-windows.done) | fm in a window of `wm` starts programs in windows of their own (it lends its broker client, files and system information) | done (2026-10-05) |
 | [u001](../issues-done/u001-mouse-in-windows-and-fm.done) | The mouse inside windows (`wm` passes clicks, drags and the wheel to the program at the cell of its content) and in fm (click, double click, right click, wheel, key bar; the pointer cell on a screen) | done (2026-10-05) |
 | [u002](../issues-done/u002-restore-and-unsnap-windows.done) | wm: `[▲]` maximizes, `[⇕]` gives a maximized or snapped window its frame back; dragging a snapped title off the edge does too | done (2026-10-05) |
+| [u003](../issues-done/u003-desktop-programs-menu.done) | wm: a right click on the desktop (or Alt+P) opens the programs by category; a click starts one in a window | done (2026-10-05) |
 | [u005](../issues-done/u005-beep-without-a-screen.done) | `beep` without a screen: `beep 440` sounds 500 ms, `beep 440 200 0 100 880 300` a series (0 Hz: a pause) | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
