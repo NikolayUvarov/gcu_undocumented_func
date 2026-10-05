@@ -26,7 +26,7 @@ MIND Core runs only on x86-64.
 
 ## Related
 
-[200](200-architecture-layer.done), [202](../issues/202-aarch64-devices.md), [203](../issues/203-aarch64-smp-and-power.md).
+[200](200-architecture-layer.done), [202](202-aarch64-devices.done), [203](../issues/203-aarch64-smp-and-power.md).
 
 ## Resolution
 

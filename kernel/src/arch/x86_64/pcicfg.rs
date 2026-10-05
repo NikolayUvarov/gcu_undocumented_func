@@ -17,5 +17,5 @@ pub unsafe fn line(bus: u8, device: u8, function: u8) -> u8 {
     let irq = read(bus, device, function, 0x3C) as u8;
     if irq < 16 { irq } else { 0 }
 }
-/// The MSI address of the local APIC `apic`.
-pub fn msi_address(apic: u32) -> Option<u64> { Some(0xFEE0_0000 | (apic as u64) << 12) }
+/// MSI message (address, data) for MSI line `index`: vector 0x40 + index at the boot processor's local APIC.
+pub unsafe fn msi_message(_location: u32, index: usize) -> Option<(u64, u32)> { Some((0xFEE0_0000 | (crate::cpu::apic_id(0) as u64) << 12, 0x40 + index as u32)) }

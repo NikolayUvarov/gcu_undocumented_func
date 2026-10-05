@@ -1,6 +1,6 @@
 # 204 — aarch64 profile and CI
 
-**Type:** documents + CI · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** 202, 203 · **Roadmap:** track H · **Constitution:** MC-12.1, Appendix A (profiles)
+**Type:** documents + CI · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** 203 (202 done) · **Roadmap:** track H · **Constitution:** MC-12.1, Appendix A (profiles)
 
 ## Plan
 
@@ -17,4 +17,4 @@ The CI matrix is green for both architectures, and the README says how to build 
 
 ## Related
 
-[201](../issues-done/201-aarch64-boot.done), [202](202-aarch64-devices.md), [203](203-aarch64-smp-and-power.md).
+[201](../issues-done/201-aarch64-boot.done), [202](../issues-done/202-aarch64-devices.done), [203](203-aarch64-smp-and-power.md).

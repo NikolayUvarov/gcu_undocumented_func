@@ -24,4 +24,4 @@ The PS/2 mouse (156) is a relative device: QEMU must grab the host pointer to tu
 
 ## Related
 
-[156](156-ps2-mouse.done), [088](../issues/088-text-window-manager.md), [202](../issues/202-aarch64-devices.md) (VirtIO input on aarch64).
+[156](156-ps2-mouse.done), [088](../issues/088-text-window-manager.md), [202](202-aarch64-devices.done) (VirtIO input on aarch64).

@@ -106,10 +106,10 @@ pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
     (!bar.io && bar.size != 0 && at + 16 <= 0x1_0000_0000 && at + 16 <= bar.base + bar.size).then_some(at)
 }
 
-/// Points MSI-X table entry `entry` (mapped uncached by the caller) at `vector` on CPU `apic`, unmasks it and enables
-/// MSI-X, which turns the legacy line off. None where the platform has no MSI target yet (aarch64 without the ITS).
-pub unsafe fn msix(device: &Device, entry: u16, apic: u32, vector: u8) -> Option<()> {
-    let target = crate::pcicfg::msi_address(apic)?;
+/// Points MSI-X table entry `entry` (mapped uncached by the caller) at MSI line `index` (the arch's message), unmasks
+/// it and enables MSI-X, which turns the legacy line off. None where the platform has no MSI target.
+pub unsafe fn msix(device: &Device, entry: u16, index: usize) -> Option<()> {
+    let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
     let cap = capability(device, 0x11)?;
     let header = config(device, cap);
     let control = header >> 16;
@@ -117,7 +117,7 @@ pub unsafe fn msix(device: &Device, entry: u16, apic: u32, vector: u8) -> Option
     let at = msix_entry(device, entry)?;
     enable(device);
     let entry = at as *mut u32;
-    entry.write_volatile(target as u32); entry.add(1).write_volatile((target >> 32) as u32); entry.add(2).write_volatile(vector as u32); entry.add(3).write_volatile(0);
+    entry.write_volatile(target as u32); entry.add(1).write_volatile((target >> 32) as u32); entry.add(2).write_volatile(data); entry.add(3).write_volatile(0);
     write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control | 0x8000) & !0x4000) << 16);
     Some(())
 }

@@ -60,7 +60,7 @@ class VM:
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", source])
-        if args.arch == "aarch64":
+        if getattr(args, "arch", "x86_64") == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
             # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
             variables = Path(tempfile.mkdtemp()) / "vars.fd"
@@ -434,7 +434,7 @@ def normal_suite(vm):
     assert task_rows(vm) == {}
     # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
     # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
-    if vm.args.arch == "aarch64":
+    if getattr(vm.args, "arch", "x86_64") == "aarch64":
         def cpu_seconds():
             fields = Path(f"/proc/{vm.process.pid}/stat").read_text().rpartition(")")[2].split()
             return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
@@ -2780,11 +2780,12 @@ def net_suite(args, disk):
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
         require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
-        # The boot report of legacy hardware: the transitional card needs no legacy code; the PIIX IDE controller does.
-        report = vm.service_logs("init", "LEGACY DEVICES FOUND")
-        for line in ("[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: NOT FOUND", "[INIT] VIRTIO TRANSITIONAL DEVICES: 1",
-                     "[INIT] LEGACY IDE CONTROLLER: FOUND 1", "[INIT] LEGACY AC97 AUDIO: NOT FOUND", "[INIT] LEGACY DEVICES FOUND: 1"):
-            require(report, line)
+        # The boot report of legacy hardware (x86): the transitional card needs no legacy code; the PIIX IDE controller does.
+        if args.arch == "x86_64":
+            report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+            for line in ("[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: NOT FOUND", "[INIT] VIRTIO TRANSITIONAL DEVICES: 1",
+                         "[INIT] LEGACY IDE CONTROLLER: FOUND 1", "[INIT] LEGACY AC97 AUDIO: NOT FOUND", "[INIT] LEGACY DEVICES FOUND: 1"):
+                require(report, line)
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
@@ -2903,22 +2904,26 @@ def net_suite(args, disk):
     finally:
         vm.close()
         web.shutdown()
-    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X).
-    for device, mode in [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]:
+    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X; x86 only: the
+    # aarch64 driver has no port I/O interface).
+    cards = [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]
+    for device, mode in cards[:1] if args.arch == "aarch64" else cards:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
         try:
             require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), mode)
-            report = vm.service_logs("init", "LEGACY DEVICES FOUND")
-            require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
-            assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
+            if args.arch == "x86_64":
+                report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+                require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
+                assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
             require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             if mode == "MODERN MSI-X":
                 _msix_only(vm)
         finally:
             vm.close()
-    # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card; the stack reports no network.
-    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
+    # for a VirtIO card; the stack reports no network.
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else ())
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
@@ -2930,7 +2935,7 @@ def net_suite(args, disk):
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
-          "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
+          f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
 
 
 def _certificates(directory):
@@ -2978,10 +2983,12 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", "qemu64,+rdrand"])
+    # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
+    entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
     try:
         require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
-        require(vm.service_logs("tls", "[TLS] READY"), "[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM RDRAND")
+        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
         for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):
@@ -3036,10 +3043,10 @@ def tls_suite(args, disk):
         for server in (good, rogue, asking):
             server.shutdown()
         (Path(tempfile.gettempdir()) / f"mind-core-tls-{args.cpus}cpu.log").write_text(vm.log)
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=network)
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, *(["-cpu", without] if without else [])])
     try:
-        require(vm.service_logs("keystore", "NO RDRAND"), "[KEYSTORE] NO RDRAND: NO DEVICE KEY")
-        require(vm.service_logs("tls", "[TLS] READY"), "NO RDRAND: EVERY CONNECTION WILL BE REFUSED")
+        require(vm.service_logs("keystore", f"NO {entropy}"), f"[KEYSTORE] NO {entropy}: NO DEVICE KEY")
+        require(vm.service_logs("tls", "[TLS] READY"), f"NO {entropy}: EVERY CONNECTION WILL BE REFUSED")
         require(vm.command(f"https 10.0.2.2:{ports['good']} / mind.test"), "HTTPS: NoEntropy")
         require(vm.command("tls cert"), "TLS: NotFound")
     finally:
@@ -3048,7 +3055,7 @@ def tls_suite(args, disk):
     print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
-          "which only the TLS service may ask; no RDRAND: no key and no connection", flush=True)
+          f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -3448,6 +3455,8 @@ def main():
         suites.append("heap")
     if args.block_elf:
         suites.append("block")
+    if args.arch == "aarch64":
+        suites = ["normal", "shell", "vfs", "net", "tls"]  # the suites that run on virt (issue 202)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:

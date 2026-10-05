@@ -438,7 +438,7 @@ impl Scheduler {
                     .any(|r| !matches!(r.kind, 11 | 12) && (r.start as usize) < at + 0x20_0000 && at < r.start as usize + r.pages as usize * 4096);
                 if ram { return Err(ERR_RIGHTS); }
                 unsafe { paging::uncached(at); }
-                unsafe { pci::msix(&device, entry, cpu::apic_id(0), 0x40 + index as u8) }.ok_or(ERR_NOT_FOUND)?;
+                unsafe { pci::msix(&device, entry, index) }.ok_or(ERR_NOT_FOUND)?;
                 self.msi[index] = Some((a, entry));
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
