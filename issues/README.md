@@ -21,6 +21,9 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
+| [u006](u006-beep-from-the-desktop-menu.md) | beep started from wm's desktop menu does not work | tools | P2 | — | track G |
+| [u007](u007-load-right-edge-alignment.md) | load: the graphs' right edges and scale labels are not aligned | tools | P3 | — | track G |
+| [u008](u008-quit-in-a-program-menu.md) | The Quit item of a program's menu does not work | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
