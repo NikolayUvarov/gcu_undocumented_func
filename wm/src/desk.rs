@@ -22,13 +22,16 @@ pub struct Win {
     pub title: String,
     /// The frame on the screen, border included.
     pub rect: Rect,
-    /// The frame before Alt+Enter maximized it.
+    /// The frame it had before it was maximized or snapped to a half or a quarter (issue u002): `[⇕]` and a drag of
+    /// the title give it back.
     pub restore: Option<Rect>,
+    /// The frame Alt+Enter maximized it from (a snapped one too): Alt+Enter again goes back there.
+    pub before_max: Option<Rect>,
 }
 
 impl Win {
     pub fn new(id: u32, owner: u64, content: Content, size: (usize, usize), title: &str) -> Self {
-        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None }
+        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None }
     }
     /// The frame that shows all of the content.
     pub fn natural(&self) -> (usize, usize) {
@@ -38,7 +41,7 @@ impl Win {
 
 /// What is under a cell of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hit { Desktop, Title(u32), Close(u32), Corner(u32), Border(u32), Content(u32) }
+pub enum Hit { Desktop, Title(u32), Close(u32), Zoom(u32), Corner(u32), Border(u32), Content(u32) }
 
 /// The cell under a pixel window's content: what is still this cell after everything is drawn shows the pixels.
 pub const PIXELS: Cell = Cell { ch: ' ', style: Style { fg: 0, bg: 0 } };
@@ -74,6 +77,16 @@ impl Desk {
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
             if w.rect != rect { w.rect = rect; if !self.changed.contains(&id) { self.changed.push(id); } }
         }
+    }
+
+    // Before a window is maximized or snapped: the frame it has now is the one to give back, unless one is kept already.
+    fn keep_restore(&mut self, id: u32) {
+        if let Some(index) = self.index(id) { let w = &mut self.windows[index]; if w.restore.is_none() { w.restore = Some(w.rect); } }
+    }
+    /// A window moved or resized by hand is no longer snapped.
+    pub fn forget_restore(&mut self, id: u32) { self.set_restore(id, None); }
+    pub fn set_restore(&mut self, id: u32, restore: Option<Rect>) {
+        if let Some(index) = self.index(id) { let w = &mut self.windows[index]; w.restore = restore; w.before_max = None; }
     }
 
     /// `rect` made at least `MIN`, at most the area, and moved inside it.
@@ -121,19 +134,21 @@ impl Desk {
     }
 
     pub fn move_by(&mut self, id: u32, dx: isize, dy: isize) {
+        self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
         self.set(id, Rect::new(r.x.saturating_add_signed(dx), r.y.saturating_add_signed(dy).max(self.area().y), r.w, r.h));
     }
     pub fn resize_by(&mut self, id: u32, dw: isize, dh: isize) {
+        self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
         let area = self.area();
         let (width, height) = (r.w.saturating_add_signed(dw).min(area.right() - r.x), r.h.saturating_add_signed(dh).min(area.bottom().saturating_sub(r.y)));
         self.set(id, Rect::new(r.x, r.y, width, height));
     }
-    /// Moves a window's frame to `rect` (kept inside the area).
-    pub fn place(&mut self, id: u32, rect: Rect) { self.set(id, rect); }
+    /// Moves a window's frame to `rect` (kept inside the area), as a hand does: it is no longer snapped.
+    pub fn place(&mut self, id: u32, rect: Rect) { self.forget_restore(id); self.set(id, rect); }
 
     /// Half the area: 0 left, 1 right, 2 top, 3 bottom.
     pub fn half_rect(&self, side: usize) -> Rect {
@@ -147,16 +162,36 @@ impl Desk {
         let (right, bottom) = (n == 2 || n == 4, n >= 3);
         Rect::new(if right { a.x + w } else { a.x }, if bottom { a.y + h } else { a.y }, if right { a.w - w } else { w }, if bottom { a.h - h } else { h })
     }
-    pub fn half(&mut self, id: u32, side: usize) { let r = self.half_rect(side); self.set(id, r); }
-    pub fn quarter(&mut self, id: u32, n: usize) { let r = self.quarter_rect(n); self.set(id, r); }
+    pub fn half(&mut self, id: u32, side: usize) { let r = self.half_rect(side); self.keep_restore(id); self.set(id, r); }
+    pub fn quarter(&mut self, id: u32, n: usize) { let r = self.quarter_rect(n); self.keep_restore(id); self.set(id, r); }
 
-    /// Alt+Enter: the whole area, or back to where it was.
+    /// Alt+Enter: the whole area, or back to where it was maximized from.
     pub fn maximize(&mut self, id: u32) {
         let area = self.area();
         let Some(index) = self.index(id) else { return };
         let w = &mut self.windows[index];
-        let rect = match w.restore.take() { Some(old) if w.rect == area => old, _ => { w.restore = Some(w.rect); area } };
-        self.set(id, rect);
+        if w.rect == area {
+            let Some(back) = w.before_max.take().or(w.restore) else { return };
+            if w.restore == Some(back) { w.restore = None; } // back where it floated
+            self.set(id, back);
+        } else {
+            w.before_max = Some(w.rect);
+            self.keep_restore(id);
+            self.set(id, area);
+        }
+    }
+
+    /// `[⇕]`: back to the frame before it was maximized or snapped (issue u002).
+    pub fn restore(&mut self, id: u32) {
+        let Some(index) = self.index(id) else { return };
+        let w = &mut self.windows[index];
+        w.before_max = None;
+        if let Some(old) = w.restore.take() { self.set(id, old); }
+    }
+
+    /// `[▲]` maximizes a window, `[⇕]` gives a maximized or snapped one its frame back.
+    pub fn zoom(&mut self, id: u32) {
+        if self.get(id).is_some_and(|w| w.restore.is_some()) { self.restore(id); } else { self.maximize(id); }
     }
 
     /// After a move: a window within `SNAP` cells of an edge sticks to it — a corner takes that quarter, a side half
@@ -174,10 +209,11 @@ impl Desk {
             (false, true, false, true) => self.quarter_rect(4),
             (true, false, false, false) => self.half_rect(0),
             (false, true, false, false) => self.half_rect(1),
-            (false, false, true, false) => { if let Some(index) = self.index(id) { self.windows[index].restore = Some(r); } a }
+            (false, false, true, false) => { if let Some(index) = self.index(id) { self.windows[index].before_max = Some(r); } a }
             (false, false, false, true) => self.half_rect(3),
             (false, false, false, false) => return,
         };
+        self.keep_restore(id);
         self.set(id, target);
     }
 
@@ -187,7 +223,9 @@ impl Desk {
             let r = w.rect;
             if x < r.x || x >= r.right() || y < r.y || y >= r.bottom() { continue; }
             return if y == r.y {
-                if r.w >= 8 && x + 5 >= r.right() && x + 2 < r.right() { Hit::Close(w.id) } else { Hit::Title(w.id) }
+                if r.w >= 8 && x + 5 >= r.right() && x + 2 < r.right() { Hit::Close(w.id) }
+                else if r.w >= 11 && x + 8 >= r.right() && x + 5 < r.right() { Hit::Zoom(w.id) }
+                else { Hit::Title(w.id) }
             } else if x + 1 == r.right() && y + 1 == r.bottom() { Hit::Corner(w.id) }
             else if x == r.x || x + 1 == r.right() || y + 1 == r.bottom() { Hit::Border(w.id) }
             else { Hit::Content(w.id) };
@@ -211,6 +249,7 @@ impl Desk {
             let title_style = if focused { theme.selected } else { theme.frame };
             grid.frame_titled(r, if focused { Line::Double } else { Line::Single }, &w.title, frame, title_style);
             if r.w >= 8 { grid.text(r.right() - 5, r.y, "[×]", if focused { Style::new(0xFFFFFF, 0xA03030) } else { frame }); }
+            if r.w >= 11 { grid.text(r.right() - 8, r.y, if w.restore.is_some() { "[⇕]" } else { "[▲]" }, frame); }
             grid.put(r.right() - 1, r.bottom() - 1, '◆', if focused { theme.accent } else { frame });
             let inner = r.inner();
             for y in inner.y..inner.bottom().min(rows) {
@@ -262,11 +301,16 @@ pub enum Action {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Drag { Move { id: u32, dx: usize, dy: usize }, Resize { id: u32 } }
+enum Drag {
+    /// The title held at (dx, dy) of the frame, pressed at `from` until the mouse first moves; a maximized or snapped
+    /// window gets its frame back then.
+    Move { id: u32, dx: usize, dy: usize, from: Option<(usize, usize)>, unsnap: bool },
+    Resize { id: u32 },
+}
 
-pub enum Mode { Normal, Move { id: u32, before: Rect }, Run(InputLine), Help }
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help }
 
-pub const HELP: [&str; 13] = [
+pub const HELP: [&str; 14] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+M — move and resize: arrows move, Shift+arrows resize, Enter ends (at an edge it snaps), Esc goes back",
@@ -275,7 +319,8 @@ pub const HELP: [&str; 13] = [
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
-    "  drag the title to move a window (it snaps at the edges), the ◆ corner to resize it; [×] closes it",
+    "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
+    "  the ◆ corner to resize it; [▲] maximizes, [⇕] gives the size back; [×] closes",
     "Every other key goes to the window in front only.",
     "Programs started here get only what wm holds and they ask for: the user's files,",
     "  system information, a window; nothing else.",
@@ -309,8 +354,8 @@ impl Wm {
                     _ => Action::Redraw,
                 };
             }
-            Mode::Move { id, before } => {
-                let (id, before) = (*id, *before);
+            Mode::Move { id, before, restore } => {
+                let (id, before, restore) = (*id, *before, *restore);
                 let step = if key.ctrl() { 8 } else { 1 };
                 match (key.code(), key.shift()) {
                     (Code::Left, false) => self.desk.move_by(id, -step, 0),
@@ -322,7 +367,7 @@ impl Wm {
                     (Code::Up, true) => self.desk.resize_by(id, 0, -step),
                     (Code::Down, true) => self.desk.resize_by(id, 0, step),
                     (Code::Enter, _) => { self.desk.snap(id); self.mode = Mode::Normal; }
-                    (Code::Esc, _) => { self.desk.place(id, before); self.mode = Mode::Normal; }
+                    (Code::Esc, _) => { self.desk.place(id, before); self.desk.set_restore(id, restore); self.mode = Mode::Normal; }
                     _ => {}
                 }
                 return Action::Redraw;
@@ -351,7 +396,7 @@ impl Wm {
             (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
-            (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect }; } Action::Redraw }
+            (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
@@ -378,15 +423,31 @@ impl Wm {
         if pressed || (other_pressed && self.drag.is_none()) {
             return match self.desk.hit(x, y) {
                 Hit::Close(id) if pressed => Action::Close(id),
-                Hit::Title(id) if pressed => { self.desk.raise(id); let r = self.desk.get(id).unwrap().rect; self.drag = Some(Drag::Move { id, dx: x - r.x, dy: y - r.y }); Action::Redraw }
-                Hit::Corner(id) if pressed => { self.desk.raise(id); self.drag = Some(Drag::Resize { id }); Action::Redraw }
+                Hit::Zoom(id) if pressed => { self.desk.raise(id); self.desk.zoom(id); Action::Redraw }
+                Hit::Title(id) if pressed => {
+                    self.desk.raise(id);
+                    let w = self.desk.get(id).unwrap();
+                    self.drag = Some(Drag::Move { id, dx: x - w.rect.x, dy: y - w.rect.y, from: Some((x, y)), unsnap: w.restore.is_some() });
+                    Action::Redraw
+                }
+                Hit::Corner(id) if pressed => { self.desk.raise(id); self.desk.forget_restore(id); self.drag = Some(Drag::Resize { id }); Action::Redraw }
                 Hit::Content(id) => { self.desk.raise(id); self.grab = Some(id); self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw) }
-                Hit::Border(id) | Hit::Title(id) | Hit::Corner(id) | Hit::Close(id) => { self.desk.raise(id); Action::Redraw }
+                Hit::Border(id) | Hit::Title(id) | Hit::Corner(id) | Hit::Close(id) | Hit::Zoom(id) => { self.desk.raise(id); Action::Redraw }
                 Hit::Desktop => Action::Redraw,
             };
         }
         match self.drag {
-            Some(Drag::Move { id, dx, dy }) => {
+            Some(Drag::Move { id, mut dx, dy, from, unsnap }) => {
+                // A click on the title, the mouse not moved: nothing changes.
+                if from == Some((x, y)) { if released { self.drag = None; } return Action::Redraw; }
+                // A maximized or snapped window dragged by its title leaves the edge with the frame it had before,
+                // held at the same share of its width (issue u002).
+                if let (true, Some(w)) = (unsnap, self.desk.get(id)) {
+                    let (now, old) = (w.rect, w.restore.unwrap_or(w.rect));
+                    dx = (dx * old.w / now.w.max(1)).min(old.w.saturating_sub(1));
+                    self.desk.place(id, Rect::new(now.x, now.y, old.w, old.h));
+                }
+                self.drag = Some(Drag::Move { id, dx, dy, from: None, unsnap: false });
                 if let Some(w) = self.desk.get(id) { let r = w.rect; self.desk.place(id, Rect::new(x.saturating_sub(dx), y.saturating_sub(dy).max(self.desk.area().y), r.w, r.h)); }
                 if released { self.desk.snap(id); self.drag = None; }
                 Action::Redraw

@@ -232,6 +232,63 @@ fn the_mouse_drags_titles_and_corners() {
 }
 
 #[test]
+fn snapped_windows_give_their_size_back() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let title = |wm: &mut Wm, id: u32| {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        let mut text = |_: u32, _: usize, _: usize| None;
+        wm.draw(&mut grid, &DARK, &mut text, None);
+        let r = wm.desk.get(id).unwrap().rect;
+        (r.x..r.right()).map(|x| grid.get(x, r.y).ch).collect::<String>()
+    };
+    // Window 2 floats at (80, 1) 80 × 24: [▲] maximizes it, [⇕] gives its frame back.
+    assert!(title(&mut wm, 2).contains("[▲][×]"), "{}", title(&mut wm, 2));
+    assert_eq!(wm.desk.hit(153, 1), Hit::Zoom(2));
+    wm.pointer(153, 1, 1, 0);
+    wm.pointer(153, 1, 0, 0);
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 160, 48));
+    assert!(title(&mut wm, 2).contains("[⇕][×]"));
+    wm.pointer(153, 1, 1, 0);
+    wm.pointer(153, 1, 0, 0);
+    assert_eq!((rect(&wm.desk, 2), wm.desk.get(2).unwrap().restore), ((80, 1, 80, 24), None));
+    // A window snapped to the left half by a key: [⇕] gives back the frame it floated in.
+    wm.key(alt(KEY_LEFT, '\0'));
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
+    assert!(title(&mut wm, 2).contains("[⇕][×]"));
+    // A click on its title does not move it ...
+    wm.pointer(30, 1, 1, 0);
+    wm.pointer(30, 1, 0, 0);
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
+    // ... a drag does: it leaves the edge with that frame, held at the same share of its width, and floats.
+    wm.pointer(40, 1, 1, 0);
+    wm.pointer(60, 10, 1, 0);
+    assert_eq!(rect(&wm.desk, 2), (20, 10, 80, 24));
+    wm.pointer(60, 10, 0, 0);
+    assert_eq!((rect(&wm.desk, 2), wm.desk.get(2).unwrap().restore), ((20, 10, 80, 24), None));
+    // Maximized by Alt+Enter, then dragged by the title: the same.
+    wm.key(alt(KEY_ENTER, '\n'));
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 160, 48));
+    wm.pointer(80, 1, 1, 0);
+    wm.pointer(80, 6, 1, 0);
+    wm.pointer(80, 6, 0, 0);
+    assert_eq!(rect(&wm.desk, 2), (40, 6, 80, 24));
+    // Snapped again at the right edge, then given back with [⇕]; Alt+M and Esc keep what [⇕] gives back.
+    wm.pointer(80, 6, 1, 0);
+    wm.pointer(158, 6, 1, 0);
+    wm.pointer(158, 6, 0, 0);
+    assert_eq!(rect(&wm.desk, 2), (80, 1, 80, 48));
+    wm.key(alt_char('m'));
+    wm.key(key(KEY_LEFT));
+    wm.key(key(KEY_ESC));
+    assert_eq!(rect(&wm.desk, 2), (80, 1, 80, 48));
+    wm.pointer(153, 1, 1, 0);
+    wm.pointer(153, 1, 0, 0);
+    assert_eq!(rect(&wm.desk, 2), (80, 6, 80, 24), "where it was let go (kept on the screen)");
+}
+
+#[test]
 fn the_mouse_goes_to_the_programs() {
     let mut wm = Wm::new(160, 50);
     wm.desk = desk_of_four();

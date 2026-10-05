@@ -131,6 +131,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [098](../issues-done/098-pong-shows-the-exchange.done) | `pong` kept the string it read on screen for 10 ms only; it stays now, with the number of calls, and Esc works between calls | done (2026-10-05) |
 | [099](../issues-done/099-fm-starts-programs-in-windows.done) | fm in a window of `wm` starts programs in windows of their own (it lends its broker client, files and system information) | done (2026-10-05) |
 | [u001](../issues-done/u001-mouse-in-windows-and-fm.done) | The mouse inside windows (`wm` passes clicks, drags and the wheel to the program at the cell of its content) and in fm (click, double click, right click, wheel, key bar; the pointer cell on a screen) | done (2026-10-05) |
+| [u002](../issues-done/u002-restore-and-unsnap-windows.done) | wm: `[▲]` maximizes, `[⇕]` gives a maximized or snapped window its frame back; dragging a snapped title off the edge does too | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

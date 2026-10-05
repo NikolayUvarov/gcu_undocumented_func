@@ -1,0 +1,26 @@
+# u002 — wm: a restore button, and a snapped window dragged off the edge gets its size back — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: a window let go near an edge of the screen snaps to it (a half, a quarter, the whole screen), which is right, but often it has to go back to the size it had, and there was no way to do that with the mouse (Alt+Enter only undid a maximize). And a snapped or maximized window dragged by its title kept the snapped size: it should come off the edge.
+
+## Plan
+
+- Each window keeps the frame it floated in before it was maximized or snapped (by a key, by Alt+M, or at an edge).
+- The title shows `[▲]` (maximize) or, for a maximized or snapped window, `[⇕]` (restore: the kept frame), next to `[×]` — the Windows 3.1 symbols, both in the system font.
+- Dragging the title of a maximized or snapped window gives it the kept frame as soon as the mouse moves, held at the same share of its width, as Windows does; a click on the title alone changes nothing.
+- A window moved or resized by hand is no longer snapped. Alt+Enter keeps going back to where it was maximized from (a snapped place too).
+
+## Acceptance criteria
+
+- Host: the button and its hit, maximize and restore, a half by a key restored, a click on a snapped title, a drag off the edge for a snapped and for a maximized window, Alt+M with Esc keeping the kept frame.
+- QEMU (`wm` suite): fm's `[⇕]` gives back the frame it had before Alt+M snapped it; the clock, snapped to the left half by a drag, gets its own size back when its title is dragged off the edge.
+
+## Resolution
+
+- `wm/src/desk.rs`: `Win::restore` is the frame before maximizing or snapping (`keep_restore` in `half`, `quarter`, `maximize`, `snap`; `forget_restore` in `place`, `move_by`, `resize_by` and a corner drag), `Win::before_max` what Alt+Enter maximized from; `Desk::restore`, `Desk::zoom`; `Hit::Zoom` for `[▲]` / `[⇕]` (drawn left of `[×]` on frames 11 cells wide or more); `Drag::Move` starts from the pressed cell and unsnaps on the first move; `Mode::Move` keeps the kept frame for Esc. The help names the buttons.
+- `wm/src/main.rs`: the broker's `maximized` flag is set for a window covering the whole area.
+- Tests: `tests/wm_host.rs` (`snapped_windows_give_their_size_back`), QEMU `wm` suite.
+- Docs: docs/tools §4.9 (English and Russian), README (`wm`).

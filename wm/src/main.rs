@@ -170,9 +170,10 @@ impl Manager {
                 live.wake();
             }
         }
+        let area = self.wm.desk.area();
         for (z, w) in self.wm.desk.windows.iter().enumerate() {
             if self.saved.iter().any(|&(id, rect, at)| id == w.id && rect == w.rect && at == z) { continue; }
-            let place = Placement { x: w.rect.x as u16, y: w.rect.y as u16, columns: w.rect.w as u16, rows: w.rect.h as u16, z: z as u16, minimized: false, maximized: w.restore.is_some() };
+            let place = Placement { x: w.rect.x as u16, y: w.rect.y as u16, columns: w.rect.w as u16, rows: w.rect.h as u16, z: z as u16, minimized: false, maximized: w.rect == area };
             let _ = api::place(BROKER, w.id, &place);
             self.saved.retain(|&(id, ..)| id != w.id);
             self.saved.push((w.id, w.rect, z));

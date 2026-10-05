@@ -3312,6 +3312,15 @@ def wm_suite(vm):
         require(fm_log, line)
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
+    # Snapped windows give their frame back (issue u002): fm's [⇕] the one it had before Alt+M snapped it; the clock,
+    # snapped to the left half by the drag above, its own size when its title is dragged off the edge.
+    point(80 + 80 - 7, 1)
+    mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+    assert rects[fm] == (0, 20, 80, 24), rects
+    assert rects[clock] == (0, 1, 80, 48), rects
+    point(20, 1)
+    mode, focus, rects = mouse("mouse_button 1", *mouse_moves(30 * 8, 10 * 16), "mouse_button 0", lines=2)
+    assert focus == clock and rects[clock] == (40, 11, 42, 13), (focus, rects)
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3364,7 +3373,7 @@ def wm_suite(vm):
     assert heap_used(vm) == baseline
     print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
-          "in fm's window; programs get only what wm holds; "
+          "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
