@@ -13,7 +13,9 @@ fn print(text: &[u8]) { mind::process::log(text) }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("dzen-clock — the Dzen clock on its own screen.\nUsage: dzen-clock\nEsc: exit.");
+    mind::about!("dzen-clock — the Dzen clock on its own screen, or in a window under wm.\nUsage: dzen-clock\nEsc: exit.");
+    // Started by a window manager: a 400 × 320 window instead of the screen (issue 088).
+    let info = mind::windowed::pixels(info, 400, 320, "dzen-clock");
     print(
         b"\r\n[DZEN-CLOCK] STARTED. D: DIGITS, C: ORBIT, P: 10S TICKS, H: TEXT, CTRL+Z: SHELL, ESC: EXIT.\r\n",
     );

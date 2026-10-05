@@ -94,6 +94,7 @@ USER_CRATES=(
     "monitor:caps:caps.elf"
     "fm:fm:fm.elf"
     "edit:edit:edit.elf"
+    "wm:wm:wm.elf"
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
     "disk:format:format.elf"

@@ -73,3 +73,29 @@ fn events_size_requests_and_state() {
     s.set_state(STATE_CLOSE);
     assert_eq!(s.state(), STATE_CLOSE);
 }
+
+#[test]
+fn cursor_resize_and_pixels() {
+    // A text surface made for the screen's cells, drawn smaller: the size changes within the memory.
+    let mut memory = region(bytes(Kind::Text, 80, 25));
+    let s = surface(&mut memory);
+    s.init(Kind::Text, 80, 25, "fm");
+    assert!(s.fits(80, 25) && !s.fits(80, 40), "the memory is whole pages");
+    assert!(s.set_size(40, 10));
+    assert_eq!((s.size(), s.check()), ((40, 10), Some((Kind::Text, 40, 10))));
+    assert_eq!(s.cursor(), None);
+    s.set_cursor(Some((39, 9)));
+    assert_eq!(s.cursor(), Some((39, 9)));
+    assert!(s.set_size(20, 5));
+    assert_eq!(s.cursor(), None, "a cursor outside the size is not shown");
+    s.set_cursor(None);
+    assert!(s.set_size(40, 10));
+    assert_eq!(s.cursor(), None);
+    // Pixels: the manager reads what the program wrote, inside the size only.
+    let mut memory = region(bytes(Kind::Pixels, 8, 4));
+    let p = surface(&mut memory);
+    p.init(Kind::Pixels, 8, 4, "clock");
+    unsafe { p.content().cast::<u32>().add(3 * 8 + 7).write(0x00A6E3A1); }
+    assert_eq!(p.pixel(7, 3), Some(0x00A6E3A1));
+    assert_eq!((p.pixel(8, 0), p.pixel(0, 4), s.pixel(0, 0)), (None, None, None), "outside, or not a pixel surface");
+}

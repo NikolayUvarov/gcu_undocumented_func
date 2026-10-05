@@ -36,6 +36,7 @@ const O_WANTED: usize = 12; // width u16, height u16 the manager asks for (0: no
 const O_CHANGES: usize = 16; // u32, bumped by the program after drawing
 const O_DAMAGE: usize = 20; // x, y, width, height u16: what the last changes touched (all 0: everything)
 const O_TITLE: usize = 32;
+const O_CURSOR: usize = 96; // x + 1 u16, y + 1 u16 of a text cursor (0: none), written by the program (issue 088)
 const O_STATE: usize = 128;
 const O_EVENT_HEAD: usize = 192; // events the manager queued
 const O_EVENT_TAIL: usize = 256; // events the program took
@@ -88,12 +89,25 @@ impl Surface {
         self.set_pair(O_DAMAGE, x, y); self.set_pair(O_DAMAGE + 4, w, h);
         self.u32(O_CHANGES).fetch_add(1, Ordering::Release);
     }
+    /// The size the program draws at (cells or pixels), as it last set it.
+    pub fn size(&self) -> (usize, usize) { self.pair(O_SIZE) }
+    /// The surface's memory holds a content of this size.
+    pub fn fits(&self, width: usize, height: usize) -> bool { self.kind().is_some_and(|kind| bytes(kind, width, height) <= self.len) }
+    /// Where the text cursor is (None: not shown).
+    pub fn set_cursor(&self, at: Option<(usize, usize)>) {
+        match at { Some((x, y)) => self.set_pair(O_CURSOR, x + 1, y + 1), None => self.u32(O_CURSOR).store(0, Ordering::Release) }
+    }
     /// The content: cells or pixels, `bytes` of it.
     pub fn content(&self) -> *mut u8 { unsafe { self.base.add(HEADER) } }
     /// The size the manager asks for, once (it is cleared).
     pub fn wanted(&self) -> Option<(usize, usize)> {
         let v = self.u32(O_WANTED).swap(0, Ordering::AcqRel);
         (v != 0).then_some(((v & 0xFFFF) as usize, (v >> 16) as usize))
+    }
+    /// Input events queued and not taken yet.
+    pub fn queued(&self) -> usize {
+        let queued = self.u32(O_EVENT_HEAD).load(Ordering::Acquire).wrapping_sub(self.u32(O_EVENT_TAIL).load(Ordering::Relaxed)) as usize;
+        if queued > EVENTS { 0 } else { queued }
     }
     /// The next input event the manager queued (common/abi.rs word).
     pub fn event(&self) -> Option<usize> {
@@ -130,6 +144,18 @@ impl Surface {
         let ((x, y), (w, h)) = (self.pair(O_DAMAGE), self.pair(O_DAMAGE + 4));
         let (_, width, height) = self.check()?;
         (w > 0 && h > 0 && x < width && y < height).then(|| (x, y, w.min(width - x), h.min(height - y)))
+    }
+    /// The program's text cursor, inside its size.
+    pub fn cursor(&self) -> Option<(usize, usize)> {
+        let (x, y) = self.pair(O_CURSOR);
+        let (_, width, height) = self.check()?;
+        (x > 0 && y > 0 && x <= width && y <= height).then(|| (x - 1, y - 1))
+    }
+    /// Pixel (x, y) of a pixel surface the header describes (0x00RRGGBB).
+    pub fn pixel(&self, x: usize, y: usize) -> Option<u32> {
+        let (Kind::Pixels, width, height) = self.check()? else { return None };
+        if x >= width || y >= height { return None; }
+        Some(unsafe { core::ptr::read_volatile(self.base.add(HEADER + (y * width + x) * 4).cast::<u32>()) })
     }
     pub fn ask_size(&self, width: usize, height: usize) { self.set_pair(O_WANTED, width.max(1), height.max(1)); }
     pub fn state(&self) -> u32 { self.u32(O_STATE).load(Ordering::Acquire) }

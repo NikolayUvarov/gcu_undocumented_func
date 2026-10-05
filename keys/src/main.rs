@@ -4,7 +4,6 @@
 // events (buttons, movement, wheel; issue 156). Esc exits.
 use core::fmt::Write;
 use mind::abi::BootInfo;
-use mind::gfx::Screen;
 use mind::input::{Code, Input, Key};
 use mind::tui::{Line, Rect, Terminal, DARK};
 use mind::util::FixedBuf;
@@ -51,7 +50,7 @@ fn draw(term: &mut Terminal, lines: &Lines) {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("keys — shows every key event the program receives: key code, modifiers, character.\nUsage: keys\nEsc: exit.");
-    let mut term = Screen::new(info).and_then(Terminal::new);
+    let mut term = Terminal::open(info, "keys");
     let mut lines = Lines { text: core::array::from_fn(|_| FixedBuf::new()), count: 0 };
     if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
     mind::input::pointer(true); // mouse events too (issue 156)

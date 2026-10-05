@@ -21,14 +21,17 @@ const RECEIVED: usize = 9;
 const CLIENT: usize = 2; // our own program client, lent to managers
 const WINDOWS: usize = 64;
 
-// `cap`: the shared surface; `program` and `manager`: its children whose copies are the leases.
-struct Window { id: u32, owner: u64, _pages: Pages, cap: usize, program: usize, manager: usize, surface: Surface, waker: Option<usize>, place: Placement }
+// `cap`: the shared surface; `program` and `manager`: its children whose copies are the leases. `ended`: its program
+// ended while a manager was attached; the manager's lease stays until the manager has listed the windows without it
+// (it may be drawing it: memory revoked under it would fault, issue 088).
+struct Window { id: u32, owner: u64, _pages: Pages, cap: usize, program: usize, manager: usize, surface: Surface, waker: Option<usize>, place: Placement, ended: bool }
 
 struct Broker { windows: Vec<Window>, next: u32, manager: Option<u64>, generation: u64 }
 
 impl Broker {
     fn is_manager(&self, badge: u16, pid: u64) -> bool { badge == BADGE_MANAGER && self.manager == Some(pid) }
-    fn index(&self, id: u32) -> Option<usize> { self.windows.iter().position(|w| w.id == id) }
+    fn index(&self, id: u32) -> Option<usize> { self.windows.iter().position(|w| w.id == id && !w.ended) }
+    fn live(&self) -> impl Iterator<Item = &Window> { self.windows.iter().filter(|w| !w.ended) }
 
     fn create(&mut self, kind: Kind, width: u16, height: u16, pid: u64) -> Result<u32, Error> {
         if self.windows.len() >= WINDOWS || self.windows.iter().filter(|w| w.owner == pid).count() >= 8 { return Err(Error::Limit); }
@@ -51,7 +54,7 @@ impl Broker {
         self.next = self.next.wrapping_add(1).max(1);
         let id = self.next;
         mind::println!("[WINDOWS] WINDOW {} OF PID {}: {:?} {}X{}", id, pid, kind, width, height);
-        self.windows.push(Window { id, owner: pid, _pages: pages, cap, program, manager, surface, waker: None, place: Placement::default() });
+        self.windows.push(Window { id, owner: pid, _pages: pages, cap, program, manager, surface, waker: None, place: Placement::default(), ended: false });
         self.generation += 1;
         Ok(id)
     }
@@ -69,9 +72,13 @@ impl Broker {
         if let Some(waker) = window.waker { let _ = Endpoint(waker).send_timeout(&Message::new(0, 0), 1); }
     }
 
+    // Windows whose end the manager has seen (or that no manager shows any more) go.
+    fn reap(&mut self) { while let Some(index) = self.windows.iter().position(|w| w.ended) { self.end(index); } }
+
     // The manager detaches (or ended): its leases go, the windows stay hidden.
     fn detach(&mut self, why: &str) {
         let Some(pid) = self.manager.take() else { return };
+        self.reap();
         for w in &self.windows {
             let _ = ipc::revoke(w.manager);
             if let Some(waker) = w.waker { let _ = ipc::revoke(waker); }
@@ -83,11 +90,17 @@ impl Broker {
 
     // Windows of programs that ended; a manager that ended is detached.
     fn expire(&mut self) {
-        while let Some(index) = self.windows.iter().position(|w| !mind::process::alive(w.owner)) {
-            mind::println!("[WINDOWS] WINDOW {} ENDED WITH PID {}", self.windows[index].id, self.windows[index].owner);
-            self.end(index);
-        }
         if self.manager.is_some_and(|pid| !mind::process::alive(pid)) { self.detach("ENDED"); }
+        while let Some(index) = self.windows.iter().position(|w| !w.ended && !mind::process::alive(w.owner)) {
+            mind::println!("[WINDOWS] WINDOW {} ENDED WITH PID {}", self.windows[index].id, self.windows[index].owner);
+            if self.manager.is_none() { self.end(index); continue; }
+            // The manager keeps its lease until it lists the windows again; the program's goes now.
+            let w = &mut self.windows[index];
+            w.ended = true;
+            let _ = ipc::revoke(w.program);
+            if let Some(waker) = w.waker.take() { let _ = ipc::revoke(waker); let _ = ipc::drop_cap(waker); }
+            self.generation += 1;
+        }
     }
 
     fn info(w: &Window) -> Info {
@@ -121,26 +134,30 @@ impl Broker {
                     else if self.manager.is_some_and(|m| m != pid && mind::process::alive(m)) { Err(Error::Busy) }
                     else {
                         self.manager = Some(pid);
-                        for w in &self.windows { w.surface.set_state(STATE_SHOWN); self.wake(w); }
-                        mind::println!("[WINDOWS] MANAGER PID {} ATTACHED: {} WINDOWS", pid, self.windows.len());
-                        Ok(self.windows.len() as u32)
+                        for w in self.live() { w.surface.set_state(STATE_SHOWN); self.wake(w); }
+                        let count = self.live().count();
+                        mind::println!("[WINDOWS] MANAGER PID {} ATTACHED: {} WINDOWS", pid, count);
+                        Ok(count as u32)
                     };
                 api::reply_attach(call, result)
             }
             Request::Detach => { let result = if manager { self.detach("DETACHED"); Ok(()) } else { Err(Error::Denied) }; api::reply_detach(call, result) }
             Request::CloseAll => {
                 let result = if !manager { Err(Error::Denied) } else {
-                    for w in &self.windows { w.surface.set_state(STATE_CLOSE); self.wake(w); }
-                    mind::println!("[WINDOWS] CLOSE ALL: {} WINDOWS ASKED TO END", self.windows.len());
-                    Ok(self.windows.len() as u32)
+                    for w in self.live() { w.surface.set_state(STATE_CLOSE); self.wake(w); }
+                    let count = self.live().count();
+                    mind::println!("[WINDOWS] CLOSE ALL: {} WINDOWS ASKED TO END", count);
+                    Ok(count as u32)
                 };
                 api::reply_close_all(call, result)
             }
             Request::List { start } => {
                 if !manager { return api::reply_list(call, Err(Error::Denied)); }
                 let mut list = List::<Info, 16>::default();
-                for w in self.windows.iter().skip(start as usize).take(16) { list.push(Self::info(w)); }
-                api::reply_list(call, Ok(list.as_slice()))
+                for w in self.live().skip(start as usize).take(16) { list.push(Self::info(w)); }
+                let result = api::reply_list(call, Ok(list.as_slice()));
+                self.reap(); // the manager now knows which windows ended
+                result
             }
             Request::Generation => api::reply_generation(call, if manager { self.generation } else { 0 }),
             Request::Surface { window } => {

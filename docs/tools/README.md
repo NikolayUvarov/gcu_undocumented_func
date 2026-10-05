@@ -242,17 +242,17 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 
 Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab completion of program names (loader `LIST`) and paths; lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
 
-### 4.9 `wm` — window manager (planned, issues 088 and 157; the broker and the mouse are done)
+### 4.9 `wm` — window manager (issue 088, on the window broker of issue 157)
 
-An application, not a service.
-- **Windows:** on the cell grid of its own screen, with text frames and titles. They are moved and resized with the keyboard and, with the PS/2 mouse (issue 156), by dragging. Windows snap to the screen's edges (halves) and corners (quarters).
-- **Content:** text (`mind::tui` draws into a cell surface) or pixels (`gfx::Screen` draws into a pixel surface), so `fm`, the monitors, `view`, `edit` and `clock` run in windows unchanged.
-- **Windows outlive the manager.** A program in a window owns its surface and input endpoint and registers them with the window broker `windows` (issue 157), a small service that keeps the windows and their layout.
-- **Two ways out.** *Detach* (also what a crash does): `wm` ends and its programs keep running hidden; the next `wm`, or a graphical manager later on the same protocol, shows them where they were. *Close all*: the programs get a close event.
-- **Authority:** `wm` lends a program only what it holds itself and the program asks for (MC-3.11).
-- `clock` and `dzen-clock` also get text faces for text windows and consoles (issue 089).
+An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit ram:a.txt` with arguments) starts the programs in windows; Alt+R starts more.
+- **Windows:** on the cell grid of its own screen, with frames, titles, a `[×]` close mark and a `◆` resize corner; the one in front has a double frame and gets the keys. The first four windows take the quarters of the screen (a text window fills its quarter, a pixel window gets the frame its pixels need), later ones cascade.
+- **Keys:** Alt+Tab / Alt+Shift+Tab the next / previous window; Alt+←→↑↓ half the screen; Alt+1…4 a quarter; Alt+Enter maximize or restore; Alt+M move (arrows, Ctrl: 8 cells) and resize (Shift+arrows), Enter ends it and a window within two cells of an edge snaps (a corner: a quarter, a side: half, the top: the whole screen), Esc puts it back; Alt+W or Alt+F4 close; Alt+R run; Alt+H the keys; Alt+Q leave; Alt+X close all. Every other key goes to the window in front only; Shift, Ctrl and Alt are passed as held to the window in front and as released to the others.
+- **Mouse** (PS/2, issue 156): a click brings a window to the front; dragging the title moves it and it snaps when let go; dragging `◆` resizes; `[×]` closes.
+- **Content:** text — `mind::tui::Terminal::open` draws into a cell surface at the size of the window's inside and draws again when it changes; pixels — `mind::windowed::pixels` gives a program a framebuffer in its window (`clock` 320 × 176, `dzen-clock` 400 × 320), drawn over the cells (`wm` copies only the cells that show it). `mind::input` reads the keys `wm` queues in the surface and `mind::time::sleep` waits on the window's wake endpoint, so `fm`, `edit`, `view`, `top`, `memmap`, `load`, `hw`, `ipc`, `caps`, `keys`, `clock` and `dzen-clock` run in windows with one changed line each. A program started in a window gets no screen of its own (no frame of kernel memory).
+- **Windows outlive the manager.** The surfaces are the broker's memory; the broker keeps the places `wm` saves. *Leave* (Alt+Q; also what a crash or a kill does): the programs keep running hidden and the next `wm` shows them where they were. *Close all* (Alt+X): every program is asked to end (its next look at its input ends it); those still running after 3 s are named in the log.
+- **Authority:** `wm` asks the shell for the window manager client, the user's files and system information; a program it starts gets a plain broker client and, of what it asks for, only those (a file's directory is confined from the files client, as the shell does). `top` runs without the lifecycle client, `caps` without the authority view (MC-3.11).
+- Not done: text faces of `clock` and `dzen-clock` (issue 089); resizing a pixel window's content (the frame clips or pads it); console programs in windows (`uptime` and the like stay in the shell); the mouse inside windows.
 - Full-screen consoles switched with Alt+F1…F4 are issue 155.
-
 
 ## 5. Phases
 
