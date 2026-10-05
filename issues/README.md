@@ -8,14 +8,14 @@
    - add a `## Resolution` (or `## Done`) section saying what was done and where (files, tests);
    - fix relative links (`../issues/…md` for open tasks, `….done` for finished ones).
 3. **A task that became irrelevant** (replaced by another design or by a different task) is moved the same way with status `superseded` and a resolution naming what replaced it. Unfinished remainders are split into a new issue rather than keeping the old one open.
-4. **One file per task**: `NNN-short-name.md`, numbers are never reused. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
+4. **One file per task**: `NNN-short-name.md` (the tools track: `uNNN-short-name.md`), numbers are never reused. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
 5. Update the tables below in the same commit.
 
 Tasks that need a person (repository settings, legal decisions, coordination of agent sessions) are in [issues-human/](../issues-human/README.md).
 
 ## Open tasks
 
-Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** (077–099) builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`); the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. The **porting track** (200–249) brings MIND Core to other architectures (track H, aarch64 first) and coordinates with the kernel track on `kernel/src/arch/`. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`) — its range 077–099 is used up, and it numbers its issues u001, u002, … from now on (`u001-short-name.md`), a counter of its own that no other track uses; the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. The **porting track** (200–249) brings MIND Core to other architectures (track H, aarch64 first) and coordinates with the kernel track on `kernel/src/arch/`. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
