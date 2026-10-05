@@ -1,0 +1,22 @@
+# 098 — `pong` shows what it read, not only "WAITING FOR CALL" — done
+
+**Type:** fix · **Owner:** tools track · **Priority:** P3 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: `pong` writes the exchange to the serial console, but its window shows only `WAITING FOR CALL...`. pong drew the string read from ping's page, then 10 ms later cleared the same area and wrote `WAITING FOR CALL...` again for the 1.5 s until the next call: the string was on the screen for less than a frame. Esc was looked at only after a call came, because pong waited for calls without a time limit.
+
+## Plan
+
+- Keep the last string read and its sender on the screen until the next one; show how many calls were answered, and the waiting line only before the first call.
+- Wait for calls 100 ms at a time and look at the keys in between: Esc exits at once.
+- Use the system font (MIND Mono 16) on character cells, so the harness can read the screen.
+
+## Acceptance criteria
+
+- QEMU (`services` suite): with pong in front, the screen shows `HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 100x` and `CALLS ANSWERED: n`, and no `WAITING`.
+
+## Resolution
+
+- `pong/src/main.rs`: lines drawn in place (`line`), `recv_timeout(…, 100)`, a call counter with the last call's number, the string and the sender's PID kept until the next call, Esc between calls; `--help` says `fg <pid>` shows it. `mind::util::FixedBuf::as_str` for the formatted lines.
+- Test: QEMU `services` suite (the checks above, then pong goes back to the background and the existing kill checks follow).

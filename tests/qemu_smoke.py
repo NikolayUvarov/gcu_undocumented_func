@@ -1569,6 +1569,15 @@ def services_suite(vm):
     require(pong, "SPAWNED PING PID=2")
     require(pong, "FROM PID 2: HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 1001")
     require(vm.command("logs 2"), "[PING] ACK 1001")
+    # In front, pong shows the last string it read and how many calls it answered (issue 098).
+    vm.send("fg 1\n")
+    vm.expect("FOREGROUND PID=1")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 100") in row for row in screen), screen
+    assert any(re.search(canon("CALLS ANSWERED: ") + r"[1-9]", row) for row in screen) and not any(canon("WAITING") in row for row in screen), screen
+    vm.background(1)
     # Killing a server whose client awaits a reply wakes the client with an error instead of hanging the kernel.
     require(vm.command("kill 1"), "KILLED PID=1")
     time.sleep(.5)

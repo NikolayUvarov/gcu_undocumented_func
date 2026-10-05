@@ -16,6 +16,10 @@ pub struct FixedBuf<const N: usize> { bytes: [u8; N], len: usize }
 impl<const N: usize> FixedBuf<N> {
     pub const fn new() -> Self { Self { bytes: [0; N], len: 0 } }
     pub fn as_bytes(&self) -> &[u8] { &self.bytes[..self.len] }
+    /// The text written (a character cut off at the end is left out).
+    pub fn as_str(&self) -> &str {
+        match core::str::from_utf8(self.as_bytes()) { Ok(text) => text, Err(error) => core::str::from_utf8(&self.bytes[..error.valid_up_to()]).unwrap_or("") }
+    }
     pub fn clear(&mut self) { self.len = 0; }
 }
 impl<const N: usize> Default for FixedBuf<N> { fn default() -> Self { Self::new() } }
