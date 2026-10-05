@@ -58,7 +58,7 @@ class VM:
             [args.qemu, "-bios", args.firmware, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
-             *(["-cpu", args.cpu_model] if args.cpu_model and "-cpu" not in extra else []),
+             *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -1103,10 +1103,11 @@ def busy_suite(vm):
 def avx_expected(vm, fixture=None):
     """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
     cpus = vm.command("cpus")
-    if vm.args.cpu_model == "max":
+    model = getattr(vm.args, "cpu_model", None)
+    if model == "max":
         assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
         assert fixture is None or "CALLS, AVX" in fixture, fixture
-    elif vm.args.cpu_model is None:
+    elif model is None:
         assert len(re.findall(r"FPU=FXSAVE", cpus)) == vm.cpus, cpus
 
 
