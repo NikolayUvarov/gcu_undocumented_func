@@ -9,6 +9,7 @@ static SMC: AtomicBool = AtomicBool::new(false); // PSCI through SMC instead of 
 // The enabled CPUs' MPIDR affinities in MADT order (the boot CPU among them), and how many.
 pub static CPUS: [AtomicU64; crate::cpu::MAX] = [const { AtomicU64::new(0) }; crate::cpu::MAX];
 pub static CPU_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static INTERFACES: [AtomicU64; crate::cpu::MAX] = [const { AtomicU64::new(0) }; crate::cpu::MAX]; // GICv2 CPU interface numbers
 
 const WINDOW: u64 = crate::mmu::IDENTITY_END;
 
@@ -34,8 +35,9 @@ pub unsafe fn init(rsdp: u64) {
             b"MCFG" => for entry in (44..table.len().saturating_sub(15)).step_by(16) {
                 if !ecam && u16::from_le_bytes([table[entry + 8], table[entry + 9]]) == 0 { crate::pcicfg::configure(u64_at(table, entry), table[entry + 10], table[entry + 11]); ecam = true; }
             },
-            // Interrupt controller structures from offset 44: GICC (0x0B: flags at 12, bit 0 enabled; GICR base at 60;
-            // MPIDR at 68), GICD (0x0C: base at 8), GICR (0x0E: base of the first range at 4), ITS (0x0F: base at 8).
+            // Interrupt controller structures from offset 44: GICC (0x0B: interface number at 4, flags at 12, bit 0
+            // enabled; the GICv2 CPU interface at 32, GICR base at 60, MPIDR at 68), GICD (0x0C: base at 8, version at
+            // 20), GICv2m MSI frame (0x0D: base at 8), GICR (0x0E: base of the first range at 4), ITS (0x0F: base at 8).
             b"APIC" => {
                 let (mut entry, mut its, mut gicr, mut gicc_gicr) = (44, 0, 0, 0);
                 while entry + 2 <= table.len() {
@@ -44,10 +46,19 @@ pub unsafe fn init(rsdp: u64) {
                     let count = CPU_COUNT.load(Ordering::Relaxed);
                     match kind {
                         0x0B if length >= 76 && u32_at(table, entry + 12) & 1 != 0 => {
-                            if count < CPUS.len() { CPUS[count].store(u64_at(table, entry + 68) & 0xFF_00FF_FFFF, Ordering::Relaxed); CPU_COUNT.store(count + 1, Ordering::Release); }
+                            if count < CPUS.len() {
+                                CPUS[count].store(u64_at(table, entry + 68) & 0xFF_00FF_FFFF, Ordering::Relaxed);
+                                INTERFACES[count].store(u32_at(table, entry + 4) as u64, Ordering::Relaxed);
+                                CPU_COUNT.store(count + 1, Ordering::Release);
+                            }
                             if gicc_gicr == 0 { gicc_gicr = u64_at(table, entry + 60); }
+                            if count == 0 && u64_at(table, entry + 32) != 0 { board::set(&board::GICC, mapped(u64_at(table, entry + 32))); }
                         }
-                        0x0C if length >= 24 => board::set(&board::GICD, mapped(u64_at(table, entry + 8))),
+                        0x0C if length >= 24 => {
+                            board::set(&board::GICD, mapped(u64_at(table, entry + 8)));
+                            if matches!(table[entry + 20], 1 | 2) { board::set(&board::GIC_VERSION, 2); }
+                        }
+                        0x0D if length >= 24 => board::set(&board::V2M, mapped(u64_at(table, entry + 8))),
                         0x0E if length >= 16 && gicr == 0 => gicr = u64_at(table, entry + 4),
                         0x0F if length >= 20 && its == 0 => its = u64_at(table, entry + 8),
                         _ => {}
@@ -76,8 +87,8 @@ pub unsafe fn init(rsdp: u64) {
     }
     if !ecam { serial_print("MIND CORE KERNEL: ACPI: NO MCFG\n"); }
     use core::fmt::Write;
-    let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {}\r",
-                     board::get(&board::GICD), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::UART),
+    let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICV{} GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {}\r",
+                     board::get(&board::GIC_VERSION), board::get(&board::GICD), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::UART),
                      board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire));
     if CPU_COUNT.load(Ordering::Acquire) == 0 { serial_print("MIND CORE KERNEL: ACPI: NO GICC IN THE MADT, ONE CPU\n"); }
 }

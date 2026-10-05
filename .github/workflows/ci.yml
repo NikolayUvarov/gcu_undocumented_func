@@ -131,6 +131,9 @@ jobs:
             suites: normal,net
             machine: virt,gic-version=3,highmem=on
             memory: 6G
+          - group: GICv2 with GICv2m (a Raspberry Pi 4's interrupt controller)
+            suites: normal,smp,net
+            machine: virt,gic-version=2,highmem=off
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools

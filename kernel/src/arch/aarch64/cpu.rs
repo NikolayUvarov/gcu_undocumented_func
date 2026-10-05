@@ -29,7 +29,9 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
     let mut count = 1;
     for i in 0..super::acpi::CPU_COUNT.load(Ordering::Acquire) {
         let affinity = super::acpi::CPUS[i].load(Ordering::Relaxed) & 0xFF_FFFF;
-        if affinity != boot && count < MAX { IDS[count].store(affinity, Ordering::Relaxed); count += 1; }
+        let interface = super::acpi::INTERFACES[i].load(Ordering::Relaxed) as usize; // GICv2: the SGI target
+        if affinity == boot { super::board::set(&super::board::INTERFACE[0], interface); }
+        else if count < MAX { IDS[count].store(affinity, Ordering::Relaxed); super::board::set(&super::board::INTERFACE[count], interface); count += 1; }
     }
     COUNT.store(count, Ordering::Release);
     load()?;
@@ -126,16 +128,16 @@ extern "C" fn ap_entry(index: usize) -> ! {
 // SGIs to the other online CPUs: the tick (from the boot CPU's timer), a wake-up, a stop.
 pub unsafe fn tick_others() {
     for i in 1..COUNT.load(Ordering::Acquire) {
-        if ONLINE[i].load(Ordering::Acquire) { crate::interrupts::sgi(IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_TICK); }
+        if ONLINE[i].load(Ordering::Acquire) { crate::interrupts::sgi(i, IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_TICK); }
     }
 }
 pub unsafe fn wake(index: usize) {
-    if ONLINE[index].load(Ordering::Acquire) { crate::interrupts::sgi(IDS[index].load(Ordering::Relaxed), crate::interrupts::SGI_WAKE); }
+    if ONLINE[index].load(Ordering::Acquire) { crate::interrupts::sgi(index, IDS[index].load(Ordering::Relaxed), crate::interrupts::SGI_WAKE); }
 }
 pub fn stop_others() {
     let this = id();
     for i in 0..COUNT.load(Ordering::Acquire) {
-        if i != this && ONLINE[i].load(Ordering::Acquire) { unsafe { crate::interrupts::sgi(IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_STOP); } }
+        if i != this && ONLINE[i].load(Ordering::Acquire) { unsafe { crate::interrupts::sgi(i, IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_STOP); } }
     }
 }
 
