@@ -577,7 +577,8 @@ fn main(info: &'static BootInfo) {
         for &event in events.as_slice() { shell.uart(event); }
         events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus.
-        while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } }
+        // While a program has the focus only the keys the shell listens for come here (F12: push-to-talk, issue 154).
+        while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } else if key.code() == Code::F(12) { shell.voice_key(key); } }
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         shell.term.render(cursor);
         // Wait for the next tick, or for the voice program's call.

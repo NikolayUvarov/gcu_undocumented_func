@@ -79,11 +79,16 @@ struct Task {
     band: u8, budget_ns: u64, period_ns: u64, period_start: u64, consumed: u64, // scheduling context (C7)
     parent: Option<(usize, u64)>, quota_tasks: usize, quota_endpoints: usize, // accounting owner and delegated quotas
 }
+// An INPUT_LISTEN registration: the key and modifiers, the listening task, and whether a taken press awaits release.
+#[derive(Clone, Copy)]
+struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
+const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
 struct Scheduler {
     boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
     foreground: usize, // focused task: its screen is shown and it receives input
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
+    listeners: [Option<Listener>; INPUT_LISTENERS], // keys taken out of the focused stream (INPUT_LISTEN)
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [Option<usize>; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
@@ -124,7 +129,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [None; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -196,6 +201,17 @@ impl Scheduler {
             }
             return;
         }
+        let (key, pressed) = (event_key(owner), event_pressed(owner));
+        // A listened key goes to its listener; its release follows the press even if the modifiers changed meanwhile.
+        let taken = self.listeners.iter().position(|l| l.is_some_and(|l| l.key == key && if pressed { event_mods(owner) & LISTEN_MODS == l.mods } else { l.down }));
+        if let Some(index) = taken.filter(|_| key != 0) {
+            let mut listener = self.listeners[index].unwrap(); listener.down = pressed; self.listeners[index] = Some(listener);
+            if self.tasks[listener.slot].as_ref().is_some_and(|t| t.pid == listener.pid) && self.live(listener.slot) {
+                let task = self.tasks[listener.slot].as_mut().unwrap(); task.input.push(owner);
+                if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
+            }
+            return;
+        }
         if !self.live(target) { return; }
         let event = if target == self.focus_owner { owner } else { app };
         let task = self.tasks[target].as_mut().unwrap();
@@ -232,6 +248,7 @@ impl Scheduler {
             self.exited_console = Some((pid, console));
         }
         if self.focus_owner == slot { self.focus_owner = 0; if self.foreground == slot { self.focus(0); } }
+        for listener in self.listeners.iter_mut() { if listener.is_some_and(|l| l.slot == slot) { *listener = None; } }
     }
     // Uptime at which an IPC with this handle word times out (0: never).
     fn deadline(word: usize) -> u64 { match word >> IPC_TIMEOUT_SHIFT { 0 => 0, ms => (interrupts::milliseconds() + ms as u64).max(1) } }
@@ -654,7 +671,7 @@ impl Scheduler {
 
     // Process control (TASK_LIST ... HALT): only for the holder of the control capability.
     unsafe fn control(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
-        // Statistics need only the observe privilege; kill, focus, logs, console and halt need process control (MC-10.2).
+        // Statistics need only the observe privilege; kill, focus, key listening, logs, console and halt need process control (MC-10.2).
         let observation = matches!(request.syscall_num, SYSCALL_TASK_LIST | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_FAULTS | SYSCALL_STAT);
         if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) { return Err(ERR_RIGHTS); }
         let task_slot = |s: &Self, pid: usize| if pid == 0 { Some(slot) } else { s.find(pid as u64) };
@@ -686,6 +703,18 @@ impl Scheduler {
                 if self.tasks[target].as_ref().unwrap().screen.is_none() { return Err(ERR_INVALID); }
                 if request.arg2 == 0 { self.tasks[target].as_mut().unwrap().console.clear(); }
                 self.focus_owner = slot; self.focus(target); Ok(self.tasks[target].as_ref().unwrap().pid as usize)
+            }
+            SYSCALL_INPUT_LISTEN => {
+                let (key, mods) = (request.arg1 as u16, (request.arg1 >> 16) as u8);
+                if key == 0 || key == KEY_POINTER || mods & !LISTEN_MODS != 0 || request.arg1 >> 24 != 0 { return Err(ERR_INVALID); }
+                let pid = self.tasks[slot].as_ref().unwrap().pid;
+                let same = self.listeners.iter().position(|l| l.is_some_and(|l| l.key == key && l.mods == mods));
+                if request.arg2 == 0 {
+                    // Only the listener itself stops listening.
+                    return match same { Some(i) if self.listeners[i].unwrap().slot == slot => { self.listeners[i] = None; Ok(0) } _ => Err(ERR_NOT_FOUND) };
+                }
+                let index = same.or_else(|| self.listeners.iter().position(Option::is_none)).ok_or(ERR_NO_SLOT)?;
+                self.listeners[index] = Some(Listener { key, mods, slot, pid, down: false }); Ok(0)
             }
             SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ => {
                 let (address, capacity) = (request.msg[0], request.msg[1].min(4096));
@@ -982,7 +1011,7 @@ impl Scheduler {
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_REBOOT | SYSCALL_STAT => {
+            SYSCALL_TASK_LIST | SYSCALL_TASK_KILL | SYSCALL_FOCUS | SYSCALL_INPUT_LISTEN | SYSCALL_TASK_LOGS | SYSCALL_CONSOLE_READ | SYSCALL_NOTICE | SYSCALL_FAULTS | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_HALT | SYSCALL_REBOOT | SYSCALL_STAT => {
                 let result = self.control(slot, ptr, &request);
                 // KILL of the caller itself or of the task it waits on is handled like an exit.
                 if self.tasks[slot].as_ref().unwrap().state == State::Exited { return self.select(sp, cpu); }

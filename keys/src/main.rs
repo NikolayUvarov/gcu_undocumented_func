@@ -54,6 +54,8 @@ fn main(info: &'static BootInfo) {
     let mut lines = Lines { text: core::array::from_fn(|_| FixedBuf::new()), count: 0 };
     if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }
     mind::input::pointer(true); // mouse events too (issue 156)
+    // Without process control a program cannot take keys from others (issue 154).
+    mind::println!("[KEYS] LISTEN: {:?}", mind::input::listen(mind::abi::KEY_F1, 0, true));
     mind::println!("[KEYS] READY");
     loop {
         let key = match mind::input::read_input() {

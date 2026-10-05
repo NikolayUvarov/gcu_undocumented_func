@@ -403,7 +403,8 @@ def keys_suite(vm):
     """Key events: the same events from the UART (VT100 sequences, UTF-8) and from PS/2, layouts, Esc."""
     baseline = heap_used(vm)
     vm.send("run keys\n")
-    vm.expect("[KEYS] READY")
+    # A program without process control cannot take keys from others (issue 154).
+    require(vm.expect("[KEYS] READY"), "[KEYS] LISTEN: Err(Rights)")
     uart = [(b"\x1b[A", "code=Up mods=-"), (b"\x1b[1;2C", "code=Right mods=S"), (b"\x1bOP", "code=F(1) mods=-"),
             (b"\x1b[15~", "code=F(5) mods=-"), (b"\x1b[24~", "code=F(12) mods=-"), (b"\x1b[3;5~", "code=Delete mods=C"),
             (b"\x1b[5~", "code=PageUp mods=-"), (b"\x1b[H", "code=Home mods=-"), (b"\x7f", "code=Backspace mods=- char=U+0008"),
@@ -2493,6 +2494,17 @@ def voice_control(vm):
                  "[VOICE] SAY Останавливаю службу rtc", "[VOICE] SAY Строка 1: съешь же ещё этих мягких французских булок, да выпей чаю. Line 1.\n",
                  "[VOICE] SAY Не понял", '[VOICE] HEARD "да" INTENT=yes', "[VOICE] NOTHING HEARD"):
         require(log, line)
+    # Push-to-talk over a focused program (issue 154): F12 reaches the shell and not the program; other keys the program.
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    start = len(vm.log)
+    vm.send_bytes(b"\x1b[24~")
+    vm.expect("VOICE: NOTHING HEARD", timeout=180)
+    vm.send_bytes(b"q")
+    vm.expect("char=q U+0071")
+    assert "code=F(12)" not in vm.log[start:], vm.log[start:]
+    vm.send_bytes(b"\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
     # voice waits for the next push-to-talk: `voice off` answers its call with quit.
     require(vm.command("voice off"), "VOICE CONTROL OFF")
     for _ in range(40):

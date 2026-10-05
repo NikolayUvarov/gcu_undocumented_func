@@ -38,6 +38,7 @@ Required authority is in brackets; "none" means every task may call it.
 | 2 | `READ_KEY` | → legacy byte of the next input event that has one, 0 if none [focused task] |
 | 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`; pointer events: `KEY_POINTER`, `pointer_fields`), 0 if none [focused task] |
 | 56 | `INPUT_POINTER` | `arg1` = 1 to receive pointer events, 0 to stop (the caller only; without it the kernel drops them) [none] |
+| 57 | `INPUT_LISTEN` | `arg1` = key \| modifiers << 16 (`MOD_SHIFT`/`MOD_CTRL`/`MOD_ALT`, exactly those held), `arg2` = 1 to listen, 0 to stop: presses of that key and their releases go to the caller's input queue, not the focused task's; 8 in the system, ended with the task; `mind::input::listen` [process control] |
 
 ### Memory
 

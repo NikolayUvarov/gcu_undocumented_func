@@ -60,6 +60,12 @@ pub const SYSCALL_READ_INPUT: usize = 50;
 // INPUT_POINTER: arg1 = 1 to receive pointer events (KEY_POINTER), 0 to stop; for the calling task only. Without it
 // the kernel drops pointer events instead of queueing them (issue 156).
 pub const SYSCALL_INPUT_POINTER: usize = 56;
+// INPUT_LISTEN (process control, issue 154): arg1 = key (KEY_*) | modifiers (MOD_SHIFT|MOD_CTRL|MOD_ALT, exactly those
+// held) << 16, arg2 = 1 to listen, 0 to stop. Presses of that key with those modifiers, and their releases, go to the
+// caller's own input queue instead of the focused task's, whatever has the focus. INPUT_LISTENERS registrations in
+// the system; one for the same key and modifiers is replaced; they end with the task. Pointer events cannot be taken.
+pub const SYSCALL_INPUT_LISTEN: usize = 57;
+pub const INPUT_LISTENERS: usize = 8;
 pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
 pub const SYSCALL_IPC_CALL: usize = 22;
 pub const SYSCALL_IPC_REPLY: usize = 23;

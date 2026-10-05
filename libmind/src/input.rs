@@ -80,6 +80,12 @@ pub enum Input { Key(KeyEvent), Pointer(Pointer) }
 /// Asks for pointer events (`read_input` returns them) or stops them; without it a program gets none.
 pub fn pointer(enable: bool) { call(SYSCALL_INPUT_POINTER, enable as usize, 0); }
 
+/// Takes `key` with exactly the modifiers `mods` (MOD_*) out of the focused program's input and into the caller's own,
+/// or gives it back (`on` false). Needs process control (issue 154).
+pub fn listen(key: u16, mods: u8, on: bool) -> crate::sys::Result<()> {
+    crate::sys::check(call(SYSCALL_INPUT_LISTEN, key as usize | (mods as usize) << 16, on as usize)).map(drop)
+}
+
 /// Next key or pointer event of the active program, if any.
 pub fn read_input() -> Option<Input> {
     match next_word() {
