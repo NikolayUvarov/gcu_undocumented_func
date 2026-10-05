@@ -335,8 +335,8 @@ impl Service {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut service = Service { provider: provider::provider(), sessions: Vec::new(), next: 0 };
-    let entropy = if mind::random::available() { "RANDOM FROM RDRAND" } else { "NO RDRAND: EVERY CONNECTION WILL BE REFUSED" };
-    mind::println!("[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM {}, {}", ROOTS_FILE, entropy);
+    let (entropy, outcome) = if mind::random::available() { ("RANDOM FROM ", "") } else { ("NO ", ": EVERY CONNECTION WILL BE REFUSED") };
+    mind::println!("[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM {}, {}{}{}", ROOTS_FILE, entropy, mind::random::SOURCE, outcome);
     let mut scratch = Box::new([0u8; api::REQUEST_MAX]);
     let mut buffer = Box::new([0u8; CHUNK]);
     let mut checked = 0u64;

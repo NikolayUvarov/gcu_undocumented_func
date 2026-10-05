@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
-// LEGACY: the whole driver: the CMOS RTC on ISA ports (docs/legacy.md).
-// Ring 3 CMOS RTC driver: answers CALL with the time since midnight and the date (idl/rtc.wit).
-use mind::abi::{BootInfo, SLOT_DEV0};
-use mind::dev::Ports;
+// LEGACY: the CMOS RTC on ISA ports (docs/legacy.md); the PL031 of aarch64 `virt` is the other clock (issue 202).
+// Ring 3 RTC driver: answers CALL with the time since midnight and the date (idl/rtc.wit).
+use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0};
+use mind::dev::{cap_info, Mmio, Ports};
 use mind::idl::{rtc, wire};
 use mind::ipc::Endpoint;
 
@@ -51,15 +51,23 @@ fn decode_time([seconds, minutes, hours, mode]: [u8; 4]) -> Option<usize> {
     Some(hour as usize * 3600 + minute as usize * 60 + second as usize)
 }
 
+// The device in SLOT_DEV0: CMOS ports, or the PL031's registers (RTCDR: seconds since 1970, UTC).
+enum Clock { Cmos(Ports), Pl031(Mmio) }
+const DAYS_1970_TO_2000: u32 = 10957;
+impl Clock {
+    fn time(&self) -> Option<usize> { match self { Self::Cmos(cmos) => read_time(*cmos), Self::Pl031(rtc) => Some(rtc.read32(0) as usize % 86400) } }
+    fn date(&self) -> Option<u32> { match self { Self::Cmos(cmos) => read_date(*cmos), Self::Pl031(rtc) => (rtc.read32(0) / 86400).checked_sub(DAYS_1970_TO_2000) } }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let cmos = Ports(SLOT_DEV0);
+    let clock = match cap_info(SLOT_DEV0).0 { CAP_KIND_MMIO => Mmio::map(SLOT_DEV0).map(Clock::Pl031).unwrap_or(Clock::Cmos(Ports(SLOT_DEV0))), _ => Clock::Cmos(Ports(SLOT_DEV0)) };
     loop {
         // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
         let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
         let _ = match rtc::decode(&request, 0) {
-            Ok((rtc::Request::Now, call)) => rtc::reply_now(call, read_time(cmos).map(|seconds| seconds as u32)),
-            Ok((rtc::Request::Date, call)) => rtc::reply_date(call, read_date(cmos)),
+            Ok((rtc::Request::Now, call)) => rtc::reply_now(call, clock.time().map(|seconds| seconds as u32)),
+            Ok((rtc::Request::Date, call)) => rtc::reply_date(call, clock.date()),
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };

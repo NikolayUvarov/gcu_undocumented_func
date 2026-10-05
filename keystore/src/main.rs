@@ -36,7 +36,7 @@ impl Keys {
                 mind::println!("[KEYSTORE] DEVICE KEY READY: {} (ED25519, CERTIFICATE {} BYTES)", core::str::from_utf8(certificate::common_name(key).as_bytes()).unwrap_or(""), der.len());
                 der
             }
-            None => { mind::println!("[KEYSTORE] NO RDRAND: NO DEVICE KEY"); Vec::new() }
+            None => { mind::println!("[KEYSTORE] NO {}: NO DEVICE KEY", mind::random::SOURCE); Vec::new() }
         };
         Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 } }
     }

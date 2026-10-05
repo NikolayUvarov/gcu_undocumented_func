@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """aarch64 on QEMU `virt` (issue 201): boots to `[INIT] READY` on the PL011 console with the services that need no
-devices, and a service that faults is ended, restarted and quarantined while the rest keeps running.
+devices, and a service that faults is ended, restarted and quarantined while the rest keeps running. The disk has no
+shell, so the kernel keeps mirroring every log to the PL011 (the shell would take it over), and no PCI (`highmem` on
+puts the ECAM above 4 GiB): the boot path without devices.
 
 Needs `scripts/build_aarch64.sh --fixtures` first, qemu-system-aarch64 and AAVMF (qemu-efi-aarch64)."""
 import argparse
@@ -45,7 +47,7 @@ def boot(args, disk, until, timeout=90):
 
 def disk_with(rtc=None):
     disk = Path(tempfile.mkdtemp()) / "root"
-    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf"))
+    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
     return disk

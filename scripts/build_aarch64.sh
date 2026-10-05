@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
-SERVICES=(init logd loader sysmon keystore)
+SERVICES=(init logd rtc loader sysmon keystore compositor ramdisk vfs_server netstack netpolicy tls windows virtio_input shell)
 TARGET=aarch64-unknown-none-softfloat
 rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT"
 (cd "$ROOT/bootloader" && cargo build --release --target aarch64-unknown-uefi)
@@ -16,6 +16,9 @@ for service in "${SERVICES[@]}"; do
     (cd "$ROOT/$service" && cargo build --release --target "$TARGET")
     cp "$ROOT/$service/target/$TARGET/release/$service" "$OUT/$service.elf"
 done
+# The network driver without its legacy (port I/O) interface: modern VirtIO only.
+(cd "$ROOT/virtio_net" && cargo build --release --target "$TARGET" --no-default-features)
+cp "$ROOT/virtio_net/target/$TARGET/release/virtio_net" "$OUT/virtio_net.elf"
 if [[ "${1:-}" == --fixtures ]]; then
     for case in kernel_read text_write stack_exec undefined; do
         rustc --edition=2021 --target "$TARGET" --crate-type bin -C opt-level=2 -C panic=abort -C relocation-model=pic \

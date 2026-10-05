@@ -23,7 +23,7 @@ const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe priv
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "tablet BAR and MSI-X vector; input; 16 KiB DMA", "observe privilege", "screen; process control; input; COM1"];
+    "the key service's signer client; RTC and VFS clients", "its own program client", "tablet BAR and MSI-X vector; input; 16 KiB DMA", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -49,6 +49,10 @@ impl Minted {
         Ok(slot)
     }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
+    // The real-time clock: CMOS ports (LEGACY) on x86, the PL031 on aarch64 `virt`.
+    fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, 0x0901_0000, 0x1000) } else { self.ports(0x70, 2) } }
+    // The platform's serial line: COM1 (LEGACY) on x86, the PL011 on aarch64 `virt`.
+    fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, 0x0900_0000, 0x1000) } else { self.ports(0x3F8, 8) } }
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
 }
 impl Drop for Minted { fn drop(&mut self) { for &slot in &self.slots[..self.count] { let _ = ipc::drop_cap(slot); } } }
@@ -141,7 +145,7 @@ impl Init {
         let mut flags = SPAWN_SERVICE;
         match BOOT_SERVICES[image] {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
-            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
+            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.clock()?, 0); }
             "ps2_kbd" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "ps2_kbd")?, ALL); // requests from the shell's keyboard client (151)
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
@@ -260,14 +264,14 @@ impl Init {
             "logd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "logd")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "sysmon" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "sysmon")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "shell" => {
-                // Application slots plus process control, input injection (UART) and the COM1 ports.
+                // Application slots plus process control, input injection (UART) and the serial line.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
                 for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
-                grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0); // LEGACY: COM1 UART
+                grants.add(SLOT_SERIAL, minted.serial()?, 0);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
                 self.lend(&mut grants, SLOT_KEYBOARD, "ps2_kbd")?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
@@ -424,12 +428,14 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+fn main(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS] };
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
     for index in order {
+        // An image the bootloader did not find (a service of the other architecture) is not started.
+        if info.programs[unit_image(index).0].len == 0 { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
         match init.start(index) {
             // From now on init's own lines (and those printed so far) go to the system log too.
             Ok(_) if unit_name(index) == "logd" => {

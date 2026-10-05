@@ -1,7 +1,10 @@
 //! Random bytes from the processor (RDRAND, usable in ring 3). There is no fallback: without RDRAND, or when it keeps
 //! failing, callers get `None` and must fail closed (issue 103).
 
-/// Whether the processor has RDRAND (CPUID leaf 1, ECX bit 30).
+/// The processor's random number instruction, for messages.
+pub const SOURCE: &str = if cfg!(target_arch = "aarch64") { "RNDR" } else { "RDRAND" };
+
+/// Whether the processor has RDRAND (CPUID leaf 1, ECX bit 30) or RNDR.
 pub fn available() -> bool {
     crate::arch::entropy_available()
 }

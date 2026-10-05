@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Command shell in ring 3: text console on its own screen and COM1, commands over process control, loader and init.
+// Command shell in ring 3: text console on its own screen and the serial line, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
 mod bmp;
 mod console;
@@ -13,11 +13,11 @@ mod programs;
 mod screenshot;
 mod voicectl;
 
-use console::{Console, Position, COM1};
+use console::{Console, Position};
 use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
-use mind::dev::{input_key, Ports};
+use mind::dev::{input_key, Uart};
 use mind::idl::{init as idl_init, loader};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
@@ -85,7 +85,7 @@ impl Shell {
         if !self.line.is_empty() { self.redraw_input(true); }
     }
 
-    // Output of the focused program goes to COM1 only, each line prefixed with its PID.
+    // Output of the focused program goes to the serial line only, each line prefixed with its PID.
     fn mirror(&mut self, pid: u64) {
         let mut buffer = [0u8; 1024];
         while let Ok(len @ 1..) = control::console(pid, &mut buffer) {
@@ -545,7 +545,7 @@ impl Events {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let term = Console::new(mind::gfx::Screen::new(info), Ports(SLOT_SERIAL));
+    let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
     let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
@@ -555,7 +555,6 @@ fn main(info: &'static BootInfo) {
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
     shell.prompt();
-    let serial = Ports(SLOT_SERIAL);
     let mut vt = Vt::new();
     let mut events = Events::new();
     loop {
@@ -569,8 +568,7 @@ fn main(info: &'static BootInfo) {
         }
         // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout).
         let now = mind::time::uptime_ms() as u64;
-        while serial.in8(COM1 + 5) & 1 != 0 {
-            let byte = serial.in8(COM1);
+        while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
         }
         vt.poll(now, &mut |event| events.push(event));

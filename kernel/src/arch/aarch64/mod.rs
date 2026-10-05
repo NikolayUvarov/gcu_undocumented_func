@@ -7,5 +7,6 @@ pub mod cpu;
 pub mod interrupts;
 pub mod mmu;
 pub mod pcicfg;
+pub mod platform;
 pub mod port;
 pub mod serial;

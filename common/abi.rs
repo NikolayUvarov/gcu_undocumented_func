@@ -280,13 +280,14 @@ pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of 
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_PORTS: usize = 2; // base, count: only legacy ranges from the platform profile
-pub const PLATFORM_IRQ: usize = 3; // line 1..15 except the cascade (2)
+pub const PLATFORM_IRQ: usize = 3; // line of a platform device: ISA 1..15 except the cascade (2); aarch64 virt: 1 UART, 2 RTC
 pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range or MMIO
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
+pub const PLATFORM_MMIO: usize = 10; // base, bytes: registers of a platform device outside PCI (aarch64 virt: PL011, PL031)
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
 // vendor | device << 16 to match as well (0: any); result = device index.
 

@@ -1,11 +1,10 @@
-// The shell's console: a scrollback of text lines drawn with the 8x16 font through mind::tui, mirrored to COM1.
+// The shell's console: a scrollback of text lines drawn with the 8x16 font through mind::tui, mirrored to the serial line (COM1 or the PL011).
 use core::fmt::Write;
-use mind::dev::Ports;
+use mind::dev::Uart;
 use mind::gfx::Screen;
 use mind::mem::Pages;
 use mind::tui::{Style, Terminal};
 
-pub const COM1: u16 = 0x3F8; // LEGACY: the COM1 UART (docs/legacy.md)
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
 const SCROLLBACK: usize = 400; // lines kept for Shift+PgUp
@@ -21,11 +20,11 @@ pub struct Console {
     first: u64, total: u64, // absolute numbers: oldest kept line, lines so far (the last one is being written)
     cx: usize, back: usize, dirty: bool,
     utf8: u32, need: u8, // UTF-8 being decoded for the screen
-    pub serial: Ports,
+    pub serial: Option<Uart>,
 }
 
 impl Console {
-    pub fn new(screen: Option<Screen>, serial: Ports) -> Self {
+    pub fn new(screen: Option<Screen>, serial: Option<Uart>) -> Self {
         let term = screen.and_then(Terminal::new);
         let (cols, rows) = term.as_ref().map_or((80, 25), |t| (t.cols().min(MAX_COLS), t.rows()));
         let text = Pages::new(SCROLLBACK * cols * 4);
@@ -34,10 +33,7 @@ impl Console {
         console
     }
 
-    pub fn serial(&self, byte: u8) {
-        while self.serial.in8(COM1 + 5) & 0x20 == 0 {}
-        self.serial.out8(COM1, byte);
-    }
+    pub fn serial(&self, byte: u8) { if let Some(uart) = &self.serial { uart.write(byte); } }
     pub fn serial_str(&self, text: &str) { for byte in text.bytes() { if byte == b'\n' { self.serial(b'\r'); } self.serial(byte); } }
 
     fn row(&mut self, line: u64) -> &mut [u32] {
@@ -78,7 +74,7 @@ impl Console {
     }
     pub fn put_str(&mut self, text: &str) { for ch in text.chars() { self.put(ch); } }
 
-    /// A byte of output: to COM1 as is (LF as CRLF), to the screen decoded as UTF-8.
+    /// A byte of output: to the serial line as is (LF as CRLF), to the screen decoded as UTF-8.
     pub fn print_char(&mut self, byte: u8) {
         if byte == b'\n' { self.serial(b'\r'); }
         self.serial(byte);

@@ -2,7 +2,7 @@ use crate::abi::*;
 use crate::input::{Events, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
-use crate::{context, cpu, elf, interrupts, paging, pci, port, serial_write_byte};
+use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,14 +18,10 @@ const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
-// Every task's log also goes to the serial line where no shell shows it yet (aarch64 until issue 202).
-const MIRROR_LOGS: bool = cfg!(target_arch = "aarch64");
+// Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
+static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
 use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
-// Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
-// The PIC, PIT and PCI configuration ports stay with the kernel.
-// LEGACY: ISA devices of the platform profile (docs/legacy.md).
-const LEGACY_PORTS: [(u16, u16); 6] = [(0x60, 1), (0x64, 1), (0x70, 2), (0x1F0, 8), (0x3F6, 1), (0x3F8, 8)];
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -414,10 +410,15 @@ impl Scheduler {
         match kind {
             PLATFORM_PORTS => {
                 let end = a.checked_add(b).ok_or(ERR_INVALID)?;
-                if b == 0 || !LEGACY_PORTS.iter().any(|&(base, count)| a >= base as usize && end <= base as usize + count as usize) { return Err(ERR_RIGHTS); }
+                if b == 0 || !platform::PORTS.iter().any(|&(base, count)| a >= base as usize && end <= base as usize + count as usize) { return Err(ERR_RIGHTS); }
                 Ok(Capability::IoPorts(a as u16, b as u16))
             }
-            PLATFORM_IRQ if (1..16).contains(&a) && a != 2 => Ok(Capability::Interrupt(a as u8)),
+            PLATFORM_IRQ if platform::irq(a) => Ok(Capability::Interrupt(a as u8)),
+            PLATFORM_MMIO => {
+                if !platform::MMIO.iter().any(|&(base, bytes)| a == base && b == bytes) { return Err(ERR_RIGHTS); }
+                if a == platform::CONSOLE { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
+                Ok(Capability::Mmio(a, b))
+            }
             PLATFORM_DEVICE_BAR => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
@@ -466,7 +467,7 @@ impl Scheduler {
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if has_screen { Some(Region::task(frame_bytes(&self.boot), 4096)?) } else { None };
-        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); // which images exist, not where info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -833,7 +834,7 @@ impl Scheduler {
                     for i in 0..length {
                         let physical = task.space.readable(request.arg1 + i).unwrap(); let byte = core::ptr::read_volatile(physical as *const u8);
                         task.log.push(byte); task.console.push(byte);
-                        if MIRROR_LOGS { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); }
+                        if MIRROR_LOGS.load(Ordering::Relaxed) { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); }
                     }
                     Ok(length)
                 }
