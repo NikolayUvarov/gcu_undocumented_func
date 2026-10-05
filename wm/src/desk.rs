@@ -311,7 +311,7 @@ enum Drag {
 
 pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu) }
 
-pub const HELP: [&str; 15] = [
+pub const HELP: [&str; 16] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+M — move and resize: arrows move, Shift+arrows resize, Enter ends (at an edge it snaps), Esc goes back",
@@ -320,6 +320,7 @@ pub const HELP: [&str; 15] = [
     "Alt+P or a right click on the desktop — the programs by category: a click or Enter starts one",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
+    "The items of the top bar can be clicked instead of their keys (\"wm\": the programs)",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
     "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
     "  the ◆ corner to resize it; [▲] maximizes, [⇕] gives the size back; [×] closes",
@@ -328,6 +329,28 @@ pub const HELP: [&str; 15] = [
     "  system information, a window; nothing else.",
     "",
 ];
+
+/// What a click on an item of the top bar does (issue u008): the same as its key — for a host that keeps Alt+Tab and
+/// the like for itself. "wm" at the left opens the programs, as Alt+P does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave }
+
+pub const BAR: [(&str, Bar); 7] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
+                                    ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave)];
+
+/// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
+/// then `│ label ` for each item that fits.
+pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> {
+    let mut items = alloc::vec![(0, 3.min(cols), Bar::Programs)];
+    let mut x = 4;
+    for (label, bar) in BAR {
+        let width = label.chars().count() + 2;
+        if x + 1 + width > cols { break; }
+        items.push((x + 1, width, bar));
+        x += 1 + width;
+    }
+    items
+}
 
 /// The window manager's state over the desk: modes, the drag of the mouse, the notice on the status line.
 pub struct Wm {
@@ -431,6 +454,11 @@ impl Wm {
             if buttons == 0 { self.grab = None; }
             return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
         }
+        if pressed && y == 0 {
+            if let Some(&(at, _, item)) = bar_items(self.desk.cols).iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
+        }
+        // The keys' help closes on a click too.
+        if pressed && matches!(self.mode, Mode::Help) { self.mode = Mode::Normal; return Action::Redraw; }
         if let Mode::Menu(open) = &mut self.mode {
             let (cols, rows) = (self.desk.cols, self.desk.rows);
             return match open.pointer(&self.programs, cols, rows, x, y, pressed || other_pressed) {
@@ -486,6 +514,21 @@ impl Wm {
         }
     }
 
+    /// A click on item `item` of the top bar, at column `at`: what its key does. It leaves a dialog or mode of wm first;
+    /// the programs item or help clicked again closes them.
+    pub fn bar(&mut self, item: Bar, at: usize) -> Action {
+        let before = core::mem::replace(&mut self.mode, Mode::Normal);
+        match item {
+            Bar::Programs => { if !matches!(before, Mode::Menu(_)) { self.mode = Mode::Menu(Menu::new(at, 1)); } Action::Redraw }
+            Bar::Next => { self.desk.cycle(false); Action::Redraw }
+            Bar::Run => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
+            Bar::Move => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
+            Bar::Close => self.desk.focus().map_or(Action::Redraw, Action::Close),
+            Bar::Help => { if !matches!(before, Mode::Help) { self.mode = Mode::Help; } Action::Redraw }
+            Bar::Leave => Action::Detach,
+        }
+    }
+
     // The event for window `id` at screen cell (x, y), as a cell of its content (the nearest one when outside it).
     fn to_window(&self, id: u32, x: usize, y: usize, buttons: u8, wheel: i32) -> Option<Action> {
         let inner = self.desk.get(id)?.rect.inner();
@@ -503,8 +546,18 @@ impl Wm {
         let cols = grid.cols;
         let bar = Style::new(0x101820, 0x80A0C0);
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
-        grid.text(1, 0, "wm", Style::new(0x000000, 0x80A0C0));
-        grid.text_max(4, 0, "│ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ Alt+Q leave", cols.saturating_sub(4), bar);
+        // The items can be clicked (issue u008); the one under the mouse is lit.
+        let lit = Style::new(0xFFFFFF, 0x305070);
+        for (index, &(at, width, _)) in bar_items(cols).iter().enumerate() {
+            let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x >= at && x < at + width);
+            if index == 0 {
+                grid.fill(Rect::new(at, 0, width, 1), ' ', if hovered { lit } else { bar });
+                grid.text(1, 0, "wm", if hovered { lit } else { Style::new(0x000000, 0x80A0C0) });
+            } else {
+                grid.put(at - 1, 0, '│', bar);
+                grid.text_max(at, 0, &format!(" {} ", BAR[index - 1].0), width, if hovered { lit } else { bar });
+            }
+        }
         if let Some(w) = self.desk.focused() { let title = format!(" {} ", w.title); grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
         let status_y = grid.rows.saturating_sub(1);
         let status = match (&self.mode, &self.notice) {

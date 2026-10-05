@@ -1,0 +1,24 @@
+# u008 — wm: the items of the top bar can be clicked — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Asked by the user: `wm`'s top bar names its keys (Alt+Tab next, Alt+P programs, Alt+R run, …), but the host system keeps several of them for itself. In a virtual machine's window on Windows or a desktop Linux, Alt+Tab switches the host's windows and never reaches MIND Core. The bar should be clickable so the same commands can be given with the mouse.
+
+## Plan
+
+- Each item of the bar covers its own cells (`│ label `); "wm" at the left opens the programs, as Alt+P does. The cells come from one function, `bar_items`, so drawing and clicking agree, and items that do not fit the width are left out of both.
+- A click does what the item's key does: next window, the programs menu (below its item), the run line, move mode for the window in front, close it, the keys' help, leave. It leaves any dialog or mode of wm first. Clicking the programs or the help item again closes it, and a click anywhere while the help is shown closes the help.
+- The item under the mouse is lit.
+
+## Acceptance criteria
+
+- Host: the items' cells; the bar drawn as before; the lit item; every item clicked does what its key does; the separators and the cells past the items do nothing; a click closes the help.
+- QEMU (`tablet` suite, through the VirtIO tablet): Alt+H help clicked open, closed by a click on the desktop, the run line opened by a click, then a program typed there runs.
+
+## Resolution
+
+- `wm/src/desk.rs`: `Bar`, `BAR`, `bar_items`, `Wm::bar`; `Wm::pointer` sends a press on row 0 to the bar and closes the help on a click; `draw` builds the bar from `bar_items` and lights the hovered item; a line in the keys' help.
+- Tests: `tests/wm_host.rs` (`the_top_bar_can_be_clicked`, the dialog test), QEMU `tablet` suite.
+- Docs: docs/tools §4.9 (EN/RU), README (`wm`).

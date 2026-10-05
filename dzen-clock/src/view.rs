@@ -318,14 +318,13 @@ impl<'a> View<'a> {
         }
     }
 
-    pub fn hints(&self, visible: bool) {
+    /// The title and the keys; `switch`: T switches to the text face (on the program's own screen).
+    pub fn hints(&self, visible: bool, switch: bool) {
         let color = if visible { HINT } else { BACKGROUND };
         self.text(b"DZEN CLOCK", 24, color);
-        self.text(
-            b"D: DIGITS   C: ORBIT   P: 10S TICKS   H: TEXT   CTRL+Z: SHELL   ESC: EXIT",
-            self.info.height.saturating_sub(32),
-            color,
-        );
+        let keys: &[u8] = if switch { b"D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   T: TEXT FACE   CTRL+Z: SHELL   ESC: EXIT" }
+                          else { b"D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   CTRL+Z: SHELL   ESC: EXIT" };
+        self.text(keys, self.info.height.saturating_sub(32), color);
     }
 
     fn text(&self, text: &[u8], y: usize, color: u32) {

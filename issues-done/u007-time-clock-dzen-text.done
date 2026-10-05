@@ -1,0 +1,26 @@
+# u007 — The shell's one-line `clock` is `time`; `clock` is the clock again; dzen-clock switches to its text face — done
+
+**Type:** fix · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** —
+
+## Problem
+
+Reported by the user: `clock` used to be the full-screen digital clock, and now it printed one line. The shell's command `clock` (the kernel's monotonic clock) hid the program of the same name (`run clock` was needed). The one-line output should be `time`, and `clock` the full-screen clock as before. And dzen-clock needs a text mode.
+
+## Plan
+
+- The shell: `time` prints one line — the time of day from the RTC, the uptime, the monotonic clock, its resolution, the TSC frequency; `clock` is no longer a command, so it starts the program. Help, the command list and Tab completion follow.
+- console: `time` too.
+- dzen-clock has had a text face since issue 089 (`dzen-clock --text`, also `dzen-clock text` now): on its own screen T switches between the pixel face and the text face, and the key line says so; in a window of `wm` the face is chosen when the window opens (a pixel or a text window), so T is not offered there. H's hint reads HINTS.
+
+## Acceptance criteria
+
+- QEMU: `time` gives `TIME: HH:MM:SS UPTIME MS=… MONOTONIC NS=… RESOLUTION NS=… TSC HZ=…` (`normal` suite, `shell` suite history); `clock --text` starts the program (`dzen` suite); in dzen-clock's text face T gives the pixel face and T again the text face, whose key line names T.
+- Host: the text face's key line with and without T.
+
+## Resolution
+
+- `shell/src/main.rs`: `time` (was `clock`), `COMMANDS`, the help and the no-arguments list.
+- `console/src/builtins.rs`, `console/src/screen.rs`: `time`.
+- `dzen-clock/src/main.rs`: `main` loops over `pixel_face` and `text_face`, which end with `Next::Exit` or `Next::Switch`; `switch_key` (T, not in a window). `dzen-clock/src/view.rs`: `hints(visible, switch)`. `dzen-clock/src/text.rs`: `Show::switch`, `KEYS_SWITCH`.
+- Tests: `tests/clock_host.rs`; QEMU `normal`, `shell`, `dzen` suites.
+- Docs: README (`TIME`, `clock`, `dzen-clock`).

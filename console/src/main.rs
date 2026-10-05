@@ -6,6 +6,7 @@
 // the background. Of what a program asks for, it gets what console holds: the user's files and system information.
 extern crate alloc;
 
+mod builtins;
 mod screen;
 pub use mind::{keys, tui};
 
@@ -19,12 +20,16 @@ use mind::ipc::{self, Endpoint};
 use mind::tui::Terminal;
 use screen::{parse, Command, Kind, Screen};
 
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO);
+// The network only for its own `ping`: a flow grant the policy names for console, when the shell starts it.
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK);
 
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
-const HELP: &str = "Type a program and its arguments: uptime, df, find ram: *.txt, grep -i word docs/notes.txt, fm, …\n\
-A console program prints here; one with a screen opens a window of its own.\n\
-list: the programs; clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.";
+const HELP: &str = "Type a program and its arguments: uptime, df, find ram: -name *.txt, grep -i word docs/notes.txt, fm, …\n\
+A console program prints here; one with a screen opens a window of its own. run <program> starts a program even where a\n\
+command has its name (run ping: the IPC demo).\n\
+Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
+clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
+kill, fg, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them there.";
 
 struct Job { pid: u64, name: String, console: bool, printed: bool }
 
@@ -95,6 +100,9 @@ fn main(info: &'static BootInfo) {
                 Command::Clear => screen.clear(),
                 Command::Exit => break,
                 Command::List => list(&mut screen),
+                Command::Builtin { name, args } => builtins::run(&mut screen, name, args),
+                Command::Shell(name) => screen.say(&format!("{}: a command of the shell (it needs what only the shell holds); type it in the shell", name), Kind::Error),
+                Command::Run { name: "", .. } => screen.say("run <program> [arguments]", Kind::Error),
                 Command::Run { name, args } => match run(name, args, output) {
                     Ok(job) => {
                         mind::println!("[CONSOLE] RUN {} PID {}{}", job.name, job.pid, if job.console { "" } else { " ITS OWN SCREEN" });

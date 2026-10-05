@@ -139,6 +139,19 @@ class VM:
             time.sleep(.25)
         return output
 
+    def program_logs(self, pid, until, tries=80):
+        """What program `pid` logged, until `until` is in it. `logs` drains the log, and a line printed in pieces may
+        be drained half at a time ("[MEMTEST] HELD " in one, "144 MiB INTACT=true" in the next), so bodies are joined."""
+        text = ""
+        for _ in range(tries):
+            output = self.command(f"logs {pid}").replace("\r", "")
+            body = re.search(r"LOGS PID=\d+ \([^)]*\):\n(.*)\nEND LOGS", output, re.S)
+            text += body[1] if body else output
+            if until in text:
+                break
+            time.sleep(.25)
+        return text
+
     def _read(self):
         # The UART carries UTF-8 (Cyrillic in program output).
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -316,11 +329,7 @@ def hold_frames(vm, frames, leave_mib):
     while (mib := min(144, left // (1024 * 1024)) // 16 * 16) > 0:
         output = vm.command(f"run memtest hold {mib} &")
         holders.append(int(re.search(r"STARTED PID=(\d+)", output)[1]))
-        for _ in range(80):
-            if f"HELD {mib} MiB" in vm.command(f"logs {holders[-1]}"):
-                break
-            time.sleep(.25)
-        else:
+        if f"HELD {mib} MiB" not in vm.program_logs(holders[-1], f"HELD {mib} MiB"):
             raise AssertionError(f"memtest did not hold {mib} MiB")
         left -= mib * 1024 * 1024
     return holders
@@ -629,7 +638,7 @@ def shell_suite(vm):
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
     keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
-    vm.command("clock")
+    vm.command("time")
     # History: Up twice is "cpus".
     keys(b"\x1b[A\x1b[A\r", "CPU=0 APIC=")
     # Esc clears a typed line.
@@ -639,9 +648,10 @@ def shell_suite(vm):
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
     keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
-    # Several matches are listed under the line.
+    # Several matches are listed under the line: the shell's commands, then the programs (clock is one, issue u007);
+    # the prompt drawn again ends the listing.
     vm.send_bytes(b"c\t")
-    listing = vm.expect("cpus")
+    listing = vm.expect("MIND> ", after="cpus")
     for word in ("clear", "clock"):
         require(listing, word)
     vm.send_bytes(b"\x1b")
@@ -1116,11 +1126,22 @@ def console_check(vm):
     assert any(row.rstrip() == "300" for row in screen), screen
     assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
     assert screen[-1].startswith(canon("> ")), screen[-1]
+    # console's own commands (issue u006): ps, ls; a shell command is named as such, ping without a network says why.
+    vm.send_bytes(b"clear\r")
+    for line in (b"ps", b"ls docs", b"kill 1", b"ping ya.ru"):
+        vm.send_bytes(line + b"\r")
+        time.sleep(.6)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
+    assert any(row.startswith(canon("notes.txt ")) for row in screen), screen
+    assert any(row.startswith(canon("kill: a command of the shell")) for row in screen), screen
+    assert any(row.startswith(canon("ping: ")) for row in screen), screen
     vm.send_bytes(b"exit\r")
     require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, exit returns to the shell", flush=True)
+    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, ps and ls of its own, shell commands named, exit returns to the shell", flush=True)
 
 
 def vfs_check(vm):
@@ -1699,10 +1720,18 @@ def dzen_suite(vm):
     time.sleep(.3)
     screen = look()[0]
     assert not screen[0].strip() and not screen[-1].strip() and not screen[-2].strip(), (screen[0], screen[-2:])
+    # On its own screen T switches to the pixel face and back (issue u007).
+    vm.send("t\n")
+    require(vm.expect("[DZEN-CLOCK] STARTED. D: DIGITS"), "[DZEN-CLOCK] PIXEL FACE")
+    vm.send("t\n")
+    require(vm.expect("[DZEN-CLOCK] STARTED (TEXT)"), "[DZEN-CLOCK] TEXT FACE")
+    time.sleep(.3)
+    screen = look()[0]
+    assert canon("T: PIXEL FACE") in screen[-1], screen[-1]
     vm.send("\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
     time.sleep(.1); vm.collect(); vm.output = ""
-    vm.send("run clock --text\n")  # `clock` alone is the shell's command for the monotonic clock
+    vm.send("clock --text\n")  # the program (issue u007: the shell's one-line command is `time`)
     vm.expect("[CLOCK] 19:3")
     time.sleep(.3)
     first = look()[0]
@@ -1715,7 +1744,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -1772,7 +1801,8 @@ def services_suite(vm):
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
-    clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
+    clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("time")) for _ in range(2)]
+    assert re.search(r"TIME: \d\d:\d\d:\d\d UPTIME MS=\d+ ", vm.command("time")), "the time of day first"
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
@@ -2718,10 +2748,18 @@ def listen_suite(vm, starts):
     require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "HEAR: THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)")
     vm.command(f"kill {pid}")
     voice_control(vm)
+    # say's screen (issue u010): its text in the 8x16 font, Cyrillic as it is, whole; it stays until Esc.
+    vm.send("say\n")
+    pid = re.findall(r"STARTED PID=(\d+) NAME=say FOREGROUND", vm.expect("[SAY] DONE", timeout=30))[-1]
+    screen = screen_text(vm)
+    assert any(canon("Привет. Я разум корабля. Система готова к работе. Hello world.") in row for row in screen), screen[:8]
+    vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+    vm.send("\x1b\n")
+    vm.expect(f"PID={pid} EXITED. SHELL RESUMED.")
     assert "FAULT PID=" not in vm.command("faults")
     print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card, both drivers interrupted' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
-          "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
+          "voice commands recognized by hear, say's text on its screen (Cyrillic, whole), voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
 
 
@@ -2921,7 +2959,7 @@ def net_suite(args, disk):
     dns = _dns_server()
     web_port, dns_port = web.server_address[1], dns.getsockname()[1]
     # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing.
-    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\n")
+    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n")
     shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
@@ -2961,10 +2999,7 @@ def net_suite(args, disk):
         require(vm.command("dmesg -s netstack"), "[NETSTACK] DENIED FOR GRANT 1")
         # Revoking a grant removes the program's capability and closes its connection.
         holder = int(re.search(r"PID=(\d+) NAME=netcheck", vm.command(f"run netcheck hold:10.0.2.2:{web_port}:30 &"))[1])
-        for _ in range(20):
-            if "NETCHECK HOLDING" in vm.command(f"logs {holder}"):
-                break
-            time.sleep(.25)
+        vm.program_logs(holder, "NETCHECK HOLDING", 20)
         require(vm.command("netgrants"), "netcheck RULES=2")
         require(vm.command("netrevoke netcheck"), "REVOKED 1 GRANTS OF netcheck")
         for _ in range(20):
@@ -3004,6 +3039,24 @@ def net_suite(args, disk):
             raise AssertionError("no ping answer after the driver restart")
         # The new driver instance had no frame ring: the stack lent it a fresh one (issue 107).
         require(vm.command("dmesg -s netstack"), "[NETSTACK] CARD 0: DRIVER WITHOUT OUR RING, ATTACHING AGAIN")
+        # console's ping (issue u006): through its own grant, to what the policy names for it and nothing else.
+        vm.send("console ping 10.0.2.2\n")
+        vm.expect("[CONSOLE] READY")
+        for _ in range(40):
+            time.sleep(.25)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(row.startswith(canon("ping: 3 sent")) for row in screen):
+                break
+        assert any(row.rstrip() == canon("ping: 3 sent, 3 received") for row in screen), screen
+        vm.send_bytes(b"ping 10.0.2.3\r")
+        time.sleep(1)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        assert any(row.startswith(canon("ping: 10.0.2.3: not allowed for console")) for row in screen), screen
+        vm.send_bytes(b"exit\r")
+        require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
+        require(vm.command("dmesg -s netpolicy"), "TO console: 1 RULES")
     finally:
         vm.close()
         web.shutdown(); dns.close()
@@ -3554,9 +3607,13 @@ def tablet_suite(vm):
     vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
     time.sleep(.2)
     require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    # The top bar's items can be clicked (issue u008): help opens and a click closes it; the run line opens.
+    assert "MODE=HELP" in click(80, 0, "MODE=HELP")
+    assert "MODE=NORMAL" in click(80, 30, "MODE=NORMAL")
+    assert "MODE=RUN" in click(40, 0, "MODE=RUN")
     # A console program started in wm runs in a window of console, which shows what it prints (issue u004).
     start = len(vm.log)
-    for key in ("alt-r", "u", "p", "t", "i", "m", "e", "ret"):
+    for key in ("u", "p", "t", "i", "m", "e", "ret"):
         vm.hmp(f"sendkey {key}")
         time.sleep(.08)
     vm.serial(enter=False)
@@ -3575,7 +3632,7 @@ def tablet_suite(vm):
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
-          "the desktop menu opened by a right click, a program started from its Clocks submenu; uptime from Alt+R in a console window", flush=True)
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window", flush=True)
 
 
 def windows_suite(vm):
@@ -3607,10 +3664,7 @@ def windows_suite(vm):
     require(intruder, "INTRUDER ATTACH: Ok(Err(Denied))")
     require(intruder, "INTRUDER LIST: Ok(Err(Denied))")
     assert "Ok(Ok(" not in intruder.split("INTRUDER SURFACE")[1], intruder
-    for _ in range(40):
-        if "MANAGER LEAVES" in vm.command(f"logs {holder}"):
-            break
-        time.sleep(.25)
+    vm.program_logs(holder, "MANAGER LEAVES", 40)
     time.sleep(1.2)
     # Close all: every program is asked to end and its window goes.
     require(vm.command("winmgr closeall"), "CLOSE ALL: Ok(Ok(2))")

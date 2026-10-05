@@ -27,7 +27,7 @@ pub const CATEGORIES: [(&str, &[&str]); 5] = [
     ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "reboot"]),
     ("Clocks", &["clock", "dzen-clock"]),
     ("Sound and voice", &["beep", "say", "listen", "hear"]),
-    ("Network", &["ping", "pong", "netcheck", "netbench"]),
+    ("Network", &["netcheck", "netbench"]),
 ];
 /// Programs with a text face (issue 089) get a second entry for it.
 const TEXT_FACES: [&str; 2] = ["clock", "dzen-clock"];
