@@ -224,7 +224,7 @@ impl Dialogue {
 // ---- The shell's side: the `voice` program, its calls and push-to-talk ----
 
 use super::{error_text, Shell};
-use mind::abi::{CAP_GRANT, CAP_WRITE, SLOT_INIT};
+use mind::abi::{CAP_GRANT, CAP_WRITE, KEY_F1, SLOT_INIT};
 use mind::control;
 use mind::idl::voice::{self as idl, Action, Order};
 use mind::idl::{init as idl_init, wire};
@@ -267,6 +267,7 @@ impl Shell {
     fn voice_reset(&mut self) {
         if let Some(call) = self.voice.call.take() { let _ = idl::reply_next(call, &Order { say: fit(""), action: Action::Quit }); }
         let endpoint = self.voice.endpoint;
+        if self.voice.pid.is_some() { let _ = mind::input::listen(KEY_F1 + 11, 0, false); }
         self.voice = Voice { endpoint, ..Voice::default() };
     }
 
@@ -290,6 +291,8 @@ impl Shell {
                 match started {
                     Ok(pid) => {
                         self.voice.pid = Some(pid);
+                        // F12 reaches the shell whatever program has the focus (issue 154).
+                        let _ = mind::input::listen(KEY_F1 + 11, 0, true);
                         self.started(pid, b"voice", true);
                         let _ = writeln!(self.term, "VOICE CONTROL ON. F12 OR VOICE LISTEN: SAY A COMMAND, ESC: CANCEL. VOICE OFF: STOP.");
                     }

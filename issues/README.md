@@ -26,8 +26,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [150](150-user-memory-beyond-the-arena.md) | User memory beyond the kernel arena (frames from free RAM, large shared read-only objects) | kernel | P2 | — | stage II, track G |
 | [153](153-xsave-avx-state.md) | XSAVE: AVX state per task | kernel | P3 | — | track G |
-| [154](154-push-to-talk-routing.md) | Push-to-talk routing to a registered listener | kernel | P3 | — | track G |
-| [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell + kernel | P2 | — (extends 154) | track G |
+| [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [200](200-architecture-layer.md) | Architecture layer in the kernel and libmind (x86-64 first, no change in behavior) | porting | P2 | — | track H |
 | [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | 200 | track H |
@@ -137,6 +136,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [105](../issues-done/105-multiple-network-cards.done) | Several network cards: driver instances per card, stack interfaces | done (2026-10-04) |
 | [106](../issues-done/106-network-offloads.done) | Checksum and segmentation offloads, after measurement (transmit checksum offload, off by default) | done (2026-10-04) |
 | [107](../issues-done/107-batched-frame-path.done) | Batched frame path between the stack and the card drivers (frame ring) | done (2026-10-04) |
+| [154](../issues-done/154-push-to-talk-routing.done) | Push-to-talk routing: keys taken from the focused program for a listener (`INPUT_LISTEN`) | done (2026-10-05) |
 | [156](../issues-done/156-ps2-mouse.done) | PS/2 mouse: pointer events for the focused program | done (2026-10-04) |
 | [157](../issues-done/157-window-broker.done) | `windows`: window broker, windows that outlive the window manager | done (2026-10-04) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |

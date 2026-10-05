@@ -1,6 +1,6 @@
 # 155 — Virtual consoles: several shell consoles and switching between them
 
-**Type:** shell + kernel · **Owner:** tools track (shell), kernel track (key routing) · **Priority:** P2 · **Status:** open · **Blocked by:** — (the key routing extends 154) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2
+**Type:** shell + kernel · **Owner:** tools track (shell), kernel track (key routing) · **Priority:** P2 · **Status:** open · **Blocked by:** — (the key routing is done: `INPUT_LISTEN`, 154) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2
 
 ## Problem
 
@@ -18,7 +18,7 @@ There is one console: the shell's screen and line, with one foreground program a
   2. gives the focus to that console's foreground program (`FOCUS`).
   
   A program in a console that is not shown keeps running. Its console output goes to its own console's buffer.
-- **Key routing (kernel).** The switch keys must reach the shell even while another program has the focus, and never that program. This is the mechanism of 154 (`INPUT_LISTEN`: the focus owner registers keys whose events go to its endpoint and are taken out of the focused stream), extended to a small set of keys. Ctrl+Z keeps its meaning in each console.
+- **Key routing (kernel, done in 154).** The switch keys must reach the shell even while another program has the focus, and never that program. `INPUT_LISTEN` (`mind::input::listen(KEY_F1, MOD_ALT, true)` … `KEY_F1 + 3`) takes each key with exactly those modifiers out of the focused stream and into the shell's own input queue, presses and releases; up to 8 registrations. The shell reads them in its main loop while a program has the focus, as it does for F12. Ctrl+Z keeps its meaning in each console. What remains here is the shell's part.
 - **COM1** stays attached to console 1, the test harness's channel. The status line names the console shown. `ps` names the console of every program.
 
 ## Acceptance criteria
@@ -31,4 +31,4 @@ QEMU `keys` and `shell` suites:
 
 ## Related
 
-[154](154-push-to-talk-routing.md), [151](../issues-done/151-shell-grant-slots-13-15.done), [docs/tools](../docs/tools/README.md).
+[154](../issues-done/154-push-to-talk-routing.done), [151](../issues-done/151-shell-grant-slots-13-15.done), [docs/tools](../docs/tools/README.md).
