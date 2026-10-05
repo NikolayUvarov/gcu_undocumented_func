@@ -32,6 +32,10 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
 /// The distributor, this CPU's redistributor and CPU interface, and the tick.
 pub unsafe fn init() {
     write32(GICD, 1 << 4 | 1 << 1); // ARE_NS, Group 1 non-secure
+    // Device lines (SPIs): group 1, to CPU 0, level-triggered as reset; enabled by their drivers.
+    let lines = ((read32(GICD + 4) & 0x1F) as usize + 1) * 32;
+    for word in 1..lines / 32 { write32(GICD + 0x80 + 4 * word, u32::MAX); }
+    for spi in 32..lines { core::ptr::write_volatile((GICD + 0x6000 + 8 * spi) as *mut u64, 0); }
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);

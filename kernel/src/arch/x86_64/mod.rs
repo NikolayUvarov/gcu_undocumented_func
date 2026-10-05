@@ -5,6 +5,6 @@ pub mod context;
 pub mod cpu;
 pub mod interrupts;
 pub mod mmu;
-pub mod pci;
+pub mod pcicfg;
 pub mod port;
 pub mod serial;

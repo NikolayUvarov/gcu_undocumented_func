@@ -50,6 +50,12 @@ impl Local {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl Local {
+    /// EL0 cannot read the ID registers: the architecture only (issue 202).
+    pub fn cpuid() -> Self { Self { vendor: String::from("AArch64"), ..Self::default() } }
+}
+
 /// A line of the report: text and how to show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { Heading, Text, Dim }

@@ -24,7 +24,7 @@ def boot(args, disk, until, timeout=90):
     process = subprocess.Popen(
         [args.qemu, "-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512", "-nographic", "-no-reboot",
          "-drive", f"if=pflash,format=raw,readonly=on,file={args.code}", "-drive", f"if=pflash,format=raw,file={variables}",
-         "-drive", f"format=raw,file=fat:rw:{disk}", "-device", "ramfb"],
+         "-drive", f"format=raw,file=fat:rw:{disk}", "-device", "ramfb", "-nic", "none"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     output, deadline = b"", time.monotonic() + timeout
     try:
