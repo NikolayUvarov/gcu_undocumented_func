@@ -615,9 +615,10 @@ def shell_suite(vm):
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
     keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
-    # Several matches are listed under the line.
+    # Several matches are listed under the line: the shell's commands, then the programs (clock is one, issue u007);
+    # the prompt drawn again ends the listing.
     vm.send_bytes(b"c\t")
-    listing = vm.expect("cpus")
+    listing = vm.expect("MIND> ", after="cpus")
     for word in ("clear", "clock"):
         require(listing, word)
     vm.send_bytes(b"\x1b")
