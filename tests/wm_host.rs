@@ -150,7 +150,12 @@ fn keys_wm_keeps_and_passes_on() {
     wm.desk = desk_of_four();
     assert_eq!(wm.key(chr('x')), Action::Forward, "plain keys go to the window in front");
     assert_eq!(wm.key(key(KEY_F1)), Action::Forward);
-    assert_eq!(wm.key(Key(event(KEY_F1, 0, MOD_ALT))), Action::Redraw, "Alt+F1: wm's keys");
+    assert_eq!(wm.key(Key(event(KEY_F1, 0, MOD_ALT))), Action::Forward, "Alt+F1 is fm's (the left panel's volume)");
+    assert_eq!(wm.key(Key(event(KEY_F1 + 1, 0, MOD_ALT))), Action::Forward);
+    assert_eq!(wm.key(Key(event(KEY_F1 + 6, 0, MOD_ALT))), Action::Forward, "fm's Alt+F7");
+    assert_eq!(wm.key(Key(event(KEY_F1 + 7, 0, MOD_ALT))), Action::Forward, "edit's Alt+F8");
+    assert_eq!(wm.key(Key(event(KEY_BACKSPACE, 8, MOD_ALT))), Action::Forward, "edit's Alt+Backspace");
+    assert_eq!(wm.key(alt_char('h')), Action::Redraw, "Alt+H: wm's keys");
     assert!(wm.status().starts_with("MODE=HELP"));
     wm.key(key(KEY_ESC));
     assert_eq!(wm.key(alt(KEY_TAB, '\t')), Action::Redraw);
@@ -261,6 +266,24 @@ fn what_each_cell_shows() {
     wm.key(alt_char('r'));
     let (_, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((3, 0)));
     assert!(cursor.is_some() && cursor != Some((84, 2)));
+    // A dialog over a pixel window (Alt+H over the clocks): the cells it covers are not the window's, so its pixels
+    // are not copied over the dialog; the rest of the window still shows them.
+    wm.key(key(KEY_ESC));
+    let mut clocks = Wm::new(160, 50);
+    let mut big = pixels(1, "dzen-clock", 1200, 700);
+    big.rect = Rect::new(10, 5, 140, 40);
+    clocks.desk.add(big);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!((owner[25 * 160 + 80], owner[6 * 160 + 11]), (1, 1));
+    clocks.key(alt_char('h'));
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[25 * 160 + 80], 0, "under the help dialog");
+    assert_eq!(owner[6 * 160 + 11], 1, "outside the dialog");
+    clocks.key(key(KEY_ESC));
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[25 * 160 + 80], 1, "the dialog closed: the pixels come back");
     // Every size draws.
     for (cols, rows) in [(20, 6), (40, 12), (100, 30)] {
         let mut wm = Wm::new(cols, rows);

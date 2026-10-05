@@ -3,7 +3,7 @@
 //! halves, quarters and the whole screen; what each cell of the screen shows. No system calls: tests/wm_host.rs.
 use crate::keys::{Code, Key};
 use crate::tui::widgets::{message, Edit, InputLine};
-use crate::tui::{Grid, Line, Rect, Style, Theme};
+use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -39,6 +39,9 @@ impl Win {
 /// What is under a cell of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit { Desktop, Title(u32), Close(u32), Corner(u32), Border(u32), Content(u32) }
+
+/// The cell under a pixel window's content: what is still this cell after everything is drawn shows the pixels.
+pub const PIXELS: Cell = Cell { ch: ' ', style: Style { fg: 0, bg: 0 } };
 
 /// Smallest frame, and how near an edge a moved window sticks to it (cells).
 pub const MIN: (usize, usize) = (16, 4);
@@ -219,7 +222,7 @@ impl Desk {
                             grid.put(x, y, ch, Style::new(fg, bg));
                             owner[y * cols + x] = 0;
                         }
-                        Content::Pixels => { grid.put(x, y, ' ', Style::new(0, 0)); owner[y * cols + x] = index as u16 + 1; }
+                        Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
                     }
                 }
             }
@@ -341,7 +344,8 @@ impl Wm {
             }
             (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
             (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
-            (Code::F(1), _) | (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
+            // Not Alt+F1: fm chooses the left panel's volume with it.
+            (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
             (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect }; } Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
             (_, Some('q')) => Action::Detach,
@@ -385,9 +389,10 @@ impl Wm {
 
     fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP" } }
 
-    /// Draws everything; returns the text cursor (of the run line, or the focused text window's from `cursor`).
+    /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
+    /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>, cursor: Option<(usize, usize)>) -> (Vec<u16>, Option<(usize, usize)>) {
-        let owner = self.desk.draw(grid, theme, cell);
+        let mut owner = self.desk.draw(grid, theme, cell);
         let cols = grid.cols;
         let bar = Style::new(0x101820, 0x80A0C0);
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
@@ -407,6 +412,10 @@ impl Wm {
             Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); shown = None; }
             Mode::Run(line) => { shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
             _ => {}
+        }
+        // A dialog over a pixel window: its cells are no longer the window's.
+        for (index, tag) in owner.iter_mut().enumerate() {
+            if *tag != 0 && grid.get(index % cols, index / cols) != PIXELS { *tag = 0; }
         }
         (owner, shown)
     }
