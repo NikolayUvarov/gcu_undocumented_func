@@ -20,7 +20,16 @@ CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined
 
 
 def boot(args, disk, until, timeout=90):
-    """Boots QEMU on `disk` and returns the console output once `until` appears (or the timeout passes)."""
+    """Boots QEMU on `disk` and returns the console output once `until` appears (or the timeout passes). AAVMF under
+    TCG now and then stalls before it loads the bootloader; a boot that shows no kernel line is tried once more."""
+    output = boot_once(args, disk, until, timeout)
+    if "MIND CORE KERNEL" not in output and "BdsDxe: starting" not in output:
+        print("NOTE: the firmware stalled before loading the bootloader; booting again", flush=True)
+        output = boot_once(args, disk, until, timeout)
+    return output
+
+
+def boot_once(args, disk, until, timeout):
     variables = Path(tempfile.mkdtemp()) / "vars.fd"
     shutil.copyfile(args.vars, variables)
     process = subprocess.Popen(
