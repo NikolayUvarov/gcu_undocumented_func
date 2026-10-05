@@ -188,6 +188,8 @@ Ten building blocks; the tools in §4 are thin on top of them.
 - **Phase 1** (read-only VFS): browse, view, run, information, find. **Phase 2** (after F8): write operations.
 - Phase 1 done in issue 063, phase 2 in issue 068: F5–F8 as jobs planned up front and run a slice at a time between keys (progress, Esc, Retry / Skip / Abort, overwrite or skip existing targets), both volumes; F4 is the editor built in (`edit`'s library) rather than a separate program — like the viewer, it saves a screen. fm gets the shell's VFS client through `REQUEST_FILES` (issue 071 split it from the editor's one-directory `REQUEST_FILE`).
 - The viewer is built in rather than a separate process: every application with a screen costs a full frame of kernel memory.
+- **Command line** (issue 097): what is typed goes to the line under the panels (`A:/docs> …`); Enter runs it — `cd <dir>` (`..`, `/`, `ram:`; `cd` alone: the volume root), `edit <file>` (a missing one is new), `view <file>`, or a program with its arguments, where a name of the active panel's entry becomes its path (`grep -i x notes.txt` → `docs/notes.txt`); Esc clears it, Alt+Enter or Ctrl+Enter adds the name under the cursor. On an empty line `+ - *` keep their marking meaning. Programs started here run in the background without the grants the shell gives (no file or network clients) and fm cannot show their output (it has no process control): `FG <pid>` in the shell does.
+- **Hiding panels** (Midnight / Norton Commander): Ctrl+O hides or shows both, Ctrl+F1 / Ctrl+F2 the left / right one, Ctrl+P the other one; their place shows what the command line did, and a hidden panel does not keep the cursor.
 
 ### 4.2 `edit` — panel text editor
 

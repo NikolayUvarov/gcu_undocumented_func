@@ -868,6 +868,8 @@ def fm_check(vm):
     def keys(data, text):
         vm.send_bytes(data)
         return status_line(vm, text)
+    def poke(text):
+        return keys(b"\x18", text)  # Ctrl+X: bound to nothing (a letter would go to the command line)
     vm.send("fm\n")
     vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
     time.sleep(.3)
@@ -876,7 +878,7 @@ def fm_check(vm):
     assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
     assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
     assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
-    assert "CURRENT=.." in tool_status(vm, "[FM] LEFT=/docs FULL")
+    assert "CURRENT=.." in poke("[FM] LEFT=/docs FULL")
     # F3 views notes.txt in the built-in viewer; Esc comes back.
     keys(b"\x1b[B", "CURRENT=notes.txt")
     keys(b"\x1bOR", "VIEW=1")
@@ -887,17 +889,17 @@ def fm_check(vm):
     keys(b"\x1b", "VIEW=0")
     # ".." goes up with the cursor on the directory left; EFI/BOOT and back.
     keys(b"\x1b[H\r", "LEFT=/ FULL")
-    assert "CURRENT=docs" in tool_status(vm, "[FM] LEFT=/ FULL")
+    assert "CURRENT=docs" in poke("[FM] LEFT=/ FULL")
     keys(b"\x1b[B", "CURRENT=EFI")
     keys(b"\r", "LEFT=/EFI FULL")
     keys(b"\x1b[B", "CURRENT=BOOT")
     keys(b"\r", "LEFT=/EFI/BOOT FULL")
-    tool_status(vm, "LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
+    poke("LEFT=/EFI/BOOT FULL")  # not CR last: CR LF would be one Enter
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()  # Enter on "..": back to EFI
     assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
-    assert "CURRENT=BOOT" in tool_status(vm, "[FM] LEFT=/EFI FULL")
+    assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel runs in the background.
     for _ in range(60):
@@ -912,6 +914,31 @@ def fm_check(vm):
     started = table_row(screen, canon("Started clock.elf as PID"))
     assert started, screen
     pid = int(re.search(r"PID (\d+)", started)[1])
+    # The command line (issue 097): typing goes under the panels, Enter runs it (cd, edit, view, a program with its
+    # arguments); Ctrl+O hides both panels and shows what it did there, Ctrl+F1 / Ctrl+F2 one, Ctrl+P the other.
+    keys(b"cd docs", "CMD=cd docs")
+    keys(b"\r", "LEFT=/docs FULL")
+    keys(b"\x0f", "HIDDEN=LR")
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()  # Enter on an empty line with the panels hidden: nothing
+    assert any(line.startswith(canon("A:/> cd docs")) for line in screen) and not any(canon("║") in line for line in screen[:-2]), screen
+    assert screen[-2].startswith(canon("A:/docs>")), screen[-2]
+    keys(b"cd ..", "CMD=cd ..")
+    keys(b"\r", "LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
+    assert "HIDDEN" not in keys(b"\x0f", "CURRENT=docs"), "Ctrl+O shows the panels again"
+    vm.send_bytes(b"\x1b[1;5P")
+    assert "ACTIVE=R" in status_line(vm, "HIDDEN=L", whole=True), "Ctrl+F1 hides the left panel; the right one is active"
+    time.sleep(.2)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(line.startswith(canon("A:/docs> cd ..")) for line in screen) and canon("║") in screen[1][40:], screen
+    assert screen[-1].startswith(canon("1Help")), "a terminal's Ctrl does not stay in the key bar: " + screen[-1]
+    assert "HIDDEN" not in keys(b"\x10", "ACTIVE=R"), "Ctrl+P shows the other panel again"
+    keys(b"\t", "ACTIVE=L")
+    keys(b"view docs/notes.txt", "CMD=view docs/notes.txt")
+    keys(b"\r", "VIEW=1")
+    keys(b"\x1b", "VIEW=0")
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -924,7 +951,7 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel", flush=True)
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P", flush=True)
     vfs_check(vm)
 
 
@@ -1543,6 +1570,15 @@ def services_suite(vm):
     require(pong, "SPAWNED PING PID=2")
     require(pong, "FROM PID 2: HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 1001")
     require(vm.command("logs 2"), "[PING] ACK 1001")
+    # In front, pong shows the last string it read and how many calls it answered (issue 098).
+    vm.send("fg 1\n")
+    vm.expect("FOREGROUND PID=1")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("HELLO FROM PING! ZERO-COPY IPC SUCCESS! COUNT: 100") in row for row in screen), screen
+    assert any(re.search(canon("CALLS ANSWERED: ") + r"[1-9]", row) for row in screen) and not any(canon("WAITING") in row for row in screen), screen
+    vm.background(1)
     # Killing a server whose client awaits a reply wakes the client with an error instead of hanging the kernel.
     require(vm.command("kill 1"), "KILLED PID=1")
     time.sleep(.5)
@@ -1578,7 +1614,17 @@ def services_suite(vm):
     assert len(described) == count and all(text.strip() for _, text in described), detailed
     assert re.search(r"^  fm +\d+ KB  file manager \(Norton Commander keys\)", detailed, re.M), detailed
     assert re.search(r"^  hello +\d+ KB  clock — a digital clock", detailed, re.M), detailed  # a copy of clock.elf
-    require(vm.command("list x"), "USAGE: LIST [-L]")
+    # A mask keeps the names that match: list a* shows the programs (and services) starting with a.
+    output = vm.command("list a*")
+    matching = int(re.search(r"PROGRAMS ON DISK MATCHING a\* \((\d+)\):", output)[1])
+    names = [name for row in output.splitlines() if row.startswith("  ") for name in row.split()]
+    assert len(names) == matching and {"app", "app2"} <= set(names) and all(n.startswith("a") for n in names), output
+    require(output, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE): ata ahci audio_gw\n")
+    output = vm.command("list -l f*")
+    assert re.search(r"^  fm +\d+ KB  file manager", output, re.M) and not re.search(r"^  [^f]", output, re.M), output
+    assert "SERVICES" not in output, output
+    require(vm.command("list zz*"), "PROGRAMS ON DISK MATCHING zz* (0).")
+    require(vm.command("list -x"), "USAGE: LIST [-L] [MASK]")
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
@@ -2290,6 +2336,11 @@ def speech_wav(phrases=SPEECH):
 
 
 def listen_suite(vm, starts):
+    # The network card the launchers add shares the sound card's interrupt line, which the kernel delivers to one
+    # driver only (issue 159): audio_gw then plays without interrupts, looking at the ring while a client waits (096).
+    lines = dict(re.findall(r"(Ethernet|audio \(AC97\)) IRQ=(\d+)", vm.command("devices")))
+    assert len(lines) == 2, lines
+    shared = len(set(lines.values())) == 1
     # QEMU's "none" backend feeds the AC97 microphone with silence at the real rate ("wav" has no capture).
     require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
     log = ""
@@ -2372,7 +2423,7 @@ def listen_suite(vm, starts):
     vm.command(f"kill {pid}")
     voice_control(vm)
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback, program arguments, run by name, "
+    print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
           "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
@@ -2966,6 +3017,8 @@ def windows_suite(vm):
         time.sleep(.25)
     else:
         raise AssertionError(seen)
+    # A program may print its last line and end between the reads above and `ps`: its output stays readable once.
+    seen += "".join(vm.command(f"logs {pid}") for pid in pids)
     require(seen, "CLOSED AFTER")
     time.sleep(1.2)
     require(vm.command("dmesg -s windows"), "ENDED WITH PID")
@@ -3128,8 +3181,11 @@ def main():
                 netbench_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
+            # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
+            # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
-                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci")
+                    rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ())
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)

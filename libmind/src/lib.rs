@@ -23,6 +23,7 @@ pub mod input;
 pub mod ipc;
 pub mod keys;
 pub mod log;
+pub mod mask;
 pub mod mem;
 pub mod network;
 pub mod netring;

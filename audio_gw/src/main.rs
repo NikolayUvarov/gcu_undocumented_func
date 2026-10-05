@@ -162,15 +162,23 @@ impl Ac97 {
         }
         (take * BUFFER_BYTES, halted)
     }
-    fn interrupt(&mut self) {
-        let status = self.bus.in16(SR);
-        self.bus.out16(SR, status & SR_CLEAR); // clear write-1-to-clear flags
-        self.interrupts += 1;
+    // Clears the write-1-to-clear flags until none is left: a buffer that completes between the read and the write
+    // would otherwise keep the line asserted, and on an edge-triggered line no interrupt would come again.
+    fn clear_status(&mut self) {
+        for _ in 0..8 {
+            let status = self.bus.in16(SR) & SR_CLEAR;
+            if status == 0 { break; }
+            self.bus.out16(SR, status);
+        }
     }
+    fn interrupt(&mut self) { self.clear_status(); self.interrupts += 1; }
 }
 
 // Clients waiting for ring space: saved reply capability and the number of free buffers needed.
 const WAITERS: usize = 8;
+// While a client waits, the ring is also looked at this often: an interrupt lost to a burst of completions (a host
+// backend such as dsound plays 100 ms at a time) would otherwise leave it waiting forever, and its program with it.
+const POLL_MS: u32 = 20;
 
 // Answers deferred `wait` calls whose space is now free (or all of them on stop).
 fn release(device: &Option<Ac97>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
@@ -192,7 +200,18 @@ fn main(_info: &'static BootInfo) {
         None => mind::println!("[AUDIO] NO AC97 DEVICE; GATEWAY ANSWERS WITHOUT OUTPUT"),
     }
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
+        let waiting = waiters.iter().any(Option::is_some);
+        let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if waiting { POLL_MS } else { 0 }) {
+            Ok(request) => request,
+            Err(Error::Other(ERR_TIMEOUT)) => {
+                // No interrupt for a while: do what it would have done, and unmask the line again.
+                if let Some(device) = device.as_mut() { device.clear_status(); }
+                let _ = irq.ack();
+                release(&device, &mut waiters, false);
+                continue;
+            }
+            Err(_) => continue,
+        };
         if request.irq.is_some() {
             if let Some(device) = device.as_mut() {
                 device.interrupt();

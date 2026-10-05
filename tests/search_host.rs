@@ -2,6 +2,8 @@
 //! regular expressions with case folding, the walk over a tree in memory, line scanning.
 #![allow(dead_code)]
 extern crate alloc;
+#[path = "../libmind/src/mask.rs"]
+mod mask;
 #[path = "../libmind/src/pattern.rs"]
 mod pattern;
 #[path = "../search/src/find.rs"]
@@ -22,6 +24,17 @@ fn masks() {
     assert!(pattern::matches("*.*", "README"));
     assert!(pattern::matches("з?метки*", "Заметки.txt"), "Cyrillic folds case");
     assert!(!pattern::matches("*.txt", "notes.md"));
+}
+
+#[test]
+fn masks_without_allocation() {
+    // mind::mask works on characters with byte offsets (the shell, which has no heap, uses it for `list a*`).
+    assert!(mask::glob("a*", "app2") && mask::glob("A*", "app") && !mask::glob("a*", "beep"));
+    assert!(mask::glob("*mon*", "sysmon") && mask::glob("*", "") && !mask::glob("?", ""));
+    assert!(mask::glob("f?", "fm") && !mask::glob("f?", "fsck") && mask::glob("f*k", "fsck"));
+    assert!(mask::glob("*ки", "заметки") && mask::glob("?а*", "Заметки") && !mask::glob("*ки?", "заметки"));
+    assert!(mask::glob("*a*b", "xaab") && mask::glob("**", "anything") && !mask::glob("a*b", "acbc"));
+    assert!(mask::matches("x* a*", "app") && !mask::matches("x*, y*", "app"));
 }
 
 #[test]

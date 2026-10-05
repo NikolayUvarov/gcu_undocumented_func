@@ -1,27 +1,9 @@
 //! Name masks and simple regular expressions for `fm`, `find` and `grep`. Matching folds case for every script Rust
-//! knows (Latin, Cyrillic, ...) when asked; it works on characters, not bytes.
+//! knows (Latin, Cyrillic, ...) when asked; it works on characters, not bytes. The masks are `mind::mask` (no
+//! allocation, so the shell can use them too).
 use alloc::vec::Vec;
 
-/// Wildcard masks: `*` any run, `?` one character, case-insensitive; several masks separated by `,`, `;` or spaces.
-/// `*.*` matches names without an extension too (as in DOS).
-pub fn matches(masks: &str, name: &str) -> bool {
-    masks.split([',', ';', ' ']).filter(|m| !m.is_empty()).any(|m| m == "*.*" || glob(m, name))
-}
-
-/// One wildcard mask against a name, case-insensitive.
-pub fn glob(mask: &str, name: &str) -> bool {
-    let m: Vec<char> = mask.chars().flat_map(|c| c.to_lowercase()).collect();
-    let n: Vec<char> = name.chars().flat_map(|c| c.to_lowercase()).collect();
-    let (mut i, mut j, mut star, mut mark) = (0usize, 0usize, None, 0usize);
-    while j < n.len() {
-        if i < m.len() && (m[i] == '?' || m[i] == n[j]) { i += 1; j += 1; }
-        else if i < m.len() && m[i] == '*' { star = Some(i); i += 1; mark = j; }
-        else if let Some(s) = star { i = s + 1; mark += 1; j = mark; }
-        else { return false; }
-    }
-    while i < m.len() && m[i] == '*' { i += 1; }
-    i == m.len()
-}
+pub use crate::mask::{glob, matches};
 
 /// Why a regular expression was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

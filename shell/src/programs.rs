@@ -63,13 +63,15 @@ pub fn show_about(out: &mut Console, name: &str) -> bool {
     match about(name, &mut text) { Some(about) => { let _ = writeln!(out, "{}", about.trim_end()); true } None => false }
 }
 
-/// `list` (programs in columns) or `list -l` (one per line with what it does).
-pub fn list(out: &mut Console, long: bool) {
+/// `list` (programs in columns) or `list -l` (one per line with what it does); `masks` (`a*`, `*mon*`, several
+/// separated by spaces or commas; empty: all) keeps the programs and services whose names match.
+pub fn list(out: &mut Console, long: bool, masks: &str) {
+    let wanted = |name: &str| masks.is_empty() || mind::mask::matches(masks, name);
     let programs = match loader::list(Endpoint::LOADER) { Ok(programs) => programs, Err(_) => { let _ = writeln!(out, "ERROR: CANNOT LIST THE BOOT DISK"); return; } };
     // Applications only, sorted by name (services are listed below).
     let mut names: [([u8; NAME_MAX], usize, u64); 64] = [([0; NAME_MAX], 0, 0); 64];
     let mut count = 0;
-    for program in programs.as_slice().iter().filter(|p| !p.service) {
+    for program in programs.as_slice().iter().filter(|p| !p.service && wanted(p.name.as_str())) {
         let name = program.name.as_str().as_bytes();
         let len = name.len().min(NAME_MAX);
         if count < names.len() { names[count].0[..len].copy_from_slice(&name[..len]); names[count].1 = len; names[count].2 = program.size; count += 1; }
@@ -77,7 +79,11 @@ pub fn list(out: &mut Console, long: bool) {
     let names = &mut names[..count];
     names.sort_unstable_by(|a, b| a.0[..a.1].cmp(&b.0[..b.1]));
 
-    let _ = writeln!(out, "PROGRAMS ON DISK ({}): RUN <NAME> [ARGS] [&], OR JUST <NAME> [ARGS].{}", count, if long { "" } else { " LIST -L: WHAT EACH ONE DOES." });
+    if masks.is_empty() {
+        let _ = writeln!(out, "PROGRAMS ON DISK ({}): RUN <NAME> [ARGS] [&], OR JUST <NAME> [ARGS].{}", count, if long { "" } else { " LIST -L: WHAT EACH ONE DOES." });
+    } else {
+        let _ = writeln!(out, "PROGRAMS ON DISK MATCHING {} ({}){}", masks, count, if count == 0 { "." } else { ":" });
+    }
     if long {
         let mut text = [0u8; 2048];
         for entry in names.iter() { let _ = writeln!(out, "  {:<12} {:>5} KB  {}", name(entry), entry.2.div_ceil(1024), summary(name(entry), &mut text)); }
@@ -94,7 +100,11 @@ pub fn list(out: &mut Console, long: bool) {
             let _ = writeln!(out);
         }
     }
-    let _ = write!(out, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE):");
-    for service in BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()) { let _ = write!(out, " {}", service); }
-    let _ = writeln!(out, "\nCTRL+Z: BACK TO THE SHELL, THE PROGRAM KEEPS RUNNING. ESC: EXIT A PROGRAM. HELP: THE SHELL'S COMMANDS.");
+    let mut services = BOOT_SERVICES.iter().chain(SERVICE_INSTANCES.iter()).filter(|s| wanted(s)).peekable();
+    if services.peek().is_some() {
+        let _ = write!(out, "SERVICES (STARTED AT BOOT; SVC SHOWS THEIR STATE):");
+        for service in services { let _ = write!(out, " {}", service); }
+        let _ = writeln!(out);
+    }
+    if masks.is_empty() { let _ = writeln!(out, "CTRL+Z: BACK TO THE SHELL, THE PROGRAM KEEPS RUNNING. ESC: EXIT A PROGRAM. HELP: THE SHELL'S COMMANDS."); }
 }
