@@ -91,7 +91,8 @@ fn launch(command: &str) -> Result<String, String> {
     let lost = || format!("cannot start {}: the loader does not answer", name);
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
-    if needs.console { return Err(format!("{} is a console program: run it in the shell", name)); }
+    // A console program runs in a window of `console`, which shows what it prints (issue u004).
+    if needs.console { return launch(&format!("console {}", command)).map_err(|_| format!("{} is a console program, and there is no console to run it in: run it in the shell", name)); }
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{} is a window manager", name)); }
     if !matches!(api::client(BROKER, RECEIVE), Ok(Ok(()))) { return Err(String::from("the window broker gives no client")); }
     let session = match loader::begin(Endpoint::LOADER, name, args) {

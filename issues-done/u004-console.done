@@ -1,0 +1,26 @@
+# u004 — `console`: a terminal for programs, in a window of wm or on a screen — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — (162 done with it) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2
+
+## Problem
+
+Asked by the user: a `console` program. Console programs — `uptime`, `df`, `find`, `grep`, `beep`, … — ran only in the shell: `wm` refused them ("run it in the shell"), and `fm` in a window started them where nobody saw their output ("LOGS n in the shell shows what it printed").
+
+## Plan
+
+- `console [program [arguments]]`: a text window of `wm` (or a screen of its own) with a command line under what its programs printed. A line typed starts a program through the loader; a console program is lent an endpoint of console's in `SLOT_CONSOLE` (issue 162) and what it prints shows here; a program with a screen gets console's window client (its own window, in `wm`) or runs on a screen in the background.
+- Of what a program asks for, it gets what `console` holds: the user's files (a client confined to the file's directory for one file) and system information — `console` asks for both to pass them on. Nothing else (no lifecycle, log or network clients; no process control).
+- `list`, `clear` (Ctrl+L), `exit`, `help`; ↑ ↓ recall earlier lines; PgUp/PgDn and the wheel scroll back through 2000 lines; output is UTF-8 even when a message cuts a character, tabs to 8 columns; several programs may run at once, named at the right of the command line; one that ends without printing says so.
+- `wm` (Alt+R, the desktop menu) and `fm` in a window start a console program in a `console` window by themselves.
+
+## Acceptance criteria
+
+- Host: output cut anywhere (Cyrillic), an invalid byte, wrapping, PgUp, the wheel, the limits of scrolling; the command line, its history, Esc, Ctrl+L; the commands; fm's message for a console window.
+- QEMU: `console uptime` from the shell shows uptime's line, `grep -i -c строка docs/notes.txt` prints 300, an unknown program is named, `exit` returns to the shell (`tools` suite); in `wm`, `uptime` typed after Alt+R opens a console window with uptime's line (`tablet` suite).
+
+## Resolution
+
+- `console/` (new): `src/screen.rs` (`Screen`, `Kind`, `Command`, `parse`; host-tested), `src/main.rs` (the endpoint, `run` with its grants, the loop over output, keys and ended programs; `[CONSOLE] RUN|ENDED|DONE` in its log). `02_build.sh` builds it.
+- `wm/src/main.rs`: `launch` runs a console program as `console <program>`. `fm/src/main.rs`, `fm/src/fm.rs`: in a window, the same, `Place::InConsole` ("Started uptime in a console window (PID n)"). The desktop menu (u003) lists console programs once `console` is on the disk.
+- Tests: `tests/console_host.rs`, `tests/fm_host.rs`; QEMU `tools` (`console_check`) and `tablet` suites; CI runs the host tests.
+- Docs: docs/tools §4.9, §4.10 (English and Russian), README.

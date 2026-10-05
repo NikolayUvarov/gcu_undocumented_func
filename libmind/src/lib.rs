@@ -27,6 +27,7 @@ pub mod mask;
 pub mod mem;
 pub mod network;
 pub mod netring;
+pub mod output;
 pub mod platform;
 pub mod process;
 mod arch;
@@ -90,6 +91,7 @@ macro_rules! entry {
         pub extern "sysv64" fn _start(info: &'static $crate::abi::BootInfo, mailbox: *mut $crate::abi::SyscallMailbox) -> ! {
             unsafe { $crate::sys::init(mailbox) };
             $crate::log::prepare();
+            $crate::output::prepare();
             let main: fn(&'static $crate::abi::BootInfo) = $main;
             main(info);
             $crate::process::exit()

@@ -72,6 +72,8 @@ pub enum Place {
     Screen,
     /// No screen: a console program, its output in its log.
     Console,
+    /// A console program in a window of `console` (fm in a window, issue u004): `pid` is console's.
+    InConsole,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +87,7 @@ impl Started {
             Place::Window => format!("Started {} (PID {}) in a window of its own", name, pid),
             Place::Screen => format!("Started {} as PID {} in the background: Ctrl+Z, then FG {} in the shell shows it", name, pid, pid),
             Place::Console => format!("Started {} as PID {}: a console program, LOGS {} in the shell shows what it printed", name, pid, pid),
+            Place::InConsole => format!("Started {} in a console window (PID {})", name, pid),
         }
     }
 }

@@ -255,8 +255,13 @@ An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit
 - **Authority:** `wm` asks the shell for the window manager client, the user's files and system information; a program it starts gets a plain broker client and, of what it asks for, only those (a file's directory is confined from the files client, as the shell does). `top` runs without the lifecycle client, `caps` without the authority view (MC-3.11).
 - `clock --text` and `dzen-clock --text` (issue 089) draw text faces sized to their window: large block digits with the date, the indicators as colored cells.
 - A program started from `fm` in a window opens a window of its own (issue 099).
-- Not done: resizing a pixel window's content (the frame clips or pads it); console programs in windows (`uptime` and the like stay in the shell).
+- Console programs (`uptime`, `df`, `grep`, …) started from `wm` (Alt+R, the menu) or from `fm` in a window run in a window of `console` (§4.10).
+- Not done: resizing a pixel window's content (the frame clips or pads it).
 - Full-screen consoles switched with Alt+F1…F4 are issue 155.
+
+### 4.10 `console` — a terminal for programs (issue u004)
+
+`console [program [arguments]]` in a window of `wm` or on a screen of its own: a command line under what its programs printed. A line typed starts a program with its arguments; a console program gets an endpoint of console's in `SLOT_CONSOLE` (issue 162) and what it prints shows here — as the shell shows it, and in the kernel's log as before; a program with a screen opens a window of its own (in `wm`) or a screen in the background. Of what a program asks for it gets what `console` holds: the user's files (a directory for one file) and system information. `list` names the programs, `clear` (Ctrl+L) clears, `exit` closes; ↑ ↓ recall earlier lines, PgUp/PgDn and the mouse wheel scroll back (2000 lines). Several programs may run at once; the command line names them, and one that ended without printing says so. `console` cannot stop a program (that needs process control: Ctrl+Z and `kill` in the shell), and keys typed go to `console`, not to the program.
 
 ## 5. Phases
 

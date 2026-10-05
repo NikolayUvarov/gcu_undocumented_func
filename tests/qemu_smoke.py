@@ -1063,6 +1063,31 @@ def fm_check(vm):
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
           "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
     vfs_check(vm)
+    console_check(vm)
+
+
+def console_check(vm):
+    """console (issues u004, 162): a terminal for programs on a screen of its own; a console program it starts prints
+    into it through the endpoint it lends, and keys typed there start more."""
+    vm.send("console uptime\n")
+    require(vm.expect("[CONSOLE] ENDED uptime"), "[CONSOLE] RUN uptime PID")
+    vm.send_bytes("grep -i -c строка docs/notes.txt\r".encode())
+    vm.expect("[CONSOLE] ENDED grep")
+    vm.send_bytes(b"nosuch\r")
+    vm.expect("[CONSOLE] nosuch: no such program")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert screen[1] == canon("> uptime").ljust(len(screen[1])) and screen[2].startswith(canon("up 0:")), screen[:4]
+    assert any(row.startswith(canon("> grep -i -c строка docs/notes.txt")) for row in screen), screen
+    assert any(row.rstrip() == "300" for row in screen), screen
+    assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
+    assert screen[-1].startswith(canon("> ")), screen[-1]
+    vm.send_bytes(b"exit\r")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, exit returns to the shell", flush=True)
 
 
 def vfs_check(vm):
@@ -3470,13 +3495,28 @@ def tablet_suite(vm):
     vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
     time.sleep(.2)
     require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    # A console program started in wm runs in a window of console, which shows what it prints (issue u004).
+    start = len(vm.log)
+    for key in ("alt-r", "u", "p", "t", "i", "m", "e", "ret"):
+        vm.hmp(f"sendkey {key}")
+        time.sleep(.08)
+    vm.serial(enter=False)
+    require(logged(vm, start, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("> uptime") in row for row in screen) and any(canon("║up 0:") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(logged(vm, start, "RESUMED.", timeout=12), "CLOSE ALL: 2 WINDOWS")
+    require(logged(vm, start, "RESUMED.", timeout=12), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
-          "the desktop menu opened by a right click, a program started from its Clocks submenu", flush=True)
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; uptime from Alt+R in a console window", flush=True)
 
 
 def windows_suite(vm):

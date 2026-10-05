@@ -133,6 +133,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u001](../issues-done/u001-mouse-in-windows-and-fm.done) | The mouse inside windows (`wm` passes clicks, drags and the wheel to the program at the cell of its content) and in fm (click, double click, right click, wheel, key bar; the pointer cell on a screen) | done (2026-10-05) |
 | [u002](../issues-done/u002-restore-and-unsnap-windows.done) | wm: `[▲]` maximizes, `[⇕]` gives a maximized or snapped window its frame back; dragging a snapped title off the edge does too | done (2026-10-05) |
 | [u003](../issues-done/u003-desktop-programs-menu.done) | wm: a right click on the desktop (or Alt+P) opens the programs by category; a click starts one in a window | done (2026-10-05) |
+| [u004](../issues-done/u004-console.done) | `console`: a terminal for programs in a window or on a screen; console programs started in `wm` or `fm` run in it | done (2026-10-05) |
 | [u005](../issues-done/u005-beep-without-a-screen.done) | `beep` without a screen: `beep 440` sounds 500 ms, `beep 440 200 0 100 880 300` a series (0 Hz: a pause) | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
@@ -152,5 +153,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
+| [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

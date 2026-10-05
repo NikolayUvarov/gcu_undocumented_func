@@ -215,6 +215,10 @@ pub const SLOT_WINDOWS: usize = 21;
 pub const SLOT_WINDOW_MANAGER: usize = 22;
 // In an application: its client of the window broker (8 is the input privilege only in the shell).
 pub const SLOT_WINDOW: usize = 8;
+// In an application: where what it prints goes besides the kernel's log (issue 162) — an endpoint of the program that
+// started it (`console`), which shows it; mind::process::log sends it there, 15 bytes a message (9 is the serial port
+// only in the shell).
+pub const SLOT_CONSOLE: usize = 9;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
 pub const SLOT_DYNAMIC: usize = 23;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with

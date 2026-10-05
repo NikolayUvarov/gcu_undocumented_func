@@ -95,6 +95,7 @@ USER_CRATES=(
     "fm:fm:fm.elf"
     "edit:edit:edit.elf"
     "wm:wm:wm.elf"
+    "console:console:console.elf"
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
     "disk:format:format.elf"
