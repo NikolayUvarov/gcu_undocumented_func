@@ -201,6 +201,12 @@ impl Manager {
         if live.surface.push_event(word) { live.wake(); }
     }
 
+    // A mouse event for window `id`'s program (issue u001), whether or not it is in front.
+    fn pointer(&self, id: u32, word: usize) {
+        let Some(live) = self.live(id) else { return };
+        if live.surface.push_event(word) { live.wake(); }
+    }
+
     fn close(&mut self, id: u32) {
         if let Some(live) = self.live(id) {
             live.surface.set_state(STATE_CLOSE);
@@ -302,11 +308,14 @@ fn main(info: &'static BootInfo) {
                 Input::Pointer(p) => {
                     px = (px as i64 + p.dx as i64).clamp(0, screen.width as i64 - 1) as usize;
                     py = (py as i64 + p.dy as i64).clamp(0, screen.height as i64 - 1) as usize;
-                    manager.wm.pointer(px.saturating_sub(x0) / 8, py.saturating_sub(y0) / 16, p.buttons)
+                    manager.wm.pointer(px.saturating_sub(x0) / 8, py.saturating_sub(y0) / 16, p.buttons, p.wheel)
                 }
             };
-            // Keys and what clicks did are logged; moves of the mouse are not (a drag is logged when it ends).
-            let log = match input { Input::Key(_) => true, Input::Pointer(p) => action != Action::Redraw || (p.buttons & 1) != (buttons & 1) };
+            // Keys, clicks and the wheel are logged; moves of the mouse are not (a drag is logged when it ends).
+            let log = match input {
+                Input::Key(_) => true,
+                Input::Pointer(p) => p.buttons != buttons || p.wheel != 0 || !matches!(action, Action::Redraw | Action::Pointer { .. }),
+            };
             buttons = if let Input::Pointer(p) = input { p.buttons } else { buttons };
             match action {
                 Action::Forward => { if let Input::Key(event) = input { manager.forward(event.to_word()); } }
@@ -325,6 +334,10 @@ fn main(info: &'static BootInfo) {
                     return;
                 }
                 Action::CloseAll => { manager.close_all(); mind::println!("[WM] DONE"); return; }
+                Action::Pointer { id, x, y, buttons, wheel } => {
+                    manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel));
+                    if log { mind::println!("[WM] POINTER {} AT {},{} BUTTONS={} WHEEL={}", id, x, y, buttons, wheel); }
+                }
             }
             if log { mind::println!("[WM] {}", manager.wm.status()); }
         }

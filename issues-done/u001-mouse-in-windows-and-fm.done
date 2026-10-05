@@ -1,0 +1,31 @@
+# u001 — The mouse inside windows and in fm — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G (input methods, UI) · **Constitution:** MC-3.7, MC-3.11
+
+The first issue of the tools track's own counter (u001, u002, …; its range 077–099 is used up).
+
+## Problem
+
+`wm` used the mouse only for itself: a click brought a window to the front, the title and the `◆` corner were dragged, `[×]` closed. Nothing reached the program in the window, so `fm` in a window could not be used with the mouse at all, and on a screen of its own `fm` did not ask for pointer events. `mind::input::Pointer` carried only the motion: a program had no cell to act on, and nothing showed where the mouse was.
+
+## Plan
+
+- **The window protocol.** `wm` queues a pointer event in the window's surface with the cell of the window's content it is on. It is the kernel's pointer event word (`common/abi.rs`, issue 156) with the cell in the motion fields and a free bit of the word set, so a program tells it from a motion; the kernel never sees it (no ABI change).
+- **`wm`:** a press on a window's content brings the window to the front and goes to its program, which then gets the moves and the release until every button is up (outside the window: the nearest cell); the wheel goes to the window under the mouse without raising it; moves with no button held are not passed on; nothing goes to programs while a dialog of `wm` is open.
+- **`mind::input`:** `Pointer` gets the cell (`x`, `y`): in a window from `wm`, on a screen from the motion within the grid `Terminal` sets. A wait for a key or a pointer event for programs with a key bar.
+- **`Terminal`:** on a screen, shows the cell under the mouse inverted when the program asks (`wm` draws its own pointer over windows).
+- **`fm`:** a click puts the cursor on an entry (and makes its panel active), a double click opens it as Enter does, a right click marks it as Ins does; the wheel moves the cursor of the panel under the mouse, or scrolls the viewer and the editor; a click on the key bar presses that key with the modifiers held.
+
+## Acceptance criteria
+
+- Host: `wm`'s actions for presses, drags, releases and the wheel over windows, frames and the desktop, and in its dialogs; fm's clicks, double clicks, right clicks, the wheel and the key bar on panels in both modes, the viewer and the editor; the window pointer event word.
+- QEMU: fm on a screen — a click selects `EFI`, a double click opens it, the wheel moves the cursor, the cell under the mouse is inverted on the screen; fm in a window of `wm` behind another window — a click raises it and reaches fm at the cell of its content, a double click on `..` opens it, the wheel reaches fm.
+
+## Resolution
+
+- `libmind/src/window.rs`: `POINTER_AT` (bit 33 of the event word, free in `common/abi.rs`), `pointer_at(buttons, x, y, wheel)` and `pointer_position(word)`. If the kernel ever gives bit 33 a meaning in pointer events, window events need another mark.
+- `wm/src/desk.rs`: `Action::Pointer { id, x, y, buttons, wheel }`; `Wm::pointer(x, y, buttons, wheel)` with the grab of the window that got the press; a right click on a frame raises the window without a drag; the help says what the mouse does. `wm/src/main.rs`: `Manager::pointer` queues the event in that window's surface and wakes its program; clicks and the wheel are logged (`[WM] POINTER id AT x,y BUTTONS=b WHEEL=w`).
+- `libmind/src/input.rs`: every kernel pointer event read moves the screen's pointer (`pointer_area`, `pointer_cell`); `Pointer { buttons, dx, dy, wheel, x, y }`; `KeyOrPointer` and `wait_key_pointer_or_modifiers`. `libmind/src/tui/term.rs`: `Terminal::new` sets the pointer's area to its grid; `show_pointer` swaps the colours of the cell under the mouse in `present`. `libmind/src/tui/mod.rs`: `Rect::contains`.
+- `fm/src/panel.rs`: `Panel::entry_at(area, x, y)` (as `draw` lays out the full and brief modes), `select`, `move_by`. `fm/src/fm.rs`: `Fm::pointer(x, y, buttons, wheel, now, disk)`, `DOUBLE_CLICK_MS` = 500; the grid's size is kept from `draw`; F1 and `fm --help` name the mouse. `fm/src/main.rs`: asks for pointer events, shows the pointer on a screen, logs clicks and the wheel (`[FM] POINTER x,y BUTTONS=b WHEEL=w`).
+- Tests: `tests/wm_host.rs` (`the_mouse_goes_to_the_programs`, the drag test updated), `tests/fm_host.rs` (`the_mouse_in_panels_viewer_and_key_bar`), `tests/window_host.rs` (`pointer_events_of_a_window`); QEMU `tools` suite (fm on a screen) and `wm` suite (fm's window), as in the criteria. In QEMU, `mouse_move 0 0 1` is the wheel turned away from the user (−1, up).
+- Docs: docs/tools §4.1 (fm), §4.9 (wm), F4 (`mind::input`), in English and Russian.

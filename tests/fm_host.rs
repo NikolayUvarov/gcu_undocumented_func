@@ -26,7 +26,7 @@ mod panel;
 mod fm;
 
 use abi::*;
-use fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo};
+use fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo, DOUBLE_CLICK_MS};
 use keys::{event, Key};
 use panel::{VFS_ENTRY_HIDDEN, VFS_ENTRY_SYSTEM, display, fat_time, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use std::cell::{Cell as Counter, RefCell};
@@ -556,6 +556,112 @@ fn command_line_and_hidden_panels() {
     assert!(!fm.status().contains("HIDDEN"), "{}", fm.status());
     // Every state draws on small screens.
     for (cols, rows) in [(20, 8), (40, 12), (100, 30)] { fm.key(ctrl('o'), &mut disk); let _ = draw(&mut fm, cols, rows); fm.key(ctrl_f(2), &mut disk); let _ = draw(&mut fm, cols, rows); }
+}
+
+// The cell where `name` is drawn in the panel on `side` (of a 100-column screen).
+fn cell_of(screen: &[String], side: usize, name: &str) -> (usize, usize) {
+    for (y, line) in screen.iter().enumerate().skip(1) {
+        let chars: Vec<char> = line.chars().collect();
+        let half: String = if side == 0 { chars[..50].iter().collect() } else { chars[50..].iter().collect() };
+        if let Some(at) = half.find(name) { return (half[..at].chars().count() + 1 + 50 * side, y); }
+    }
+    panic!("{} not on the screen: {:#?}", name, screen)
+}
+
+#[test]
+fn the_mouse_in_panels_viewer_and_key_bar() {
+    let mut disk = Mem::sample();
+    disk.dirs.push("data".into());
+    let text: String = (0..100).map(|n| format!("line {}\n", n)).collect();
+    disk.add_file("data/long.txt", text.as_bytes());
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    // A click puts the cursor on an entry; releasing the button does nothing more.
+    let (x, y) = cell_of(&screen, 0, "EFI");
+    assert_eq!(fm.pointer(x, y, POINTER_LEFT, 0, 1000, &mut disk), Outcome::Redraw);
+    assert_eq!(fm.panels[0].current().unwrap().name, "EFI");
+    assert_eq!(fm.pointer(x, y, 0, 0, 1050, &mut disk), Outcome::Ignored);
+    assert_eq!(fm.pointer(x + 1, y, 0, 0, 1100, &mut disk), Outcome::Ignored, "a move");
+    assert_eq!(fm.panels[0].path, "");
+    // A second click soon after opens it, as Enter does.
+    fm.pointer(x, y, POINTER_LEFT, 0, 1300, &mut disk);
+    assert_eq!(fm.panels[0].path, "EFI");
+    fm.pointer(x, y, 0, 0, 1350, &mut disk);
+    // Two clicks far apart, or on two entries, do not.
+    let screen = draw(&mut fm, 100, 30);
+    let (x, y) = cell_of(&screen, 0, "BOOT");
+    fm.pointer(x, y, POINTER_LEFT, 0, 2000, &mut disk);
+    fm.pointer(x, y, 0, 0, 2050, &mut disk);
+    fm.pointer(x, y, POINTER_LEFT, 0, 2000 + DOUBLE_CLICK_MS + 1, &mut disk);
+    fm.pointer(x, y, 0, 0, 2600, &mut disk);
+    assert_eq!((fm.panels[0].path.as_str(), fm.panels[0].current().unwrap().name.as_str()), ("EFI", "BOOT"));
+    fm.pointer(x, y - 1, POINTER_LEFT, 0, 3000, &mut disk);
+    fm.pointer(x, y - 1, 0, 0, 3010, &mut disk);
+    fm.pointer(x, y, POINTER_LEFT, 0, 3100, &mut disk);
+    fm.pointer(x, y, 0, 0, 3110, &mut disk);
+    assert_eq!(fm.panels[0].path, "EFI");
+    fm.key(code(KEY_BACKSPACE), &mut disk);
+    // A click in the other panel (brief: names in columns) makes it active; a right click marks a file.
+    let screen = draw(&mut fm, 100, 30);
+    let (x, y) = cell_of(&screen, 1, "readme.txt");
+    fm.pointer(x + 2, y, POINTER_LEFT, 0, 4000, &mut disk);
+    fm.pointer(x + 2, y, 0, 0, 4010, &mut disk);
+    assert_eq!((fm.active, fm.panels[1].current().unwrap().name.as_str()), (1, "readme.txt"));
+    let (x, y) = cell_of(&screen, 1, "top.elf");
+    fm.pointer(x, y, POINTER_RIGHT, 0, 5000, &mut disk);
+    fm.pointer(x, y, 0, 0, 5010, &mut disk);
+    assert_eq!(fm.panels[1].marked, ["top.elf"]);
+    assert_eq!(fm.panels[1].current().unwrap().name, "top.elf", "the cursor stays on it");
+    assert!(disk.runs.is_empty());
+    // The wheel moves the cursor of the panel under the mouse, three entries a step.
+    let (x, y) = cell_of(&screen, 0, "EFI");
+    fm.panels[0].select(0);
+    assert_eq!(fm.pointer(x, y, 0, 1, 6000, &mut disk), Outcome::Redraw);
+    assert_eq!((fm.active, fm.panels[0].list.selected), (0, 3));
+    fm.pointer(x, y, 0, -2, 6100, &mut disk);
+    assert_eq!(fm.panels[0].list.selected, 0);
+    // Clicks on the frame or below the entries make the panel active, and nothing else.
+    fm.pointer(60, 0, POINTER_LEFT, 0, 7000, &mut disk);
+    fm.pointer(60, 0, 0, 0, 7010, &mut disk);
+    assert_eq!((fm.active, fm.panels[1].current().unwrap().name.as_str()), (1, "top.elf"));
+    // The key bar: F1 shows the keys, F10 quits; with Alt held, F1 is the left volume.
+    assert_eq!(fm.pointer(3, 29, POINTER_LEFT, 0, 8000, &mut disk), Outcome::Redraw);
+    assert!(fm.status().contains("DIALOG=HELP"), "{}", fm.status());
+    fm.pointer(3, 29, 0, 0, 8010, &mut disk);
+    assert_eq!(fm.pointer(40, 10, POINTER_LEFT, 0, 8100, &mut disk), Outcome::Ignored, "a dialog is open");
+    fm.pointer(40, 10, 0, 0, 8110, &mut disk);
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.modifiers = MOD_ALT;
+    fm.pointer(3, 29, POINTER_LEFT, 0, 8200, &mut disk);
+    fm.pointer(3, 29, 0, 0, 8210, &mut disk);
+    assert!(fm.status().contains("DIALOG=VOLUME"), "{}", fm.status());
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.modifiers = 0;
+    // The wheel scrolls the viewer (VIEW is the byte offset of its top line + 1; a line is 7 bytes) and moves the
+    // editor's cursor.
+    fm.active = 0;
+    fm.load(0, "data", Some("long.txt"), &mut disk);
+    fm.key(f(3), &mut disk);
+    let _ = draw(&mut fm, 100, 30);
+    assert!(fm.status().contains("VIEW=1 "), "{}", fm.status());
+    fm.pointer(50, 10, 0, 2, 9000, &mut disk);
+    assert!(fm.status().contains("VIEW=43 "), "{}", fm.status());
+    fm.pointer(50, 10, 0, -1, 9100, &mut disk);
+    assert!(fm.status().contains("VIEW=22 "), "{}", fm.status());
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.key(f(4), &mut disk);
+    let _ = draw(&mut fm, 100, 30);
+    let before = fm.status();
+    fm.pointer(50, 10, 0, 1, 9200, &mut disk);
+    let _ = draw(&mut fm, 100, 30);
+    assert_ne!(fm.status(), before);
+    fm.pointer(50, 10, 0, -1, 9300, &mut disk);
+    assert_eq!(fm.status(), before);
+    fm.key(code(KEY_ESC), &mut disk);
+    // F10 on the key bar quits.
+    let _ = draw(&mut fm, 100, 30);
+    assert_eq!(fm.pointer(95, 29, POINTER_LEFT, 0, 10_000, &mut disk), Outcome::Quit);
 }
 
 fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }

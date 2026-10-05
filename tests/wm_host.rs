@@ -204,30 +204,63 @@ fn keys_wm_keeps_and_passes_on() {
 fn the_mouse_drags_titles_and_corners() {
     let mut wm = Wm::new(160, 50);
     wm.desk = desk_of_four();
-    // A click in window 1 brings it to the front.
-    assert_eq!(wm.pointer(10, 10, 1), Action::Redraw);
-    wm.pointer(10, 10, 0);
+    // A click in window 1 brings it to the front and goes to its program, at the cell of its content.
+    assert_eq!(rect(&wm.desk, 1), (0, 1, 80, 24));
+    assert_eq!(wm.pointer(10, 10, 1, 0), Action::Pointer { id: 1, x: 9, y: 8, buttons: 1, wheel: 0 });
+    assert_eq!(wm.pointer(10, 10, 0, 0), Action::Pointer { id: 1, x: 9, y: 8, buttons: 0, wheel: 0 });
     assert_eq!(wm.desk.focus(), Some(1));
     // Drag window 2's title to the left edge: it follows, then snaps to the left half.
-    wm.pointer(100, 1, 0);
-    wm.pointer(100, 1, 1);
+    wm.pointer(100, 1, 0, 0);
+    wm.pointer(100, 1, 1, 0);
     assert_eq!(wm.desk.focus(), Some(2));
-    wm.pointer(60, 20, 1);
+    wm.pointer(60, 20, 1, 0);
     assert_eq!(rect(&wm.desk, 2), (40, 20, 80, 24));
-    wm.pointer(20, 20, 1);
+    wm.pointer(20, 20, 1, 0);
     assert_eq!(rect(&wm.desk, 2), (0, 20, 80, 24));
-    wm.pointer(20, 20, 0);
+    wm.pointer(20, 20, 0, 0);
     assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
     // The corner resizes.
     wm.desk.place(2, Rect::new(40, 10, 30, 10));
-    wm.pointer(69, 19, 1);
-    wm.pointer(89, 24, 1);
-    wm.pointer(89, 24, 0);
+    wm.pointer(69, 19, 1, 0);
+    wm.pointer(89, 24, 1, 0);
+    wm.pointer(89, 24, 0, 0);
     assert_eq!(rect(&wm.desk, 2), (40, 10, 50, 15));
     // [×] closes.
-    assert_eq!(wm.pointer(86, 10, 1), Action::Close(2));
-    wm.pointer(86, 10, 0);
+    assert_eq!(wm.pointer(86, 10, 1, 0), Action::Close(2));
+    wm.pointer(86, 10, 0, 0);
     assert_eq!(wm.pointer.unwrap(), (86, 10));
+}
+
+#[test]
+fn the_mouse_goes_to_the_programs() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let inner = wm.desk.get(2).unwrap().rect.inner();
+    // Moves with no button held stay with wm.
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, 0), Action::Redraw);
+    // The wheel goes to the window under the mouse, which stays where it is in the stack.
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, -1), Action::Pointer { id: 2, x: 3, y: 2, buttons: 0, wheel: -1 });
+    assert_eq!(wm.desk.focus(), Some(4));
+    assert_eq!(wm.pointer(0, 0, 0, 1), Action::Redraw, "not over a window's content");
+    // A press grabs the mouse: the window gets the moves and the release, at the nearest cell when outside it.
+    assert_eq!(wm.pointer(inner.x, inner.y, 2, 0), Action::Pointer { id: 2, x: 0, y: 0, buttons: 2, wheel: 0 }, "the right button too");
+    assert_eq!(wm.desk.focus(), Some(2));
+    assert_eq!(wm.pointer(5, 40, 2, 0), Action::Pointer { id: 2, x: 0, y: inner.h - 1, buttons: 2, wheel: 0 });
+    assert_eq!(wm.pointer(5, 40, 0, 0), Action::Pointer { id: 2, x: 0, y: inner.h - 1, buttons: 0, wheel: 0 });
+    assert_eq!(wm.pointer(5, 40, 0, 0), Action::Redraw, "released");
+    // A right click on a frame raises the window; no drag starts.
+    let title = wm.desk.get(3).unwrap().rect;
+    assert_eq!(wm.pointer(title.x + 2, title.y, 2, 0), Action::Redraw);
+    assert_eq!(wm.desk.focus(), Some(3));
+    let before = rect(&wm.desk, 3);
+    wm.pointer(title.x + 10, title.y + 5, 2, 0);
+    wm.pointer(title.x + 10, title.y + 5, 0, 0);
+    assert_eq!(rect(&wm.desk, 3), before);
+    // In a dialog of wm the mouse goes nowhere.
+    wm.key(alt_char('h'));
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 1, 0), Action::Redraw);
+    wm.pointer(inner.x + 3, inner.y + 2, 0, 0);
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, 1), Action::Redraw);
 }
 
 #[test]

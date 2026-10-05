@@ -13,6 +13,7 @@ use fm::panel::{self, Entry};
 use mind::abi::*;
 use mind::fs::{self, Error, File};
 use mind::idl::loader;
+use mind::input::KeyOrPointer;
 use mind::ipc::Endpoint;
 use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
@@ -81,7 +82,7 @@ impl Disk for Vfs {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
+    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one. The mouse: a click puts the cursor on an entry, a double click\nopens it, a right click marks it, the wheel scrolls, a click on the key bar presses that key.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Terminal::open(info, "fm") else { return };
     let mut disk = Vfs;
@@ -92,6 +93,9 @@ fn main(info: &'static mind::BootInfo) {
     let start = mind::process::args_str().trim().trim_matches('/');
     if !start.is_empty() { fm.load(0, start, None, &mut disk); }
     mind::println!("[FM] READY {}", fm.status());
+    // The mouse (issue u001): on a screen the cell under it is shown inverted; in a window wm draws the pointer.
+    mind::input::pointer(true);
+    term.show_pointer(true);
     loop {
         fm.modifiers = mind::input::modifiers();
         let cursor = { let mut grid = term.grid(); fm.draw(&mut grid, &CLASSIC) };
@@ -100,16 +104,25 @@ fn main(info: &'static mind::BootInfo) {
         term.set_title(&alloc::format!("fm {}", panel::display(&fm.panels[fm.active].path)));
         term.present();
         // While a job runs, keys are only looked at between slices, and the screen is drawn about every 100 ms.
-        let key = if fm.busy() {
+        let input = if fm.busy() {
             let since = mind::time::uptime_ms();
             while fm.busy() && mind::time::uptime_ms() - since < 100 { fm.work(&mut disk); }
             if !fm.busy() { mind::println!("[FM] {}", fm.status()); } // finished, or waiting for an answer
-            match mind::input::read_key() { Some(key) => key, None => continue }
+            match mind::input::read_key() { Some(key) => KeyOrPointer::Key(key), None => continue }
         } else {
             // Shift, Ctrl or Alt going down or up changes the key bar: drawn again.
-            match mind::input::wait_key_or_modifiers(fm.modifiers) { Some(key) => key, None => continue }
+            match mind::input::wait_key_pointer_or_modifiers(fm.modifiers) { Some(input) => input, None => continue }
         };
-        let outcome = fm.key(key, &mut disk);
+        let outcome = match input {
+            KeyOrPointer::Key(key) => fm.key(key, &mut disk),
+            KeyOrPointer::Pointer(p) => {
+                let outcome = fm.pointer(p.x, p.y, p.buttons, p.wheel, mind::time::uptime_ms(), &mut disk);
+                // Moves of the mouse are not logged.
+                if outcome == Outcome::Ignored { continue; }
+                mind::println!("[FM] POINTER {},{} BUTTONS={} WHEEL={}", p.x, p.y, p.buttons, p.wheel);
+                outcome
+            }
+        };
         mind::println!("[FM] {}", fm.status());
         if outcome == Outcome::Quit { break; }
     }

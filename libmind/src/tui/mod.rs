@@ -38,6 +38,7 @@ impl Rect {
     pub fn centered(self, w: usize, h: usize) -> Self { let (w, h) = (w.min(self.w), h.min(self.h)); Self { x: self.x + (self.w - w) / 2, y: self.y + (self.h - h) / 2, w, h } }
     pub fn right(self) -> usize { self.x + self.w }
     pub fn bottom(self) -> usize { self.y + self.h }
+    pub fn contains(self, x: usize, y: usize) -> bool { x >= self.x && x < self.right() && y >= self.y && y < self.bottom() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

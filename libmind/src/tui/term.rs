@@ -1,6 +1,7 @@
 //! The grid on the program's screen: a back buffer the program draws into and a copy of what is on the screen;
 //! `present` draws only the cells that differ, plus the cursor. In a window (issue 088) the cells go to the window's
 //! surface with the rectangle that changed, and the window manager draws them; the grid follows the window's size.
+//! On a screen the cell under the mouse can be shown inverted (`show_pointer`, issue u001).
 use super::{Cell, Grid, Style};
 use crate::abi::BootInfo;
 use crate::gfx::Screen;
@@ -9,7 +10,11 @@ use crate::window::{Kind, Surface, MAX_COLUMNS, MAX_ROWS};
 
 enum Output { Screen { screen: Screen, x0: usize, y0: usize }, Window(Surface) }
 
-pub struct Terminal { output: Output, back: Pages, front: Pages, cols: usize, rows: usize, capacity: usize, cursor: Option<(usize, usize)>, shown: Option<(usize, usize)>, valid: bool }
+pub struct Terminal {
+    output: Output, back: Pages, front: Pages, cols: usize, rows: usize, capacity: usize, cursor: Option<(usize, usize)>, shown: Option<(usize, usize)>, valid: bool,
+    // The pointer's cell: whether to show it, and where it was drawn.
+    pointer: bool, pointer_shown: Option<(usize, usize)>,
+}
 
 fn cells(pages: &mut Pages, count: usize) -> &mut [Cell] {
     unsafe { core::slice::from_raw_parts_mut(pages.as_mut_slice().as_mut_ptr() as *mut Cell, count) }
@@ -22,6 +27,7 @@ impl Terminal {
     /// A grid covering the screen in 8x16 cells (centred if the screen is not a multiple of the cell size).
     pub fn new(screen: Screen) -> Option<Self> {
         let (cols, rows) = (screen.width / 8, screen.height / 16);
+        crate::input::pointer_area(cols * 8, rows * 16);
         Self::buffers(Output::Screen { screen, x0: (screen.width - cols * 8) / 2, y0: (screen.height - rows * 16) / 2 }, cols, rows, cols * rows)
     }
 
@@ -46,7 +52,7 @@ impl Terminal {
         let (mut back, mut front) = (Pages::new(bytes)?, Pages::new(bytes)?);
         for cell in cells(&mut back, capacity) { *cell = Cell::BLANK; }
         for cell in cells(&mut front, capacity) { *cell = Cell::BLANK; }
-        Some(Self { output, back, front, cols, rows, capacity, cursor: None, shown: None, valid: false })
+        Some(Self { output, back, front, cols, rows, capacity, cursor: None, shown: None, valid: false, pointer: false, pointer_shown: None })
     }
 
     // In a window: takes the size the manager asked for (within the window's memory) and draws everything again.
@@ -66,6 +72,9 @@ impl Terminal {
     pub fn grid(&mut self) -> Grid<'_> { self.apply_resize(); let count = self.cols * self.rows; Grid::new(cells(&mut self.back, count), self.cols, self.rows) }
     /// Cursor (an underline in the cell's text colour) or none.
     pub fn set_cursor(&mut self, at: Option<(usize, usize)>) { self.cursor = at.filter(|&(x, y)| x < self.cols && y < self.rows); }
+    /// On a screen, `present` shows the cell under the mouse inverted, once the mouse moved (`mind::input::pointer`
+    /// must be on). A window manager draws the pointer over windows itself.
+    pub fn show_pointer(&mut self, on: bool) { self.pointer = on; }
     /// Redraw everything on the next `present` (e.g. after another program drew on the screen).
     pub fn invalidate(&mut self) { self.valid = false; }
     /// Draw cell (x, y) on the next `present` (something else drew over it).
@@ -84,15 +93,20 @@ impl Terminal {
         let front = cells(&mut self.front, count);
         let mut drawn = 0;
         let moved = self.cursor != self.shown;
+        let pointer = match self.output { Output::Screen { .. } if self.pointer => crate::input::pointer_cell().filter(|&(x, y)| x < self.cols && y < self.rows), _ => None };
+        let pointer_moved = pointer != self.pointer_shown;
+        // The cell under the pointer swaps its colours.
+        let colours = |cell: Cell, at: (usize, usize)| if pointer == Some(at) { (cell.style.bg, cell.style.fg) } else { (cell.style.fg, cell.style.bg) };
         let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
         for index in 0..count {
             let (x, y) = (index % self.cols, index / self.cols);
             let on_cursor = self.cursor == Some((x, y)) || self.shown == Some((x, y));
-            if full || back[index] != front[index] || (moved && on_cursor) {
+            let on_pointer = pointer == Some((x, y)) || self.pointer_shown == Some((x, y));
+            if full || back[index] != front[index] || (moved && on_cursor) || (pointer_moved && on_pointer) {
                 front[index] = back[index];
                 let cell = back[index];
                 match &self.output {
-                    Output::Screen { screen, x0, y0 } => screen.glyph16(x0 + x * 8, y0 + y * 16, cell.ch, cell.style.fg, Some(cell.style.bg)),
+                    Output::Screen { screen, x0, y0 } => { let (fg, bg) = colours(cell, (x, y)); screen.glyph16(x0 + x * 8, y0 + y * 16, cell.ch, fg, Some(bg)) }
                     Output::Window(surface) => surface.set_cell(x, y, cell.ch, cell.style.fg, cell.style.bg),
                 }
                 (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1));
@@ -103,8 +117,9 @@ impl Terminal {
             Output::Screen { screen, x0, y0 } => if let Some((x, y)) = self.cursor {
                 let cell = back[y * self.cols + x];
                 let (px, py) = (x0 + x * 8, y0 + y * 16);
-                screen.glyph16(px, py, cell.ch, cell.style.fg, Some(cell.style.bg));
-                screen.fill(px, py + 14, 8, 2, cell.style.fg);
+                let (fg, bg) = colours(cell, (x, y));
+                screen.glyph16(px, py, cell.ch, fg, Some(bg));
+                screen.fill(px, py + 14, 8, 2, fg);
             },
             Output::Window(surface) => {
                 surface.set_cursor(self.cursor);
@@ -113,6 +128,7 @@ impl Terminal {
             }
         }
         self.shown = self.cursor;
+        self.pointer_shown = pointer;
         drawn
     }
 

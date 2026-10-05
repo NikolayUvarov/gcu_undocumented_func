@@ -685,6 +685,29 @@ def status_line(vm, text, timeout=8, raw=False, whole=False):
     raise AssertionError(f"Timeout waiting for the line {text!r}: {vm.output[-3000:]}")
 
 
+def logged(vm, start, text, timeout=8):
+    # The log from `start` once a whole line with `text` came: what a program printed while the harness was in the QEMU
+    # monitor (where `expect` and `serial` drop the output) counts too.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        vm.collect()
+        got = to_ordinal(ANSI.sub("", vm.log[start:]).replace("\r", ""))
+        if text in got and "\n" in got[got.index(text):]:
+            return got
+        time.sleep(.02)
+    raise AssertionError(f"Timeout waiting for {text!r}: {vm.log[start:][-3000:]}")
+
+
+def mouse_moves(dx, dy):
+    # QEMU monitor commands that move the PS/2 mouse by (dx, dy): QEMU queues few packets per command, so small steps.
+    moves = []
+    while dx or dy:
+        step = (max(-100, min(100, dx)), max(-100, min(100, dy)))
+        moves.append(f"mouse_move {step[0]} {step[1]}")
+        dx, dy = dx - step[0], dy - step[1]
+    return moves
+
+
 def tool_status(vm, text):
     # The state line a monitor logs after a key: x is bound in none of them. (The line after the Enter that leaving
     # the QEMU monitor sends may be dropped by serial().)
@@ -969,6 +992,27 @@ def fm_check(vm):
     keys(b"view docs/notes.txt", "CMD=view docs/notes.txt")
     keys(b"\r", "VIEW=1")
     keys(b"\x1b", "VIEW=0")
+    # The mouse (issue u001): it starts in the middle of the screen (cell 80, 25). A click puts the cursor on an entry,
+    # a second click soon after opens it, the wheel moves the cursor; the cell under the mouse is shown inverted.
+    def mouse(*commands, text=None):
+        start = len(vm.log)
+        for command in commands:
+            vm.hmp(command)
+            time.sleep(.05)
+        vm.serial(enter=False)
+        return text and logged(vm, start, text)
+    clicked = mouse(*mouse_moves((10 - 80) * 8, (3 - 25) * 16), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
+    require(clicked, "[FM] POINTER 10,3 BUTTONS=1 WHEEL=0")
+    assert "LEFT=/ FULL" in clicked, clicked
+    mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", text="LEFT=/EFI FULL")
+    require(mouse("mouse_move 0 0 -1", text="CURRENT=BOOT "), "[FM] POINTER 10,3 BUTTONS=0 WHEEL=1")
+    mouse(*mouse_moves(0, 30 * 16))  # moves are not logged
+    time.sleep(.3)
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    width = int(size.split()[0])
+    corner = lambda x, y: pixels[(y * 16 * width + x * 8) * 3:(y * 16 * width + x * 8) * 3 + 3]
+    assert corner(10, 33) != corner(12, 33) and corner(9, 33) == corner(12, 33), (corner(10, 33), corner(12, 33))
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -981,7 +1025,8 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P", flush=True)
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
+          "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
     vfs_check(vm)
 
 
@@ -3230,6 +3275,43 @@ def wm_suite(vm):
     wait(lines=2)
     mode, focus, rects = state()
     assert focus == clock and rects[clock] == (0, 1, 80, 48), (focus, rects)
+    # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
+    # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
+    # wheel moves fm's cursor.
+    front(fm)
+    keys("alt-right")
+    mode, focus, rects = front(clock)
+    assert focus == clock and rects[fm] == (80, 1, 80, 48), (focus, rects)
+
+    def mouse(*commands, lines):
+        for command in commands:
+            vm.hmp(command)
+            time.sleep(.05)
+        vm.serial(enter=False)
+        wait(lines=lines)
+        return state()
+
+    def point(x, y):
+        # From the cell the last state line names; its pixel within the cell stays the same.
+        px, py = map(int, re.findall(r"POINTER=(\d+),(\d+)", "".join(seen))[-1])
+        for move in mouse_moves((x - px) * 8, (y - py) * 16):
+            vm.hmp(move)
+            time.sleep(.05)
+
+    point(81 + 5, 2 + 3)  # fm's left panel lists docs: "..", then notes.txt
+    mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+    assert focus == fm, (focus, rects)
+    until(f"[WM] POINTER {fm} AT 5,3 BUTTONS=1 WHEEL=0")
+    point(81 + 5, 2 + 2)
+    mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", lines=4)
+    mouse("mouse_move 0 0 -1", lines=1)
+    until(f"[WM] POINTER {fm} AT 5,2 BUTTONS=0 WHEEL=1")
+    vm.background(wm_pid)
+    fm_log = vm.command(f"logs {started['fm']}")
+    for line in ("[FM] POINTER 5,3 BUTTONS=1 WHEEL=0", "CURRENT=notes.txt", "LEFT=/ FULL", "[FM] POINTER 5,2 BUTTONS=0 WHEEL=1"):
+        require(fm_log, line)
+    vm.send(f"fg {wm_pid}\n")
+    vm.expect(f"FOREGROUND PID={wm_pid}")
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3281,7 +3363,8 @@ def wm_suite(vm):
         time.sleep(.2)
     assert heap_used(vm) == baseline
     print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
-          "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse; programs get only what wm holds; "
+          "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
+          "in fm's window; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 

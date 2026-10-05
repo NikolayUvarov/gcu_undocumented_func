@@ -242,6 +242,38 @@ impl Panel {
         true
     }
 
+    /// Puts the cursor on entry `index` (a click, issue u001).
+    pub fn select(&mut self, index: usize) {
+        if self.items.is_empty() { return; }
+        self.list.selected = index.min(self.items.len() - 1);
+        self.scroll();
+    }
+
+    /// Moves the cursor `lines` down (up if negative): the mouse wheel.
+    pub fn move_by(&mut self, lines: isize) {
+        if self.items.is_empty() { return; }
+        self.list.selected = (self.list.selected as isize + lines).clamp(0, self.items.len() as isize - 1) as usize;
+        self.scroll();
+    }
+
+    /// The entry `draw` showed at cell (x, y) when it drew the panel in `area` (a click, issue u001).
+    pub fn entry_at(&self, area: Rect, x: usize, y: usize) -> Option<usize> {
+        if area.w < 8 || area.h < 6 { return None; }
+        let inner = area.inner();
+        let list_h = inner.h.saturating_sub(3);
+        if x < inner.x || x >= inner.right() || y <= inner.y || y > inner.y + list_h { return None; }
+        let row = y - inner.y - 1;
+        let index = match self.mode {
+            Mode::Full => self.list.top + row,
+            _ => {
+                let count = if inner.w >= 39 { 3 } else if inner.w >= 20 { 2 } else { 1 };
+                let column = ((x - inner.x) / ((inner.w + 1) / count)).min(count - 1);
+                self.list.top + column * list_h.max(1) + row
+            }
+        };
+        (index < self.items.len()).then_some(index)
+    }
+
     fn style(&self, entry: &Entry, cursor: bool, theme: &Theme) -> Style {
         let base = if self.is_marked(&entry.name) { theme.marked } else if entry.dir { theme.directory } else if entry.is_program() { theme.accent } else { theme.panel };
         if cursor { Style::new(if self.is_marked(&entry.name) { theme.marked.fg } else { theme.selected.fg }, theme.selected.bg) } else { base }
