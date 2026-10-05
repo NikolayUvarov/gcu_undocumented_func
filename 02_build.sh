@@ -66,6 +66,7 @@ USER_CRATES=(
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
     "virtio_net:virtio_net:virtio_net.elf"
+    "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
     "netcheck:netcheck:netcheck.elf"

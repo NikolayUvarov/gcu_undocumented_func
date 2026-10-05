@@ -64,7 +64,10 @@ fn main(info: &'static BootInfo) {
             Some(Input::Pointer(p)) => {
                 let line = &mut lines.text[lines.count % HISTORY];
                 line.clear();
-                let _ = write!(line, "pointer buttons={} dx={} dy={} wheel={}", p.buttons, p.dx, p.dy, p.wheel);
+                match p.at {
+                    Some((x, y)) => { let _ = write!(line, "pointer buttons={} at={},{} wheel={}", p.buttons, x, y, p.wheel); }
+                    None => { let _ = write!(line, "pointer buttons={} dx={} dy={} wheel={}", p.buttons, p.dx, p.dy, p.wheel); }
+                }
                 lines.count += 1;
                 mind::println!("[KEYS] {}", core::str::from_utf8(line.as_bytes()).unwrap_or("?"));
                 if let Some(term) = term.as_mut() { draw(term, &lines); term.present(); }

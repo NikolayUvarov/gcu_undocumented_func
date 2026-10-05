@@ -9,6 +9,7 @@ import argparse
 import codecs
 import http.server
 import math
+import json
 import os
 from pathlib import Path
 import queue
@@ -26,7 +27,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -425,6 +426,49 @@ def normal_suite(vm):
     vm.serial()
     assert heap_used(vm) == baseline
     print("PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, 4 CPUs", flush=True)
+
+
+def tablet_suite(args, disk):
+    """Issue 160: a VirtIO tablet, an absolute pointer, needs no grab; its events carry the position."""
+    path = Path(tempfile.gettempdir()) / f"mind-core-qmp-{os.getpid()}.sock"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-device", "virtio-tablet-pci", "-qmp", f"unix:{path},server=on,wait=off"])
+    try:
+        require(vm.service_logs("virtio_input", "TABLET READY"), "[VIRTIO_INPUT] TABLET READY")
+        vm.send("run keys\n")
+        vm.expect("[KEYS] READY")
+        start = len(vm.log)
+        # The monitor's mouse_move is relative only: absolute events go through QMP (0..0x7FFF on each axis).
+        qmp = socket.socket(socket.AF_UNIX); qmp.connect(str(path)); reader = qmp.makefile("r")
+        def execute(command, arguments=None):
+            qmp.sendall(json.dumps({"execute": command, **({"arguments": arguments} if arguments else {})}).encode() + b"\n")
+            while "return" not in (reply := json.loads(reader.readline())) and "error" not in reply:
+                pass
+            assert "error" not in reply, reply
+        reader.readline()  # greeting
+        execute("qmp_capabilities")
+        events = [[{"type": "abs", "data": {"axis": "x", "value": 16383}}, {"type": "abs", "data": {"axis": "y", "value": 8191}}],
+                  [{"type": "btn", "data": {"down": True, "button": "left"}}], [{"type": "btn", "data": {"down": False, "button": "left"}}],
+                  [{"type": "btn", "data": {"down": True, "button": "wheel-down"}}], [{"type": "btn", "data": {"down": False, "button": "wheel-down"}}]]
+        for batch in events:
+            execute("input-send-event", {"events": batch})
+            time.sleep(.15)
+        qmp.close()
+        time.sleep(.3)
+        vm.collect()
+        got = re.findall(r"\[KEYS\] (pointer [^\r\n]*)", vm.log[start:])
+        positions = [tuple(map(int, m)) for m in re.findall(r"at=(\d+),(\d+)", " ".join(got))]
+        assert positions and all(0 <= x < 4096 and 0 <= y < 4096 for x, y in positions), got
+        assert any(abs(x - 2048) < 64 and abs(y - 1024) < 64 for x, y in positions), got
+        assert any(line.startswith("pointer buttons=1 at=") for line in got), got
+        assert any(line.endswith("wheel=1") or line.endswith("wheel=-1") for line in got), got
+        vm.send_bytes(b"\x1b")
+        vm.expect("EXITED. SHELL RESUMED.")
+        print("PASS: VirtIO tablet: absolute positions in 1/4096 of the screen, buttons and wheel reach the focused program; no pointer grab needed", flush=True)
+    finally:
+        vm.close()
+        log = Path(tempfile.gettempdir()) / "mind-core-tablet.log"
+        log.write_text(vm.log)
+        print(f"QEMU log: {log}", flush=True)
 
 
 def keys_suite(vm):
@@ -3189,7 +3233,7 @@ def main():
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "tablet", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3259,6 +3303,9 @@ def main():
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)
+                continue
+            if suite == "tablet":
+                tablet_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt

@@ -1,0 +1,27 @@
+# 160 — Absolute pointer: a VirtIO tablet, no pointer grab in the emulator — done
+
+**Type:** kernel ABI + driver · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2
+
+## Problem
+
+The PS/2 mouse (156) is a relative device: QEMU must grab the host pointer to turn its movement into relative motion. Under Wayland, WSLg and Windows QEMU the grab often does not hold: the pointer leaves the window and the mouse stops working (reported by the user).
+
+## Plan
+
+- An absolute device, the VirtIO tablet (`virtio-tablet-pci`): QEMU sends positions and needs no grab.
+- A pointer event that carries a position; programs map it onto their screen.
+- The launchers add the tablet.
+
+## Resolution
+
+- **ABI** (`common/abi.rs`): an absolute pointer event is a `KEY_POINTER` event with `POINTER_ABSOLUTE` (bit 33): the character field holds x and y in 1/4096 of the screen (`POINTER_SCALE`), bits 34–37 the wheel (`pointer_at_event`, `pointer_position`; `pointer_fields` gives no movement for it). Everything that filters pointer events (the kernel's `INPUT_POINTER`, `mind::keys`) treats it as before.
+- **libmind:** `Pointer.at` and `Pointer::position(width, height)`.
+- **Driver `virtio_input`** (boot service, `virtio_input/src/main.rs`): the modern VirtIO interface, one event queue of Linux input events; axis ranges from the device configuration; each `EV_SYN` report becomes one pointer event with the position, buttons and wheel, injected with the input privilege like `ps2_kbd`'s. init grants the tablet's BAR, an MSI-X vector (or the line), 16 KiB DMA and the input privilege; without the device the service is absent.
+- **Launchers:** `03_run_qemu.sh`, `03_run_qemu_wsl.sh` and the Windows batch files add `-device virtio-tablet-pci` (`MIND_POINTER=ps2` leaves it out). The PS/2 mouse stays for machines without the tablet.
+- **`keys`** prints `at=x,y` for tablet events.
+- **Test:** `tablet` suite (QEMU with the tablet, positions, a button and the wheel sent through QMP `input-send-event`): `keys` gets `at=2048,1024` for the screen's middle-top quarter point, the button and the wheel.
+- **For the tools track:** `wm` (088) should use `Pointer::position` when `at` is set and the movement otherwise.
+
+## Related
+
+[156](156-ps2-mouse.done), [088](../issues/088-text-window-manager.md), [202](../issues/202-aarch64-devices.md) (VirtIO input on aarch64).

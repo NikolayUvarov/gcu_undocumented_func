@@ -64,9 +64,17 @@ impl KeyEvent {
     pub fn to_word(self) -> usize { input_event(self.byte, self.key, self.mods, self.pressed, self.ch.map_or(0, |c| c as u32)) }
 }
 
-/// A pointer event (issue 156): buttons held (`POINTER_*`), movement (dy grows downwards) and wheel steps.
+/// A pointer event (issue 156): buttons held (`POINTER_*`), movement (dy grows downwards) and wheel steps; from a
+/// tablet (issue 160) the position instead, `at` = (x, y) in 1/POINTER_SCALE of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32 }
+pub struct Pointer { pub buttons: u8, pub dx: i32, pub dy: i32, pub wheel: i32, pub at: Option<(u32, u32)> }
+
+impl Pointer {
+    /// The position on a screen of `width` × `height` pixels, for a tablet event.
+    pub fn position(&self, width: usize, height: usize) -> Option<(usize, usize)> {
+        self.at.map(|(x, y)| (x as usize * width / POINTER_SCALE as usize, y as usize * height / POINTER_SCALE as usize))
+    }
+}
 
 /// A key or a pointer event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +93,7 @@ pub fn listen(key: u16, mods: u8, on: bool) -> crate::sys::Result<()> {
 pub fn read_input() -> Option<Input> {
     match call(SYSCALL_READ_INPUT, 0, 0) {
         0 => None,
-        word if event_key(word) == KEY_POINTER => { let (buttons, dx, dy, wheel) = pointer_fields(word); Some(Input::Pointer(Pointer { buttons, dx, dy, wheel })) }
+        word if event_key(word) == KEY_POINTER => { let (buttons, dx, dy, wheel) = pointer_fields(word); Some(Input::Pointer(Pointer { buttons, dx, dy, wheel, at: pointer_position(word) })) }
         word => Some(Input::Key(KeyEvent::from_word(seen(word)))),
     }
 }

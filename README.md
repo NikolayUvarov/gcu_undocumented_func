@@ -41,6 +41,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `init` | own endpoint, platform and spawn privileges (from the kernel), process control (minted for itself) | service policy; the lifecycle of services and applications (`idl/init.wit` 1.1: list, start, stop, restart, stop an application) |
 | `logd` | service endpoint, observe privilege | the system log (`idl/log.wit`): 256 records of up to 200 bytes in a 64 KiB ring, each stamped with the time it arrived and the sender's PID and task name (from IPC and the kernel's task records, never from the text); at most 64 records a second per sender, the rest refused and counted; reading needs the shell's read badge |
 | `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight, days since 2000-01-01) |
+| `virtio_input` | the tablet's BAR and MSI-X vector, 16 KiB DMA, input | VirtIO tablet (issue 160): absolute pointer events (position in 1/4096 of the screen, buttons, wheel) like the PS/2 mouse's, so the emulator needs no pointer grab; absent without the device |
 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1 and 12, input | PS/2 keyboard → key events, and the PS/2 mouse → pointer events (buttons, movement, wheel) for the focused task if it asked for them (`mind::input::pointer`, issue 156); (modifiers, F-keys, navigation keys, US/Russian layout) for the focused task; serves `idl/keyboard.wit` (layout and switch key) to the shell's `keymap` |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer; serves `idl/display.wit` (the mode, a sealed read-only copy of the screen) to the shell's `screenshot` |
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
@@ -215,12 +216,13 @@ What the last three lines add:
 - **`-cpu qemu64,+rdrand`:** a processor with RDRAND. The TLS and key services refuse to work without it.
 - **`-nic user,model=virtio-net-pci`:** a VirtIO network card on QEMU's user networking.
 
-On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`). It adds the sound card, the network card and RDRAND as above:
+On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`). It adds the sound card, the network card, a VirtIO tablet and RDRAND as above:
 - **Sound:** the backend is the first of PipeWire, PulseAudio, ALSA (with `/dev/snd`) and SDL (in a desktop session) that starts on this host. Without any, it starts without sound and says so. `MIND_AUDIO=<driver>` picks the backend, `MIND_AUDIO=none` leaves the card out.
 - **Network:** `MIND_NET=none` leaves the network card out.
+- **Pointer:** a VirtIO tablet (`virtio-tablet-pci`), an absolute device: QEMU does not grab the pointer, which moves freely in and out of the window. `MIND_POINTER=ps2` leaves only the PS/2 mouse, which QEMU grabs on a click (Ctrl+Alt+G releases it); under Wayland, WSLg or Windows that grab may not hold the pointer in the window.
 - **CPU:** `MIND_CPU=<model>` replaces the CPU model.
 
-On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card and RDRAND.
+On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card, the VirtIO tablet and RDRAND.
 
 From WSL with Windows interop enabled, build and launch Windows QEMU directly:
 
@@ -234,7 +236,7 @@ It locates `OVMF.fd` and `usb_root/` beside the script and converts their paths
 with `wslpath`, so it can be invoked from any directory. To use another Windows
 installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
 arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
-`MIND_AUDIO`, `MIND_NET` and `MIND_CPU` work as with `03_run_qemu.sh`.
+`MIND_AUDIO`, `MIND_NET`, `MIND_POINTER` and `MIND_CPU` work as with `03_run_qemu.sh`.
 
 ### Bootable USB image
 
