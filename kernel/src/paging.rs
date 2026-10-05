@@ -49,12 +49,12 @@ pub unsafe fn init() -> Result<(), &'static str> {
     KERNEL_ROOT.store(root.ptr() as usize, Ordering::Release);
     core::mem::forget(pdpt);
     core::mem::forget(root);
-    enable_protection();
+    enable_protection(true);
     activate(kernel_root());
     Ok(())
 }
 
-pub unsafe fn enable_protection() {
+pub unsafe fn enable_protection(bsp: bool) {
     let nx = core::arch::x86_64::__cpuid(0x80000001).edx & (1 << 20) != 0;
     assert!(nx, "NX support required");
     let mut lo: u32;
@@ -71,11 +71,23 @@ pub unsafe fn enable_protection() {
     let mut cr4: usize;
     asm!("mov {}, cr4", out(reg) cr4);
     cr4 |= (1 << 9) | (1 << 10);
-    // Flush inherited global translations as well. No user FSGSBASE, PCID, or
-    // XSAVE/AVX state outside our FXSAVE context.
+    // Flush inherited global translations as well. No user FSGSBASE or PCID.
     cr4 &= !((1 << 7) | (1 << 16) | (1 << 17) | (1 << 18));
+    // XSAVE with x87, SSE and AVX state when the CPU has both (issue 153); the BSP decides, the APs follow.
+    let features = core::arch::x86_64::__cpuid(1).ecx;
+    let avx = features & (1 << 26) != 0 && features & (1 << 28) != 0;
+    let xsave = if bsp { avx } else { crate::context::XSAVE.load(Ordering::Acquire) };
+    if xsave { cr4 |= 1 << 18; }
     asm!("mov cr4, {}", in(reg) cr4);
+    if xsave {
+        asm!("xsetbv", in("ecx") 0u32, in("eax") XCR0 as u32, in("edx") 0u32);
+        assert!(core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize <= crate::context::AREA, "XSAVE area too large");
+    }
+    if bsp { crate::context::XSAVE.store(xsave, Ordering::Release); }
 }
+
+/// x87, SSE and AVX state components (XCR0) when XSAVE is used.
+pub const XCR0: u64 = 0b111;
 
 pub unsafe fn activate(root: usize) {
     asm!("mov cr3, {}", in(reg) root);

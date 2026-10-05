@@ -59,6 +59,11 @@ jobs:
             args: --suites vfs,edit,disk,block
           - name: one CPU
             args: --cpus 1 --suites smp,isolation,heap,services
+          # A CPU with AVX: its state is saved per task with XSAVE (issue 153).
+          - name: AVX state
+            args: --cpu-model max --suites busy,smp
+          - name: AVX state, one CPU
+            args: --cpu-model max --cpus 1 --suites busy,smp
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})

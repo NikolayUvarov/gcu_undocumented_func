@@ -18,6 +18,11 @@ mod elf;
 mod elf_reloc;
 #[path = "../kernel/src/memory.rs"]
 mod memory;
+// The kernel's context switch is not built on the host: what paging.rs reads of it.
+mod context {
+    pub static XSAVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    pub const AREA: usize = 1024;
+}
 // The kernel's frame pool is not set up on the host: task memory comes from the allocator.
 mod frames {
     pub fn ready() -> bool { false }
