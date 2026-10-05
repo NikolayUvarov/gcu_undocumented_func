@@ -415,9 +415,9 @@ impl Scheduler {
             }
             PLATFORM_IRQ if platform::irq(a) => Ok(Capability::Interrupt(a as u8)),
             PLATFORM_MMIO => {
-                if !platform::MMIO.iter().any(|&(base, bytes)| a == base && b == bytes) { return Err(ERR_RIGHTS); }
-                if a == platform::CONSOLE { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
-                Ok(Capability::Mmio(a, b))
+                let (base, bytes) = platform::mmio(a).ok_or(ERR_NOT_FOUND)?;
+                if base == platform::console() { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
+                Ok(Capability::Mmio(base, bytes))
             }
             PLATFORM_DEVICE_BAR => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;

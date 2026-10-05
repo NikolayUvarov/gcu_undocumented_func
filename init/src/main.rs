@@ -51,10 +51,10 @@ impl Minted {
         Ok(slot)
     }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
-    // The real-time clock: CMOS ports (LEGACY) on x86, the PL031 on aarch64 `virt`.
-    fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, 0x0901_0000, 0x1000) } else { self.ports(0x70, 2) } }
-    // The platform's serial line: COM1 (LEGACY) on x86, the PL011 on aarch64 `virt`.
-    fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, 0x0900_0000, 0x1000) } else { self.ports(0x3F8, 8) } }
+    // The real-time clock: CMOS ports (LEGACY) on x86, the board's PL031 on aarch64.
+    fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_RTC, 0) } else { self.ports(0x70, 2) } }
+    // The platform's serial line: COM1 (LEGACY) on x86, the board's UART on aarch64.
+    fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_UART, 0) } else { self.ports(0x3F8, 8) } }
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
 }
 impl Drop for Minted { fn drop(&mut self) { for &slot in &self.slots[..self.count] { let _ = ipc::drop_cap(slot); } } }

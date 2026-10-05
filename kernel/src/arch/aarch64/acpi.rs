@@ -1,6 +1,7 @@
 // ACPI on `virt`: the MCFG for the PCI ECAM, the MADT for the CPUs (their MPIDRs, issue 203) and the FADT for PSCI's
 // conduit (HVC or SMC); reset and power off go through PSCI. The tables are untrusted input: every length is checked
 // against the identity-mapped 4 GiB.
+use super::board;
 use crate::serial_print;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -18,7 +19,10 @@ fn u32_at(data: &[u8], at: usize) -> u32 { u32::from_le_bytes(data[at..at + 4].t
 fn u64_at(data: &[u8], at: usize) -> u64 { u64::from_le_bytes(data[at..at + 8].try_into().unwrap()) }
 unsafe fn table(address: u64) -> Option<&'static [u8]> { let header = bytes(address, 36)?; bytes(address, u32_at(header, 4).max(36) as u64) }
 
-/// Reads the MCFG (the segment-0 ECAM goes to PCI), the MADT and the FADT through the XSDT.
+// A device address the kernel can reach (its identity map), else 0: not used.
+fn mapped(address: u64) -> usize { if address != 0 && address < WINDOW { address as usize } else { 0 } }
+
+/// Reads the MCFG (the segment-0 ECAM goes to PCI), the MADT, FADT, SPCR and GTDT through the XSDT.
 pub unsafe fn init(rsdp: u64) {
     let Some(root) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { serial_print("MIND CORE KERNEL: ACPI: NO RSDP\n"); return };
     let Some(list) = table(u64_at(root, 24)) else { return };
@@ -30,26 +34,51 @@ pub unsafe fn init(rsdp: u64) {
             b"MCFG" => for entry in (44..table.len().saturating_sub(15)).step_by(16) {
                 if !ecam && u16::from_le_bytes([table[entry + 8], table[entry + 9]]) == 0 { crate::pcicfg::configure(u64_at(table, entry), table[entry + 10], table[entry + 11]); ecam = true; }
             },
-            // Interrupt controller structures from offset 44; GICC (type 0x0B): flags at 12 (bit 0 enabled), MPIDR at 68.
+            // Interrupt controller structures from offset 44: GICC (0x0B: flags at 12, bit 0 enabled; GICR base at 60;
+            // MPIDR at 68), GICD (0x0C: base at 8), GICR (0x0E: base of the first range at 4), ITS (0x0F: base at 8).
             b"APIC" => {
-                let mut entry = 44;
+                let (mut entry, mut its, mut gicr, mut gicc_gicr) = (44, 0, 0, 0);
                 while entry + 2 <= table.len() {
                     let (kind, length) = (table[entry], table[entry + 1] as usize);
                     if length < 2 || entry + length > table.len() { break; }
                     let count = CPU_COUNT.load(Ordering::Relaxed);
-                    if kind == 0x0B && length >= 76 && u32_at(table, entry + 12) & 1 != 0 && count < CPUS.len() {
-                        CPUS[count].store(u64_at(table, entry + 68) & 0xFF_00FF_FFFF, Ordering::Relaxed);
-                        CPU_COUNT.store(count + 1, Ordering::Release);
+                    match kind {
+                        0x0B if length >= 76 && u32_at(table, entry + 12) & 1 != 0 => {
+                            if count < CPUS.len() { CPUS[count].store(u64_at(table, entry + 68) & 0xFF_00FF_FFFF, Ordering::Relaxed); CPU_COUNT.store(count + 1, Ordering::Release); }
+                            if gicc_gicr == 0 { gicc_gicr = u64_at(table, entry + 60); }
+                        }
+                        0x0C if length >= 24 => board::set(&board::GICD, mapped(u64_at(table, entry + 8))),
+                        0x0E if length >= 16 && gicr == 0 => gicr = u64_at(table, entry + 4),
+                        0x0F if length >= 20 && its == 0 => its = u64_at(table, entry + 8),
+                        _ => {}
                     }
                     entry += length;
                 }
+                // A machine without an ITS has no MSIs here; redistributors are named by GICR ranges or in each GICC.
+                board::set(&board::GITS, mapped(its));
+                let first = if gicr != 0 { gicr } else { gicc_gicr };
+                if first != 0 { board::set(&board::GICR, mapped(first)); }
             }
+            // The console: interface type at 36 (3 a PL011, 0x0E the SBSA generic UART), the register address (a
+            // generic address structure) at 40, its address at 44; the interrupt (GSIV) at 54 when bit 3 of 52 is set.
+            b"SPCR" if table.len() >= 58 => {
+                if matches!(table[36], 0x03 | 0x0E) && table[40] == 0 {
+                    board::set(&board::UART, mapped(u64_at(table, 44)));
+                    if table[52] & 8 != 0 { let gsiv = u32_at(table, 54) as usize; if gsiv >= 32 { board::set(&board::UART_LINE, gsiv - 32); } }
+                }
+            }
+            // The generic timer: the virtual EL1 timer's GSIV at 64 (a PPI).
+            b"GTDT" if table.len() >= 68 => { let ppi = u32_at(table, 64) as usize; if (16..32).contains(&ppi) { board::set(&board::TIMER_PPI, ppi); } }
             // ARM_BOOT_ARCH at 129: bit 0 PSCI compliant, bit 1 PSCI through HVC.
             b"FACP" if table.len() >= 131 => SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed),
             _ => {}
         }
     }
     if !ecam { serial_print("MIND CORE KERNEL: ACPI: NO MCFG\n"); }
+    use core::fmt::Write;
+    let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {}\r",
+                     board::get(&board::GICD), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::UART),
+                     board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire));
     if CPU_COUNT.load(Ordering::Acquire) == 0 { serial_print("MIND CORE KERNEL: ACPI: NO GICC IN THE MADT, ONE CPU\n"); }
 }
 

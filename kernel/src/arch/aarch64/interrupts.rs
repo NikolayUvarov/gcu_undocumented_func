@@ -6,9 +6,12 @@ use core::alloc::Layout;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-const GICD: usize = 0x0800_0000;
-const GICR: usize = 0x080A_0000; // the first redistributor (CPU 0's); each CPU's has its RD and SGI/PPI pages of 64 KiB
-const TIMER_PPI: u32 = 27; // EL1 virtual timer
+// Where the distributor, the first redistributor (CPU 0's; each CPU's has its RD and SGI/PPI pages of 64 KiB) and
+// the ITS are, and the virtual timer's PPI: the board's (board.rs, from the MADT and GTDT).
+fn gicd() -> usize { super::board::get(&super::board::GICD) }
+fn gicr() -> usize { super::board::get(&super::board::GICR) }
+fn gits() -> usize { super::board::get(&super::board::GITS) }
+fn timer_ppi() -> u32 { super::board::get(&super::board::TIMER_PPI) as u32 }
 const TICK_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TIMER_STEP: AtomicU64 = AtomicU64::new(0);
@@ -41,11 +44,11 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
 
 /// The distributor, this CPU's redistributor and CPU interface, and the tick.
 pub unsafe fn init() {
-    write32(GICD, 1 << 4 | 1 << 1); // ARE_NS, Group 1 non-secure
+    write32(gicd(), 1 << 4 | 1 << 1); // ARE_NS, Group 1 non-secure
     // Device lines (SPIs): group 1, to CPU 0, level-triggered as reset; enabled by their drivers.
-    let lines = ((read32(GICD + 4) & 0x1F) as usize + 1) * 32;
-    for word in 1..lines / 32 { write32(GICD + 0x80 + 4 * word, u32::MAX); }
-    for spi in 32..lines { core::ptr::write_volatile((GICD + 0x6000 + 8 * spi) as *mut u64, 0); }
+    let lines = ((read32(gicd() + 4) & 0x1F) as usize + 1) * 32;
+    for word in 1..lines / 32 { write32(gicd() + 0x80 + 4 * word, u32::MAX); }
+    for spi in 32..lines { core::ptr::write_volatile((gicd() + 0x6000 + 8 * spi) as *mut u64, 0); }
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);
@@ -57,14 +60,14 @@ pub unsafe fn init() {
 pub fn redistributor() -> usize {
     let mpidr: u64; unsafe { asm!("mrs {}, mpidr_el1", out(reg) mpidr); }
     let affinity = (mpidr >> 32 & 0xFF) << 24 | mpidr & 0xFF_FFFF;
-    let mut frame = GICR;
+    let mut frame = gicr();
     for _ in 0..64 {
         let typer = unsafe { read64(frame + 8) };
         if typer >> 32 == affinity { return frame; }
         if typer & 1 << 4 != 0 { break; } // Last
         frame += if typer & 1 << 1 != 0 { 0x4_0000 } else { 0x2_0000 }; // with virtual LPIs: four pages
     }
-    GICR
+    gicr()
 }
 
 // This CPU's redistributor and CPU interface.
@@ -75,7 +78,7 @@ pub unsafe fn load() {
     while read32(waker) & (1 << 2) != 0 { core::hint::spin_loop(); } // ChildrenAsleep
     let sgi = gicr + 0x1_0000;
     write32(sgi + 0x80, u32::MAX); // IGROUPR0: SGIs and PPIs in group 1
-    write32(sgi + 0x100, 1 << TIMER_PPI | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE); // ISENABLER0
+    write32(sgi + 0x100, 1 << timer_ppi() | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE); // ISENABLER0
     asm!("msr icc_sre_el1, {}", "isb", in(reg) 7u64);
     asm!("msr icc_pmr_el1, {}", in(reg) 0xFFu64);
     asm!("msr icc_igrpen1_el1, {}", "isb", in(reg) 1u64);
@@ -87,12 +90,12 @@ unsafe fn rearm() { asm!("msr cntv_tval_el0, {}", in(reg) TIMER_STEP.load(Orderi
 pub fn irq_masked(line: u8) -> bool {
     if line as usize >= MSI_FIRST { return false; }
     let spi = 32 + line as usize;
-    unsafe { read32(GICD + 0x100 + spi / 32 * 4) & 1 << (spi % 32) == 0 }
+    unsafe { read32(gicd() + 0x100 + spi / 32 * 4) & 1 << (spi % 32) == 0 }
 }
 pub unsafe fn set_irq_masked(line: u8, masked: bool) {
     if line as usize >= MSI_FIRST { return; }
     let spi = 32 + line as usize;
-    write32(GICD + if masked { 0x180 } else { 0x100 } + spi / 32 * 4, 1 << (spi % 32));
+    write32(gicd() + if masked { 0x180 } else { 0x100 } + spi / 32 * 4, 1 << (spi % 32));
 }
 
 // Takes the pending interrupt from the CPU interface and ends it; a device line stays disabled until its driver
@@ -103,7 +106,7 @@ pub unsafe fn acknowledge() -> Event {
     let intid = intid as u32 & 0xFF_FFFF;
     if (1020..1024).contains(&intid) { return Event::Wake; } // spurious
     let event = match intid {
-        TIMER_PPI => { rearm(); advance(); super::cpu::tick_others(); Event::Tick }
+        id if id == timer_ppi() => { rearm(); advance(); super::cpu::tick_others(); Event::Tick }
         SGI_STOP => Event::Stop,
         SGI_TICK => Event::Tick,
         SGI_WAKE => Event::Wake,
@@ -115,11 +118,9 @@ pub unsafe fn acknowledge() -> Event {
     event
 }
 
-// The ITS (interrupt translation service) of `virt`: device writes to GITS_TRANSLATER carry an event ID; the ITS maps
-// (device ID, event) to an LPI for a collection, here collection 0 on CPU 0. Its tables, the command queue and the
+// The ITS (interrupt translation service), where the MADT puts it: device writes to GITS_TRANSLATER carry an event
+// ID; the ITS maps (device ID, event) to an LPI for a collection, here collection 0 on CPU 0. Its tables, the command queue and the
 // redistributor's LPI configuration and pending tables are taken from the frame pool when the first MSI is routed.
-const GITS: usize = 0x0808_0000;
-const TRANSLATER: u64 = GITS as u64 + 0x1_0040;
 const LPI_FIRST: u32 = 8192;
 const LPI_ID_BITS: u64 = 14; // INTIDs below 16384
 const LPIS: usize = 16; // MSI lines
@@ -138,17 +139,18 @@ unsafe fn zeroed(bytes: usize, align: usize) -> Option<u64> {
 
 impl Its {
     unsafe fn start() -> Option<Self> {
+        if gits() == 0 { return None; } // no ITS: drivers keep their wired lines
         // Redistributor: LPI configuration (priority 0xA0, enabled, for the MSI lines) and pending tables, then LPIs on.
         let properties = zeroed((1usize << LPI_ID_BITS) - LPI_FIRST as usize, 4096)?;
         for lpi in 0..LPIS { core::ptr::write_volatile((properties as usize + lpi) as *mut u8, 0xA0 | 1); }
         let pending = zeroed((1usize << LPI_ID_BITS) / 8, 0x1_0000)?;
         // LPIs go to the boot CPU (collection 0): its redistributor takes them.
-        write64(GICR + 0x70, properties | 0b111 << 7 | 1 << 10 | (LPI_ID_BITS - 1));
-        write64(GICR + 0x78, pending | 0b111 << 7 | 1 << 10);
-        write32(GICR, read32(GICR) | 1); // EnableLPIs
+        write64(gicr() + 0x70, properties | 0b111 << 7 | 1 << 10 | (LPI_ID_BITS - 1));
+        write64(gicr() + 0x78, pending | 0b111 << 7 | 1 << 10);
+        write32(gicr(), read32(gicr()) | 1); // EnableLPIs
         // ITS tables: device and collection tables, 64 KiB each, flat, 4 KiB pages.
         for n in 0..8 {
-            let register = GITS + 0x100 + 8 * n;
+            let register = gits() + 0x100 + 8 * n;
             let kind = read64(register) >> 56 & 7;
             if kind != 1 && kind != 4 { continue; }
             let table = zeroed(0x1_0000, 0x1_0000)?;
@@ -156,12 +158,12 @@ impl Its {
             write64(register, 1 << 63 | CACHED | kind << 56 | entry << 48 | table | 15);
         }
         let queue = zeroed(QUEUE_BYTES, 0x1_0000)? as usize;
-        write64(GITS + 0x80, 1 << 63 | CACHED | queue as u64); // GITS_CBASER: one page
-        write64(GITS + 0x88, 0); // GITS_CWRITER
-        write32(GITS, read32(GITS) | 1); // enabled
+        write64(gits() + 0x80, 1 << 63 | CACHED | queue as u64); // GITS_CBASER: one page
+        write64(gits() + 0x88, 0); // GITS_CWRITER
+        write32(gits(), read32(gits()) | 1); // enabled
         let mut its = Self { queue, write: 0, devices: [None; DEVICES] };
         // Collection 0 targets this CPU: its redistributor's address or its number, as GITS_TYPER.PTA says.
-        let target = if read64(GITS + 8) & 1 << 19 != 0 { GICR as u64 } else { 0 };
+        let target = if read64(gits() + 8) & 1 << 19 != 0 { gicr() as u64 } else { 0 };
         its.command([0x09, 0, 1 << 63 | target << 16, 0]); // MAPC
         its.command([0x05, 0, target << 16, 0]); // SYNC
         Some(its)
@@ -172,8 +174,8 @@ impl Its {
         for (i, word) in words.iter().enumerate() { core::ptr::write_volatile((self.queue + self.write + 8 * i) as *mut u64, *word); }
         asm!("dsb ish");
         self.write = (self.write + 32) % QUEUE_BYTES;
-        write64(GITS + 0x88, self.write as u64);
-        for _ in 0..1_000_000 { if read64(GITS + 0x90) as usize & (QUEUE_BYTES - 1) == self.write { return true; } core::hint::spin_loop(); }
+        write64(gits() + 0x88, self.write as u64);
+        for _ in 0..1_000_000 { if read64(gits() + 0x90) as usize & (QUEUE_BYTES - 1) == self.write { return true; } core::hint::spin_loop(); }
         false
     }
 
@@ -182,7 +184,7 @@ impl Its {
         if index >= LPIS { return None; }
         if !self.devices.contains(&Some(device)) {
             let slot = self.devices.iter().position(Option::is_none)?;
-            let entry = (read64(GITS + 8) >> 4 & 0xF) + 1; // GITS_TYPER.ITT_entry_size
+            let entry = (read64(gits() + 8) >> 4 & 0xF) + 1; // GITS_TYPER.ITT_entry_size
             let table = zeroed((entry << EVENT_BITS).next_multiple_of(256) as usize, 256)?;
             if !self.command([0x08 | (device as u64) << 32, EVENT_BITS - 1, 1 << 63 | table, 0]) { return None; } // MAPD
             self.devices[slot] = Some(device);
@@ -202,6 +204,6 @@ pub unsafe fn its_route(device: u32, index: usize) -> Option<(u64, u32)> {
         if state.is_none() { *state = Its::start(); }
         let routed = state.as_mut().and_then(|its| its.route(device, index));
         LOCK.store(false, Ordering::Release);
-        routed.map(|()| (TRANSLATER, index as u32))
+        routed.map(|()| (gits() as u64 + 0x1_0040, index as u32)) // GITS_TRANSLATER
     })
 }

@@ -104,7 +104,7 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
 }
 
 // Serial output without locks or allocation: the panic may come from the allocator or inside the scheduler lock.
-struct PanicSerial;
+pub struct PanicSerial;
 impl core::fmt::Write for PanicSerial {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_print(text); Ok(()) }
 }

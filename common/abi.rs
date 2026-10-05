@@ -292,7 +292,9 @@ pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
-pub const PLATFORM_MMIO: usize = 10; // base, bytes: registers of a platform device outside PCI (aarch64 virt: PL011, PL031)
+pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
+pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
+pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
 // vendor | device << 16 to match as well (0: any); result = device index.
 
