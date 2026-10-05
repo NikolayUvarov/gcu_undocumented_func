@@ -2967,6 +2967,8 @@ def wm_suite(vm):
     clock's pixels); keys reach only the window in front; halves, quarters, maximize and snapping by keys and by
     dragging a title with the mouse; a program started from wm gets only what wm holds; leaving wm and killing it keep
     the programs running and the next wm shows them where they were; close all ends them."""
+    # The broker's first window gives it a heap arena it keeps: one window before the baseline.
+    require(vm.command("wintest show W 1"), "W DONE AFTER")
     baseline = heap_used(vm)
     windows_re = re.compile(r'\[WM\] WINDOW (\d+) PID (\d+) (TEXT|PIXELS) (\d+)X(\d+) "[^"]*" AT (\d+),(\d+) (\d+)X(\d+)')
     seen = []  # everything wm logged, PIDs as the suites number them
