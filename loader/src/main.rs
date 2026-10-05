@@ -15,6 +15,7 @@ use mind::util::FixedBuf;
 
 const RECEIVED_CAP: usize = 9;
 const APP_ENDPOINTS: u16 = 4; // endpoints an application may create
+const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for (the frame pool limits it further)
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
@@ -37,28 +38,29 @@ fn task_name(path: &[u8]) -> FixedBuf<NAME_MAX> {
 }
 
 // What the program asks for: the `.mind_request` section (`mind::request!`): magic, version, flags. It grants nothing.
-fn request_flags(read: &mut dyn FnMut(usize, &mut [u8]) -> usize) -> u32 {
+fn request_flags(read: &mut dyn FnMut(usize, &mut [u8]) -> usize) -> (u32, u32) {
     let mut header = [0u8; 64];
-    if read(0, &mut header) < 64 || &header[..4] != b"\x7fELF" { return 0; }
+    if read(0, &mut header) < 64 || &header[..4] != b"\x7fELF" { return (0, 0); }
     let u16_at = |b: &[u8], at: usize| u16::from_le_bytes([b[at], b[at + 1]]) as usize;
     let u64_at = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap()) as usize;
     let (shoff, shentsize, shnum, shstrndx) = (u64_at(&header, 0x28), u16_at(&header, 0x3A), u16_at(&header, 0x3C), u16_at(&header, 0x3E));
-    if shentsize != 64 || shnum == 0 || shnum > 64 || shstrndx >= shnum { return 0; }
+    if shentsize != 64 || shnum == 0 || shnum > 64 || shstrndx >= shnum { return (0, 0); }
     let mut sections = [0u8; 64 * 64];
-    if read(shoff, &mut sections[..shnum * 64]) < shnum * 64 { return 0; }
+    if read(shoff, &mut sections[..shnum * 64]) < shnum * 64 { return (0, 0); }
     let strtab = &sections[shstrndx * 64..shstrndx * 64 + 64];
     let (str_offset, str_size) = (u64_at(strtab, 0x18), u64_at(strtab, 0x20).min(4096));
     let mut names = [0u8; 4096];
-    if read(str_offset, &mut names[..str_size]) < str_size { return 0; }
+    if read(str_offset, &mut names[..str_size]) < str_size { return (0, 0); }
     for index in 0..shnum {
         let section = &sections[index * 64..index * 64 + 64];
         let name = u32::from_le_bytes(section[..4].try_into().unwrap()) as usize;
         if name >= str_size || !names[name..str_size].starts_with(b".mind_request\0") { continue; }
         let mut note = [0u8; 16];
-        if u64_at(section, 0x20) < 16 || read(u64_at(section, 0x18), &mut note) < 16 { return 0; }
-        return if &note[..8] == mind::process::REQUEST_MAGIC { u32::from_le_bytes(note[8..12].try_into().unwrap()) } else { 0 };
+        if u64_at(section, 0x20) < 16 || read(u64_at(section, 0x18), &mut note) < 16 { return (0, 0); }
+        let word = |at: usize| u32::from_le_bytes(note[at..at + 4].try_into().unwrap());
+        return if &note[..8] == mind::process::REQUEST_MAGIC { (word(8), word(12)) } else { (0, 0) };
     }
-    0
+    (0, 0)
 }
 
 // The program file of `name` and its task name; boot services and the kernel are not applications.
@@ -79,7 +81,7 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
     let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
     if file.read_at(0, &mut image.as_mut_slice()[..size])? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
-    let flags = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
+    let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
     let mut grants = [Grant::default(); SPAWN_GRANTS_MAX];
@@ -96,7 +98,9 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     if !args.is_empty() { text[len + 1..len + 1 + args.len()].copy_from_slice(args); len += 1 + args.len(); }
     let screen = if flags & mind::process::REQUEST_CONSOLE != 0 { 0 } else { SPAWN_SCREEN };
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
-    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, &grants[..count], screen, Quota { tasks: 0, endpoints: APP_ENDPOINTS });
+    // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
+    let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
+    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, &grants[..count], screen, Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib });
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
@@ -165,7 +169,7 @@ impl Launcher {
 // The raw request flags of program `name` (REQUEST_*).
 fn requests(name: &str) -> Result<u32, loader::Error> {
     let (file, _) = open(name.as_bytes()).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })?;
-    Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)))
+    Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)).0)
 }
 
 fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {

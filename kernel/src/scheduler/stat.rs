@@ -93,6 +93,7 @@ impl Scheduler {
                     band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
                     budget_ns: task.budget_ns, period_ns: task.period_ns,
                     kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
+                    memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
                 });
             },
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
@@ -112,6 +113,7 @@ impl Scheduler {
                 }
                 m.objects = self.orphans.iter().map(|o| o.region.len() as u64).sum();
                 m.dma = self.dma.iter().map(|r| r.len() as u64).sum();
+                let (frames, frames_free) = crate::frames::stats(); m.frames = frames as u64; m.frames_free = frames_free as u64;
                 m.endpoints = (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]).count() as u64;
                 out.push(m);
             }

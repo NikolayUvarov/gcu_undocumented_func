@@ -50,7 +50,7 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 | **V1. Commands** (done) | Offline recognizer of a fixed grammar (Russian, English) from a model file; `hear` prints what it recognized; tested by synthesizer loopback | tools | [078](../../issues-done/078-voice-command-recognizer.done) |
 | **V2. Voice control** (done) | `voice` + shell integration: intents, confirmations, spoken replies, push-to-talk in the shell, a command set covering the tools | tools | [079](../../issues-done/079-voice-control-in-the-shell.done) |
 | **V2+. Push-to-talk anywhere** | A key that reaches the voice program whatever has the focus | kernel | [154](../../issues-done/154-push-to-talk-routing.done) (done) |
-| **V3. Dictation** | Large-vocabulary recognition (text into `edit`, search in `fm`) from a 40–80 MB model | kernel first, then tools | [150](../../issues/150-user-memory-beyond-the-arena.md), [153](../../issues/153-xsave-avx-state.md); a tools issue when they are done |
+| **V3. Dictation** | Large-vocabulary recognition (text into `edit`, search in `fm`) from a 40–80 MB model | kernel first, then tools | [150](../../issues-done/150-user-memory-beyond-the-arena.done), [153](../../issues/153-xsave-avx-state.md); a tools issue when they are done |
 | **V4. Understanding and dialogue** | Free speech → intent through a language model: remote first (through the network track's policy broker and TLS service), local later | network, tools | 101–103 (network track); a tools issue then |
 
 ### V0 — hearing (tools, done)
@@ -100,7 +100,7 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 
 | № | Task | Needed by |
 |---|---|---|
-| [150](../../issues/150-user-memory-beyond-the-arena.md) | User memory beyond the 64 MiB kernel arena: task heaps and memory objects from free RAM; large read-only memory objects for models, shared between tasks | V3 (models of 40–80 MB), larger tools |
+| [150](../../issues-done/150-user-memory-beyond-the-arena.done) | User memory beyond the 64 MiB kernel arena: task heaps and memory objects from free RAM; large read-only memory objects for models, shared between tasks (done) | V3 (models of 40–80 MB), larger tools |
 | [153](../../issues/153-xsave-avx-state.md) | XSAVE: AVX/AVX2 register state per task | V3 (inference speed), V1 optional |
 | [154](../../issues-done/154-push-to-talk-routing.done) | Push-to-talk routing: keys delivered to a registered listener regardless of the focus, like the attention key (done) | V2+ |
 
@@ -117,7 +117,7 @@ V0–V2 needed **no kernel change**: the voice program is an ordinary applicatio
 
 ## 7. Limits and risks
 
-- Memory: a program heap is at most 16 MiB in 32 blocks, an image at most 4 MiB, and user memory comes from the 64 MiB kernel arena — enough for V0–V2 (model ≤ 3 MB, loaded from a file), not for V3 (150).
+- Memory: an image is at most 4 MiB; a program heap is 16 MiB by default and more when the program asks for it (`mind::request!(…, memory: MiB)`), from the free RAM ([150](../../issues-done/150-user-memory-beyond-the-arena.done)). A 40–80 MB model fits, loaded once as a sealed read-only object that several tasks map.
 - Compute: SSE2 only (FXSAVE context); int8 inference of a small model for an 8 s utterance takes well under a second on one core; larger models need AVX (153).
 - Accuracy: a synthesized training and test voice overestimates accuracy on real voices; real recordings must be added before V2 is claimed done for users.
 - Privacy: audio never leaves the machine in V0–V3; V4 sends text (not audio) only through the policy broker with the user's consent.

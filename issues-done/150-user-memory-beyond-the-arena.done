@@ -1,0 +1,32 @@
+# 150 — User memory beyond the kernel arena — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** stage II follow-up, track G (voice V3) · **Constitution:** MC-5.4, MC-3.13
+
+## Problem
+
+Task memory (images, stacks, screens, program heaps, memory objects) comes from the 64 MiB kernel arena, while a QEMU machine has 512 MiB and real ones far more. A program heap is limited to 16 MiB in 32 blocks and all memory objects to 16 MiB together. Voice V3 needs speech models of 40–80 MB, read-only and best shared between tasks ([docs/voice](../docs/voice/README.md) §4); larger tools and files hit the same wall.
+
+## Plan
+
+- A physical frame allocator over the free RAM of the firmware map (outside the arena, the kernel image, boot images and the framebuffer); task pages (heap blocks, memory objects, screens) come from it, kernel structures stay in the arena.
+- Per-task memory quota delegated at `SPAWN` like the task and endpoint quotas (MC-3.13); `HEAP_MAX_BYTES`/`HEAP_MAX_BLOCKS` become defaults of that quota.
+- Large memory objects: a sealed read-only object of up to the quota, mappable by several tasks (a model loaded once).
+- `STAT_MEMORY` reports free frames and per-task use; tests for exhaustion, rollback and reclamation as for the arena today.
+
+## Acceptance criteria
+
+- A program allocates and frees 128 MiB in a 512 MiB VM; a 64 MiB sealed object is mapped read-only by two tasks; the `memory`, `heap` and `isolation` suites pass.
+
+## Related
+
+[docs/voice](../docs/voice/README.md) (V3), [075](075-stat-fields-for-the-monitors.done).
+
+## Resolution
+
+- **Frame pool** (`kernel/src/frames.rs`): the largest free conventional ranges below 4 GiB of the firmware map (up to 16), each managed by a first-fit allocator; about 400 MiB in a 512 MiB QEMU machine. `Region::task` takes zeroed frames from it, the arena only before the pool exists. Task images, stacks, screens, heap blocks and memory objects come from the pool; contexts, mailboxes, exit pages and page tables stay in the arena. RAM above 4 GiB is not used: the kernel identity-maps only the first 4 GiB.
+- **Memory quota** (MC-3.13; `common/abi.rs` SPAWN, `kernel/src/scheduler.rs` `charge`/`uncharge`): bits 48–63 of SPAWN's `msg[3]` give the child's quota in MiB (0: `HEAP_MAX_BYTES` = 16 MiB, `SPAWN_MEMORY_ALL`: the spawner's), at most the spawner's. Private memory (heap blocks, memory objects, freed blocks others still hold) is charged to the task and to every payer above it, and an allocation fails if any of them would go over its quota, so a subtree never holds more than its root's quota. When a task ends, its payer pays for its children. `init` holds the whole pool, `loader` all of init's (`SPAWN_MEMORY_ALL`), and an application what its request note asks for: `mind::request!(flags, memory: MiB)` (bytes 12–15 of the note, up to 1024 MiB) or 16 MiB. `mind::process::Quota` has `memory_mib`.
+- **Changed from the plan:** quotas are limits, not reservations (siblings share their payer's quota first come, first served), so the default 16 MiB of every service does not have to fit in the pool at once. Images, stacks and screens are not charged; the task quotas bound them.
+- **Limits:** `HEAP_MAX_BLOCKS` 64 (blocks and mappings), `SHARED_MAX_BYTES` 256 MiB, `DETACHED_MAX_BYTES` 256 MiB (objects nobody pays for any more are bounded by it); the heap window is 928 MiB and a task may have up to 640 page tables (a list that grows and shrinks with them).
+- **Statistics:** `StatMemory` gains `frames` and `frames_free`, `StatTask` `memory_quota` and `memory_used`; the shell's `free` shows `FRAMES=… FRAMES_FREE=…`.
+- **Test program `memtest`:** `alloc <MiB>` (write and check, one 160 MiB block more is refused, free), `hold <MiB>`, `share <MiB>` (a sealed object mapped by itself and by a second memtest started through loader, which reports back).
+- **Tests:** `memory` suite: 128 MiB allocated and freed within the requested quota; a 64 MiB sealed object mapped read-only by two tasks with the same contents; the frames come back. Out-of-memory rollback of a spawn now runs with memtest holding all but 40 MiB of the pool, and checks the pool as well as the arena. `heap` suite: the ALLOC failure case likewise. `heap`, `isolation` and the host tests (`tests/runtime.rs`, with a stub pool) pass.

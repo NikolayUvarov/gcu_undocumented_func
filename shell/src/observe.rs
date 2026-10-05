@@ -13,6 +13,7 @@ pub fn free(out: &mut impl Write) {
     let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
     let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
     let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
+    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
 }
 
 pub fn cpus(out: &mut impl Write) {

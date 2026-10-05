@@ -73,15 +73,16 @@ pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own:
 /// Same, but the capability is moved into the child (the caller's handle becomes invalid once the child exists).
 pub const fn grant_moved(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, flags: GRANT_MOVE } }
 
-/// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints.
+/// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints, and private
+/// memory in MiB (0: the default HEAP_MAX_BYTES, SPAWN_MEMORY_ALL: the spawner's whole quota; issue 150).
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Quota { pub tasks: u16, pub endpoints: u16 }
+pub struct Quota { pub tasks: u16, pub endpoints: u16, pub memory_mib: u16 }
 
 /// Starts a task with exactly the granted capabilities and quotas; `flags` are SPAWN_SERVICE / SPAWN_SCREEN.
 /// `name` may be `name\0arguments`.
 pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota) -> Result<u64> {
     let (source, len) = match image { Image::Memory { cap, len } => (cap, len), Image::Boot(index) => (SPAWN_BOOT | index, 0) };
-    let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32;
+    let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32 | (quota.memory_mib as usize) << 48;
     check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed]).result).map(|pid| pid as u64)
 }
 
@@ -104,9 +105,9 @@ pub const REQUEST_WINDOW_MANAGER: u32 = 512; // the broker's manager client in S
 pub const REQUEST_MAGIC: &[u8; 8] = b"MINDREQ1";
 
 /// Contents of the `.mind_request` section: magic, flags, reserved.
-pub const fn request_note(flags: u32) -> [u8; 16] {
-    let f = flags.to_le_bytes();
-    [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', f[0], f[1], f[2], f[3], 0, 0, 0, 0]
+pub const fn request_note(flags: u32, memory_mib: u32) -> [u8; 16] {
+    let (f, m) = (flags.to_le_bytes(), memory_mib.to_le_bytes());
+    [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', f[0], f[1], f[2], f[3], m[0], m[1], m[2], m[3]]
 }
 
 /// Contents of the `.mind_about` section (`about!`): the text, UTF-8.
@@ -155,13 +156,15 @@ pub fn section(read: &mut dyn FnMut(usize, &mut [u8]) -> usize, name: &str) -> O
     })
 }
 
-/// Declares what the program asks its launcher for, e.g. `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO);`. The
+/// Declares what the program asks its launcher for, e.g. `mind::request!(REQUEST_CONSOLE | REQUEST_SYSINFO);`, and
+/// optionally a memory quota beyond the default 16 MiB: `mind::request!(REQUEST_CONSOLE, memory: 160);` (MiB). The
 /// program's linker script keeps the `.mind_request` section (`KEEP`).
 #[macro_export]
 macro_rules! request {
-    ($flags:expr) => {
+    ($flags:expr) => { $crate::request!($flags, memory: 0); };
+    ($flags:expr, memory: $mib:expr) => {
         #[used]
         #[link_section = ".mind_request"]
-        static MIND_REQUEST: [u8; 16] = { use $crate::process::*; $crate::process::request_note($flags) };
+        static MIND_REQUEST: [u8; 16] = { use $crate::process::*; $crate::process::request_note($flags, $mib) };
     };
 }

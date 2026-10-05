@@ -8,6 +8,7 @@ use core::ptr::NonNull;
 pub struct Region {
     ptr: NonNull<u8>,
     layout: Layout,
+    frames: bool, // from the frame pool (task memory), else the kernel arena
 }
 
 impl Region {
@@ -15,7 +16,15 @@ impl Region {
         let layout = Layout::from_size_align(size.max(1), alignment)
             .map_err(|_| "INVALID ALLOCATION SIZE")?;
         let ptr = NonNull::new(unsafe { alloc_zeroed(layout) }).ok_or("OUT OF MEMORY")?;
-        Ok(Self { ptr, layout })
+        Ok(Self { ptr, layout, frames: false })
+    }
+
+    // Task memory: from the frame pool once it exists (issue 150), else from the arena.
+    pub fn task(size: usize, alignment: usize) -> Result<Self, &'static str> {
+        if !crate::frames::ready() { return Self::new(size, alignment); }
+        let layout = Layout::from_size_align(size.max(1), alignment).map_err(|_| "INVALID ALLOCATION SIZE")?;
+        let ptr = crate::frames::allocate(layout).ok_or("OUT OF MEMORY")?;
+        Ok(Self { ptr, layout, frames: true })
     }
 
     pub fn ptr(&self) -> *mut u8 {
@@ -32,7 +41,7 @@ impl Region {
 impl Drop for Region {
     fn drop(&mut self) {
         unsafe {
-            dealloc(self.ptr(), self.layout);
+            if self.frames { crate::frames::free(self.ptr, self.layout) } else { dealloc(self.ptr(), self.layout) }
         }
     }
 }

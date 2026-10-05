@@ -119,7 +119,7 @@ pub const EXIT_NORMAL: usize = 0;
 pub const EXIT_KILLED: usize = 1;
 pub const EXIT_FAULT: usize = 2; // | vector << 8
 pub const EXIT_NOTICES_MAX: usize = 16; // undelivered exit notices kept by the kernel; further ones are counted as lost
-pub const DETACHED_MAX_BYTES: usize = 16 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
+pub const DETACHED_MAX_BYTES: usize = 256 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 
 // CAP_INFO reply: result=capability kind, arg2=port base or memory rights, msg[2]=size/port count/endpoint rights.
 // Memory rights: CAP_READ maps, CAP_WRITE maps writable, CAP_GRANT (MEM_SHARE gives all three). For memory msg[3] = 1
@@ -241,9 +241,10 @@ pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;
 pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH)
 
-pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 32; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
-// Separate quota for mapped foreign memory (frame, IPC buffers).
-pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
+// HEAP_MAX_BYTES is the default memory quota of a task (SPAWN); blocks are heap blocks and mappings together.
+pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
+// Separate limit for mapped foreign memory (frame, IPC buffers, shared read-only objects).
+pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 
 // RTC protocol: idl/rtc.wit (MIND IDL, bindings in mind::idl::rtc).
 // VFS protocol: idl/vfs.wit (bindings in mind::idl::vfs).
@@ -252,11 +253,15 @@ pub const SHARED_MAX_BYTES: usize = 48 * 1024 * 1024;
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
 // index (boot images need the platform privilege), msg[1] = ELF length, msg[2] = address of a Grant array,
-// msg[3] = grant count | SPAWN_* flags << 8 | child task quota << 16 | child endpoint quota << 32. The quotas are taken
+// msg[3] = grant count | SPAWN_* flags << 8 | child task quota << 16 | child endpoint quota << 32 | child memory quota in
+// MiB << 48 (0: HEAP_MAX_BYTES, SPAWN_MEMORY_ALL: the spawner's). The quotas are taken
 // from the spawner's (MC-3.13): a spawner's live children each reserve 1 + their task quota of its task quota, and their
 // endpoint quotas plus the endpoints it created count against its endpoint quota. Each grant copies the spawner's capability into a child slot;
 // endpoint rights are narrowed by the mask, reply capabilities are not transferable.
 pub const SPAWN_BOOT: usize = 1 << 63;
+// Memory quota (issue 150): private memory (heap blocks, memory objects) of a task and its live descendants is charged
+// to it and to every spawner above; a child's quota is at most its spawner's. init's quota is the frame pool.
+pub const SPAWN_MEMORY_ALL: usize = 0xFFFF;
 pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
 pub const SPAWN_GRANTS_MAX: usize = 24;
@@ -379,14 +384,16 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
     pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables
+    pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64 }
-// Kernel arena (bytes) by category, and the global limits. `largest_free` is searched for (trial allocations) only when
+// Task memory (bytes) by category, the kernel arena, the frame pool and the global limits. `largest_free` is searched for (trial allocations) only when
 // msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatMemory {
     pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64,
     pub heaps: u64, pub objects: u64, pub dma: u64, pub dma_limit: u64, pub objects_limit: u64, pub tasks: u64, pub endpoints: u64,
     pub largest_free: u64, pub page_tables: u64, pub shared: u64, pub tasks_limit: u32, pub endpoints_limit: u32,
+    pub frames: u64, pub frames_free: u64, // the frame pool for task memory (issue 150): images, stacks, screens, heaps, objects
 }
 // Physical layout: firmware memory map entries (kind = UEFI memory type) and the platform layout (kind >= PHYS_PLATFORM).
 pub const PHYS_PLATFORM: u32 = 0x100; pub const PHYS_ARENA: u32 = 0x100; pub const PHYS_FRAMEBUFFER: u32 = 0x101;

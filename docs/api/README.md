@@ -44,7 +44,7 @@ Required authority is in brackets; "none" means every task may call it.
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block, 0 on failure (quota `HEAP_MAX_BYTES`, `HEAP_MAX_BLOCKS`) |
+| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`) |
 | 9 | `FREE` | `arg1` = block address; memory still referenced elsewhere is kept until released and stays charged to the owner |
 | 15 | `MEM_SHARE` | `arg1` = address of an own heap block → handle of a memory capability (read, write, grant) |
 | 16 | `MEM_MAP` | `arg1` = memory, DMA or MMIO handle → mapped address; `arg2` = size. Read-only without `CAP_WRITE`; MMIO uncached |

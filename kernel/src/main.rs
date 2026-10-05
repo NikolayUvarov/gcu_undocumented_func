@@ -33,6 +33,7 @@ mod clock;
 mod context;
 mod cpu;
 mod elf;
+mod frames;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
 mod input;
@@ -121,6 +122,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
         init_serial();
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
+        frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         paging::init().expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
