@@ -122,6 +122,19 @@ class VM:
             time.sleep(.25)
         return output
 
+    def program_logs(self, pid, until, tries=80):
+        """What program `pid` logged, until `until` is in it. `logs` drains the log, and a line printed in pieces may
+        be drained half at a time ("[MEMTEST] HELD " in one, "144 MiB INTACT=true" in the next), so bodies are joined."""
+        text = ""
+        for _ in range(tries):
+            output = self.command(f"logs {pid}").replace("\r", "")
+            body = re.search(r"LOGS PID=\d+ \([^)]*\):\n(.*)\nEND LOGS", output, re.S)
+            text += body[1] if body else output
+            if until in text:
+                break
+            time.sleep(.25)
+        return text
+
     def _read(self):
         # The UART carries UTF-8 (Cyrillic in program output).
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -297,11 +310,7 @@ def hold_frames(vm, frames, leave_mib):
     while (mib := min(144, left // (1024 * 1024)) // 16 * 16) > 0:
         output = vm.command(f"run memtest hold {mib} &")
         holders.append(int(re.search(r"STARTED PID=(\d+)", output)[1]))
-        for _ in range(80):
-            if f"HELD {mib} MiB" in vm.command(f"logs {holders[-1]}"):
-                break
-            time.sleep(.25)
-        else:
+        if f"HELD {mib} MiB" not in vm.program_logs(holders[-1], f"HELD {mib} MiB"):
             raise AssertionError(f"memtest did not hold {mib} MiB")
         left -= mib * 1024 * 1024
     return holders
@@ -2930,10 +2939,7 @@ def net_suite(args, disk):
         require(vm.command("dmesg -s netstack"), "[NETSTACK] DENIED FOR GRANT 1")
         # Revoking a grant removes the program's capability and closes its connection.
         holder = int(re.search(r"PID=(\d+) NAME=netcheck", vm.command(f"run netcheck hold:10.0.2.2:{web_port}:30 &"))[1])
-        for _ in range(20):
-            if "NETCHECK HOLDING" in vm.command(f"logs {holder}"):
-                break
-            time.sleep(.25)
+        vm.program_logs(holder, "NETCHECK HOLDING", 20)
         require(vm.command("netgrants"), "netcheck RULES=2")
         require(vm.command("netrevoke netcheck"), "REVOKED 1 GRANTS OF netcheck")
         for _ in range(20):
@@ -3588,10 +3594,7 @@ def windows_suite(vm):
     require(intruder, "INTRUDER ATTACH: Ok(Err(Denied))")
     require(intruder, "INTRUDER LIST: Ok(Err(Denied))")
     assert "Ok(Ok(" not in intruder.split("INTRUDER SURFACE")[1], intruder
-    for _ in range(40):
-        if "MANAGER LEAVES" in vm.command(f"logs {holder}"):
-            break
-        time.sleep(.25)
+    vm.program_logs(holder, "MANAGER LEAVES", 40)
     time.sleep(1.2)
     # Close all: every program is asked to end and its window goes.
     require(vm.command("winmgr closeall"), "CLOSE ALL: Ok(Ok(2))")
