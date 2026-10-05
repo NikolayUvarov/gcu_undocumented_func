@@ -5,7 +5,7 @@ use crate::mmu;
 pub use crate::mmu::{activate, init, kernel_root, uncached};
 
 pub const PAGE: usize = 4096;
-pub const USER_IMAGE: usize = 0x80_0000_0000;
+pub const USER_IMAGE: usize = mmu::USER_IMAGE; // the start of a task's window: the architecture's
 pub const USER_STACK: usize = USER_IMAGE + 0x0100_1000;
 pub const USER_SCREEN: usize = USER_IMAGE + 0x0200_0000;
 pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
@@ -101,7 +101,7 @@ impl Space {
         };
         let root = space.table()?;
         unsafe {
-            (root as *mut u64).write(mmu::kernel_entry());
+            for index in 0..mmu::KERNEL_ENTRIES { (root as *mut u64).add(index).write(mmu::kernel_entry(index)); }
         }
         Ok(space)
     }

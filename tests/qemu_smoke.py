@@ -71,14 +71,14 @@ class VM:
             # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
             variables = Path(tempfile.mkdtemp()) / "vars.fd"
             shutil.copyfile(args.aavmf_vars, variables)
-            machine = ["-machine", "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
+            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
                        "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
                        "-device", "ramfb", "-device", "virtio-keyboard-pci", *([] if "virtio-tablet-pci" in extra else ["-device", "virtio-tablet-pci"])]
         else:
             machine = ["-bios", args.firmware]
         self.process = subprocess.Popen(
             [args.qemu, *machine, *storage,
-             *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
+             *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
@@ -3757,6 +3757,8 @@ def main():
     parser.add_argument("--arch", choices=("x86_64", "aarch64"), default="x86_64", help="aarch64: QEMU virt with the aarch64_root build (scripts/build_aarch64.sh)")
     parser.add_argument("--qemu", default=os.environ.get("QEMU"))
     parser.add_argument("--cpus", type=int)
+    parser.add_argument("--machine", help="aarch64: QEMU -machine (default virt,gic-version=3,highmem=off; issue 205: highmem=on, gic-version=2)")
+    parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")

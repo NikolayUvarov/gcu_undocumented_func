@@ -103,7 +103,7 @@ pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
     let table = config(device, cap + 4);
     let bar = *device.bars.get((table & 7) as usize)?;
     let at = bar.base.checked_add((table & !7) as u64 + 16 * entry as u64)?;
-    (!bar.io && bar.size != 0 && at + 16 <= 0x1_0000_0000 && at + 16 <= bar.base + bar.size).then_some(at)
+    (!bar.io && bar.size != 0 && at + 16 <= crate::mmu::IDENTITY_END && at + 16 <= bar.base + bar.size).then_some(at)
 }
 
 /// Points MSI-X table entry `entry` (mapped uncached by the caller) at MSI line `index` (the arch's message), unmasks

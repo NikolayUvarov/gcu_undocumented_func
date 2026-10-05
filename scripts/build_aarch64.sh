@@ -17,6 +17,8 @@ cp "$ROOT/bootloader/target/aarch64-unknown-uefi/release/bootloader.efi" "$OUT/E
 for entry in "${CRATES[@]}"; do
     crate=${entry%%:*}; rest=${entry#*:}; bin=${rest%%:*}; out=${rest#*:}
     [[ "$X86_ONLY" == *" $crate "* ]] && continue
+    # Without its aarch64 section a program links as a fixed-address executable the loaders refuse.
+    grep -q "aarch64-unknown-none-softfloat" "$ROOT/$crate/.cargo/config.toml" || { echo "$crate/.cargo/config.toml has no [target.aarch64-unknown-none-softfloat] section" >&2; exit 1; }
     features=(); [[ "$crate" == virtio_net ]] && features=(--no-default-features)
     (cd "$ROOT/$crate" && cargo build --release --target "$TARGET" "${features[@]}")
     cp "$ROOT/$crate/target/$TARGET/release/$bin" "$OUT/$out"

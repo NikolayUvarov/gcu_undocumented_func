@@ -1,15 +1,15 @@
-// PCI configuration through ECAM (issue 202), at the base the ACPI MCFG gives. Only an ECAM in the identity-mapped
-// 4 GiB is used: `virt` puts it at 0x3F00_0000 with `highmem=off`, otherwise above it and PCI stays off. Legacy
+// PCI configuration through ECAM (issue 202), at the base the ACPI MCFG gives, within the kernel's identity map (1 TiB,
+// issue 205): `virt` puts it at 0x3F00_0000 with `highmem=off`, at 0x40_1000_0000 otherwise. Legacy
 // interrupts INTA-D of slot s, pin p are SPIs 3 + (s + p - 1) % 4: device lines 3-6. MSI goes through the GICv3 ITS.
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 static ECAM: AtomicUsize = AtomicUsize::new(0); // base | last bus (bits 0-7); 0: none
-const WINDOW: u64 = 0x1_0000_0000;
+const WINDOW: u64 = crate::mmu::IDENTITY_END;
 
-/// Takes segment 0 of the MCFG, starting at bus 0, if its whole range lies below 4 GiB.
+/// Takes segment 0 of the MCFG, starting at bus 0, if its whole range is in the identity map.
 pub fn configure(base: u64, first_bus: u8, last_bus: u8) {
     let end = base + (last_bus as u64 + 1) * (1 << 20);
-    if first_bus != 0 || base & 0xFF_FFFF != 0 || end > WINDOW { crate::serial_print("MIND CORE KERNEL: PCI: ECAM ABOVE 4 GIB, NOT USED\n"); return; }
+    if first_bus != 0 || base & 0xFF_FFFF != 0 || end > WINDOW { crate::serial_print("MIND CORE KERNEL: PCI: ECAM OUTSIDE THE IDENTITY MAP, NOT USED\n"); return; }
     ECAM.store(base as usize | last_bus as usize, Ordering::Release);
 }
 pub fn last_bus() -> Option<u8> { let ecam = ECAM.load(Ordering::Acquire); (ecam != 0).then_some(ecam as u8) }

@@ -1,6 +1,6 @@
-// ACPI on `virt`: the MCFG for the PCI ECAM, the MADT for the CPUs (their MPIDRs, issue 203) and the FADT for PSCI's
-// conduit (HVC or SMC); reset and power off go through PSCI. The tables are untrusted input: every length is checked
-// against the identity-mapped 4 GiB.
+// ACPI: the MCFG for the PCI ECAM, the MADT for the CPUs (their MPIDRs, issue 203) and the GIC, the FADT for PSCI's
+// conduit (HVC or SMC), the SPCR for the console and the GTDT for the timer (issue 205); reset and power off go through
+// PSCI. The tables are untrusted input: every length is checked against the identity map.
 use super::board;
 use crate::serial_print;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -10,7 +10,7 @@ static SMC: AtomicBool = AtomicBool::new(false); // PSCI through SMC instead of 
 pub static CPUS: [AtomicU64; crate::cpu::MAX] = [const { AtomicU64::new(0) }; crate::cpu::MAX];
 pub static CPU_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-const WINDOW: u64 = 0x1_0000_0000;
+const WINDOW: u64 = crate::mmu::IDENTITY_END;
 
 unsafe fn bytes(address: u64, len: u64) -> Option<&'static [u8]> {
     (address != 0 && address.checked_add(len)? <= WINDOW).then(|| core::slice::from_raw_parts(address as *const u8, len as usize))

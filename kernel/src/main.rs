@@ -86,7 +86,7 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
-        paging::init().expect("Kernel page tables");
+        paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
         scheduler::spawn_init().expect("init spawn");

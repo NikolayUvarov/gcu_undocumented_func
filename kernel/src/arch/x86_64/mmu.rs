@@ -25,7 +25,13 @@ pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VAL
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED != 0) }
 /// Root entry 0 of every space: the kernel's identity map.
-pub fn kernel_entry() -> u64 { KERNEL_PDPT.load(Ordering::Acquire) as u64 | 3 }
+/// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB.
+pub const KERNEL_ENTRIES: usize = 1;
+pub fn kernel_entry(_index: usize) -> u64 { KERNEL_PDPT.load(Ordering::Acquire) as u64 | 3 }
+/// The end of the kernel's identity map; RAM and devices above it are not used.
+pub const IDENTITY_END: u64 = 1 << 32;
+/// Where a task's window starts (root entry 1).
+pub const USER_IMAGE: usize = 0x80_0000_0000;
 /// The space's translations changed: reload them if it is the active one.
 pub fn flush(root: usize) {
     #[cfg(not(test))]
@@ -42,7 +48,7 @@ pub fn kernel_root() -> usize {
     KERNEL_ROOT.load(Ordering::Acquire)
 }
 
-pub unsafe fn init() -> Result<(), &'static str> {
+pub unsafe fn init(_map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     // The bootloader reserves all runtime RAM below 4 GiB. Retain supervisor
     // identity mappings for the kernel, boot stack and MMIO on every CR3.
     let root = Region::new(PAGE, PAGE)?;
