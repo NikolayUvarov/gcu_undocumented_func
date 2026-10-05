@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use fm::fm::{Disk, Failure, Fm, Outcome, Sink, VolumeInfo};
+use fm::fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo};
 use fm::panel::{self, Entry};
 use mind::abi::*;
 use mind::fs::{self, Error, File};
@@ -17,7 +17,8 @@ use mind::ipc::Endpoint;
 use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
 
-mind::request!(REQUEST_FILES);
+// The user's files to work on; system information only to lend to the monitors it starts.
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO);
 
 struct DiskFile(File);
 impl Source for DiskFile {
@@ -47,10 +48,21 @@ impl Disk for Vfs {
         Ok(entries)
     }
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> { File::open(path).ok().map(|file| Box::new(DiskFile(file)) as Box<dyn Source>) }
-    fn run(&mut self, path: &str, args: &str) -> Result<u64, String> {
+    // As the shell and wm do: of what the program asks for, what fm holds. In a window of wm fm lends its broker client,
+    // so the program opens a window of its own next to fm's instead of a screen in the background (issue 099).
+    fn run(&mut self, path: &str, args: &str) -> Result<Started, String> {
         let failed = |e: loader::Error| alloc::format!("{:?}", e);
-        let session = loader::begin(Endpoint::LOADER, path, args).map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)?;
-        loader::commit(Endpoint::LOADER, session).map_err(|e| alloc::format!("{:?}", e))?.map_err(failed)
+        let lost = |e: mind::Error| alloc::format!("{:?}", e);
+        let needs = loader::inspect(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
+        let requests = loader::inspect_requests(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
+        let session = loader::begin(Endpoint::LOADER, path, args).map_err(lost)?.map_err(failed)?;
+        let holds = |slot: usize| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT;
+        let lend = |slot: usize| matches!(loader::grant(Endpoint::LOADER, session, slot as u8, slot), Ok(Ok(())));
+        let window = !needs.console && mind::windowed::active() && requests & mind::process::REQUEST_WINDOW_MANAGER == 0 && lend(SLOT_WINDOW);
+        if needs.files && holds(SLOT_FILE) { lend(SLOT_FILE); }
+        if needs.sysinfo && requests & mind::process::REQUEST_AUTHORITY == 0 && holds(SLOT_SYSINFO) { lend(SLOT_SYSINFO); }
+        let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
+        Ok(Started { pid, place: if needs.console { Place::Console } else if window { Place::Window } else { Place::Screen } })
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         let mode = fs::MODE_WRITE | fs::MODE_CREATE | if replace { fs::MODE_TRUNCATE } else { fs::MODE_NEW };

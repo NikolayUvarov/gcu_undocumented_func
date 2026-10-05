@@ -1,0 +1,26 @@
+# 099 — fm in a window starts programs in windows of their own — done
+
+**Type:** fix · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user with a screenshot of `fm` in a window of `wm`: `top` typed on fm's command line "does not work and goes to the background" (`Started top as PID 27 in the background; FG 27 in the shell shows it`). fm started programs through the loader with nothing but its arguments: the program got a screen of its own behind `wm`, which only the shell can bring to the front, and no system information either (fm did not hold it), so `top` would have shown "No access to sysmon" anyway.
+
+## Plan
+
+- When fm runs in a window (`mind::windowed::active`), lend its broker client to the program it starts: the program opens a window of its own, in front, next to fm's.
+- Lend, of what the program asks for, what fm holds, as the shell and `wm` do: the user's files, and system information — fm asks for it now only to pass it on to the monitors.
+- Say where the program went: a window, a screen in the background (fm cannot bring it forward: Ctrl+Z, then `FG`), or the log of a console program.
+- The full-screen case needs the kernel: [160](../issues/160-focus-for-a-started-program.md).
+
+## Acceptance criteria
+
+- QEMU (`wm` suite): `clock` typed on the command line of fm in a window opens a pixel window of its own in front; Alt+W closes it and fm is in front again.
+- Host: the three messages.
+
+## Resolution
+
+- `fm/src/fm.rs`: `Disk::run` returns `Started { pid, place }` with `Place::{Window, Screen, Console}`; `Started::text` says `Started top (PID n) in a window of its own`, `… in the background: Ctrl+Z, then FG n in the shell shows it` or `…: a console program, LOGS n in the shell shows what it printed`. F1 says programs open in windows under `wm`.
+- `fm/src/main.rs`: `run` inspects the program; lends `SLOT_WINDOW` when fm is in a window (not to a console program or a window manager), `SLOT_FILE` for `REQUEST_FILES`, `SLOT_SYSINFO` for `REQUEST_SYSINFO` (not for `REQUEST_AUTHORITY`). fm asks for `REQUEST_FILES | REQUEST_SYSINFO`.
+- Tests: `tests/fm_host.rs` (the messages for a window, a screen and a console program); QEMU `wm` suite (above).
+- Docs: README (`fm`), docs/tools §4.1.

@@ -1520,9 +1520,54 @@ def dzen_suite(vm):
     vm.expect("PID=1 EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("kill 2"), "KILLED PID=2")
+    # The text faces (issue 089): the indicators as colored cells with the same keys, the clock in large digits.
+    vm.send("dzen-clock --text\n")
+    require(vm.expect("[DZEN-CLOCK] 19:3"), "[DZEN-CLOCK] STARTED (TEXT)")
+    time.sleep(.5)
+
+    def look():
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial()  # the Enter of leaving the monitor: neither face uses it
+        width, height = map(int, size.split())
+        def count(color, x0, x1, y0, y1):
+            return sum(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3] == color for y in range(y0, y1, 2) for x in range(x0, x1, 2))
+        return screen, width, height, count
+
+    screen, width, height, count = look()
+    assert canon("DZEN CLOCK") in screen[0] and canon("D: DIGITS") in screen[-1] and canon("19:3") in screen[-2], (screen[0], screen[-2:])
+    assert count(b"\xff\xff\x00", width // 2, width, 0, height // 2) > 300, "the hour's yellow disc at the top right"
+    assert count(b"\x00\xff\xff", width // 4, 3 * width // 4, height // 4, 3 * height // 4) > 300, "the cyan center"
+    assert count(b"\x60\x60\x60", 0, width, 0, height) > 300, "white corners"
+    vm.send("c\n")
+    vm.expect("ORBIT SIMPLE")
+    time.sleep(.3)
+    screen = look()[0]
+    assert sum(row.count(canon("●")) for row in screen) == 1 and sum(row.count(canon("·")) for row in screen) > 10, screen
+    vm.send("d\n")
+    vm.expect("DIGITS OFF")
+    vm.send("h\n")
+    vm.expect("TEXT OFF")
+    time.sleep(.3)
+    screen = look()[0]
+    assert not screen[0].strip() and not screen[-1].strip() and not screen[-2].strip(), (screen[0], screen[-2:])
+    vm.send("\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    vm.send("clock --text\n")
+    vm.expect("[CLOCK] 19:3")
+    time.sleep(.3)
+    first = look()[0]
+    assert any(canon("▀") in row or canon("▄") in row for row in first), first
+    assert any(canon("Saturday 2026-09-19") in row for row in first) and canon("CLOCK (IPC RTC)") in first[0], first
+    time.sleep(1.2)
+    assert look()[0] != first, "the digits change every second"
+    vm.send("\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -3149,6 +3194,20 @@ def wm_suite(vm):
     assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
+    # A program fm starts opens a window of its own next to fm's (issue 099), in front; Alt+W closes it.
+    read[0] = len(vm.log)
+    vm.send_bytes(b"clock\r")
+    wait(lines=6)
+    while not any(m[1] not in started.values() and m[2] == "PIXELS" for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    second_clock = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] not in started.values() and m[2] == "PIXELS")
+    while state()[1] != second_clock:
+        wait()
+    keys("alt-w", text=f"CLOSE {second_clock}")
+    until(f"GONE {second_clock}")
+    while second_clock in state()[2]:
+        wait()
+    assert state()[1] == fm, state()
     # Halves, quarters, maximize and back.
     assert keys("alt-right")[2][fm] == (80, 1, 80, 48)
     assert keys("alt-3")[2][fm] == (0, 25, 80, 24)

@@ -44,8 +44,8 @@ pub trait Disk {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
-    /// Starts a program (in the background) with arguments; returns its PID.
-    fn run(&mut self, path: &str, args: &str) -> Result<u64, String>;
+    /// Starts a program with arguments; says where it shows itself.
+    fn run(&mut self, path: &str, args: &str) -> Result<Started, String>;
     /// A file to write: an existing one is emptied if `replace`, else `Failure::Exists`.
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure>;
     /// Makes a directory and missing parents (an existing one is fine).
@@ -60,6 +60,32 @@ pub trait Disk {
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
     /// Writes what is cached for the volume of `path` to the disk.
     fn flush(&mut self, path: &str);
+}
+
+/// Where a program fm started shows itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// A window of its own next to fm's (fm runs in a window of `wm`, issue 099).
+    Window,
+    /// A screen of its own, in the background: fm cannot bring it to the front (Ctrl+Z, then FG in the shell).
+    Screen,
+    /// No screen: a console program, its output in its log.
+    Console,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Started { pub pid: u64, pub place: Place }
+
+impl Started {
+    /// What fm says after starting `name`.
+    pub fn text(&self, name: &str) -> String {
+        let pid = self.pid;
+        match self.place {
+            Place::Window => format!("Started {} (PID {}) in a window of its own", name, pid),
+            Place::Screen => format!("Started {} as PID {} in the background: Ctrl+Z, then FG {} in the shell shows it", name, pid, pid),
+            Place::Console => format!("Started {} as PID {}: a console program, LOGS {} in the shell shows what it printed", name, pid, pid),
+        }
+    }
 }
 
 /// A boxed source as a `Source`.
@@ -114,8 +140,8 @@ const HELP: [&str; 17] = [
     "Ctrl+H — hidden files; Ctrl+R — reread; Ctrl+U — swap panels",
     "Ctrl+L — information, Ctrl+Q — quick view in the other panel",
     "Alt+F1 / Alt+F2 — volume of the left / right panel; Alt+F7 — find",
-    "Programs started here run in the background: FG <pid> in the shell",
-    "shows them. Only ram: and data/ on the boot disk are writable.",
+    "Programs started here open a window of their own under wm; on a screen they run in the",
+    "background (FG <pid> in the shell). Only ram: and data/ on the boot disk are writable.",
     "",
 ];
 
@@ -443,7 +469,7 @@ impl<'b> Fm<'b> {
         else if entry.dir { self.load(self.active, &path, None, disk); }
         else if entry.is_program() {
             self.notice = Some(match disk.run(&path, "") {
-                Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", entry.name, pid, pid),
+                Ok(started) => started.text(&entry.name),
                 Err(error) => format!("Cannot start {}: {}", entry.name, error),
             });
         } else { self.view(&path, disk); }
@@ -675,7 +701,7 @@ impl<'b> Fm<'b> {
                 };
                 let args: Vec<String> = rest.split_whitespace().map(|arg| entry(arg).map_or_else(|| String::from(arg), |e| join(&here, &e.name))).collect();
                 let text = match disk.run(&program, &args.join(" ")) {
-                    Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", word, pid, pid),
+                    Ok(started) => started.text(word),
                     Err(error) => format!("Cannot start {}: {}", word, error),
                 };
                 self.notice = Some(text.clone());

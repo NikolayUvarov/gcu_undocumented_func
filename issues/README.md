@@ -19,11 +19,11 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [089](089-text-clock-faces.md) | Text faces for `clock` and `dzen-clock` (compatibility: text windows, consoles) | tools | P2 | — | track G |
 | [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
+| [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
 | [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | — (200 done) | track H |
 | [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
 | [203](203-aarch64-smp-and-power.md) | aarch64 SMP, reset and power off through PSCI | porting | P2 | 201 | track H |
@@ -121,6 +121,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [086](../issues-done/086-screenshot.done) | `screenshot`: the screen as a BMP (`display.wit` 1.0) | done (2026-10-04) |
 | [087](../issues-done/087-tts-idle-tone.done) | `tts`: a quiet tone stayed after every phrase (fixed-point limit cycle; filters cleared after 30 ms without excitation) | done (2026-10-04) |
 | [088](../issues-done/088-text-window-manager.done) | `wm`: window manager — text and pixel programs in windows (keys and mouse, snapping, detach keeps them running); programs open windows through `mind::windowed` | done (2026-10-05) |
+| [089](../issues-done/089-text-clock-faces.done) | Text faces for `clock` and `dzen-clock` (`--text`: large digits, colored cells; on a screen or in a `wm` text window) | done (2026-10-05) |
 | [090](../issues-done/090-read-only-status-and-modifier-key-bars.done) | Editor says READ-ONLY; key bars follow Shift, Ctrl and Alt | done (2026-10-04) |
 | [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
 | [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
@@ -128,6 +129,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [096](../issues-done/096-audio-without-interrupts.done) | `say` and `listen` hung when the sound card shared its interrupt line (`audio_gw` looks at its ring while a client waits) | done (2026-10-05) |
 | [097](../issues-done/097-fm-command-line-and-hidden-panels.done) | fm: the command line under the panels (`cd`, `edit`, `view`, programs with arguments) and hiding panels with Ctrl+O, Ctrl+F1/F2, Ctrl+P | done (2026-10-05) |
 | [098](../issues-done/098-pong-shows-the-exchange.done) | `pong` kept the string it read on screen for 10 ms only; it stays now, with the number of calls, and Esc works between calls | done (2026-10-05) |
+| [099](../issues-done/099-fm-starts-programs-in-windows.done) | fm in a window of `wm` starts programs in windows of their own (it lends its broker client, files and system information) | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

@@ -1,6 +1,7 @@
 //! Text UI: a grid of character cells drawn with the 8x16 font (MIND Mono 16), frames, bars, graphs and widgets
 //! (`widgets`). `Grid` is plain memory and builds on the host for tests; `Terminal` puts it on the program's screen
 //! and redraws only cells that changed.
+pub mod digits;
 pub mod viewer;
 pub mod widgets;
 #[cfg(target_os = "none")]

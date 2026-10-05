@@ -26,7 +26,7 @@ mod panel;
 mod fm;
 
 use abi::*;
-use fm::{Disk, Failure, Fm, Outcome, Sink, VolumeInfo};
+use fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo};
 use keys::{event, Key};
 use panel::{VFS_ENTRY_HIDDEN, VFS_ENTRY_SYSTEM, display, fat_time, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use std::cell::{Cell as Counter, RefCell};
@@ -100,9 +100,12 @@ impl Disk for Mem {
         let broken = self.broken.iter().any(|b| b.eq_ignore_ascii_case(path));
         self.file(path).map(|bytes| { let good = if broken { bytes.len() / 2 } else { bytes.len() }; Box::new(MemFile { data: bytes, good }) as Box<dyn Source> })
     }
-    fn run(&mut self, path: &str, args: &str) -> Result<u64, String> {
+    fn run(&mut self, path: &str, args: &str) -> Result<Started, String> {
         if path.eq_ignore_ascii_case("nothing") { return Err("NotFound".into()); }
-        self.runs.push(path.into()); self.args.push(args.into()); Ok(42)
+        self.runs.push(path.into()); self.args.push(args.into());
+        // As in the system: grep is a console program, clock opens a window (fm in wm), the others a screen.
+        let place = match path { "grep" => Place::Console, "clock" => Place::Window, _ => Place::Screen };
+        Ok(Started { pid: 42, place })
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         if !Self::allowed(path) { return Err(Failure::Denied); }
@@ -479,12 +482,17 @@ fn command_line_and_hidden_panels() {
     assert_eq!(fm.command.as_str(), "grep -i x notes.txt ");
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!((disk.runs.last().unwrap().as_str(), disk.args.last().unwrap().as_str()), ("grep", "-i x docs/notes.txt"));
-    assert!(fm.notice.as_deref().unwrap().contains("as PID 42"), "{:?}", fm.notice);
+    assert_eq!(fm.notice.as_deref(), Some("Started grep as PID 42: a console program, LOGS 42 in the shell shows what it printed"));
     typed(&mut fm, &mut disk, "cd /");
     fm.key(code(KEY_ENTER), &mut disk);
     typed(&mut fm, &mut disk, "top");
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(disk.runs.last().unwrap(), "top.elf", "a program of this directory runs from it");
+    assert!(fm.notice.as_deref().unwrap().ends_with("in the background: Ctrl+Z, then FG 42 in the shell shows it"), "{:?}", fm.notice);
+    // Where the program shows itself: a window of its own when fm is in one (wm), its log for a console program.
+    typed(&mut fm, &mut disk, "clock");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.notice.as_deref(), Some("Started clock (PID 42) in a window of its own"));
     typed(&mut fm, &mut disk, "nothing");
     fm.key(code(KEY_ENTER), &mut disk);
     assert!(fm.notice.as_deref().unwrap().starts_with("Cannot start nothing: NotFound"), "{:?}", fm.notice);
