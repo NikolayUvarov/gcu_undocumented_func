@@ -20,7 +20,7 @@ const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
 const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
-    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
+    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BAR and MSI-X vector (or IRQ); 12 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; COM1"];
@@ -31,6 +31,7 @@ const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buf
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
+const INPUT_DMA_BYTES: usize = 12 * 1024; // the event queue (two pages), then up to 64 events of 8 bytes
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -146,6 +147,18 @@ impl Init {
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
                 grants.add(SLOT_IRQ, minted.mint(PLATFORM_IRQ, 1, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_MEM, minted.mint(PLATFORM_IRQ, 12, 0)?, 0); // the mouse on the auxiliary port (issue 156)
+            }
+            "virtio_input" => {
+                // The first VirtIO input device (vendor 1AF4, modern-only 1052): QEMU's tablet gives the host's pointer
+                // as a position (issue 161). Its memory BAR, an MSI-X vector (else the legacy line), a small DMA region
+                // for the event queue, and the input privilege, as the PS/2 driver has.
+                let device = platform::find_device_id(0, 0, 0x1052_1AF4, 0)?; self.devices[index] = Some(device);
+                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
+                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, INPUT_DMA_BYTES)?, 0);
+                grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
             }
             "compositor" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "compositor")?, ALL); // requests from the shell's display client (151)

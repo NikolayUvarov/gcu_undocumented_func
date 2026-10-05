@@ -286,6 +286,7 @@ fn main(info: &'static BootInfo) {
         manager.wm.notice = Some(result.unwrap_or_else(|e| e));
     }
     mind::input::pointer(true);
+    // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
     let mut shown_pointer: Option<(usize, usize)> = None;
     let mut buttons = 0u8;
@@ -307,9 +308,8 @@ fn main(info: &'static BootInfo) {
                     }
                 }
                 Input::Pointer(p) => {
-                    px = (px as i64 + p.dx as i64).clamp(0, screen.width as i64 - 1) as usize;
-                    py = (py as i64 + p.dy as i64).clamp(0, screen.height as i64 - 1) as usize;
-                    manager.wm.pointer(px.saturating_sub(x0) / 8, py.saturating_sub(y0) / 16, p.buttons, p.wheel)
+                    if let Some((gx, gy)) = mind::input::pointer_pixel() { (px, py) = (x0 + gx, y0 + gy); }
+                    manager.wm.pointer(p.x, p.y, p.buttons, p.wheel)
                 }
             };
             // Keys, clicks and the wheel are logged; moves of the mouse are not (a drag is logged when it ends).

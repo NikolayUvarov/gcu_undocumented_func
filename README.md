@@ -42,6 +42,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `logd` | service endpoint, observe privilege | the system log (`idl/log.wit`): 256 records of up to 200 bytes in a 64 KiB ring, each stamped with the time it arrived and the sender's PID and task name (from IPC and the kernel's task records, never from the text); at most 64 records a second per sender, the rest refused and counted; reading needs the shell's read badge |
 | `rtc` | service endpoint, ports 0x70–0x71 | CMOS clock; serves `idl/rtc.wit` (seconds since midnight, days since 2000-01-01) |
 | `ps2_kbd` | ports 0x60, 0x64, IRQ 1 and 12, input | PS/2 keyboard → key events, and the PS/2 mouse → pointer events (buttons, movement, wheel) for the focused task if it asked for them (`mind::input::pointer`, issue 156); (modifiers, F-keys, navigation keys, US/Russian layout) for the focused task; serves `idl/keyboard.wit` (layout and switch key) to the shell's `keymap` |
+| `virtio_input` | the first VirtIO input device: BAR, MSI-X vector (or IRQ), 12 KiB DMA, input | QEMU's tablet (`-device virtio-tablet-pci`) → absolute pointer events: where the host's pointer is, as a share of the screen (issue 161), so the system's pointer follows it; a VirtIO mouse → movement. Exits when there is no such device |
 | `compositor` | GOP framebuffer, display | copies changed pixels of the focused screen to the framebuffer; serves `idl/display.wit` (the mode, a sealed read-only copy of the screen) to the shell's `screenshot` |
 | `ata` | service endpoint, ports 0x1F0–0x1F7, 0x3F6 | primary IDE channel, PIO LBA28 |
 | `ahci` | service endpoint, ABAR (MMIO), 128 KiB DMA | first SATA disk on an AHCI controller (class 01:06:01) |
@@ -202,7 +203,8 @@ qemu-system-x86_64 \
   -serial stdio -rtc base=localtime \
   -cpu qemu64,+rdrand \
   -audiodev pa,id=snd0 -device AC97,audiodev=snd0 \
-  -nic user,model=virtio-net-pci
+  -nic user,model=virtio-net-pci \
+  -device virtio-tablet-pci
 
 ```
 
@@ -210,17 +212,19 @@ qemu-system-x86_64 \
 
 *(Adjust the path to `OVMF.fd` depending on your OS and package manager).*
 
-What the last three lines add:
+What the last four lines add:
 - **`-audiodev … -device AC97`:** the sound card. `audio_gw` drives an AC97 controller; without one, `beep`, `say` and `listen` find no device and stay silent. The `-audiodev` driver is the host's sound system: `pa` (PulseAudio, also PipeWire's), `pipewire`, `alsa`, `sdl`, `dsound` on Windows, `coreaudio` on macOS. `wav,path=out.wav` writes the sound to a file instead of playing it.
 - **`-cpu qemu64,+rdrand`:** a processor with RDRAND. The TLS and key services refuse to work without it.
 - **`-nic user,model=virtio-net-pci`:** a VirtIO network card on QEMU's user networking.
+- **`-device virtio-tablet-pci`:** a VirtIO tablet. It tells the system where the host's pointer is (`virtio_input`, issue 161), so the system's pointer follows it exactly and reaches every edge of the screen; QEMU does not have to capture the pointer. Without it the PS/2 mouse reports only movement: the two pointers drift apart, and the host's leaves the window before the system's reaches the edge.
 
-On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`). It adds the sound card, the network card and RDRAND as above:
+On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other launchers: it uses `OVMF.fd` next to the script or, without it, the distribution's split `OVMF_CODE`/`OVMF_VARS` firmware as pflash (with a private copy of the variables); extra arguments go to QEMU (for example `-display none`). It adds the sound card, the network card, the tablet and RDRAND as above:
 - **Sound:** the backend is the first of PipeWire, PulseAudio, ALSA (with `/dev/snd`) and SDL (in a desktop session) that starts on this host. Without any, it starts without sound and says so. `MIND_AUDIO=<driver>` picks the backend, `MIND_AUDIO=none` leaves the card out.
 - **Network:** `MIND_NET=none` leaves the network card out.
+- **Pointer:** `MIND_POINTER=ps2` leaves the tablet out (the PS/2 mouse only).
 - **CPU:** `MIND_CPU=<model>` replaces the CPU model.
 
-On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card and RDRAND.
+On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card, the VirtIO tablet and RDRAND.
 
 From WSL with Windows interop enabled, build and launch Windows QEMU directly:
 
@@ -234,7 +238,7 @@ It locates `OVMF.fd` and `usb_root/` beside the script and converts their paths
 with `wslpath`, so it can be invoked from any directory. To use another Windows
 installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
 arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
-`MIND_AUDIO`, `MIND_NET` and `MIND_CPU` work as with `03_run_qemu.sh`.
+`MIND_AUDIO`, `MIND_NET`, `MIND_POINTER` and `MIND_CPU` work as with `03_run_qemu.sh`.
 
 ### Bootable USB image
 
@@ -589,6 +593,7 @@ rustc --edition=2021 --test tests/sysmon_host.rs -o /tmp/mind-core-sysmon-tests 
 rustc --edition=2021 --test tests/monitor_host.rs -o /tmp/mind-core-monitor-tests && /tmp/mind-core-monitor-tests   # top, memmap, load, hw on a fake sysmon
 rustc --edition=2021 --test tests/fm_host.rs -o /tmp/mind-core-fm-tests && /tmp/mind-core-fm-tests   # the file manager on a disk in memory: browsing, jobs, the editor
 rustc --edition=2021 --test tests/wm_host.rs -o /tmp/mind-core-wm-tests && /tmp/mind-core-wm-tests   # the window manager's desktop: placement, focus, snapping, keys, the mouse, what each cell shows
+rustc --edition=2021 --test tests/virtio_input_host.rs -o /tmp/mind-core-virtio-input-tests && /tmp/mind-core-virtio-input-tests   # the VirtIO tablet's and mouse's reports as pointer events
 rustc --edition=2021 --test tests/clock_host.rs -o /tmp/mind-core-clock-tests && /tmp/mind-core-clock-tests   # the text faces of clock and dzen-clock
 rustc --edition=2021 --test tests/block_host.rs -o /tmp/mind-core-block-tests && /tmp/mind-core-block-tests   # block protocol: the write badge
 rustc --edition=2021 --test tests/fat_host.rs -o /tmp/mind-core-fat-tests && /tmp/mind-core-fat-tests   # FAT writer and checker vs mkfs.fat, fsck.fat, mtools

@@ -27,8 +27,9 @@ impl Terminal {
     /// A grid covering the screen in 8x16 cells (centred if the screen is not a multiple of the cell size).
     pub fn new(screen: Screen) -> Option<Self> {
         let (cols, rows) = (screen.width / 8, screen.height / 16);
-        crate::input::pointer_area(cols * 8, rows * 16);
-        Self::buffers(Output::Screen { screen, x0: (screen.width - cols * 8) / 2, y0: (screen.height - rows * 16) / 2 }, cols, rows, cols * rows)
+        let (x0, y0) = ((screen.width - cols * 8) / 2, (screen.height - rows * 16) / 2);
+        crate::input::pointer_area((screen.width, screen.height), x0, y0, cols * 8, rows * 16);
+        Self::buffers(Output::Screen { screen, x0, y0 }, cols, rows, cols * rows)
     }
 
     /// The program's grid: in a text window titled `title` when its launcher started it in one (`mind::windowed`),

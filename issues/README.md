@@ -149,5 +149,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [200](../issues-done/200-architecture-layer.done) | Architecture layer in the kernel and libmind (x86-64 first) | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
+| [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

@@ -7,6 +7,7 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import codecs
+import json
 import http.server
 import math
 import os
@@ -25,8 +26,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# System services (PID 1..N, started by init); ahci/usb_storage/virtio_net exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+# System services (PID 1..N, started by init); ahci/usb_storage/virtio_net/virtio_input exist only when their device is present.
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -42,10 +43,14 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
-        # `snapshot` writes reach the image.
+        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through a QMP socket (`tablet_at`).
         self.disk = disk
+        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock" if tablet else None
+        self.qmp_file = None
+        if tablet:
+            extra = (*extra, "-device", "virtio-tablet-pci", "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -76,6 +81,32 @@ class VM:
         except BaseException:
             self.close()
             raise
+
+    def qmp(self, command, **arguments):
+        # One QMP command (the tablet's events: input-send-event); the reply.
+        if self.qmp_file is None:
+            connection = socket.socket(socket.AF_UNIX)
+            connection.connect(str(self.qmp_path))
+            self.qmp_file = connection.makefile("rw")
+            self.qmp_file.readline()  # the greeting
+            self.qmp("qmp_capabilities")
+        self.qmp_file.write(json.dumps({"execute": command, **({"arguments": arguments} if arguments else {})}) + "\n")
+        self.qmp_file.flush()
+        while True:
+            reply = json.loads(self.qmp_file.readline())
+            if "return" in reply or "error" in reply:
+                assert "error" not in reply, reply
+                return reply["return"]
+
+    def tablet_at(self, x, y, width=1280, height=800):
+        # The host's pointer at pixel (x, y) of the screen, through the tablet (0..32767 across it).
+        self.qmp("input-send-event", events=[{"type": "abs", "data": {"axis": "x", "value": (2 * x + 1) * 32768 // (2 * width)}},
+                                             {"type": "abs", "data": {"axis": "y", "value": (2 * y + 1) * 32768 // (2 * height)}}])
+
+    def tablet_click(self, button="left", wait=.08):
+        for down in (True, False):
+            self.qmp("input-send-event", events=[{"type": "btn", "data": {"down": down, "button": button}}])
+            time.sleep(wait)
 
     def services(self):
         # Real service PIDs from the ps table (the harness does not translate its rows).
@@ -187,9 +218,13 @@ class VM:
             path.unlink(missing_ok=True)
 
     def close(self):
+        if self.qmp_file is not None:
+            self.qmp_file.close()
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
+        if self.qmp_path is not None:
+            shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
         self.collect()
 
 
@@ -3377,6 +3412,50 @@ def wm_suite(vm):
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
+def tablet_suite(vm):
+    """The VirtIO tablet (issue 161): the host's pointer as a position, so the system's pointer is where the host's is
+    and reaches the edges of the screen — fm's key bar in the bottom right corner, wm's buttons at the right edge."""
+    require(vm.service_logs("virtio_input", "[VIRTIO_INPUT] "), "[VIRTIO_INPUT] QEMU Virtio Tablet X=0..32767 Y=0..32767")
+
+    def click(x, y, text, button="left"):
+        # A click on cell (x, y); the log once `text` came.
+        start = len(vm.log)
+        vm.tablet_at(x * 8 + 4, y * 16 + 8)
+        time.sleep(.05)
+        vm.tablet_click(button)
+        return logged(vm, start, text)
+
+    # fm on its own screen: a click puts the cursor on the entry under the host's pointer; 10 Quit in the corner ends it.
+    vm.send("fm\n")
+    vm.expect("[FM] READY")
+    time.sleep(.3)
+    require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry
+    require(click(159, 49, "[FM] DONE"), "[FM] POINTER 159,49 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    # wm: top in the top right quarter; its [▲] maximizes it, [×] next to the screen's right edge closes it.
+    start = len(vm.log)
+    vm.send("wm fm, top\n")
+    out = logged(vm, start, "[WM] READY")
+    for _ in range(100):
+        out = logged(vm, start, "[WM] READY")
+        if len(re.findall(r"\[WM\] WINDOW \d+ PID", out)) >= 2:
+            break
+        time.sleep(.1)
+    top_pid = re.search(r"\[WM\] STARTED top PID (\d+)", out)[1]
+    top = int(re.search(fr"\[WM\] WINDOW (\d+) PID {top_pid} ", out)[1])
+    time.sleep(1)
+    out = click(153, 1, f"{top}@0,1,160x48")
+    assert re.search(fr"FOCUS={top} .*POINTER=153,1", out), out[-600:]
+    require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
+    assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
+    start = len(vm.log)
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(logged(vm, start, "RESUMED.", timeout=12), "CLOSE ALL: 1 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge", flush=True)
+
+
 def windows_suite(vm):
     # Window broker (issue 157): windows outlive their manager; a new manager gets them back where they were; one
     # manager at a time; close all ends the programs; a plain client cannot act as manager or read others' windows.
@@ -3508,13 +3587,13 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3593,7 +3672,7 @@ def main():
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ())
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else (), tablet=suite == "tablet")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
@@ -3604,7 +3683,8 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite,
+                     "tablet": tablet_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

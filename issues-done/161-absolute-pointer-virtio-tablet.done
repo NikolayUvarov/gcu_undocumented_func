@@ -1,0 +1,32 @@
+# 161 — Absolute pointer events and a VirtIO tablet driver: the system's pointer follows the host's — done
+
+**Type:** kernel ABI + driver · **Owner:** kernel track (done from the tools branch, which needed it) · **Priority:** P1 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G (input methods, UI), track A (drivers) · **Constitution:** MC-1.1, MC-3.3, MC-3.11
+
+## Problem
+
+Reported by the user: in QEMU the mouse often "flies off the screen" — near an edge of the system's screen the pointer does not get there, QEMU lets the host's pointer go, and buttons at the edge (wm's `[×]`, fm's key bar) cannot be clicked.
+
+The PS/2 mouse (issue 156) reports only movement. QEMU does not capture the host's pointer for it until asked (a click, Ctrl+Alt+G), so it passes on how the host's pointer moved over the window; the system's pointer starts in the middle of the screen whatever the host's does and stops at the edges, so the two drift apart, and the host's pointer leaves the window — taking the events with it — before the system's reaches the edge. Only a device that reports positions fixes this.
+
+## Plan
+
+- **ABI** (`common/abi.rs`): a pointer event with `POINTER_ABSOLUTE` (bit 33) set carries a position: x and y as a share of the screen in `POINTER_SCALE` (4096) steps in the character field, the wheel in bits 34–37. The kernel stores and routes it as any pointer event (only to tasks that asked for pointer events), with no change in the kernel itself. `wm`'s window events (issue u001) use the same encoding with the cell of the window's content.
+- **Driver** `virtio_input` (a new boot service after `ps2_kbd`): the first VirtIO input device (1AF4:1052) on the modern interface, its event queue in a 12 KiB DMA region, MSI-X or the legacy line, reports gathered until each `SYN_REPORT` into one event — absolute for a tablet (the axis ranges from the device's configuration), relative for a VirtIO mouse; buttons; the wheel (`REL_WHEEL`, or QEMU's gear buttons). It holds its device and the input privilege, as `ps2_kbd` does; without a device it exits.
+- **init:** starts it with the BAR, a vector, the DMA region, a service endpoint for its interrupts and the input privilege; `svc` says what it holds.
+- **`mind::input`:** a tablet's position puts the screen's pointer where it names (scaled to the screen, then to the grid `Terminal` set); `pointer_pixel` for the window manager's sprite. `wm` takes its pointer from there.
+- **Launchers:** `-device virtio-tablet-pci` in `03_run_qemu.sh`, `03_run_qemu_wsl.sh` and both Windows scripts (`MIND_POINTER=ps2` leaves it out).
+
+## Acceptance criteria
+
+- Host: a tablet's reports (two axes with their ranges, buttons, wheel both ways) and a mouse's (a large movement in several events) become the expected event words; the window event encoding.
+- QEMU (`tablet` suite, a VirtIO tablet driven through QMP `input-send-event`): the driver names the device and its axes; fm on its screen gets a click at the position sent and quits through `10 Quit` in the bottom right corner; in wm, top's `[▲]` and `[×]` next to the screen's right edge maximize and close it, and the pointer reaches the bottom right cell.
+- The PS/2 mouse suites still pass.
+
+## Resolution
+
+- `common/abi.rs`: `POINTER_ABSOLUTE`, `POINTER_SCALE`, `pointer_absolute`, `pointer_absolute_fields`; `BOOT_IMAGES` 22 with `virtio_input` after `ps2_kbd`.
+- `virtio_input/` (new): `src/events.rs` (reports → events, host-tested), `src/main.rs` (device, queue, loop). `02_build.sh` builds it.
+- `init/src/main.rs`: the service's grants (`INPUT_DMA_BYTES` 12 KiB) and its line for `svc`.
+- `libmind/src/input.rs`: `pointer_area(screen, x, y, width, height)`, absolute positions, `pointer_pixel`, the movement of the last event in `Pointer::dx/dy`; `libmind/src/window.rs`: window events are absolute events; `libmind/src/tui/term.rs` sets the area with the screen's size. `wm/src/main.rs` draws its pointer where `mind::input` says.
+- Tests: `tests/virtio_input_host.rs`, `tests/window_host.rs`; QEMU `tablet` suite (`VM(tablet=True)` adds the device and a QMP socket; `tablet_at`, `tablet_click`), the service in the harness's list; CI runs both.
+- Docs: README (QEMU command, launchers, the service table, host tests), docs/api (`READ_INPUT`), docs/tools §4.9.

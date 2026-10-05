@@ -63,6 +63,10 @@ fi
 # (MIND_CPU=<model> to change it).
 NET=()
 [[ "${MIND_NET:-user}" == none ]] || NET=(-nic "user,model=virtio-net-pci")
+# A VirtIO tablet: the system's pointer follows the host's, so it reaches every edge of the screen and the host never
+# takes the pointer back halfway (issue 161; MIND_POINTER=ps2: the PS/2 mouse only).
+POINTER=()
+[[ "${MIND_POINTER:-tablet}" == ps2 ]] || POINTER=(-device virtio-tablet-pci)
 
 printf 'Starting MIND CORE in QEMU: %s (audio: %s)\n' "$QEMU_BIN" "${driver:-none}"
 exec "$QEMU_BIN" \
@@ -71,5 +75,5 @@ exec "$QEMU_BIN" \
     -m 512 -smp 4,sockets=1,cores=4,threads=1 \
     -cpu "${MIND_CPU:-qemu64,+rdrand}" \
     -serial stdio -rtc base=localtime \
-    "${AUDIO[@]}" "${NET[@]}" \
+    "${AUDIO[@]}" "${NET[@]}" "${POINTER[@]}" \
     "$@"

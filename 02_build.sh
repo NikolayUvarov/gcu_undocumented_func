@@ -55,6 +55,7 @@ USER_CRATES=(
     "pong:pong:pong.elf"
     "rtc:rtc:rtc.elf"
     "ps2_kbd:ps2_kbd:ps2_kbd.elf"
+    "virtio_input:virtio_input:virtio_input.elf"
     "compositor:compositor:compositor.elf"
     "ata:ata:ata.elf"
     "ahci:ahci:ahci.elf"
