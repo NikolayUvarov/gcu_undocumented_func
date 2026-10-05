@@ -3091,6 +3091,8 @@ def wm_suite(vm):
     assert any(canon("No access to sysmon") in row for row in screen), screen
     keys("alt-w", text=f"CLOSE {caps}")
     until(f"GONE {caps}")
+    while caps in state()[2]:
+        wait()  # the state line after the window went
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
