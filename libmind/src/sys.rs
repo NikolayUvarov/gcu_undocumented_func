@@ -1,6 +1,5 @@
-//! The only place with `int 0x80`: everything else in libmind is built on top of `syscall`.
+//! The only caller of the system-call instruction (`arch::trap`): everything else in libmind is built on `syscall`.
 use crate::abi::*;
-use core::arch::asm;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 static MAILBOX: AtomicPtr<SyscallMailbox> = AtomicPtr::new(core::ptr::null_mut());
@@ -38,7 +37,7 @@ pub fn syscall(number: usize, arg1: usize, arg2: usize, msg: [usize; 4]) -> Raw 
     if mb.is_null() { loop { core::hint::spin_loop(); } } // without entry! there is no way to call the kernel
     unsafe {
         core::ptr::write_volatile(mb, SyscallMailbox { syscall_num: number, arg1, arg2, result: 0, msg });
-        asm!("int 0x80", options(nostack));
+        crate::arch::trap();
         let out = core::ptr::read_volatile(mb);
         Raw { result: out.result, arg1: out.arg1, arg2: out.arg2, msg: out.msg }
     }

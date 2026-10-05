@@ -1,6 +1,6 @@
 # Trusted computing base — `x86-64/QEMU-0`
 
-The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `kernel/` plus `common/abi.rs`; `bootloader/src/elf_reloc.rs` is also compiled into the kernel.
+The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `kernel/` plus `common/abi.rs`; `bootloader/src/elf_reloc.rs` is also compiled into the kernel. The kernel includes its **architecture layer**, `kernel/src/arch/x86_64/` (issue 200): interrupt entry and the context switch, page tables, CPU start and stop, the APIC, PIC and PIT, the clock, port I/O, PCI configuration access, the serial line and ACPI reset. The rest of the kernel reaches the processor only through it. In every task, `libmind/src/arch/` (the system-call and entropy instructions) is part of that program, not of the TCB, except where the program itself is in the TCB (`keystore`: RDRAND for the device key).
 
 | Guarantee | TCB |
 |---|---|
@@ -21,4 +21,4 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 - The shell's control privilege is broad (kill any task, read any log). Splitting it is future work.
 | Secrecy of the device key (issue 103) | CPU (RDRAND), kernel (memory isolation, above); `keystore` (makes and holds the key, the only process that can read it); `init` (gives the signer's badge to `tls` only). |
 | TLS sessions: server authentication, confidentiality and integrity | `tls` with rustls, rustls-webpki and the RustCrypto crates of its provider; RDRAND (key exchange); `rtc` (certificate validity times); the root store `tlsroots.pem` on the boot disk, which is not authenticated (Article 9), and `vfs_server`, which reads it; `keystore` for client authentication. `netstack`, `virtio_net` and the network see only TLS records. |
-| Availability after `REBOOT` | Firmware (reset and boot), the ACPI tables (the FADT reset register is trusted as given), kernel `acpi.rs`; only the holder of process control (the shell) may reset. |
+| Availability after `REBOOT` | Firmware (reset and boot), the ACPI tables (the FADT reset register is trusted as given), kernel `arch/x86_64/acpi.rs`; only the holder of process control (the shell) may reset. |

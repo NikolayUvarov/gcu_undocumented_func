@@ -5,7 +5,6 @@
 extern crate alloc;
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::arch::asm;
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
@@ -27,58 +26,20 @@ unsafe impl GlobalAlloc for IrqAllocator {
 }
 #[path = "../../common/abi.rs"]
 mod abi;
-mod acpi;
 use abi::BootInfo;
-mod clock;
-mod context;
-mod cpu;
+// The processor and platform: only through these names (issue 200).
+mod arch;
+use arch::{acpi, clock, context, cpu, interrupts, paging, pci, port};
+use arch::serial::{init_serial, serial_write_byte};
 mod elf;
 mod frames;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
 mod input;
-mod interrupts;
 mod memory;
-mod paging;
-mod pci;
 mod scheduler;
 mod task_state;
 mod user_heap;
-
-unsafe fn outb(port: u16, val: u8) {
-    asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack));
-}
-unsafe fn outl(port: u16, val: u32) {
-    asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack));
-}
-unsafe fn inl(port: u16) -> u32 {
-    let mut val: u32;
-    asm!("in eax, dx", out("eax") val, in("dx") port, options(nomem, nostack));
-    val
-}
-unsafe fn inb(port: u16) -> u8 {
-    let mut val: u8;
-    asm!("in al, dx", out("al") val, in("dx") port, options(nomem, nostack));
-    val
-}
-
-const COM1: u16 = 0x3F8;
-unsafe fn init_serial() {
-    outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x80);
-    outb(COM1 + 0, 0x03);
-    outb(COM1 + 1, 0x00);
-    outb(COM1 + 3, 0x03);
-    outb(COM1 + 2, 0xC7);
-    outb(COM1 + 4, 0x0B);
-}
-unsafe fn serial_is_transmit_empty() -> bool {
-    (inb(COM1 + 5) & 0x20) != 0
-}
-unsafe fn serial_write_byte(b: u8) {
-    while !serial_is_transmit_empty() {}
-    outb(COM1, b);
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void {
@@ -118,7 +79,7 @@ fn serial_print(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\
 #[link_section = ".text._start"]
 pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
     unsafe {
-        asm!("cli");
+        cpu::disable_interrupts();
         init_serial();
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
@@ -151,7 +112,7 @@ static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     use core::fmt::Write;
-    unsafe { asm!("cli"); }
+    unsafe { cpu::disable_interrupts(); }
     // One report: a second panic (another CPU, or inside the formatting) only stops the machine.
     if PANICKING.swap(true, core::sync::atomic::Ordering::AcqRel) { cpu::halt_all(); }
     // Other CPUs stop first, so their output does not interleave with the report.

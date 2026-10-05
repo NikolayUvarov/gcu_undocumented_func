@@ -1,6 +1,7 @@
 // ACPI: only what a reset needs, the FADT reset register, read once at boot from the firmware's tables (below 4 GiB,
 // identity-mapped). The tables are untrusted input: every length is checked against the 4 GiB window.
-use crate::{inb, outb, outl, serial_print};
+use super::port::{inb, outb, outl};
+use crate::serial_print;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // Reset register: address space << 56 | value << 48 | address (0: none).

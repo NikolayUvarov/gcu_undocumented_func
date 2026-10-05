@@ -2,9 +2,8 @@ use crate::abi::*;
 use crate::input::{Events, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
-use crate::{context, cpu, elf, interrupts, outb, paging, pci, serial_write_byte};
+use crate::{context, cpu, elf, interrupts, paging, pci, port, serial_write_byte};
 use alloc::vec::Vec;
-use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 mod stat;
@@ -819,7 +818,7 @@ impl Scheduler {
         let tasks = self.tasks.as_mut_ptr(); let task = (*tasks.add(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
         let result: Result<usize, usize> = match request.syscall_num {
-            SYSCALL_RDTSC => { let lo: u32; let hi: u32; asm!("rdtsc", out("eax") lo, out("edx") hi); Ok((((hi as u64) << 32) | lo as u64) as usize) }
+            SYSCALL_RDTSC => Ok(cpu::cycles() as usize),
             // The legacy byte of the next event that has one (events without a byte are skipped).
             SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 => break event_byte(event) as usize, Some(_) => {} } }),
             SYSCALL_READ_INPUT => Ok(task.input.pop().unwrap_or(0)),
@@ -980,18 +979,18 @@ impl Scheduler {
             SYSCALL_MEM_PHYS => match self.cap(slot, request.arg1) { Some(Capability::Dma(physical, _)) => Ok(physical), _ => Err(ERR_RIGHTS) },
             SYSCALL_PORT_IN => {
                 let (port, width) = (request.arg2, request.msg[1].max(1));
-                if !matches!(width, 1 | 2 | 4) || !self.ports(slot, request.arg1, port, width) { Err(ERR_RIGHTS) } else { Ok(port_in(port as u16, width)) }
+                if !matches!(width, 1 | 2 | 4) || !self.ports(slot, request.arg1, port, width) { Err(ERR_RIGHTS) } else { Ok(port::read(port as u16, width)) }
             }
             SYSCALL_PORT_OUT => {
                 let (port, width) = (request.arg2, request.msg[1].max(1));
-                if !matches!(width, 1 | 2 | 4) || !self.ports(slot, request.arg1, port, width) { Err(ERR_RIGHTS) } else { port_out(port as u16, width, request.msg[0]); Ok(0) }
+                if !matches!(width, 1 | 2 | 4) || !self.ports(slot, request.arg1, port, width) { Err(ERR_RIGHTS) } else { port::write(port as u16, width, request.msg[0]); Ok(0) }
             }
             SYSCALL_PORT_IN_BLOCK => {
                 // Reads 16-bit words (ATA sector) straight into the process buffer, without a syscall per word.
                 let (buffer, words) = (request.msg[2], request.msg[3]);
                 let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.writable(page * 4096).is_some());
                 if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
-                    for i in 0..words { let target = task.space.writable(buffer + i * 2).unwrap(); core::ptr::write_volatile(target as *mut u16, port_in(request.arg2 as u16, 2) as u16); }
+                    for i in 0..words { let target = task.space.writable(buffer + i * 2).unwrap(); core::ptr::write_volatile(target as *mut u16, port::read(request.arg2 as u16, 2) as u16); }
                     Ok(words)
                 }
             }
@@ -1000,7 +999,7 @@ impl Scheduler {
                 let (buffer, words) = (request.msg[2], request.msg[3]);
                 let pages_ok = words > 0 && words <= 2048 && buffer % 2 == 0 && buffer.checked_add(words * 2).is_some() && (buffer / 4096..=(buffer + words * 2 - 1) / 4096).all(|page| task.space.readable(page * 4096).is_some());
                 if !pages_ok || !self.ports(slot, request.arg1, request.arg2, 2) { Err(ERR_RIGHTS) } else {
-                    for i in 0..words { let source = task.space.readable(buffer + i * 2).unwrap(); port_out(request.arg2 as u16, 2, core::ptr::read_volatile(source as *const u16) as usize); }
+                    for i in 0..words { let source = task.space.readable(buffer + i * 2).unwrap(); port::write(request.arg2 as u16, 2, core::ptr::read_volatile(source as *const u16) as usize); }
                     Ok(words)
                 }
             }
@@ -1107,12 +1106,6 @@ impl Scheduler {
     }
 }
 
-unsafe fn port_in(port: u16, width: usize) -> usize {
-    match width { 1 => { let v: u8; asm!("in al, dx", out("al") v, in("dx") port, options(nomem, nostack)); v as usize } 2 => { let v: u16; asm!("in ax, dx", out("ax") v, in("dx") port, options(nomem, nostack)); v as usize } _ => { let v: u32; asm!("in eax, dx", out("eax") v, in("dx") port, options(nomem, nostack)); v as usize } }
-}
-unsafe fn port_out(port: u16, width: usize, value: usize) {
-    match width { 1 => asm!("out dx, al", in("dx") port, in("al") value as u8, options(nomem, nostack)), 2 => asm!("out dx, ax", in("dx") port, in("ax") value as u16, options(nomem, nostack)), _ => asm!("out dx, eax", in("dx") port, in("eax") value as u32, options(nomem, nostack)) }
-}
 
 // Bootstrap authority (MC-3.12): the kernel starts only boot image 0 (`init`) with its endpoint, the platform and
 // spawn privileges; everything else is distributed by init.
@@ -1135,11 +1128,11 @@ pub fn spawn_init() -> Result<u64, &'static str> {
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {
         let registers = context::registers(sp); let vector = registers[15]; let cpu = cpu::id();
-        if vector == 0x31 { asm!("cli"); loop { asm!("hlt"); } }
+        if vector == 0x31 { cpu::halt_here(); }
         if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
         let irq = if (33..48).contains(&vector) { Some(vector as usize - 32) } else if (0x40..0x50).contains(&vector) { Some(MSI_FIRST + vector as usize - 0x40) } else { None };
-        if vector == 32 { interrupts::advance(); outb(0x20, 0x20); cpu::eoi(); cpu::tick_others(); }
-        else if let Some(irq) = irq.filter(|&irq| irq < MSI_FIRST) { interrupts::set_irq_masked(irq as u8, true); if irq >= 8 { outb(0xA0, 0x20); } outb(0x20, 0x20); cpu::eoi(); } // the driver will unmask the line
+        if vector == 32 { interrupts::advance(); interrupts::pic_eoi(0); cpu::eoi(); cpu::tick_others(); }
+        else if let Some(irq) = irq.filter(|&irq| irq < MSI_FIRST) { interrupts::set_irq_masked(irq as u8, true); interrupts::pic_eoi(irq as u8); cpu::eoi(); } // the driver will unmask the line
         else if irq.is_some() { cpu::eoi(); } // MSI-X: an edge message, nothing to mask
         else if vector == 48 || vector == 50 { cpu::eoi(); }
 
@@ -1155,7 +1148,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             }
             if vector == 50 { return if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp }; }
             if vector < 32 {
-                let mut address = 0u64; if vector == 14 { asm!("mov {}, cr2", out(reg) address); }
+                let address = if vector == 14 { cpu::fault_address() } else { 0 };
                 let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
                 s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector, error: registers[16], rip: registers[17], address });
                 s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (vector as usize) << 8); return s.select(sp, cpu);
@@ -1175,4 +1168,4 @@ unsafe fn serial_number(mut number: u64) { let mut buffer = [0; 20]; let mut at 
 // Called from the BSP idle loop: reclaims memory of exited tasks.
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
-pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); [BAND_SYSTEM as u8, BAND_APPLICATION as u8].iter().any(|&band| s.states(cpu::id(), band)[1..].iter().any(|t| *t == State::Ready)) }); if ready { asm!("int 0x80"); } else { asm!("sti", "hlt", "cli"); } }); }
+pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); [BAND_SYSTEM as u8, BAND_APPLICATION as u8].iter().any(|&band| s.states(cpu::id(), band)[1..].iter().any(|t| *t == State::Ready)) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }

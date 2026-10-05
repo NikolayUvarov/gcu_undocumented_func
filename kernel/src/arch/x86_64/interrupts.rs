@@ -1,4 +1,4 @@
-use super::outb;
+use super::port::outb;
 use core::arch::asm;
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
@@ -166,4 +166,10 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
         }
         result
     }
+}
+
+/// End of interrupt for a line of the 8259 pair (the slave too for lines 8-15).
+pub unsafe fn pic_eoi(line: u8) {
+    if line >= 8 { outb(0xA0, 0x20); }
+    outb(0x20, 0x20);
 }

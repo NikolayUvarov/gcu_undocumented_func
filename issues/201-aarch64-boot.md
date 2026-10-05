@@ -1,6 +1,6 @@
 # 201 — aarch64 on QEMU `virt`: boot to init
 
-**Type:** kernel + bootloader · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** 200 · **Roadmap:** track H · **Constitution:** MC-1.x (isolation on the new platform), MC-12.1
+**Type:** kernel + bootloader · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** — (200 done) · **Roadmap:** track H · **Constitution:** MC-1.x (isolation on the new platform), MC-12.1
 
 ## Problem
 
@@ -26,4 +26,4 @@ MIND Core runs only on x86-64.
 
 ## Related
 
-[200](200-architecture-layer.md), [202](202-aarch64-devices.md), [203](203-aarch64-smp-and-power.md).
+[200](../issues-done/200-architecture-layer.done), [202](202-aarch64-devices.md), [203](203-aarch64-smp-and-power.md).

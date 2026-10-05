@@ -1,4 +1,4 @@
-use crate::{inl, outl};
+use super::port::{inl, outl};
 
 // Minimal PCI configuration access (mechanism #1) for handing devices to ring 3 drivers.
 // LEGACY: ports 0xCF8/0xCFC; ECAM (ACPI MCFG) replaces them (docs/legacy.md).
