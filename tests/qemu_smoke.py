@@ -2969,6 +2969,7 @@ def wm_suite(vm):
     the programs running and the next wm shows them where they were; close all ends them."""
     # The broker's first window gives it a heap arena it keeps: one window before the baseline.
     require(vm.command("wintest show W 1"), "W DONE AFTER")
+    time.sleep(1.2)  # the broker frees a window within 500 ms of its program's end
     baseline = heap_used(vm)
     windows_re = re.compile(r'\[WM\] WINDOW (\d+) PID (\d+) (TEXT|PIXELS) (\d+)X(\d+) "[^"]*" AT (\d+),(\d+) (\d+)X(\d+)')
     seen = []  # everything wm logged, PIDs as the suites number them
