@@ -27,6 +27,7 @@ pub unsafe fn init(rsdp: u64) {
 }
 
 pub unsafe fn reboot() -> ! {
+    serial_print("MIND CORE KERNEL: REBOOT VIA PSCI SYSTEM_RESET\n");
     core::arch::asm!("hvc #0", in("x0") 0x8400_0009u64, options(nostack)); // PSCI SYSTEM_RESET
     crate::cpu::halt_all()
 }

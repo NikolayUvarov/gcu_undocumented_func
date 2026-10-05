@@ -17,9 +17,20 @@ static mut WORK_COUNTER: usize = 0;
 struct ThreadStack { data: [u64; 1024] }
 static mut THREAD_STACK: ThreadStack = ThreadStack { data: [0; 1024] };
 
+// Saves the callee-saved registers on the current stack, stores its pointer in `old_sp`, switches to `new_sp` and
+// restores the registers saved there.
+#[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
 extern "sysv64" fn yield_task(_old_sp: *mut u64, _new_sp: u64) {
     core::arch::naked_asm!("push rbx", "push rbp", "push r12", "push r13", "push r14", "push r15", "mov [rdi], rsp", "mov rsp, rsi", "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx", "ret");
+}
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+extern "C" fn yield_task(_old_sp: *mut u64, _new_sp: u64) {
+    core::arch::naked_asm!("sub sp, sp, #96", "stp x19, x20, [sp]", "stp x21, x22, [sp, #16]", "stp x23, x24, [sp, #32]",
+        "stp x25, x26, [sp, #48]", "stp x27, x28, [sp, #64]", "stp x29, x30, [sp, #80]", "mov x9, sp", "str x9, [x0]", "mov sp, x1",
+        "ldp x19, x20, [sp]", "ldp x21, x22, [sp, #16]", "ldp x23, x24, [sp, #32]", "ldp x25, x26, [sp, #48]",
+        "ldp x27, x28, [sp, #64]", "ldp x29, x30, [sp, #80]", "add sp, sp, #96", "ret");
 }
 
 fn background_task() {
@@ -32,10 +43,18 @@ fn background_task() {
 unsafe fn init_thread() {
     let stack_ptr = core::ptr::addr_of_mut!(THREAD_STACK.data) as *mut u64;
     let mut sp = stack_ptr.add(1024) as u64;
-    // A SysV function starts with RSP % 16 == 8 after its return address.
-    sp -= 8;
-    sp -= 8; *(sp as *mut u64) = background_task as *const () as u64;
-    for _ in 0..6 { sp -= 8; *(sp as *mut u64) = 0; }
+    #[cfg(target_arch = "x86_64")] {
+        // A SysV function starts with RSP % 16 == 8 after its return address.
+        sp -= 8;
+        sp -= 8; *(sp as *mut u64) = background_task as *const () as u64;
+        for _ in 0..6 { sp -= 8; *(sp as *mut u64) = 0; }
+    }
+    #[cfg(target_arch = "aarch64")] {
+        // The frame yield_task restores: x19-x28, x29 = 0, x30 = the entry; sp stays 16-byte aligned.
+        sp -= 96;
+        for i in 0..12 { *((sp + 8 * i) as *mut u64) = 0; }
+        *((sp + 88) as *mut u64) = background_task as *const () as u64;
+    }
     core::ptr::write_volatile(core::ptr::addr_of_mut!(THREAD_SP), sp);
 }
 

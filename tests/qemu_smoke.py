@@ -28,6 +28,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "virtio_input", "sysmon", "shell")
+# The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
+IMAGE = "usb_root"
+BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
+# The boot disk's driver, as vfs names it and as a service.
+BOOT_DRIVE, BOOT_DRIVER = "ATA", "ata"
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -55,8 +60,18 @@ class VM:
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", source])
+        if args.arch == "aarch64":
+            # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
+            # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
+            variables = Path(tempfile.mkdtemp()) / "vars.fd"
+            shutil.copyfile(args.aavmf_vars, variables)
+            machine = ["-machine", "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
+                       "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
+                       "-device", "ramfb", "-device", "virtio-keyboard-pci", *([] if "virtio-tablet-pci" in extra else ["-device", "virtio-tablet-pci"])]
+        else:
+            machine = ["-bios", args.firmware]
         self.process = subprocess.Popen(
-            [args.qemu, "-bios", args.firmware, *storage,
+            [args.qemu, *machine, *storage,
              *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
@@ -220,11 +235,13 @@ def screen_text(vm):
     lookup = glyph_lookup()
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     width, height = map(int, size.split())
+    # mind::tui centers the text grid: a screen not a multiple of the cell (800x600 on aarch64) has margins.
+    x0, y0 = width % 8 // 2, height % 16 // 2
     lines = []
     for cy in range(height // 16):
         line = []
         for cx in range(width // 8):
-            rows = [[pixels[((cy * 16 + r) * width + cx * 8 + c) * 3:((cy * 16 + r) * width + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+            rows = [[pixels[((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3:((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
             colours = {p for row in rows for p in row}
             found = " " if len(colours) == 1 else "?"
             for fg in colours if len(colours) == 2 else ():
@@ -415,13 +432,21 @@ def normal_suite(vm):
     vm.keys("kill 25\n")
     vm.serial()
     assert task_rows(vm) == {}
-    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken).
-    for _ in range(10):
-        registers = vm.hmp("info registers")
-        if "HLT=1" in registers:
-            break
-        time.sleep(.02)
-    require(registers, "HLT=1")
+    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
+    # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
+    if vm.args.arch == "aarch64":
+        def cpu_seconds():
+            fields = Path(f"/proc/{vm.process.pid}/stat").read_text().rpartition(")")[2].split()
+            return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+        start = cpu_seconds(); time.sleep(1); used = cpu_seconds() - start
+        assert used < .6, f"idle QEMU used {used:.2f} s of processor time in 1 s: the CPU does not wait in WFI"
+    else:
+        for _ in range(10):
+            registers = vm.hmp("info registers")
+            if "HLT=1" in registers:
+                break
+            time.sleep(.02)
+        require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
@@ -1581,10 +1606,10 @@ def files_check(vm, pid):
     require(output, "(SORTED, HEAP ARENAS=1)")  # Vec/String on the program heap (mind::alloc)
     names = re.findall(r"^\[FILES\] (\S+) \d+$", output, re.M)
     assert names == sorted(names), names
-    size = (ROOT / "usb_root/kernel.elf").stat().st_size
+    size = (ROOT / IMAGE / "kernel.elf").stat().st_size
     require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
-    efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
-    require(output, f"READ EFI/BOOT/BOOTX64.EFI {efi}/{efi} BYTES MAGIC=4D5A")
+    efi = (ROOT / IMAGE / BOOT_EFI).stat().st_size
+    require(output, f"READ {BOOT_EFI} {efi}/{efi} BYTES MAGIC=4D5A")
     return output
 
 
@@ -1972,8 +1997,8 @@ def raw_fat_image(temp, replace=None):
     subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
     files = temp / "files"
     (files / "EFI/BOOT").mkdir(parents=True)
-    for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
-        shutil.copyfile(ROOT / "usb_root" / name, files / name)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, files / name)
     for name, source in (replace or {}).items():
         shutil.copyfile(source, files / name)
     subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
@@ -2000,19 +2025,19 @@ def vfs_suite(args):
     if not raw_tools():
         print("SKIP: vfs suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / IMAGE) as temp:
         image, start, fs_sectors = raw_fat_image(Path(temp))
         part = f"{image}@@{start * 512}"
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
             mounted = vm.service_logs("vfs_server", "AS RAM:")  # reading drains the log: both lines at once
-            require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048 (DEVICE WRITABLE)")
+            require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
             require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
                                     ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
             # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
-            def slow(command):  # 3 MB written through the ATA driver take a while under emulation
+            def slow(command):  # 3 MB written through the block driver take a while under emulation
                 vm.send(command + "\n")
                 return vm.expect("MIND> ", timeout=180, after=command + "\n")
             vm.command("clear")  # a screen with room: the output after the capture must not scroll it
@@ -2062,7 +2087,7 @@ def vfs_suite(args):
             output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=90)
             stopped = re.findall(r"^STOPPED (\w+)$", output, re.M)
             assert "REBOOTING..." in output and stopped[-1] == "logd" and "init" not in stopped and "shell" not in stopped, output
-            assert stopped.index("vfs_server") < stopped.index("ata") < stopped.index("compositor"), stopped
+            assert stopped.index("vfs_server") < stopped.index(BOOT_DRIVER) < stopped.index("compositor"), stopped
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("cat data/reboot.txt"), "kept")
@@ -2172,7 +2197,7 @@ def edit_suite(args):
     if not raw_tools():
         print("SKIP: edit suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / IMAGE) as temp:
         readme, crlf = Path(temp) / "readme.txt", Path(temp) / "crlf.txt"
         readme.write_bytes("Только для чтения\n".encode())
         crlf.write_bytes("один\r\ntwo\r\n".encode())
@@ -2321,7 +2346,7 @@ def disk_suite(args):
     if not raw_tools():
         print("SKIP: disk suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / IMAGE) as temp:
         temp = Path(temp)
         (temp / "a.txt").write_text("alpha\n")
         (temp / "b.txt").write_bytes("бета\n".encode())
@@ -2364,7 +2389,7 @@ def block_suite(args, block_elf):
     if not raw_tools():
         print("SKIP: block suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / IMAGE) as temp:
         image, start, fs_sectors = raw_fat_image(Path(temp), {"vfs_server.elf": block_elf})
         env = MTOOLS_ENV
         sectors = (BLOCK_IMAGE_MB << 20) // 512
@@ -3391,8 +3416,11 @@ def boot_suite(args, disk):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
-    parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--arch", choices=("x86_64", "aarch64"), default="x86_64", help="aarch64: QEMU virt with the aarch64_root build (scripts/build_aarch64.sh)")
+    parser.add_argument("--qemu", default=os.environ.get("QEMU"))
+    parser.add_argument("--cpus", type=int)
+    parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
+    parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
     parser.add_argument("--firmware", default="OVMF.fd")
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
@@ -3406,6 +3434,13 @@ def main():
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
+    global IMAGE, BOOT_EFI, BOOT_DRIVE, BOOT_DRIVER
+    if args.arch == "aarch64":
+        # One processor until issue 203.
+        IMAGE, BOOT_EFI = "aarch64_root", "EFI/BOOT/BOOTAA64.EFI"
+        BOOT_DRIVE, BOOT_DRIVER = "VIRTIO", "virtio_blk"
+        args.qemu, args.cpus = args.qemu or "qemu-system-aarch64", args.cpus or 1
+    args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     suites = ["boot", "display", "net", "tls", "netbench", "tablet", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
@@ -3428,12 +3463,12 @@ def main():
         if suite == "disk":
             disk_suite(args)
             continue
-        with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
+        with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / IMAGE) as temp:
             disk = Path(temp)
             (disk / "EFI/BOOT").mkdir(parents=True)
-            for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
-                shutil.copyfile(ROOT / "usb_root" / name, disk / name)
-            shutil.copytree(ROOT / "usb_root/voice", disk / "voice")  # the voice recognizer's model and grammar
+            for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+                shutil.copyfile(ROOT / IMAGE / name, disk / name)
+            shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
             if suite == "services":
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")

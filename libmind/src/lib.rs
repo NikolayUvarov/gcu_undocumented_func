@@ -21,6 +21,7 @@ pub mod heap;
 pub mod idl;
 pub mod input;
 pub mod ipc;
+pub mod keyboard;
 pub mod keys;
 pub mod log;
 pub mod mask;

@@ -23,7 +23,7 @@ const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe priv
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 256 KiB DMA", "VirtIO block BAR; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "tablet BAR and MSI-X vector; input; 16 KiB DMA", "observe privilege", "screen; process control; input; the serial line"];
+    "the key service's signer client; RTC and VFS clients", "its own program client", "tablet and keyboard BARs and MSI-X vectors; input; 32 KiB DMA", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
@@ -32,7 +32,8 @@ const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request header
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
-const INPUT_DMA_BYTES: usize = 16 * 1024; // the event virtqueue and 64 events of 8 bytes
+const INPUT_DMA_BYTES: usize = 32 * 1024; // per device: the event virtqueue and 64 events of 8 bytes
+const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -235,14 +236,20 @@ impl Init {
                 self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
             }
-            // The VirtIO tablet (issue 160): an absolute pointer, its MMIO BAR and MSI-X vector, and the input privilege.
+            // VirtIO input devices (issues 160, 202): the first two (a tablet, a keyboard), each its MMIO BAR and MSI-X
+            // vector or line; the input privilege; one DMA region the driver halves.
             "virtio_input" => {
-                let device = platform::find_device_id(0, 0, 0x1052_1AF4, 0).map_err(|_| Error::NotFound)?;
-                self.devices[index] = Some(device);
-                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
-                let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
-                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                let mut found = 0;
+                for (nth, (bar_slot, irq_slot)) in [(SLOT_DEV0, SLOT_IRQ), (SLOT_DEV1, SLOT_INPUT_IRQ1)].into_iter().enumerate() {
+                    let Ok(device) = platform::find_device_id(0, 0, 0x1052_1AF4, nth) else { break };
+                    if nth == 0 { self.devices[index] = Some(device); }
+                    let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                    let Some(bar) = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()) else { continue };
+                    grants.add(bar_slot, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                    grants.add(irq_slot, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                    found += 1;
+                }
+                if found == 0 { return Err(Error::NotFound); }
                 grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, INPUT_DMA_BYTES)?, 0);
             }
@@ -285,7 +292,7 @@ impl Init {
                 grants.add(SLOT_SERIAL, minted.serial()?, 0);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
-                self.lend(&mut grants, SLOT_KEYBOARD, "ps2_kbd")?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
+                self.lend(&mut grants, SLOT_KEYBOARD, if self.running(service_index("ps2_kbd")) { "ps2_kbd" } else { "virtio_input" })?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
                 grants.add(SLOT_SOCKET, self.badged(&mut minted, "netstack", mind::network::BADGE_OPERATOR)?, CLIENT); // every destination
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
