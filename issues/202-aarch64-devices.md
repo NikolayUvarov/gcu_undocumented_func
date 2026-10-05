@@ -1,6 +1,6 @@
 # 202 — aarch64 devices: PCIe ECAM, VirtIO, PL011, PL031, display
 
-**Type:** drivers · **Owner:** porting track (VirtIO block and input with track A) · **Priority:** P2 · **Status:** open · **Blocked by:** 201 · **Roadmap:** tracks H and A · **Constitution:** Appendix B.6, MC-6.3
+**Type:** drivers · **Owner:** porting track (VirtIO block and input with track A) · **Priority:** P2 · **Status:** open · **Blocked by:** — (201 done) · **Roadmap:** tracks H and A · **Constitution:** Appendix B.6, MC-6.3
 
 ## Plan
 
@@ -20,4 +20,4 @@ The `normal`, `shell`, `vfs`, `net` and `tls` suites pass on `qemu-system-aarch6
 
 ## Related
 
-[201](201-aarch64-boot.md), [204](204-aarch64-profile-and-ci.md), [ROADMAP](../ROADMAP.md) track A.
+[201](../issues-done/201-aarch64-boot.done), [204](204-aarch64-profile-and-ci.md), [ROADMAP](../ROADMAP.md) track A.

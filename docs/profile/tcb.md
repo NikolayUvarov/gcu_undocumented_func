@@ -1,6 +1,6 @@
 # Trusted computing base — `x86-64/QEMU-0`
 
-The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `kernel/` plus `common/abi.rs`; `bootloader/src/elf_reloc.rs` is also compiled into the kernel. The kernel includes its **architecture layer**, `kernel/src/arch/x86_64/` (issue 200): interrupt entry and the context switch, page tables, CPU start and stop, the APIC, PIC and PIT, the clock, port I/O, PCI configuration access, the serial line and ACPI reset. The rest of the kernel reaches the processor only through it. In every task, `libmind/src/arch/` (the system-call and entropy instructions) is part of that program, not of the TCB, except where the program itself is in the TCB (`keystore`: RDRAND for the device key).
+The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `kernel/` plus `common/abi.rs`; `bootloader/src/elf_reloc.rs` is also compiled into the kernel. The kernel includes its **architecture layer**, `kernel/src/arch/x86_64/` (issue 200; `arch/aarch64/` on the second platform, [aarch64-qemu-virt.md](aarch64-qemu-virt.md)): interrupt entry and the context switch, page tables, CPU start and stop, the APIC, PIC and PIT, the clock, port I/O, PCI configuration access, the serial line and ACPI reset. The rest of the kernel reaches the processor only through it. In every task, `libmind/src/arch/` (the system-call and entropy instructions) is part of that program, not of the TCB, except where the program itself is in the TCB (`keystore`: RDRAND for the device key).
 
 | Guarantee | TCB |
 |---|---|

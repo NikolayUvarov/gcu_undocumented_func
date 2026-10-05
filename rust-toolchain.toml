@@ -2,4 +2,4 @@
 [toolchain]
 channel = "nightly-2026-10-02"
 profile = "minimal"
-targets = ["x86_64-unknown-none", "x86_64-unknown-uefi"]
+targets = ["x86_64-unknown-none", "x86_64-unknown-uefi", "aarch64-unknown-none-softfloat", "aarch64-unknown-uefi"]

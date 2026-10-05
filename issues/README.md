@@ -26,9 +26,8 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
-| [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | — (200 done) | track H |
-| [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
-| [203](203-aarch64-smp-and-power.md) | aarch64 SMP, reset and power off through PSCI | porting | P2 | 201 | track H |
+| [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | — (201 done) | tracks H, A |
+| [203](203-aarch64-smp-and-power.md) | aarch64 SMP, reset and power off through PSCI | porting | P2 | — (201 done) | track H |
 | [204](204-aarch64-profile-and-ci.md) | aarch64 profile and CI | porting | P2 | 202, 203 | track H |
 
 ## Finished tasks (`issues-done/`)
@@ -145,6 +144,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [159](../issues-done/159-shared-interrupt-lines.done) | Shared interrupt lines reach every driver on them | done (2026-10-05) |
 | [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator | done (2026-10-05) |
 | [200](../issues-done/200-architecture-layer.done) | Architecture layer in the kernel and libmind (x86-64 first) | done (2026-10-05) |
+| [201](../issues-done/201-aarch64-boot.done) | aarch64 on QEMU `virt`: boot to init | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 

@@ -238,6 +238,17 @@ installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
 arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
 `MIND_AUDIO`, `MIND_NET`, `MIND_POINTER` and `MIND_CPU` work as with `03_run_qemu.sh`.
 
+### aarch64 (QEMU `virt`, issue 201)
+
+The same kernel (with its aarch64 architecture layer), bootloader and services build for aarch64. So far it boots to init with the services that need no devices — `logd`, `loader`, `keystore`, `sysmon` — and the console is the PL011; devices, the shell and the applications follow in issue 202. Needs the Rust targets of `rust-toolchain.toml`, `qemu-system-aarch64` and AAVMF (Debian/Ubuntu: `qemu-system-arm qemu-efi-aarch64`):
+
+```bash
+./scripts/build_aarch64.sh && ./03_run_qemu_aarch64.sh
+python3 tests/aarch64_smoke.py   # after ./scripts/build_aarch64.sh --fixtures
+```
+
+What differs from x86-64 is in [docs/profile/aarch64-qemu-virt.md](docs/profile/aarch64-qemu-virt.md).
+
 ### Bootable USB image
 
 Run from Linux, WSL or MSYS2 with the project's Rust toolchain, Bash, Python 3

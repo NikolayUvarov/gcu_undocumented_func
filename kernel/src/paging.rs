@@ -1,6 +1,8 @@
+// Task address spaces (four-level page tables, 4 KiB pages): the walk is the same on every architecture; the
+// descriptor format and the switch are in arch/*/mmu.rs (issue 201).
 use crate::memory::Region;
-use core::arch::asm;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::mmu;
+pub use crate::mmu::{activate, init, kernel_root, uncached};
 
 pub const PAGE: usize = 4096;
 pub const USER_IMAGE: usize = 0x80_0000_0000;
@@ -11,87 +13,8 @@ pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
 pub const USER_END: usize = USER_IMAGE + 0x4000_0000; // 928 MiB heap window: private quota + frame/IPC mappings (issue 150)
-const PRESENT: u64 = 1;
-const WRITE: u64 = 2;
-const USER: u64 = 4;
-const NX: u64 = 1 << 63;
-const UNCACHED: u64 = 0x18; // PCD | PWT: uncached device registers
 const TABLES: usize = 640; // the whole heap window mapped (each table one page of the arena)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
-static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
-static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
-
-pub fn kernel_root() -> usize {
-    KERNEL_ROOT.load(Ordering::Acquire)
-}
-
-pub unsafe fn init() -> Result<(), &'static str> {
-    // The bootloader reserves all runtime RAM below 4 GiB. Retain supervisor
-    // identity mappings for the kernel, boot stack and MMIO on every CR3.
-    let root = Region::new(PAGE, PAGE)?;
-    let pdpt = Region::new(PAGE, PAGE)?;
-    for gigabyte in 0..4 {
-        let pd = Region::new(PAGE, PAGE)?;
-        for page in 0..512 {
-            let physical = (gigabyte * 512 + page) * 0x200000;
-            let uncached = if physical >= 0xc0000000 { 0x18 } else { 0 };
-            (pd.ptr() as *mut u64)
-                .add(page)
-                .write(physical as u64 | 0x83 | uncached);
-        }
-        (pdpt.ptr() as *mut u64)
-            .add(gigabyte)
-            .write(pd.ptr() as u64 | 3);
-        core::mem::forget(pd);
-    }
-    (root.ptr() as *mut u64).write(pdpt.ptr() as u64 | 3);
-    KERNEL_PDPT.store(pdpt.ptr() as usize, Ordering::Release);
-    KERNEL_ROOT.store(root.ptr() as usize, Ordering::Release);
-    core::mem::forget(pdpt);
-    core::mem::forget(root);
-    enable_protection(true);
-    activate(kernel_root());
-    Ok(())
-}
-
-pub unsafe fn enable_protection(bsp: bool) {
-    let nx = core::arch::x86_64::__cpuid(0x80000001).edx & (1 << 20) != 0;
-    assert!(nx, "NX support required");
-    let mut lo: u32;
-    let hi: u32;
-    asm!("rdmsr", in("ecx") 0xc0000080u32, out("eax") lo, out("edx") hi);
-    // This kernel exposes only int 0x80. Never inherit a firmware SYSCALL target.
-    lo = (lo | (1 << 11)) & !1;
-    asm!("wrmsr", in("ecx") 0xc0000080u32, in("eax") lo, in("edx") hi);
-    asm!("wrmsr", in("ecx") 0x174u32, in("eax") 0u32, in("edx") 0u32); // SYSENTER_CS=0 => #GP
-    let mut cr0: usize;
-    asm!("mov {}, cr0", out(reg) cr0);
-    cr0 = (cr0 | (1 << 16) | 2) & !12; // WP, MP; clear EM/TS for FXSAVE.
-    asm!("mov cr0, {}", in(reg) cr0);
-    let mut cr4: usize;
-    asm!("mov {}, cr4", out(reg) cr4);
-    cr4 |= (1 << 9) | (1 << 10);
-    // Flush inherited global translations as well. No user FSGSBASE or PCID.
-    cr4 &= !((1 << 7) | (1 << 16) | (1 << 17) | (1 << 18));
-    // XSAVE with x87, SSE and AVX state when the CPU has both (issue 153); the BSP decides, the APs follow.
-    let features = core::arch::x86_64::__cpuid(1).ecx;
-    let avx = features & (1 << 26) != 0 && features & (1 << 28) != 0;
-    let xsave = if bsp { avx } else { crate::context::XSAVE.load(Ordering::Acquire) };
-    if xsave { cr4 |= 1 << 18; }
-    asm!("mov cr4, {}", in(reg) cr4);
-    if xsave {
-        asm!("xsetbv", in("ecx") 0u32, in("eax") XCR0 as u32, in("edx") 0u32);
-        assert!(core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize <= crate::context::AREA, "XSAVE area too large");
-    }
-    if bsp { crate::context::XSAVE.store(xsave, Ordering::Release); }
-}
-
-/// x87, SSE and AVX state components (XCR0) when XSAVE is used.
-pub const XCR0: u64 = 0b111;
-
-pub unsafe fn activate(root: usize) {
-    asm!("mov cr3, {}", in(reg) root);
-}
 
 pub struct Space {
     tables: alloc::vec::Vec<Region>,
@@ -105,7 +28,7 @@ mod tests {
         let mut entry = 0;
         for shift in [39, 30, 21, 12] {
             entry = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
-            assert_eq!(entry & 5, 5);
+            assert!(if shift == 12 { mmu::user_readable(entry) } else { mmu::user_table(entry) });
             table = (entry & ADDRESS) as usize;
         }
         entry
@@ -127,8 +50,8 @@ mod tests {
         let mut space = Space::new().unwrap();
         space.map(USER_IMAGE, 0x100000, PAGE, false, true).unwrap();
         space.map(USER_STACK, 0x200000, PAGE, true, false).unwrap();
-        assert_eq!(leaf(&space, USER_IMAGE) & (WRITE | NX), 0);
-        assert_eq!(leaf(&space, USER_STACK) & (WRITE | NX), WRITE | NX);
+        assert_eq!(mmu::attributes(leaf(&space, USER_IMAGE)), (false, true, false));
+        assert_eq!(mmu::attributes(leaf(&space, USER_STACK)), (true, false, false));
         assert!(space.readable(USER_STACK - 1).is_none());
         assert!(space.readable(USER_STACK + PAGE).is_none());
         assert!(space.map(USER_EXIT, 0x300000, PAGE, true, true).is_err());
@@ -178,7 +101,7 @@ impl Space {
         };
         let root = space.table()?;
         unsafe {
-            (root as *mut u64).write(KERNEL_PDPT.load(Ordering::Acquire) as u64 | 3);
+            (root as *mut u64).write(mmu::kernel_entry());
         }
         Ok(space)
     }
@@ -266,25 +189,18 @@ impl Space {
             for shift in [39, 30, 21] {
                 let entry = unsafe { (table as *mut u64).add((address >> shift) & 511) };
                 unsafe {
-                    if entry.read() & PRESENT == 0 {
-                        entry.write(self.table()? as u64 | 7);
+                    if entry.read() & mmu::VALID == 0 {
+                        entry.write(self.table()? as u64 | mmu::TABLE);
                     }
                     table = (entry.read() & ADDRESS) as usize;
                 }
             }
             let entry = unsafe { (table as *mut u64).add((address >> 12) & 511) };
             unsafe {
-                if entry.read() & PRESENT != 0 {
+                if entry.read() & mmu::VALID != 0 {
                     return Err("OVERLAPPING USER PAGES");
                 }
-                entry.write(
-                    (physical + offset) as u64
-                        | PRESENT
-                        | USER
-                        | if writable { WRITE } else { 0 }
-                        | if executable { 0 } else { NX }
-                        | if device { UNCACHED } else { 0 },
-                );
+                entry.write(mmu::leaf((physical + offset) as u64, writable, executable, device));
             }
         }
         Ok(())
@@ -310,7 +226,7 @@ impl Space {
             for shift in [39, 30, 21] {
                 let entry = unsafe { (table as *mut u64).add((address >> shift) & 511) };
                 let value = unsafe { entry.read() };
-                if value & PRESENT == 0 {
+                if value & mmu::VALID == 0 {
                     break;
                 }
                 table = (value & ADDRESS) as usize;
@@ -327,7 +243,7 @@ impl Space {
                 if !reclaim { break; }
                 let child = children[level];
                 let empty =
-                    (0..512).all(|i| unsafe { (child as *const u64).add(i).read() & PRESENT == 0 });
+                    (0..512).all(|i| unsafe { (child as *const u64).add(i).read() & mmu::VALID == 0 });
                 if !empty {
                     break;
                 }
@@ -350,36 +266,27 @@ impl Space {
     // Mapped user ranges with equal attributes, coalesced: (start, size, writable, executable, device). Absent tables are
     // skipped whole, so the walk is bounded by the number of tables (STAT VMAP).
     pub fn regions(&self, mut emit: impl FnMut(usize, usize, bool, bool, bool)) {
-        let mut run: Option<(usize, usize, u64)> = None;
+        let mut run: Option<(usize, usize, (bool, bool, bool))> = None;
         let mut address = USER_IMAGE;
         while address < USER_END {
             let mut table = self.root();
             let mut leaf = None; let mut span = PAGE;
             for shift in [39, 30, 21, 12] {
                 let value = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
-                if value & PRESENT == 0 { span = (1usize << shift) - (address & ((1usize << shift) - 1)); break; }
-                if shift == 12 { leaf = Some(value & (WRITE | NX | UNCACHED)); } else { table = (value & ADDRESS) as usize; }
+                if value & mmu::VALID == 0 { span = (1usize << shift) - (address & ((1usize << shift) - 1)); break; }
+                if shift == 12 { leaf = Some(mmu::attributes(value)); } else { table = (value & ADDRESS) as usize; }
             }
             match (run, leaf) {
                 (Some((start, size, flags)), Some(f)) if start + size == address && flags == f => run = Some((start, size + PAGE, flags)),
-                (_, Some(f)) => { if let Some((s, z, g)) = run { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); } run = Some((address, PAGE, f)); }
-                (_, None) => { if let Some((s, z, g)) = run.take() { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); } }
+                (_, Some(f)) => { if let Some((s, z, (w, x, d))) = run { emit(s, z, w, x, d); } run = Some((address, PAGE, f)); }
+                (_, None) => { if let Some((s, z, (w, x, d))) = run.take() { emit(s, z, w, x, d); } }
             }
             address = address.saturating_add(span);
         }
-        if let Some((s, z, g)) = run { emit(s, z, g & WRITE != 0, g & NX == 0, g & UNCACHED != 0); }
+        if let Some((s, z, (w, x, d))) = run { emit(s, z, w, x, d); }
     }
 
-    fn flush(&self) {
-        #[cfg(not(test))]
-        unsafe {
-            let current: usize;
-            asm!("mov {}, cr3", out(reg) current);
-            if current == self.root() {
-                activate(current);
-            }
-        }
-    }
+    fn flush(&self) { mmu::flush(self.root()); }
 
     // Translate through this task's locked page tables, never by trusting a
     // user-supplied kernel pointer. Null, supervisor, noncanonical and holes fail.
@@ -390,7 +297,7 @@ impl Space {
         let mut table = self.root();
         for shift in [39, 30, 21, 12] {
             let entry = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
-            if entry & (PRESENT | USER) != (PRESENT | USER) {
+            if !(if shift == 12 { mmu::user_readable(entry) } else { mmu::user_table(entry) }) {
                 return None;
             }
             table = (entry & ADDRESS) as usize;
@@ -406,7 +313,7 @@ impl Space {
         let mut table = self.root();
         for shift in [39, 30, 21, 12] {
             let entry = unsafe { (table as *const u64).add((address >> shift) & 511).read() };
-            if entry & (PRESENT | USER | WRITE) != (PRESENT | USER | WRITE) {
+            if !(if shift == 12 { mmu::user_writable(entry) } else { mmu::user_table(entry) }) {
                 return None;
             }
             table = (entry & ADDRESS) as usize;
@@ -434,12 +341,3 @@ impl Space {
     }
 }
 
-/// Makes the kernel's identity mapping of the 2 MiB page holding `physical` (below 4 GiB) uncached, for device
-/// registers the kernel itself writes (MSI-X tables). The caller checks that the page holds no RAM.
-pub unsafe fn uncached(physical: usize) {
-    let pdpt = KERNEL_PDPT.load(Ordering::Acquire) as *const u64;
-    let pd = (pdpt.add(physical >> 30).read() & !0xFFF) as *mut u64;
-    let entry = pd.add(physical >> 21 & 511);
-    entry.write(entry.read() | 0x18);
-    core::arch::asm!("invlpg [{}]", in(reg) physical, options(nostack));
-}

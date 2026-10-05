@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt)]
+#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
 extern crate alloc;
 
@@ -29,7 +29,7 @@ mod abi;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
-use arch::{acpi, clock, context, cpu, interrupts, paging, pci, port};
+use arch::{acpi, clock, context, cpu, interrupts, mmu, pci, port};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
 mod frames;
@@ -37,6 +37,7 @@ mod frames;
 mod elf_reloc;
 mod input;
 mod memory;
+mod paging;
 mod scheduler;
 mod task_state;
 mod user_heap;
@@ -77,7 +78,7 @@ fn serial_print(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\
 
 #[no_mangle]
 #[link_section = ".text._start"]
-pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
+pub extern "C" fn _start(info: &BootInfo) -> ! {
     unsafe {
         cpu::disable_interrupts();
         init_serial();

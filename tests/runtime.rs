@@ -29,8 +29,10 @@ mod frames {
     pub fn allocate(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
     pub unsafe fn free(_: core::ptr::NonNull<u8>, _: core::alloc::Layout) {}
 }
-#[path = "../kernel/src/arch/x86_64/paging.rs"]
+#[path = "../kernel/src/paging.rs"]
 mod paging;
+#[path = "../kernel/src/arch/x86_64/mmu.rs"]
+mod mmu;
 #[path = "../libmind/src/idl/codec.rs"]
 mod codec;
 #[path = "../kernel/src/task_state.rs"]

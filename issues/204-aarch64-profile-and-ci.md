@@ -17,4 +17,4 @@ The CI matrix is green for both architectures, and the README says how to build 
 
 ## Related
 
-[201](201-aarch64-boot.md), [202](202-aarch64-devices.md), [203](203-aarch64-smp-and-power.md).
+[201](../issues-done/201-aarch64-boot.done), [202](202-aarch64-devices.md), [203](203-aarch64-smp-and-power.md).

@@ -208,4 +208,4 @@ pub unsafe fn prepare_stack(stack: usize, size: usize) -> usize {
 }
 
 // The state components saved per task with XSAVE (XCR0), 0 with FXSAVE (STAT_CPUS).
-pub fn saved_state() -> u64 { if XSAVE.load(core::sync::atomic::Ordering::Acquire) { crate::paging::XCR0 } else { 0 } }
+pub fn saved_state() -> u64 { if XSAVE.load(core::sync::atomic::Ordering::Acquire) { crate::mmu::XCR0 } else { 0 } }

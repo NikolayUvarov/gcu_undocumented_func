@@ -1,6 +1,6 @@
 # 203 — aarch64 SMP, reset and power off through PSCI
 
-**Type:** kernel · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** 201 · **Roadmap:** track H · **Constitution:** MC-5.x (budgets on every CPU), MC-6.x
+**Type:** kernel · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** — (201 done) · **Roadmap:** track H · **Constitution:** MC-5.x (budgets on every CPU), MC-6.x
 
 ## Plan
 
@@ -15,4 +15,4 @@
 
 ## Related
 
-[201](201-aarch64-boot.md), [152](../issues-done/152-reboot-system-call.done).
+[201](../issues-done/201-aarch64-boot.done), [152](../issues-done/152-reboot-system-call.done).

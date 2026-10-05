@@ -110,3 +110,24 @@ jobs:
         with:
           name: qemu-logs-${{ strategy.job-index }}
           path: /tmp/mind-core-*
+
+  # aarch64 on QEMU `virt` (issue 201): boot to init, services without devices, fault containment.
+  aarch64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: QEMU for aarch64 and AAVMF
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Build for aarch64
+        run: ./scripts/build_aarch64.sh --fixtures
+      - name: Boot and fault containment
+        run: python3 tests/aarch64_smoke.py
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-logs-aarch64
+          path: /tmp/mind-core-aarch64.log

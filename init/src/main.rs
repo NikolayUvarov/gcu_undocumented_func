@@ -441,7 +441,7 @@ fn main(_info: &'static BootInfo) {
             Err(error) => mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error),
         }
     }
-    legacy::report();
+    if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Process control, to stop services and applications on request (init is their lifecycle owner).
     if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
