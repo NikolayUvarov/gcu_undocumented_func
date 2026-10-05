@@ -2481,7 +2481,12 @@ def audio_suite(vm, wav):
     require(output, "[BEEP] DEVICE=true RATE=48000")
     require(output, "[BEEP] PCM QUEUED 24000 FRAMES")
     time.sleep(1.5)
-    vm.command("kill 1")
+    # beep with notes (issue u005): a console program, no screen; frequency and duration pairs, 0 Hz a pause.
+    require(vm.command("beep 10"), "BEEP: 10 HZ: A FREQUENCY IS 20-20000 HZ, OR 0 FOR A PAUSE")
+    played = vm.command("beep 440 200 0 100 880 300")
+    require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
+    require(played, "[BEEP] DONE")
+    assert task_rows(vm) == {}, "beep ended with its sound"
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -2490,7 +2495,10 @@ def audio_suite(vm, wav):
     left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "AC97 produced no audio"
-    seconds = (loud[-1] - loud[0]) / rate
+    # The demo, then after a second of silence the notes.
+    gap = next(k for k in range(1, len(loud)) if loud[k] - loud[k - 1] > rate)
+    demo, notes = loud[:gap], loud[gap:]
+    seconds = (demo[-1] - demo[0]) / rate
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
     def power(start, hz):
@@ -2498,9 +2506,16 @@ def audio_suite(vm, wav):
         return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate))
                        for i, x in enumerate(window))) / len(window)
     for index, hz in enumerate((523, 659, 784)):
-        start = loud[0] + int(rate * (0.05 + 0.15 * index))
+        start = demo[0] + int(rate * (0.05 + 0.15 * index))
         assert power(start, hz) > 5 * max(power(start, other) for other in (523, 659, 784) if other != hz), hz
-    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio", flush=True)
+    seconds = (notes[-1] - notes[0]) / rate
+    assert 0.55 < seconds < 0.65, seconds  # 200 ms, a 100 ms pause, 300 ms
+    first, second = notes[0] + int(rate * 0.08), notes[0] + int(rate * 0.4)
+    assert power(first, 440) > 5 * power(first, 880) and power(second, 880) > 5 * power(second, 440)
+    pause = notes[0] + int(rate * 0.22)
+    assert not any(left[pause:pause + int(rate * 0.06)]), "the pause is silent"
+    print("PASS: audio gateway: AC97 DMA ring, IRQ via IPC, tones 523/659/784 Hz and client PCM in captured audio; "
+          "beep's notes (440 Hz, a pause, 880 Hz) without a screen", flush=True)
 
 
 SPEECH = ("открой файлы", "который час", "hello world")
