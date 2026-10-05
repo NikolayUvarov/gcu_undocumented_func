@@ -596,7 +596,7 @@ def shell_suite(vm):
     keys(b"ist\x1b[Hl\x1b[F\r", "PROGRAMS ON DISK (")
     # Delete: "cpusX", Left, Delete -> "cpus".
     keys(b"cpusX\x1b[D\x1b[3~\r", "CPU=0 APIC=")
-    vm.command("clock")
+    vm.command("time")
     # History: Up twice is "cpus".
     keys(b"\x1b[A\x1b[A\r", "CPU=0 APIC=")
     # Esc clears a typed line.
@@ -1083,11 +1083,22 @@ def console_check(vm):
     assert any(row.rstrip() == "300" for row in screen), screen
     assert any(row.startswith(canon("nosuch: no such program")) for row in screen), screen
     assert screen[-1].startswith(canon("> ")), screen[-1]
+    # console's own commands (issue u006): ps, ls; a shell command is named as such, ping without a network says why.
+    vm.send_bytes(b"clear\r")
+    for line in (b"ps", b"ls docs", b"kill 1", b"ping ya.ru"):
+        vm.send_bytes(line + b"\r")
+        time.sleep(.6)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(re.match(r" +1 init +RECV", row) for row in screen), screen
+    assert any(row.startswith(canon("notes.txt ")) for row in screen), screen
+    assert any(row.startswith(canon("kill: a command of the shell")) for row in screen), screen
+    assert any(row.startswith(canon("ping: ")) for row in screen), screen
     vm.send_bytes(b"exit\r")
     require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, exit returns to the shell", flush=True)
+    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, ps and ls of its own, shell commands named, exit returns to the shell", flush=True)
 
 
 def vfs_check(vm):
@@ -1657,10 +1668,18 @@ def dzen_suite(vm):
     time.sleep(.3)
     screen = look()[0]
     assert not screen[0].strip() and not screen[-1].strip() and not screen[-2].strip(), (screen[0], screen[-2:])
+    # On its own screen T switches to the pixel face and back (issue u007).
+    vm.send("t\n")
+    require(vm.expect("[DZEN-CLOCK] STARTED. D: DIGITS"), "[DZEN-CLOCK] PIXEL FACE")
+    vm.send("t\n")
+    require(vm.expect("[DZEN-CLOCK] STARTED (TEXT)"), "[DZEN-CLOCK] TEXT FACE")
+    time.sleep(.3)
+    screen = look()[0]
+    assert canon("T: PIXEL FACE") in screen[-1], screen[-1]
     vm.send("\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
     time.sleep(.1); vm.collect(); vm.output = ""
-    vm.send("run clock --text\n")  # `clock` alone is the shell's command for the monotonic clock
+    vm.send("clock --text\n")  # the program (issue u007: the shell's one-line command is `time`)
     vm.expect("[CLOCK] 19:3")
     time.sleep(.3)
     first = look()[0]
@@ -1673,7 +1692,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -1730,7 +1749,8 @@ def services_suite(vm):
     for name in ("rtc", "ps2_kbd", "compositor", "ata", "vfs_server", "loader", "audio_gw", "tts", "sysmon"):
         assert re.search(fr"^\d+ {name} (IPC_WAIT|IRQ_WAIT|SLEEPING|READY|RUNNING) BG", output, re.M), (name, output)
     # Monotonic clock: calibrated TSC with sub-millisecond resolution, never going backwards.
-    clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("clock")) for _ in range(2)]
+    clocks = [re.search(r"MONOTONIC NS=(\d+) RESOLUTION NS=(\d+) TSC HZ=(\d+)", vm.command("time")) for _ in range(2)]
+    assert re.search(r"TIME: \d\d:\d\d:\d\d UPTIME MS=\d+ ", vm.command("time")), "the time of day first"
     assert all(clocks), clocks
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
@@ -2871,7 +2891,7 @@ def net_suite(args, disk):
     dns = _dns_server()
     web_port, dns_port = web.server_address[1], dns.getsockname()[1]
     # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing.
-    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\n")
+    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n")
     shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
@@ -2953,6 +2973,24 @@ def net_suite(args, disk):
             raise AssertionError("no ping answer after the driver restart")
         # The new driver instance had no frame ring: the stack lent it a fresh one (issue 107).
         require(vm.command("dmesg -s netstack"), "[NETSTACK] CARD 0: DRIVER WITHOUT OUR RING, ATTACHING AGAIN")
+        # console's ping (issue u006): through its own grant, to what the policy names for it and nothing else.
+        vm.send("console ping 10.0.2.2\n")
+        vm.expect("[CONSOLE] READY")
+        for _ in range(40):
+            time.sleep(.25)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(row.startswith(canon("ping: 3 sent")) for row in screen):
+                break
+        assert any(row.rstrip() == canon("ping: 3 sent, 3 received") for row in screen), screen
+        vm.send_bytes(b"ping 10.0.2.3\r")
+        time.sleep(1)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        assert any(row.startswith(canon("ping: 10.0.2.3: not allowed for console")) for row in screen), screen
+        vm.send_bytes(b"exit\r")
+        require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
+        require(vm.command("dmesg -s netpolicy"), "TO console: 1 RULES")
     finally:
         vm.close()
         web.shutdown(); dns.close()

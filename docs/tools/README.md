@@ -263,6 +263,8 @@ An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit
 
 `console [program [arguments]]` in a window of `wm` or on a screen of its own: a command line under what its programs printed. A line typed starts a program with its arguments; a console program gets an endpoint of console's in `SLOT_CONSOLE` (issue 162) and what it prints shows here — as the shell shows it, and in the kernel's log as before; a program with a screen opens a window of its own (in `wm`) or a screen in the background. Of what a program asks for it gets what `console` holds: the user's files (a directory for one file) and system information. `list` names the programs, `clear` (Ctrl+L) clears, `exit` closes; ↑ ↓ recall earlier lines, PgUp/PgDn and the mouse wheel scroll back (2000 lines). Several programs may run at once; the command line names them, and one that ended without printing says so. `console` cannot stop a program (that needs process control: Ctrl+Z and `kill` in the shell), and keys typed go to `console`, not to the program.
 
+Its own commands (issue u006), done with what it holds: `ps` (the task table from system information), `ls`, `cat`, `mkdir`, `rm`, `mv`, `write` (the user's files), `date`, `time`, and `ping`, through a flow grant of console's own — when the shell starts `console` and `netpolicy.txt` names destinations for it (`console 1.1.1.1 icmp`, `console dns`); `wm` passes no network, and console says so. The shell's commands that need what only the shell holds (`kill`, `fg`, `logs`, `ip`, `nslookup`, `fetch`, its own `ping` to any host, …) are named as such. `run <program>` starts a program whose name a command has (`run ping`: the IPC demo).
+
 ## 5. Phases
 
 ```mermaid

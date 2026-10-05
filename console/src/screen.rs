@@ -25,20 +25,35 @@ impl Kind {
 }
 pub const BACKGROUND: u32 = 0x101418;
 
-/// What a line typed asks for.
+/// What a line typed asks for: console's own commands; a command of the shell, which console cannot do (it holds
+/// no process control and no network of the shell's); a program (`run` starts a program even where a command has
+/// its name, as `run ping` the IPC demo).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Run { name: &'a str, args: &'a str } }
+pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str, args: &'a str }, Shell(&'a str), Run { name: &'a str, args: &'a str } }
+
+/// Commands console does itself, with what it holds (issue u006).
+pub const BUILTINS: [&str; 10] = ["ps", "ls", "cat", "date", "time", "ping", "mkdir", "rm", "mv", "write"];
+/// The shell's commands that need what only the shell holds: process control, its network and device clients.
+pub const SHELL_ONLY: [&str; 30] = ["kill", "fg", "logs", "stop", "boot", "ip", "nslookup", "fetch", "https", "tls", "net", "netgrants", "netrevoke",
+    "pmap", "stat", "free", "cpus", "physmap", "irqs", "devices", "endpoints", "faults", "quotas", "budget", "heap", "sync", "logger", "reboot", "keymap", "screenshot"];
+
+// The first word and the rest.
+fn split(line: &str) -> (&str, &str) { line.split_once(char::is_whitespace).map_or((line, ""), |(n, a)| (n, a.trim())) }
+// A program's name without `.elf`.
+fn program(name: &str) -> &str { name.strip_suffix(".elf").unwrap_or(name) }
 
 pub fn parse(line: &str) -> Command<'_> {
-    let line = line.trim();
-    let (name, args) = line.split_once(char::is_whitespace).map_or((line, ""), |(n, a)| (n, a.trim()));
+    let (name, args) = split(line.trim());
     match name {
         "" => Command::Nothing,
         "help" | "?" => Command::Help,
         "clear" | "cls" => Command::Clear,
         "exit" | "quit" => Command::Exit,
-        "list" | "ls" if args.is_empty() => Command::List,
-        _ => Command::Run { name: name.strip_suffix(".elf").unwrap_or(name), args },
+        "list" if args.is_empty() => Command::List,
+        "run" => { let (name, args) = split(args); Command::Run { name: program(name), args } }
+        _ if BUILTINS.contains(&name) => Command::Builtin { name, args },
+        _ if SHELL_ONLY.contains(&name) => Command::Shell(name),
+        _ => Command::Run { name: program(name), args },
     }
 }
 
@@ -145,14 +160,24 @@ impl Screen {
         if steps < 0 { self.scroll += 3 * steps.unsigned_abs() as usize; } else { self.scroll = self.scroll.saturating_sub(3 * steps as usize); }
     }
 
-    /// Every line cut to `width` columns, the program's unfinished line last.
+    /// Every line cut to `width` columns (at a space where one is near the end), the program's unfinished line last.
     pub fn rows(&self, width: usize) -> Vec<(String, Kind)> {
         let width = width.max(1);
         let mut rows = Vec::new();
         for (text, kind) in self.lines.iter().map(|(t, k)| (t.as_str(), *k)).chain((!self.partial.is_empty()).then_some((self.partial.as_str(), Kind::Output))) {
             let chars: Vec<char> = text.chars().collect();
             if chars.is_empty() { rows.push((String::new(), kind)); continue; }
-            for piece in chars.chunks(width) { rows.push((piece.iter().collect(), kind)); }
+            // At the last space that fits, when there is one in the row's second half; else where the row is full.
+            let mut start = 0;
+            while start < chars.len() {
+                let mut end = (start + width).min(chars.len());
+                if end < chars.len() && chars[end] != ' ' {
+                    if let Some(space) = chars[start + width / 2..end].iter().rposition(|&c| c == ' ') { end = start + width / 2 + space + 1; }
+                }
+                rows.push((chars[start..end].iter().collect::<String>().trim_end().into(), kind));
+                start = end;
+                while start < chars.len() && chars[start] == ' ' { start += 1; } // a row continued does not start with a space
+            }
         }
         rows
     }

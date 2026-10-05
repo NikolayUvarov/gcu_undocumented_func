@@ -62,6 +62,11 @@ fn what_programs_print() {
     let (rows, _) = draw(&mut screen, 40, 8, "");
     assert_eq!(&rows[..5], ["строка один", "line    two", "последняя", "uptime: no such program", "x?y"]);
     assert_eq!(screen.lines[3].1, Kind::Error);
+    // Words stay whole where a space is near the end of a row.
+    screen.clear();
+    screen.say("type it in the shell, as before", Kind::Note);
+    assert_eq!(screen.rows(12).into_iter().map(|(t, _)| t).collect::<Vec<_>>(), ["type it in", "the shell,", "as before"]);
+    assert_eq!(screen.rows(4).into_iter().map(|(t, _)| t).collect::<Vec<_>>(), ["type", "it", "in", "the", "shel", "l,", "as", "befo", "re"]);
     // Long lines wrap; the newest rows stay at the bottom.
     screen.clear();
     for n in 0..30 { screen.output(format!("line {}\n", n).as_bytes()); }
@@ -117,4 +122,13 @@ fn the_command_line() {
     assert_eq!(parse("list"), Command::List);
     assert_eq!(parse("uptime.elf"), Command::Run { name: "uptime", args: "" });
     assert_eq!(parse(" find  ram: -name *.txt "), Command::Run { name: "find", args: "ram: -name *.txt" });
+    // console's own commands; the shell's; `run` for a program whose name a command has (issue u006).
+    assert_eq!(parse("ps"), Command::Builtin { name: "ps", args: "" });
+    assert_eq!(parse("ls docs"), Command::Builtin { name: "ls", args: "docs" });
+    assert_eq!(parse("ping ya.ru"), Command::Builtin { name: "ping", args: "ya.ru" });
+    assert_eq!(parse("run ping"), Command::Run { name: "ping", args: "" });
+    assert_eq!(parse("run clock --text"), Command::Run { name: "clock", args: "--text" });
+    assert_eq!(parse("run"), Command::Run { name: "", args: "" });
+    assert_eq!(parse("kill 3"), Command::Shell("kill"));
+    assert_eq!(parse("nslookup ya.ru"), Command::Shell("nslookup"));
 }

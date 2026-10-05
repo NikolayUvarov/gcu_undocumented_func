@@ -68,7 +68,7 @@ fn dzen_indicators_orbit_and_keys() {
     // 19:35:05: the top right corner yellow (hour 19 in the fourth quarter of the day), the center cyan (35 minutes),
     // clockwise after it: bottom right dark, bottom left and top left white.
     let face = Face::at(SECONDS).unwrap();
-    let show = dzen::Show { digits: true, hints: true, mode: OrbitMode::Off };
+    let show = dzen::Show { digits: true, hints: true, mode: OrbitMode::Off, switch: false };
     let mut cells = vec![Cell::BLANK; 80 * 25];
     let mut grid = Grid::new(&mut cells, 80, 25);
     dzen::draw(&mut grid, face, Some(SECONDS), None, show);
@@ -79,6 +79,9 @@ fn dzen_indicators_orbit_and_keys() {
     let screen = rows(&grid);
     assert_eq!(screen[0].trim(), dzen::TITLE);
     assert_eq!(screen[24].trim(), dzen::KEYS);
+    dzen::draw(&mut grid, face, Some(SECONDS), None, dzen::Show { switch: true, ..show });
+    assert_eq!(rows(&grid)[24].trim(), dzen::KEYS_SWITCH, "on its own screen T switches to the pixel face");
+    dzen::draw(&mut grid, face, Some(SECONDS), None, show);
     assert_eq!(screen[23].trim(), "19:35:05");
     assert!(!screen.iter().any(|r| r.contains('·') || r.contains('●')), "no orbit while it is off");
     // The discs are round: as wide in cells as they are tall in half cells.
@@ -87,24 +90,24 @@ fn dzen_indicators_orbit_and_keys() {
     let height = yellow.iter().map(|p| p.1).max().unwrap() - yellow.iter().map(|p| p.1).min().unwrap() + 1;
     assert!((width as isize - 2 * height as isize).abs() <= 2, "{}x{}", width, height);
     // C: the orbit with its start tick and the dot; P: ten ticks; H and D hide the text.
-    dzen::draw(&mut grid, face, Some(SECONDS), Some(5_000), dzen::Show { digits: false, hints: false, mode: OrbitMode::Simple });
+    dzen::draw(&mut grid, face, Some(SECONDS), Some(5_000), dzen::Show { digits: false, hints: false, mode: OrbitMode::Simple, switch: false });
     let screen = rows(&grid);
     assert!(screen.iter().map(|r| r.matches('·').count()).sum::<usize>() > 10, "{:#?}", screen);
     assert_eq!(screen.iter().map(|r| r.matches('●').count()).sum::<usize>(), 1);
     assert_eq!(screen.iter().map(|r| r.matches('■').count()).sum::<usize>(), 1);
     assert_eq!(screen.iter().map(|r| r.matches('•').count()).sum::<usize>(), 0);
     assert!(screen[0].trim().is_empty() && screen[23].trim().is_empty() && screen[24].trim().is_empty());
-    dzen::draw(&mut grid, face, Some(SECONDS), Some(5_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks });
+    dzen::draw(&mut grid, face, Some(SECONDS), Some(5_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
     assert_eq!(rows(&grid).iter().map(|r| r.matches('•').count()).sum::<usize>(), 9, "nine 10-second ticks");
     // The dot moves along the orbit: a quarter turn later it is elsewhere.
     let dot = |grid: &Grid| (0..25).flat_map(|y| (0..80).map(move |x| (x, y))).find(|&(x, y)| grid.get(x, y).ch == '●');
     let first = dot(&grid);
-    dzen::draw(&mut grid, face, Some(SECONDS), Some(30_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks });
+    dzen::draw(&mut grid, face, Some(SECONDS), Some(30_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
     assert!(dot(&grid).is_some() && dot(&grid) != first);
     // Small grids still draw (a window being resized).
     for (cols, rows_) in [(10, 3), (20, 6), (38, 9), (160, 50)] {
         let mut cells = vec![Cell::BLANK; cols * rows_];
         let mut grid = Grid::new(&mut cells, cols, rows_);
-        dzen::draw(&mut grid, face, None, Some(1), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks });
+        dzen::draw(&mut grid, face, None, Some(1), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
     }
 }

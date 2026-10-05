@@ -135,6 +135,8 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u003](../issues-done/u003-desktop-programs-menu.done) | wm: a right click on the desktop (or Alt+P) opens the programs by category; a click starts one in a window | done (2026-10-05) |
 | [u004](../issues-done/u004-console.done) | `console`: a terminal for programs in a window or on a screen; console programs started in `wm` or `fm` run in it | done (2026-10-05) |
 | [u005](../issues-done/u005-beep-without-a-screen.done) | `beep` without a screen: `beep 440` sounds 500 ms, `beep 440 200 0 100 880 300` a series (0 Hz: a pause) | done (2026-10-05) |
+| [u006](../issues-done/u006-console-commands.done) | console: its own `ps`, `ls`, `cat`, `date`, `time`, `ping` (through its policy grant); the shell's commands named; `run <program>` | done (2026-10-05) |
+| [u007](../issues-done/u007-time-clock-dzen-text.done) | The shell's one-line `clock` is `time`, `clock` starts the clock again; dzen-clock: T switches to the text face | done (2026-10-05) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

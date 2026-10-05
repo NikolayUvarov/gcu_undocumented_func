@@ -1,0 +1,27 @@
+# u006 — console: its own ps, ls, cat, date, time and ping; the shell's commands named; `run` — done
+
+**Type:** fix · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2
+
+## Problem
+
+Reported by the user with a screenshot: "ping in the console works somehow badly". In `console`, `ps` was "no such program" and `ping ya.ru` started `ping.elf` — the IPC ping/pong demo — in a window of its own. In the shell `ps`, `ls`, `ping` and the like are the shell's own commands; console knew only programs.
+
+## Plan
+
+- Commands of console's own, with what it holds: `ps` (sysmon's task table: console asks for system information to pass it on), `ls`, `cat`, `mkdir`, `rm`, `mv`, `write` (the user's files), `date`, `time` (the RTC).
+- `ping <host>` through console's own flow grant: it asks for the network (`REQUEST_NETWORK`); started by the shell it gets what `netpolicy.txt` names for it, and only that (issue 102). Names need `console dns`. Started by `wm` it gets none (wm holds no policy client) and says so, naming the policy lines and the shell's own `ping`. Opening the network to every address for a program in a window is a policy decision of the network track, not made here.
+- The shell's commands that need what only the shell holds — process control (`kill`, `fg`, `logs`), its network and device clients (`ip`, `nslookup`, `fetch`, `https`, …), kernel statistics — are named as such instead of being looked up as programs.
+- `run <program>` starts a program whose name a command has (`run ping`: the IPC demo).
+- Lines wrap at a space near the row's end; the desktop menu's Network category no longer lists the IPC demo `ping`/`pong`.
+
+## Acceptance criteria
+
+- Host: the commands parsed (`ps`, `ls docs`, `ping ya.ru`, `run ping`, `run`, `kill`, `nslookup`); words kept whole when wrapping.
+- QEMU: `ps` lists `init`, `ls docs` the notes, `kill` is named as the shell's, `ping` without a grant says why (`tools` suite); with `console 10.0.2.2 icmp` in the policy, `console ping 10.0.2.2` gets three replies, `ping 10.0.2.3` is refused naming the line it needs, and the broker logs console's grant (`net` suite).
+
+## Resolution
+
+- `console/src/builtins.rs` (new): `ps`, `ls`, `cat`, `change` (`mkdir`, `rm`, `mv`, `write`), `date`, `time`, `ping`. `console/src/screen.rs`: `Command::Builtin`, `Command::Shell`, `run`, `BUILTINS`, `SHELL_ONLY`; wrapping at spaces. `console/src/main.rs`: `REQUEST_NETWORK`, the commands, the help.
+- `wm/src/menu.rs`: Network lists `netcheck` and `netbench`.
+- Tests: `tests/console_host.rs`, QEMU `tools` and `net` suites.
+- Docs: docs/tools §4.10 (English and Russian).

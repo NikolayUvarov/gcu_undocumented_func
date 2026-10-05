@@ -17,11 +17,13 @@ const START_TICK: u32 = 0x909090;
 const SMALL_TICK: u32 = 0x707070;
 
 pub const TITLE: &str = "DZEN CLOCK";
-pub const KEYS: &str = "D: DIGITS   C: ORBIT   P: 10S TICKS   H: TEXT   ESC: EXIT";
+pub const KEYS: &str = "D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   ESC: EXIT";
+/// On the program's own screen T switches to the pixel face.
+pub const KEYS_SWITCH: &str = "D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   T: PIXEL FACE   ESC: EXIT";
 
-/// What the keys chose.
+/// What the keys chose; `switch`: the key line names T (the program has a screen of its own).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Show { pub digits: bool, pub hints: bool, pub mode: OrbitMode }
+pub struct Show { pub digits: bool, pub hints: bool, pub mode: OrbitMode, pub switch: bool }
 
 /// Where the face is: its center in units (x: cells, y: half cells) and the distance of the corner indicators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +88,6 @@ pub fn draw(grid: &mut Grid, face: Face, seconds: Option<usize>, phase: Option<u
     }
     if show.hints && rows >= 3 {
         grid.text_centered(grid.area(), 0, TITLE, Style::new(HINT, OFF));
-        grid.text_centered(grid.area(), rows - 1, KEYS, Style::new(HINT, OFF));
+        grid.text_centered(grid.area(), rows - 1, if show.switch { KEYS_SWITCH } else { KEYS }, Style::new(HINT, OFF));
     }
 }
