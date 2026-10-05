@@ -189,7 +189,7 @@ chmod +x 02_build.sh
 ```
 
 
-2. Build the kernel, all programs and services, and the UEFI bootloader. The script places the ELF files in `usb_root/` and the bootloader in `usb_root/EFI/BOOT/`:
+2. Build the kernel, all programs and services, and the UEFI bootloader. The script places the ELF files in `usb_root/` and the bootloader in `usb_root/EFI/BOOT/` (for aarch64: `ARCH=aarch64 ./02_build.sh` builds `aarch64_root/`, see [aarch64](#aarch64-qemu-virt-issues-201204) below):
 ```bash
 ./02_build.sh
 
@@ -242,17 +242,17 @@ installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
 arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
 `MIND_AUDIO`, `MIND_NET`, `MIND_POINTER` and `MIND_CPU` work as with `03_run_qemu.sh`.
 
-### aarch64 (QEMU `virt`, issues 201–203)
+### aarch64 (QEMU `virt`, issues 201–204)
 
 The same kernel (with its aarch64 architecture layer), bootloader, services and programs build for aarch64 and run on QEMU's `virt` machine with VirtIO devices: the boot disk on `virtio-blk`, the network card, keyboard and tablet, the screen on `ramfb`, the shell on the PL011 in the terminal, the clock from the PL031. Four CPUs by default (`MIND_CPUS`), started through PSCI; `reboot --off` turns the machine off (issue 203). Needs the Rust targets of `rust-toolchain.toml`, `qemu-system-aarch64` and AAVMF (Debian/Ubuntu: `qemu-system-arm qemu-efi-aarch64 ipxe-qemu`):
 
 ```bash
-./scripts/build_aarch64.sh && ./03_run_qemu_aarch64.sh
-python3 tests/aarch64_smoke.py   # after ./scripts/build_aarch64.sh --fixtures
+ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64_root/ (scripts/build_aarch64.sh)
+python3 tests/aarch64_smoke.py   # after ARCH=aarch64 ./02_build.sh --fixtures
 python3 tests/qemu_smoke.py --arch aarch64   # the normal, shell, vfs, net, tls, busy and smp suites on virt (after --fixtures)
 ```
 
-What differs from x86-64 is in [docs/profile/aarch64-qemu-virt.md](docs/profile/aarch64-qemu-virt.md).
+The platform profile `aarch64/QEMU-virt-0` (what differs from x86-64, its TCB, threat model and evidence) is in [docs/profile/aarch64/](docs/profile/aarch64/README.md); CI runs the `aarch64` jobs next to the x86 ones.
 
 ### Bootable USB image
 

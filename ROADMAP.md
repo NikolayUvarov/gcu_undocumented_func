@@ -1,7 +1,7 @@
 # MIND CORE — Roadmap v1.1
 
-**Version:** 1.4 (1.3 → 1.4: track H, porting to other architectures, starting with aarch64; 1.2 → 1.3: track D has a network stack, a policy broker and a TLS service with a key service; 1.1 → 1.2: stage II steps C1–C8 done; tracks A and D started with the VirtIO network driver)  
-**Date:** 4 October 2026  
+**Version:** 1.5 (1.4 → 1.5: track H has the aarch64 platform `aarch64/QEMU-virt-0`, issues 200–204; boards are next, issue 205; 1.3 → 1.4: track H, porting to other architectures, starting with aarch64; 1.2 → 1.3: track D has a network stack, a policy broker and a TLS service with a key service; 1.1 → 1.2: stage II steps C1–C8 done; tracks A and D started with the VirtIO network driver)  
+**Date:** 5 October 2026  
 **Based on:** [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md)  
 **Russian version:** [ROADMAP_RU.md](ROADMAP_RU.md) (kept in sync; the English text is the reference)
 
@@ -103,7 +103,7 @@ graph LR
 | **E. Marain** | RFC M0–M7 | M0 specification and M1 front end / M2 reference evaluator on a host bench; M3 Wasm component + runtime limits; M4 actors and protocols; M5 state/update; M6 cognitive-plane pilot and comparison with Rust bindings | **M0–M2: now** (host only) | M3–M4: IDL from C5; M5: track B; M6: tracks A/B services |
 | **F. Safety plane** | VI | Control actors, authorized change of limits, justified deadlines, degradation when the cognitive plane fails; no JIT | After II and C7 budgets | Needed drivers (A), durability (B) |
 | **G. User services** | VII | Compositor on display fences, audio, TTS, input methods, UI and localization (English and Russian); system tools — file manager, editor, `top`, memory map, load monitor ([plan](docs/tools/README.md)) | After C8 port; the system tools of the plan are done (issues 052–071, 075–076, 080–086); voice ([plan](docs/voice/README.md)): V0–V2 done (issues 077–079), needs kernel issues 150, 153, 154 for V2+ and V3; sight: cameras through a USB stack and a video gateway with consent (issue 158), screen and window recording (093) | Only the interfaces they use |
-| **H. Porting** | II–III (one more platform profile) | An architecture layer in the kernel and libmind (x86-64 first, no change in behavior); aarch64 on QEMU `virt`: UEFI loader, exception vectors, MMU, generic timer, GICv3, `svc` system calls, PSCI for SMP and reset; devices over PCIe ECAM and VirtIO (block, input, rng, the existing net driver), PL011 and PL031; a second profile `aarch64/QEMU-virt-0` with its own TCB and evidence; then boards with UEFI (Raspberry Pi with EDK2, servers with ACPI) | The architecture layer: now (issue 200); aarch64 after it (201–204) | VirtIO block and input from track A (they are not x86-specific); the x86 legacy drivers (`LEGACY:`) are not ported |
+| **H. Porting** | II–III (one more platform profile) | An architecture layer in the kernel and libmind (x86-64 first, no change in behavior); aarch64 on QEMU `virt`: UEFI loader, exception vectors, MMU, generic timer, GICv3, `svc` system calls, PSCI for SMP and reset; devices over PCIe ECAM and VirtIO (block, input, rng, the existing net driver), PL011 and PL031; a second profile `aarch64/QEMU-virt-0` with its own TCB and evidence; then boards with UEFI (Raspberry Pi with EDK2, servers with ACPI) | Done: the architecture layer (200) and aarch64 on QEMU `virt` (201–204: devices, SMP, the profile, CI); next: boards (205) | VirtIO block and input from track A (they are not x86-specific); the x86 legacy drivers (`LEGACY:`) are not ported |
 | **Assurance** | continuous | Models of revoke / MOVE / checkpoint / fencing (e.g. TLA+); fuzzing of syscalls and IDL decoders; fault injection; recovery drills; evidence tied to configuration | **Now** | — |
 
 Distribution (replication, fencing at the resource, remote capabilities through a gateway — Article 7) is part of stage V and starts after tracks B and D provide durable state and a transport.
@@ -135,7 +135,7 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | P1 | Track A: VirtIO block and input on `mind::virtio` | Drivers restart under the supervisor with device quiesce; MSI-X (done for net: 100, 104) |
 | P2 | Track D: policy broker, TLS | Flows as capabilities with quotas (done: stack 101, broker 102, TLS 103) |
 | P2 | Tracks B, C, E–G in parallel | Per track |
-| P2 | Track H: architecture layer, then aarch64 on QEMU `virt` | Issue 200 with all x86 suites green; then 201–204: the system boots to the shell on `qemu-system-aarch64` and the aarch64 suites run in CI |
+| P2 | Track H: aarch64 on boards with UEFI | Done: issue 200 with all x86 suites green, 201–204 with the aarch64 suites in CI; next 205: a Raspberry Pi with EDK2 or an ACPI server boots to the shell |
 
 ## 7. Maintenance of this roadmap
 

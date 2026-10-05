@@ -7,7 +7,7 @@ This profile states what the current implementation is, what it guarantees, unde
 | Document | Content |
 |---|---|
 | [threat-model.md](threat-model.md) | Assets, adversaries, fault model, what is out of scope |
-| [aarch64-qemu-virt.md](aarch64-qemu-virt.md) | The second platform, `aarch64/QEMU-virt` (draft, issue 201): what differs from this profile |
+| [aarch64/](aarch64/README.md) | The second platform, `aarch64/QEMU-virt-0` (issues 201–204): its own platform, TCB, threat model and evidence, as differences from this profile |
 | [tcb.md](tcb.md) | Trusted computing base for each guarantee |
 | [kernel-objects.md](kernel-objects.md) | Kernel objects, capability kinds, limits and who pays for them |
 | [clocks.md](clocks.md) | Time sources, resolution, what is not provided |

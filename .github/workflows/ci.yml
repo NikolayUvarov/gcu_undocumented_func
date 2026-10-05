@@ -113,8 +113,20 @@ jobs:
 
   # aarch64 on QEMU `virt` (issue 201): boot to init, services without devices, fault containment.
   aarch64:
+    # QEMU virt (issues 201-204): the same build in every group, then its tests.
+    name: aarch64 (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: boot and fault containment
+            smoke: true
+          - group: programs, shell and four CPUs
+            suites: normal,shell,smp,busy
+          - group: files, network and TLS
+            suites: vfs,net,tls
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
@@ -122,14 +134,16 @@ jobs:
       - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Build for aarch64
-        run: ./scripts/build_aarch64.sh --fixtures
+        run: ARCH=aarch64 ./02_build.sh --fixtures
       - name: Boot and fault containment
+        if: ${{ matrix.smoke }}
         run: python3 tests/aarch64_smoke.py
-      - name: QEMU suites on virt, four CPUs (issues 202-203)
-        run: python3 tests/qemu_smoke.py --arch aarch64
+      - name: QEMU suites on virt, four CPUs
+        if: ${{ matrix.suites }}
+        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }}
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-logs-aarch64
+          name: qemu-logs-aarch64-${{ strategy.job-index }}
           path: /tmp/mind-core-*

@@ -1,0 +1,28 @@
+# 204 — aarch64 profile and CI — done
+
+**Type:** documents + CI · **Owner:** porting track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — (202, 203 done) · **Roadmap:** track H · **Constitution:** MC-12.1, Appendix A (profiles)
+
+## Plan
+
+- **Build:** `02_build.sh` builds for both architectures (`ARCH=aarch64`); a launcher `03_run_qemu_aarch64.sh`.
+- **Profile:** `docs/profile/aarch64/` for `aarch64/QEMU-virt-0`:
+  - platform, TCB (GIC, ITS, firmware, PSCI), threat model, evidence;
+  - what differs from x86, for example no IOMMU (SMMU later) and no legacy devices.
+- **CI:** an aarch64 build job and QEMU jobs running the suites from 201–203.
+- **Then:** boards with UEFI (Raspberry Pi 4/5 with the EDK2 port, servers with ACPI) as further profiles.
+
+## Acceptance criteria
+
+The CI matrix is green for both architectures, and the README says how to build and run either.
+
+## Related
+
+[201](201-aarch64-boot.done), [202](202-aarch64-devices.done), [203](203-aarch64-smp-and-power.done), [205](../issues/205-aarch64-boards.md).
+
+## Resolution
+
+- **Build:** `ARCH=aarch64 ./02_build.sh [--fixtures]` builds `aarch64_root/` (through `scripts/build_aarch64.sh`: the bootloader and every crate of the x86 list but the ISA drivers); `03_run_qemu_aarch64.sh` runs it with four CPUs, the VirtIO devices and the shell on the terminal.
+- **Profile:** `docs/profile/aarch64/` for `aarch64/QEMU-virt-0` 1.0: [README.md](../docs/profile/aarch64/README.md) (machine, what the kernel does differently, devices, building and running, conformance differences: no SMMU, MSIs keyed by requester ID in the ITS, no legacy devices, no FP state), [tcb.md](../docs/profile/aarch64/tcb.md) (GIC and ITS, AAVMF and its ACPI tables, PSCI, the VirtIO DMA drivers), [threat-model.md](../docs/profile/aarch64/threat-model.md), [evidence.md](../docs/profile/aarch64/evidence.md). The x86 profile points to it.
+- **CI:** the `aarch64` job is a matrix of three groups, each building with `ARCH=aarch64 ./02_build.sh --fixtures`: boot and fault containment (`aarch64_smoke.py`); programs, shell and four CPUs (`normal`, `shell`, `smp`, `busy`); files, network and TLS (`vfs`, `net`, `tls`).
+- **README:** how to build and run either architecture; ROADMAP 1.5 (EN, RU): track H's aarch64 on QEMU done, boards next.
+- **Then:** boards with UEFI are [205](../issues/205-aarch64-boards.md).

@@ -20,7 +20,7 @@ The `normal`, `shell`, `vfs`, `net` and `tls` suites pass on `qemu-system-aarch6
 
 ## Related
 
-[201](../issues-done/201-aarch64-boot.done), [204](../issues/204-aarch64-profile-and-ci.md), [ROADMAP](../ROADMAP.md) track A.
+[201](../issues-done/201-aarch64-boot.done), [204](204-aarch64-profile-and-ci.done), [ROADMAP](../ROADMAP.md) track A.
 
 ## Resolution
 
@@ -32,4 +32,4 @@ The `normal`, `shell`, `vfs`, `net` and `tls` suites pass on `qemu-system-aarch6
 - **Programs:** `app`'s green threads switch on aarch64 too; `scripts/build_aarch64.sh` builds every crate of `02_build.sh` but the ISA drivers. Tasks see which boot images exist, and init reports the missing ones as `NOT STARTED: NO IMAGE`.
 - **Tests:** `tests/qemu_smoke.py --arch aarch64` runs the `normal`, `shell`, `vfs`, `net` and `tls` suites on `qemu-system-aarch64 -machine virt` with virtio-blk, virtio-net, virtio-keyboard (and tablet) and ramfb; all pass, in CI job `aarch64` too. Arch-specific parts: the idle check measures QEMU's processor time (the monitor shows no WFI state), the legacy-only card and the x86 legacy report are skipped, the TLS entropy cases use `-cpu max` and a Cortex-A72 without RNDR. Every x86 suite passes.
 - **Not done here:** `virtio_rng` (entropy without RNDR), sound (virtio-snd), the ECAM above 4 GiB; QEMU gives a `-nic` card on `virt` no MSI-X, so the launcher creates it with `-device`.
-- **Profile:** [docs/profile/aarch64-qemu-virt.md](../docs/profile/aarch64-qemu-virt.md) 0.2.
+- **Profile:** [docs/profile/aarch64/](../docs/profile/aarch64/README.md) 0.2.

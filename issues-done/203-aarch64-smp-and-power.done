@@ -24,4 +24,4 @@
 - **TLB:** already broadcast: a space's change ends with `TLBI VMALLE1IS`, which reaches every CPU without IPIs.
 - **Reset and power off:** `REBOOT` resets through PSCI `SYSTEM_RESET`; with `arg1 = REBOOT_POWER_OFF` it turns the machine off through `SYSTEM_OFF` (x86 refuses: no ACPI sleep states yet); the shell's `reboot [-f] --off`.
 - **Tests:** `tests/qemu_smoke.py --arch aarch64` runs with four CPUs, and with `scripts/build_aarch64.sh --fixtures` also the `smp` and `busy` suites (the busy fixture keeps its values in general registers on aarch64, where no FP state is saved yet); the idle check measures QEMU's processor time (no WFI state in the monitor); the vfs suite reboots the four-CPU machine and powers it off. All pass, in CI job `aarch64` too; every x86 suite passes (`reboot --off` refused there). `cpus` shows `FPU=NONE` on aarch64.
-- **Docs:** [aarch64 profile](../docs/profile/aarch64-qemu-virt.md) 0.3, API (`REBOOT`), README; `03_run_qemu_aarch64.sh` starts four CPUs (`MIND_CPUS`).
+- **Docs:** [aarch64 profile](../docs/profile/aarch64/README.md) 0.3, API (`REBOOT`), README; `03_run_qemu_aarch64.sh` starts four CPUs (`MIND_CPUS`).

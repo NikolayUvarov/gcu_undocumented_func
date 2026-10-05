@@ -25,7 +25,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
-| [204](204-aarch64-profile-and-ci.md) | aarch64 profile and CI | porting | P2 | — (202, 203 done) | track H |
+| [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 
 ## Finished tasks (`issues-done/`)
 
@@ -156,6 +156,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [201](../issues-done/201-aarch64-boot.done) | aarch64 on QEMU `virt`: boot to init | done (2026-10-05) |
 | [202](../issues-done/202-aarch64-devices.done) | aarch64 devices: PCIe ECAM and the ITS, VirtIO block/net/input, PL011, PL031, display | done (2026-10-05) |
 | [203](../issues-done/203-aarch64-smp-and-power.done) | aarch64 SMP: CPUs from the MADT started through PSCI, SGIs, reset and power off | done (2026-10-05) |
+| [204](../issues-done/204-aarch64-profile-and-ci.done) | aarch64 profile `aarch64/QEMU-virt-0` and CI: `ARCH=aarch64 ./02_build.sh`, three CI groups | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |

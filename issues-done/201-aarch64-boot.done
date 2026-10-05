@@ -38,4 +38,4 @@ MIND Core runs only on x86-64.
 - **Console:** with no shell yet, the kernel also writes every task's log to the PL011 on aarch64 (`MIRROR_LOGS`); x86 is unchanged.
 - **Build and run:** `scripts/build_aarch64.sh [--fixtures]`, `03_run_qemu_aarch64.sh`; Rust targets added to `rust-toolchain.toml`.
 - **Tests:** `tests/aarch64_smoke.py` (CI job `aarch64`): `[INIT] READY` with `logd`, `loader`, `keystore` (device key from RNDR) and `sysmon`; `tests/aarch64_fault.rs` in place of `rtc` reads kernel memory, writes its code, executes its stack or runs an undefined instruction: each ends the task with its exception class (36, 36, 32, 0), init restarts it and quarantines it after three restarts, the others keep running. Every x86 suite passes unchanged.
-- **Profile:** [docs/profile/aarch64-qemu-virt.md](../docs/profile/aarch64-qemu-virt.md).
+- **Profile:** [docs/profile/aarch64/](../docs/profile/aarch64/README.md).

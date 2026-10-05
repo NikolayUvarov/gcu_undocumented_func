@@ -1,8 +1,25 @@
-# Platform profile `aarch64/QEMU-virt` (draft, issues 201–203)
+# Platform profile `aarch64/QEMU-virt-0`
 
-**Version:** 0.3 (2026-10-05) · **Roadmap:** track H · **Status:** the system with its devices on up to eight CPUs: shell, files, network, TLS, display and input; reset and power off through PSCI. The profile's own CI and hardware are 204.
+**Version:** 1.0 (2026-10-05) · **Constitution:** [v1.6](../../../constitution/EN/MIND_CORE_Constitution_v1.6.md), stage 0 · **Roadmap:** track H (issues 201–204)
 
-This is the second platform of MIND Core. It shares the kernel's generic part, every service's source and the system-call interface with `x86-64/QEMU-0` ([README.md](README.md)); what differs is the architecture layer (`kernel/src/arch/aarch64/`, `libmind/src/arch/aarch64.rs`) and the bootloader's few architecture lines.
+This is the second platform of MIND Core. It shares the kernel's generic part, every service's source and the system-call interface with [`x86-64/QEMU-0`](../README.md); what differs is the architecture layer (`kernel/src/arch/aarch64/`, `libmind/src/arch/aarch64.rs`), the bootloader's few architecture lines and the devices. Like the x86 profile it states what the implementation is, guarantees and does not claim (MC-12.1, MC-12.3), for the code of the commit that contains it; a change that alters a statement here updates it in the same commit (MC-12.9). Where this profile says nothing, the x86 profile's statement holds unchanged: its [conformance table](../README.md#conformance), [kernel objects](../kernel-objects.md), [clocks](../clocks.md), [bootstrap](../bootstrap.md) and [memory transfers](../README.md#memory-transfers-appendix-b2).
+
+| Document | Content |
+|---|---|
+| [tcb.md](tcb.md) | The trusted computing base: what differs from x86 (GIC, ITS, firmware, ACPI tables, PSCI, the VirtIO drivers) |
+| [threat-model.md](threat-model.md) | Assets, adversaries and faults as on x86, and the differences |
+| [evidence.md](evidence.md) | Which tests on `virt` support which statement |
+
+## Building and running
+
+```bash
+ARCH=aarch64 ./02_build.sh            # or scripts/build_aarch64.sh [--fixtures]: aarch64_root/
+./03_run_qemu_aarch64.sh              # the shell on this terminal, the screen in a window
+python3 tests/aarch64_smoke.py        # boot and fault containment (after --fixtures)
+python3 tests/qemu_smoke.py --arch aarch64   # normal, shell, vfs, net, tls, busy, smp
+```
+
+Needs the Rust targets of `rust-toolchain.toml`, `qemu-system-aarch64`, AAVMF and the iPXE ROMs (Debian/Ubuntu: `qemu-system-arm qemu-efi-aarch64 ipxe-qemu`); the vfs suite needs `dosfstools` and `mtools`. CI: the `aarch64` jobs of `.github/workflows/ci.yml`.
 
 ## Machine
 
@@ -45,15 +62,28 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | PL031 | `rtc` | seconds since 1970, UTC |
 | ramfb | `compositor` | the firmware's GOP framebuffer (800x600) |
 
+## Conformance: differences from x86-64/QEMU-0
+
+| Requirement | Status here | Difference |
+|---|---|---|
+| MC-1.5 DMA boundary | **not met — declared** | No SMMU is used (QEMU `virt` has none unless `iommu=smmuv3`): `virtio_blk`, `virtio_net`, `virtio_input` and their devices can read and write all physical memory and are in the TCB of every memory guarantee. Unlike x86 the ITS keys each MSI by the device's requester ID, so a device can raise only the LPIs mapped for its own events; this does not help against DMA. |
+| MC-2.6 transfer modes | as on x86 | `block.attach` also goes to `virtio_blk` (the same SHARE_RW adapter). |
+| MC-5.1–5.5 budgets | as on x86 | Evidence: `busy` and `smp` suites on four CPUs. |
+| MC-5.6 explicit clocks | met (measurement) | The generic timer's virtual count; calendar time from the PL031 (`rtc`), seconds since 1970 in UTC. |
+| MC-6.1, 6.2 fault containment | met (EL0) | A task's synchronous exception (any exception class from EL0) ends only it; evidence: `aarch64_smoke.py` (kernel read, code write, stack execution, undefined instruction). A kernel exception halts the system. |
+| MC-10.5 side channels | not claimed | As on x86; no speculation barriers, no PAN (the kernel reaches task memory through its identity map only). |
+| Article 9 boot and update | not met — declared | As on x86: boot images are not signed or measured. |
+| FP/SIMD state | not provided | Programs are built soft-float; `CPACR_EL1` traps FP/SIMD, and no FP state is saved. |
+| Legacy devices | none | No port I/O, no ISA devices, no legacy VirtIO interface: `ata`, `ps2_kbd` and `audio_gw` are not built; `docs/legacy.md` lists nothing for this platform. |
+
 ## Not yet
 
-- A profile with CI on hardware (204); CPUs beyond eight, and CPU hotplug.
+- Boards: Raspberry Pi 4/5 with the EDK2 port, servers with ACPI (issue [205](../../../issues/205-aarch64-boards.md)); CPUs beyond eight, CPU hotplug.
+- An SMMU, so the DMA drivers leave the TCB.
 - FP/SIMD state, so programs are soft-float; sound (virtio-snd); `virtio_rng` for machines without RNDR.
 - The ECAM above 4 GiB (`highmem=on`): the kernel would need to map it.
 - PAN (Privileged Access Never): not enabled yet; the kernel reaches task memory only through its identity map, never through user addresses.
 
 ## Evidence
 
-`tests/qemu_smoke.py --arch aarch64` (CI job `aarch64`) runs the x86 suites on `virt` with four CPUs: `smp` and `busy` (every CPU online and preempting non-yielding loops that keep values in registers, the system band's reserve under load, remote kill, CPU budgets, all CPUs idle in WFI), and programs and the shell (instances, foreground, Ctrl+Z from the VirtIO keyboard, limits, heap baseline, the idle CPU waiting in WFI), line editing and history from both keyboards, files on a raw FAT disk through `virtio_blk` (fsck.fat, mtools, reboot and power off through PSCI), the network (DHCP, DNS, TCP, flow grants, two cards, driver restarts, MSI-X through the ITS) and TLS (with RNDR, and fail-closed on a Cortex-A72 without it).
-
-`tests/aarch64_smoke.py` (same job), without the shell and without PCI: the boot reaches `[INIT] READY` with `logd`, `loader`, `keystore` (device key from RNDR) and `sysmon`; a service that reads kernel memory, writes its code, executes its stack or runs an undefined instruction is ended with that exception class (`FAULT VECTOR` 36, 36, 32, 0), restarted by init and quarantined after three restarts, while the others keep running.
+Which tests support which statement: [evidence.md](evidence.md).

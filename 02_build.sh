@@ -2,6 +2,12 @@
 set -o pipefail
 
 BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ARCH=aarch64 builds the aarch64 image instead (aarch64_root/, issue 204); arguments go to scripts/build_aarch64.sh.
+case "${ARCH:-x86_64}" in
+    x86_64) ;;
+    aarch64) source "$HOME/.cargo/env" 2>/dev/null || true; exec "$BUILD_SCRIPT_DIR/scripts/build_aarch64.sh" "$@" ;;
+    *) echo "ARCH must be x86_64 or aarch64, not $ARCH" >&2; exit 2 ;;
+esac
 LOG_DIR="$BUILD_SCRIPT_DIR/code_handoff"
 LOG_FILE="$LOG_DIR/build.log"
 
