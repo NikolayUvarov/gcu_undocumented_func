@@ -42,6 +42,9 @@ fn main(_info: &'static BootInfo) {
         "closeall" => {
             let _ = api::attach(BROKER);
             mind::println!("[WINMGR] CLOSE ALL: {:?}", api::close_all(BROKER));
+            // The programs it closed end now; the kernel keeps the unread output of only the last screenless program
+            // that ended, so the shell reads this line while winmgr still runs.
+            mind::time::sleep(1000);
         }
         "second" => mind::println!("[WINMGR] SECOND MANAGER: {:?}", api::attach(BROKER)),
         _ => mind::println!("WINMGR MANAGE <SECONDS> | CLOSEALL | SECOND"),
