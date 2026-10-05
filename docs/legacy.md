@@ -27,8 +27,8 @@ or `[INIT] NO LEGACY PCI DEVICES FOUND`. PCI devices are counted; ISA devices ca
 | PS/2 keyboard controller (ports 0x60, 0x64, IRQ 1; the mouse on its auxiliary port, IRQ 12, issue 156) | the `ps2_kbd` crate (`mouse.rs` for the mouse), its `init` plan, its ranges in `LEGACY_PORTS` | USB HID, VirtIO input (not written yet; the shell also takes keys from the UART) | as for `ata` | assumed (ISA) |
 | CMOS RTC (ports 0x70–0x71) | the `rtc` crate, its `init` plan, its range in `LEGACY_PORTS` | UEFI runtime time services or an ACPI time device | as for `ata`; clients use `idl/rtc.wit` and keep working with a new server | assumed (ISA) |
 | COM1 UART (ports 0x3F8–0x3FF) | the shell's console (`shell/src/console.rs`), the kernel's boot and panic lines | VirtIO console | the kernel's diagnostics need another output first | assumed (ISA) |
-| 8259 PIC and PIT (device lines 1–15, the 100 Hz tick) | `kernel/src/interrupts.rs`, the line handling in `kernel/src/scheduler.rs` | IOAPIC or MSI/MSI-X for devices (MSI-X exists: issue 104), the local APIC timer | the largest item: every driver on a legacy line needs MSI/MSI-X or the IOAPIC first | assumed |
-| PCI configuration mechanism #1 (ports 0xCF8/0xCFC) | `kernel/src/pci.rs` | ECAM, found through the ACPI MCFG table | needs ACPI table parsing in the kernel | not reported (always present on x86 today) |
+| 8259 PIC and PIT (device lines 1–15, the 100 Hz tick) | `kernel/src/arch/x86_64/interrupts.rs`, the line handling in `kernel/src/scheduler.rs` | IOAPIC or MSI/MSI-X for devices (MSI-X exists: issue 104), the local APIC timer | the largest item: every driver on a legacy line needs MSI/MSI-X or the IOAPIC first | assumed |
+| PCI configuration mechanism #1 (ports 0xCF8/0xCFC) | `kernel/src/arch/x86_64/pci.rs` | ECAM, found through the ACPI MCFG table | needs ACPI table parsing in the kernel | not reported (always present on x86 today) |
 
 The legacy interrupt line of a modern VirtIO card (`MODERN INTX` when MSI-X cannot be set up) belongs to the PIC row.
 

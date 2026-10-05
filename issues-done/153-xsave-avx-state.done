@@ -22,7 +22,7 @@ Task contexts save SSE state with FXSAVE; AVX/AVX2 registers are not saved, so p
 
 ## Resolution
 
-- **Kernel:** when CPUID reports XSAVE and AVX, the BSP sets `CR4.OSXSAVE` and XCR0 = x87 | SSE | AVX (`paging::XCR0`), and every AP does the same (`kernel/src/paging.rs`). The context area is 1024 bytes, 64-byte aligned (`kernel/src/context.rs`): the entry path saves with `XSAVE` and restores with `XRSTOR`, or with `FXSAVE`/`FXRSTOR` on CPUs without them. The size of the enabled state (CPUID 0xD) is checked against the area at boot.
+- **Kernel:** when CPUID reports XSAVE and AVX, the BSP sets `CR4.OSXSAVE` and XCR0 = x87 | SSE | AVX (`paging::XCR0`), and every AP does the same (`kernel/src/arch/x86_64/paging.rs`). The context area is 1024 bytes, 64-byte aligned (`kernel/src/arch/x86_64/context.rs`): the entry path saves with `XSAVE` and restores with `XRSTOR`, or with `FXSAVE`/`FXRSTOR` on CPUs without them. The size of the enabled state (CPUID 0xD) is checked against the area at boot.
 - **A pitfall found on the way:** XSAVE writes only the header bits of the components it saves. Stack bytes left in the rest of the 64-byte header made the next XRSTOR fault, so the entry path clears the header first.
 - **Not done:** `XSAVEOPT` — its modified-state tracking assumes the area is restored where it was saved, but contexts are copied into each task's record.
 - **Reporting:** `StatCpu.xsave` (the saved components, 0 with FXSAVE); `cpus` shows `FPU=XSAVE+AVX` or `FPU=FXSAVE`. `hw` can show it (tools track).

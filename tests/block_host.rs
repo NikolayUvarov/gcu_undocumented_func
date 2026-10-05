@@ -4,6 +4,8 @@
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
+#[path = "../libmind/src/arch/mod.rs"]
+mod arch;
 #[path = "../libmind/src/sys.rs"]
 mod sys;
 #[path = "../libmind/src/block_protocol.rs"]

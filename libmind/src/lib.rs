@@ -29,6 +29,7 @@ pub mod network;
 pub mod netring;
 pub mod platform;
 pub mod process;
+mod arch;
 pub mod random;
 pub mod rtc;
 pub mod stat;

@@ -322,3 +322,17 @@ extern "C" fn ap_entry(index: usize) -> ! {
         crate::scheduler::idle();
     }
 }
+
+// Processor operations the generic kernel uses.
+
+/// The cycle counter (RDTSC).
+pub fn cycles() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
+/// The address of the last page fault (CR2).
+pub unsafe fn fault_address() -> u64 { let address: u64; asm!("mov {}, cr2", out(reg) address); address }
+/// Enters the scheduler from kernel mode, as a system call does.
+pub unsafe fn reschedule() { asm!("int 0x80"); }
+/// Sleeps until an interrupt with interrupts enabled only meanwhile.
+pub unsafe fn wait_for_interrupt() { asm!("sti", "hlt", "cli"); }
+pub unsafe fn disable_interrupts() { asm!("cli"); }
+/// Stops this CPU for good.
+pub unsafe fn halt_here() -> ! { asm!("cli"); loop { asm!("hlt"); } }

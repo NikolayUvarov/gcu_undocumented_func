@@ -3,17 +3,14 @@
 
 /// Whether the processor has RDRAND (CPUID leaf 1, ECX bit 30).
 pub fn available() -> bool {
-    let leaf = core::arch::x86_64::__cpuid(1);
-    leaf.ecx & (1 << 30) != 0
+    crate::arch::entropy_available()
 }
 
 /// One 64-bit value; retries a few times as Intel recommends, refuses the all-zero and all-one values a broken unit gives.
 pub fn u64() -> Option<u64> {
     if !available() { return None; }
     for _ in 0..16 {
-        let (value, ok): (u64, u8);
-        unsafe { core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) value, ok = out(reg_byte) ok, options(nomem, nostack)); }
-        if ok != 0 && value != 0 && value != u64::MAX { return Some(value); }
+        if let Some(value) = crate::arch::entropy().filter(|&v| v != 0 && v != u64::MAX) { return Some(value); }
     }
     None
 }
