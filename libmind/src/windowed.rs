@@ -2,12 +2,14 @@
 //! window manager lends one to the programs it starts) shows itself in a window instead of on a screen of its own:
 //! `mind::tui::Terminal::open` draws into a text window, `pixels` gives a framebuffer in a pixel window. From then on
 //! `mind::input` reads the keys the manager queues in the surface, and `mind::time::sleep` waits on the window's wake
-//! endpoint, so a key ends it early as it does on a screen. A window the manager closes ends the program.
+//! endpoint, so a key ends it early as it does on a screen. A window the manager closes ends the program. A pixel
+//! window has room for the screen's pixels and takes the size of its frame as a text window does (`pixels_resized`,
+//! issue u009).
 use crate::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_WINDOW, SYSCALL_WAIT, ERR_TIMEOUT};
 use crate::idl::window as api;
 use crate::ipc::Endpoint;
 use crate::mem::Mapping;
-use crate::window::{Kind, Surface, STATE_CLOSE};
+use crate::window::{Kind, Surface, MAX_PIXELS, STATE_CLOSE};
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
@@ -21,6 +23,7 @@ static LEN: AtomicUsize = AtomicUsize::new(0);
 static WAKER: AtomicUsize = AtomicUsize::new(0);
 static PIXELS: AtomicUsize = AtomicUsize::new(0); // 1: a pixel window, published at every wait
 static RESIZE: AtomicU32 = AtomicU32::new(0); // width | height << 16 the manager asked for, not yet taken
+static ROOM: AtomicU32 = AtomicU32::new(0); // width | height << 16 a pixel window has memory for
 static mut INFO: core::mem::MaybeUninit<BootInfo> = core::mem::MaybeUninit::uninit();
 
 /// The launcher lent a broker client and no window is open yet.
@@ -63,9 +66,14 @@ pub fn open(kind: Kind, capacity: (usize, usize), size: (usize, usize), title: &
 
 /// `info` with the framebuffer of a pixel window of `width` × `height` instead of the screen when the program was
 /// started in a window; else `info` itself. Programs that draw through `info` (or `gfx::Screen::new(info)`) then
-/// draw into the window unchanged.
+/// draw into the window unchanged. The window has room for the screen (when the broker has the memory), so the
+/// manager may give it another size: the program takes it with `pixels_resized` in its loop (while a size it was
+/// asked for is not taken, its waits end at once, as a text program's do until it draws).
 pub fn pixels(info: &'static BootInfo, width: usize, height: usize, title: &str) -> &'static BootInfo {
-    let Some(surface) = open(Kind::Pixels, (width, height), (width, height), title) else { return info };
+    let (width, height) = (width.clamp(1, MAX_PIXELS.0), height.clamp(1, MAX_PIXELS.1));
+    let room = (info.width.clamp(width, MAX_PIXELS.0), info.height.clamp(height, MAX_PIXELS.1));
+    let Some((surface, room)) = open_pixels(room, (width, height), title) else { return info };
+    ROOM.store((room.0 | room.1 << 16) as u32, Ordering::Release);
     let mut copy = *info;
     copy.fb_ptr = surface.content().cast::<u32>();
     copy.width = width; copy.height = height; copy.stride = width;
@@ -74,6 +82,29 @@ pub fn pixels(info: &'static BootInfo, width: usize, height: usize, title: &str)
         slot.write(copy);
         &*slot.as_ptr()
     }
+}
+
+// A pixel window with room for `room`; one of `size` only when the broker has no memory for that.
+fn open_pixels(room: (usize, usize), size: (usize, usize), title: &str) -> Option<(Surface, (usize, usize))> {
+    if let Some(surface) = open(Kind::Pixels, room, size, title) { return Some((surface, room)); }
+    if room == size || !requested() { return None; }
+    open(Kind::Pixels, size, size, title).map(|surface| (surface, size))
+}
+
+/// The framebuffer of a pixel window at a new size, once the manager asked for one (issue u009): the window is drawn
+/// at that size from now on (as much of it as the window has room for), and the program draws everything again into
+/// what this returns — `pixels`' info with the new width, height and stride. None: no new size asked, or no pixel
+/// window.
+pub fn pixels_resized() -> Option<BootInfo> {
+    if PIXELS.load(Ordering::Acquire) != 1 { return None; }
+    let (width, height) = resize()?;
+    let room = ROOM.load(Ordering::Acquire) as usize;
+    let (width, height) = (width.clamp(1, room & 0xFFFF), height.clamp(1, room >> 16));
+    let surface = surface()?;
+    if !surface.set_size(width, height) { return None; }
+    let mut copy = unsafe { *(*core::ptr::addr_of!(INFO)).as_ptr() };
+    copy.width = width; copy.height = height; copy.stride = width;
+    Some(copy)
 }
 
 // What the manager asked for since the last look: a closed window ends the program, a new size is kept for `resize`.

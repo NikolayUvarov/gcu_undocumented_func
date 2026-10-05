@@ -170,7 +170,7 @@ impl Manager {
         true
     }
 
-    // Titles, sizes and changes of the programs' surfaces; the sizes wm wants of text windows; places saved in the
+    // Titles, sizes and changes of the programs' surfaces; the sizes wm wants of the windows; places saved in the
     // broker. Returns (something to draw, pixel windows to draw again).
     fn follow(&mut self) -> (bool, Vec<u32>) {
         let mut dirty = false;
@@ -183,14 +183,20 @@ impl Manager {
                 live.changes = changes; dirty = true;
                 if win.content == Content::Pixels { pixels.push(live.id); }
             }
-            if let Some((_, w, h)) = live.surface.check() { if win.size != (w, h) { win.size = (w, h); dirty = true; } }
+            if let Some((_, w, h)) = live.surface.check() {
+                if win.size != (w, h) {
+                    if win.content == Content::Pixels { mind::println!("[WM] PIXELS {} {}X{}", live.id, w, h); }
+                    win.size = (w, h); dirty = true;
+                }
+            }
             let name = title(&live.surface);
             if !name.is_empty() && name != win.title { win.title = name; dirty = true; }
-            // A text window draws at the size of its frame's inside.
+            // A window draws at the size of its frame's inside: its cells, or their pixels (issue u009).
             let inner = win.rect.inner();
-            if win.content == Content::Text && (inner.w, inner.h) != live.surface.size() && live.asked != Some((inner.w, inner.h)) && inner.w > 0 && inner.h > 0 {
-                live.surface.ask_size(inner.w, inner.h);
-                live.asked = Some((inner.w, inner.h));
+            let wanted = match win.content { Content::Text => (inner.w, inner.h), Content::Pixels => (inner.w * 8, inner.h * 16) };
+            if wanted != live.surface.size() && live.asked != Some(wanted) && inner.w > 0 && inner.h > 0 {
+                live.surface.ask_size(wanted.0, wanted.1);
+                live.asked = Some(wanted);
                 live.wake();
             }
         }

@@ -1,0 +1,23 @@
+# 163 — The window broker's memory: room for pixel windows the size of the screen — done
+
+**Type:** core service (init policy) · **Owner:** kernel track (done from the tools branch, which needed it for u009) · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-3.13
+
+## Problem
+
+The windows' surfaces are the window broker's memory (issue 157), charged to its quota. init started `windows` with the default quota, 16 MiB (`HEAP_MAX_BYTES`). For its pixel content to follow its frame (u009), a pixel window needs room for the screen's pixels: 4 MiB at 1280 × 800, 9 MiB at 1920 × 1200. Two or three such windows would use all 16 MiB. After that, new windows would be refused, text windows included.
+
+## Plan
+
+- init's quota policy: `windows` gets `WINDOWS_MEMORY_MIB` = 128 MiB. That is about a dozen pixel windows at 1920 × 1200, or thirty at 1280 × 800, besides text windows (about 100 KiB each). The broker still allows 64 windows, 8 per program.
+- A quota is a limit, not a reservation: the memory is taken from the frame pool when a window opens and given back when it closes. It is charged to init, as the broker's spawner, like every service's.
+- No ABI change. A program whose larger window is refused gets one of its first size (`mind::windowed::pixels`, u009).
+
+## Acceptance criteria
+
+- QEMU (`wm` suite): two clocks and the text windows open with room for the screen. The clock's content follows its frame (u009).
+- Every QEMU suite passes with the new quota.
+
+## Resolution
+
+- `init/src/main.rs`: `WINDOWS_MEMORY_MIB`, the `windows` quota.
+- Docs: README (the `windows` service row).

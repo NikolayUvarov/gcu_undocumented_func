@@ -1,0 +1,30 @@
+# u009 — wm: a pixel window's content follows its frame — done
+
+**Type:** feature · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** 163 (done) · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user: the content of graphical windows stays the same size when the window is resized. A text window draws at the size of its frame's inside (`Terminal::open`). A pixel window (`clock`, `dzen-clock`) kept the framebuffer it opened, 320 × 176 or 400 × 320. A larger frame showed it with black around it; a smaller one cut it off.
+
+`mind::windowed::pixels` opened the surface with exactly the first size, so there was no memory for another one. `wm` asked only text windows for a size.
+
+## Plan
+
+- `mind::windowed::pixels`: the window has room for the screen's pixels (`info` keeps the screen's width and height for a program in a window, up to `MAX_PIXELS`); it is drawn at the first size. If the broker has no memory for that, it opens with only the first size, as before.
+- `mind::windowed::pixels_resized()`: when the manager asked for a size, the surface takes it, clamped to the room, and the program gets `pixels`' info with the new width, height and stride. The program then draws everything again. `mind::time::sleep` and `mind::input::wait_or_exit` already end early when a size is asked.
+- `wm`: asks a pixel window for the pixels of its frame's inside (8 × 16 a cell), as it asks a text window for cells; logs `[WM] PIXELS id WxH` when a pixel window's size changes.
+- `clock`: its face (title where it fits, the time centred at a scale for the size) drawn again. `dzen-clock`: the face laid out again (`View` keeps its own copy of the framebuffer's info), and hints, indicators, digits and orbit drawn again.
+- The memory is the broker's: its quota is raised in init (kernel-track issue 163).
+
+## Acceptance criteria
+
+- Host: dzen-clock's face is centred in framebuffers of four sizes, larger in a larger one, and nothing is drawn past the framebuffer (`tests/runtime.rs`).
+- QEMU (`wm` suite): the clock's window dragged to the left half gets content of 624 × 736 pixels, with digits wider than the 320 pixels it had; dragged off the edge, it is 320 × 176 again.
+
+## Resolution
+
+- `libmind/src/windowed.rs`: `ROOM`, `open_pixels`, `pixels_resized`; `pixels` opens with room for the screen.
+- `wm/src/main.rs`: `follow` asks pixel windows for their frame's pixels and logs their new sizes.
+- `clock/src/main.rs`: `face`; the loop takes a new size. `dzen-clock/src/main.rs`: the pixel face takes a new size and draws everything again. `dzen-clock/src/view.rs`: `View` owns its `BootInfo`; a test at four sizes.
+- Tests: `tests/runtime.rs` (dzen-clock's view), QEMU `wm` suite.
+- Docs: docs/tools §4.9 (EN/RU; the "not done" line removed), README (`wm`).

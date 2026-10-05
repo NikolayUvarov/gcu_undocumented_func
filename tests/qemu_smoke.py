@@ -3415,6 +3415,14 @@ def wm_suite(vm):
     wait(lines=2)
     mode, focus, rects = state()
     assert focus == clock and rects[clock] == (0, 1, 80, 48), (focus, rects)
+    # A pixel window's content follows its frame (issue u009): the clock draws again at the pixels of the left half,
+    # its digits wider than the 320 pixels it had.
+    until(f"[WM] PIXELS {clock} 624X736")
+    time.sleep(.5)
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    green = [px for py in range(2 * 16, 48 * 16) for px in range(8, 79 * 8) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
+    assert green and max(green) > 8 + 400, (len(green), max(green, default=0))
     # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
     # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
     # wheel moves fm's cursor.
@@ -3461,6 +3469,7 @@ def wm_suite(vm):
     point(20, 1)
     mode, focus, rects = mouse("mouse_button 1", *mouse_moves(30 * 8, 10 * 16), "mouse_button 0", lines=2)
     assert focus == clock and rects[clock] == (40, 11, 42, 13), (focus, rects)
+    until(f"[WM] PIXELS {clock} 320X176")  # and its content the size it had
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3511,7 +3520,7 @@ def wm_suite(vm):
             break
         time.sleep(.2)
     assert heap_used(vm) == baseline
-    print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
+    print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels, drawn again at its frame's size); keys to the window in front only; "
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
           "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)

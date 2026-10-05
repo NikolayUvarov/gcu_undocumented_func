@@ -32,6 +32,7 @@ const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 6
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 const INPUT_DMA_BYTES: usize = 12 * 1024; // the event queue (two pages), then up to 64 events of 8 bytes
+const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -290,6 +291,9 @@ impl Init {
             // The applications' memory is charged to loader too: it may use all of init's (issue 150).
             "loader" => Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16, memory_mib: SPAWN_MEMORY_ALL as u16 },
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
+            // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
+            // so that its content follows its frame (issue 163).
+            "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
             _ => Quota::default(),
         };
         let plan = Plan { grants, flags, quota };
