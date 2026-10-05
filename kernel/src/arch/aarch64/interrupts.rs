@@ -7,13 +7,19 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const GICD: usize = 0x0800_0000;
-const GICR: usize = 0x080A_0000; // CPU 0's redistributor; its SGI/PPI page follows at +64 KiB
+const GICR: usize = 0x080A_0000; // the first redistributor (CPU 0's); each CPU's has its RD and SGI/PPI pages of 64 KiB
 const TIMER_PPI: u32 = 27; // EL1 virtual timer
 const TICK_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TIMER_STEP: AtomicU64 = AtomicU64::new(0);
 // SGIs (software interrupts between CPUs, issue 203): stop, tick, wake.
 pub const SGI_STOP: u32 = 1; pub const SGI_TICK: u32 = 2; pub const SGI_WAKE: u32 = 3;
+
+/// Sends SGI `intid` to the CPU with MPIDR affinity `affinity` (Aff3.Aff2.Aff1.Aff0 in 32 bits, Aff0 below 16).
+pub unsafe fn sgi(affinity: u64, intid: u32) {
+    let value = 1u64 << (affinity & 0xF) | (affinity >> 8 & 0xFF) << 16 | (intid as u64) << 24 | (affinity >> 16 & 0xFF) << 32 | (affinity >> 24 & 0xFF) << 48;
+    asm!("dsb ishst", "msr icc_sgi1r_el1, {}", "isb", in(reg) value);
+}
 
 unsafe fn write32(address: usize, value: u32) { core::ptr::write_volatile(address as *mut u32, value) }
 unsafe fn read32(address: usize) -> u32 { core::ptr::read_volatile(address as *const u32) }
@@ -47,12 +53,27 @@ pub unsafe fn init() {
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
 }
 
+/// This CPU's redistributor: the one whose GICR_TYPER names the CPU's affinity (issue 203).
+pub fn redistributor() -> usize {
+    let mpidr: u64; unsafe { asm!("mrs {}, mpidr_el1", out(reg) mpidr); }
+    let affinity = (mpidr >> 32 & 0xFF) << 24 | mpidr & 0xFF_FFFF;
+    let mut frame = GICR;
+    for _ in 0..64 {
+        let typer = unsafe { read64(frame + 8) };
+        if typer >> 32 == affinity { return frame; }
+        if typer & 1 << 4 != 0 { break; } // Last
+        frame += if typer & 1 << 1 != 0 { 0x4_0000 } else { 0x2_0000 }; // with virtual LPIs: four pages
+    }
+    GICR
+}
+
 // This CPU's redistributor and CPU interface.
 pub unsafe fn load() {
-    let waker = GICR + 0x14;
+    let gicr = redistributor();
+    let waker = gicr + 0x14;
     write32(waker, read32(waker) & !(1 << 1)); // ProcessorSleep off
     while read32(waker) & (1 << 2) != 0 { core::hint::spin_loop(); } // ChildrenAsleep
-    let sgi = GICR + 0x1_0000;
+    let sgi = gicr + 0x1_0000;
     write32(sgi + 0x80, u32::MAX); // IGROUPR0: SGIs and PPIs in group 1
     write32(sgi + 0x100, 1 << TIMER_PPI | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE); // ISENABLER0
     asm!("msr icc_sre_el1, {}", "isb", in(reg) 7u64);
@@ -121,6 +142,7 @@ impl Its {
         let properties = zeroed((1usize << LPI_ID_BITS) - LPI_FIRST as usize, 4096)?;
         for lpi in 0..LPIS { core::ptr::write_volatile((properties as usize + lpi) as *mut u8, 0xA0 | 1); }
         let pending = zeroed((1usize << LPI_ID_BITS) / 8, 0x1_0000)?;
+        // LPIs go to the boot CPU (collection 0): its redistributor takes them.
         write64(GICR + 0x70, properties | 0b111 << 7 | 1 << 10 | (LPI_ID_BITS - 1));
         write64(GICR + 0x78, pending | 0b111 << 7 | 1 << 10);
         write32(GICR, read32(GICR) | 1); // EnableLPIs

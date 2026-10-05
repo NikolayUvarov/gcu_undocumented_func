@@ -1,8 +1,8 @@
-// CPUs (issue 201: the boot CPU; the others start through PSCI in issue 203): per-CPU exception stacks, the
-// vector base, and the processor operations the generic kernel uses.
+// CPUs (issues 201, 203): the boot CPU, and the others the ACPI MADT lists, started through PSCI CPU_ON; per-CPU
+// exception stacks, the vector base, SGIs between CPUs, and the processor operations the generic kernel uses.
 use crate::abi::BootInfo;
 use crate::memory::Region;
-use core::arch::asm;
+use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 pub const MAX: usize = 8;
@@ -22,9 +22,16 @@ pub fn id() -> usize {
 /// The CPU's hardware ID (MPIDR affinity; the APIC ID on x86).
 pub fn apic_id(index: usize) -> u32 { IDS[index].load(Ordering::Relaxed) as u32 }
 
+/// The boot CPU is CPU 0; the other enabled CPUs of the MADT follow in its order.
 pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
-    COUNT.store(1, Ordering::Release);
-    IDS[0].store(info.apic_ids[0] as u64, Ordering::Relaxed);
+    let boot = info.apic_ids[0] as u64;
+    IDS[0].store(boot, Ordering::Relaxed);
+    let mut count = 1;
+    for i in 0..super::acpi::CPU_COUNT.load(Ordering::Acquire) {
+        let affinity = super::acpi::CPUS[i].load(Ordering::Relaxed) & 0xFF_FFFF;
+        if affinity != boot && count < MAX { IDS[count].store(affinity, Ordering::Relaxed); count += 1; }
+    }
+    COUNT.store(count, Ordering::Release);
     load()?;
     ONLINE[0].store(true, Ordering::Release);
     Ok(())
@@ -43,12 +50,94 @@ unsafe fn load() -> Result<(), &'static str> {
     Ok(())
 }
 
-pub unsafe fn start(_info: &BootInfo) {}
+// A secondary CPU starts at ap_boot with its MMU and caches off and x0 = its record: the boot CPU's translation
+// registers and system control, its stack, its index and the Rust entry. It turns the MMU on like the boot CPU's and
+// jumps; the kernel is identity-mapped, so addresses do not change.
+#[repr(C, align(64))]
+struct Record { mair: u64, tcr: u64, ttbr0: u64, sctlr: u64, stack: u64, index: u64, entry: u64 }
+static mut RECORDS: [Record; MAX] = [const { Record { mair: 0, tcr: 0, ttbr0: 0, sctlr: 0, stack: 0, index: 0, entry: 0 } }; MAX];
 
-// One CPU so far: nothing to signal (SGIs between CPUs: issue 203).
-pub unsafe fn tick_others() {}
-pub unsafe fn wake(_index: usize) {}
-pub fn stop_others() {}
+global_asm!(r#"
+    .section .text.ap_boot,"ax"
+    .balign 64
+    .global ap_boot, ap_boot_end
+ap_boot:
+    msr daifset, #0xf
+    ldr x1, [x0, #0]
+    msr mair_el1, x1
+    ldr x1, [x0, #8]
+    msr tcr_el1, x1
+    ldr x1, [x0, #16]
+    msr ttbr0_el1, x1
+    isb
+    tlbi vmalle1
+    dsb nsh
+    ldr x1, [x0, #24]
+    msr sctlr_el1, x1
+    isb
+    ldr x1, [x0, #32]
+    mov sp, x1
+    ldr x2, [x0, #48]
+    ldr x0, [x0, #40]
+    br x2
+ap_boot_end:
+    .previous
+"#);
+unsafe extern "C" { static ap_boot: u8; static ap_boot_end: u8; }
+
+// Writes the data cache lines of [start, start + len) back to memory, for a CPU that reads it with caches off.
+unsafe fn clean(start: usize, len: usize) {
+    let mut line = start & !63;
+    while line < start + len { asm!("dc cvac, {}", in(reg) line); line += 64; }
+    asm!("dsb sy");
+}
+
+/// Starts the other CPUs through PSCI CPU_ON and waits until each is online (a second at most each).
+pub unsafe fn start(_info: &BootInfo) {
+    let (mair, tcr, sctlr): (u64, u64, u64);
+    asm!("mrs {}, mair_el1", "mrs {}, tcr_el1", "mrs {}, sctlr_el1", out(reg) mair, out(reg) tcr, out(reg) sctlr);
+    let code = core::ptr::addr_of!(ap_boot) as usize;
+    clean(code, core::ptr::addr_of!(ap_boot_end) as usize - code);
+    for index in 1..COUNT.load(Ordering::Acquire) {
+        let Ok(stack) = Region::new(STACK, 16) else { break };
+        let top = stack.ptr() as u64 + STACK as u64;
+        core::mem::forget(stack);
+        let record = &mut *core::ptr::addr_of_mut!(RECORDS[index]);
+        *record = Record { mair, tcr, ttbr0: crate::mmu::kernel_root() as u64, sctlr, stack: top, index: index as u64, entry: ap_entry as *const () as u64 };
+        clean(record as *const Record as usize, core::mem::size_of::<Record>());
+        let affinity = IDS[index].load(Ordering::Relaxed);
+        let status = super::acpi::psci(super::acpi::PSCI_CPU_ON, affinity, code as u64, record as *const Record as u64);
+        if status != 0 { crate::serial_print("MIND CORE KERNEL: PSCI CPU_ON REFUSED\n"); continue; }
+        let deadline = cycles() + super::clock::tsc_hz();
+        while !ONLINE[index].load(Ordering::Acquire) && cycles() < deadline { core::hint::spin_loop(); }
+        if !ONLINE[index].load(Ordering::Acquire) { crate::serial_print("MIND CORE KERNEL: A CPU DID NOT COME ONLINE\n"); }
+    }
+}
+
+extern "C" fn ap_entry(index: usize) -> ! {
+    unsafe {
+        if load().is_err() { halt_here(); }
+        crate::interrupts::load();
+        ONLINE[index].store(true, Ordering::Release);
+    }
+    loop { crate::scheduler::idle(); }
+}
+
+// SGIs to the other online CPUs: the tick (from the boot CPU's timer), a wake-up, a stop.
+pub unsafe fn tick_others() {
+    for i in 1..COUNT.load(Ordering::Acquire) {
+        if ONLINE[i].load(Ordering::Acquire) { crate::interrupts::sgi(IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_TICK); }
+    }
+}
+pub unsafe fn wake(index: usize) {
+    if ONLINE[index].load(Ordering::Acquire) { crate::interrupts::sgi(IDS[index].load(Ordering::Relaxed), crate::interrupts::SGI_WAKE); }
+}
+pub fn stop_others() {
+    let this = id();
+    for i in 0..COUNT.load(Ordering::Acquire) {
+        if i != this && ONLINE[i].load(Ordering::Acquire) { unsafe { crate::interrupts::sgi(IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_STOP); } }
+    }
+}
 
 pub fn halt_all() -> ! {
     unsafe { asm!("msr daifset, #0xf"); }

@@ -1,14 +1,14 @@
-# Platform profile `aarch64/QEMU-virt` (draft, issues 201–202)
+# Platform profile `aarch64/QEMU-virt` (draft, issues 201–203)
 
-**Version:** 0.2 (2026-10-05) · **Roadmap:** track H · **Status:** the system with its devices: shell, files, network, TLS, display and input on one CPU; more CPUs and the profile's CI are 203–204.
+**Version:** 0.3 (2026-10-05) · **Roadmap:** track H · **Status:** the system with its devices on up to eight CPUs: shell, files, network, TLS, display and input; reset and power off through PSCI. The profile's own CI and hardware are 204.
 
 This is the second platform of MIND Core. It shares the kernel's generic part, every service's source and the system-call interface with `x86-64/QEMU-0` ([README.md](README.md)); what differs is the architecture layer (`kernel/src/arch/aarch64/`, `libmind/src/arch/aarch64.rs`) and the bootloader's few architecture lines.
 
 ## Machine
 
-QEMU `virt,gic-version=3,highmem=off`, `-cpu max`, 512 MiB, AAVMF (EDK2) firmware, a `ramfb` display for the firmware's graphics output, and VirtIO PCI devices: the boot disk on `virtio-blk`, `virtio-net`, `virtio-keyboard` and `virtio-tablet`. `highmem=off` keeps the PCIe ECAM below 4 GiB, inside the kernel's identity map; with it above, the kernel reports `PCI: ECAM ABOVE 4 GIB, NOT USED` and runs without PCI.
+QEMU `virt,gic-version=3,highmem=off`, `-cpu max`, `-smp 4`, 512 MiB, AAVMF (EDK2) firmware, a `ramfb` display for the firmware's graphics output, and VirtIO PCI devices: the boot disk on `virtio-blk`, `virtio-net`, `virtio-keyboard` and `virtio-tablet`. `highmem=off` keeps the PCIe ECAM below 4 GiB, inside the kernel's identity map; with it above, the kernel reports `PCI: ECAM ABOVE 4 GIB, NOT USED` and runs without PCI.
 
-The kernel reads the ECAM's place from the ACPI MCFG. The rest of the layout is fixed in the architecture layer: GICv3 distributor at `0x0800_0000`, its ITS at `0x0808_0000`, CPU 0's redistributor at `0x080A_0000`, PL011 at `0x0900_0000` (SPI 1), PL031 at `0x0901_0000` (SPI 2), RAM from 1 GiB.
+The kernel reads the ECAM's place from the ACPI MCFG, the CPUs (their MPIDRs) from the MADT and PSCI's conduit (HVC or SMC) from the FADT. The rest of the layout is fixed in the architecture layer: GICv3 distributor at `0x0800_0000`, its ITS at `0x0808_0000`, the redistributors from `0x080A_0000` (each CPU finds its own by its affinity in `GICR_TYPER`), PL011 at `0x0900_0000` (SPI 1), PL031 at `0x0901_0000` (SPI 2), RAM from 1 GiB.
 
 ## What the kernel does here
 
@@ -18,13 +18,15 @@ The kernel reads the ECAM's place from the ACPI MCFG. The rest of the layout is 
 | System call | `svc #0`, the same mailbox ABI | `int 0x80` |
 | Exceptions | EL1 vector table (`VBAR_EL1`); a per-CPU exception stack (`TPIDR_EL1`) for entries from tasks | IDT, TSS stacks |
 | Address spaces | Stage 1, 4 KiB granule, 4 levels, 48-bit TTBR0: L0 entry 0 the kernel's identity map of 4 GiB (1 GiB blocks, EL1 only), the user window like on x86; user pages `PXN`, data pages `UXN`, code read-only; the generic walk is `kernel/src/paging.rs` | 4-level page tables, NX |
-| Interrupts | GICv3: SPI 32 + n is device line n (PCI INTA–D of slot s, pin p: line 3 + (s + p − 1) mod 4); MSI-X through the ITS, line 16 + n is LPI 8192 + n (event n of the device's requester ID, collection 0 on CPU 0); SGIs 1–3 for stop, tick and wake (used from 203) | 8259 PIC, xAPIC, MSI-X |
+| Interrupts | GICv3: SPI 32 + n is device line n (PCI INTA–D of slot s, pin p: line 3 + (s + p − 1) mod 4); MSI-X through the ITS, line 16 + n is LPI 8192 + n (event n of the device's requester ID, collection 0 on CPU 0); SGIs 1–3 for stop, tick and wake between CPUs | 8259 PIC, xAPIC, MSI-X |
 | PCI | ECAM from the MCFG, the same enumeration, BARs and MSI-X tables (`kernel/src/pci.rs`; the architecture gives configuration access, the legacy line and the MSI message) | ports `0xCF8`/`0xCFC` |
 | Platform devices | `PLATFORM_MMIO` hands out exactly the PL011 and PL031 registers, `PLATFORM_IRQ` their lines 1 and 2 (`arch/aarch64/platform.rs`); there are no I/O ports | ISA port ranges and lines 1–15 |
 | Tick and clock | EL1 virtual timer, 100 Hz; `CNTVCT_EL0` at `CNTFRQ_EL0` for the monotonic clock | PIT, TSC |
 | FP/SIMD | Disabled (`CPACR_EL1`): programs and kernel are soft-float, no FP state is saved yet | x87/SSE/AVX saved per task |
 | Entropy | `RNDR` when `ID_AA64ISAR0_EL1` lists it; the kernel tells tasks in `BootInfo.cpu_features` (EL0 cannot read ID registers) | `RDRAND` |
-| Reset | PSCI `SYSTEM_RESET` (HVC) | ACPI reset register, 0xCF9, 8042 |
+| CPUs | The boot CPU and up to seven more from the MADT, started with PSCI `CPU_ON` into a trampoline that turns on the MMU with the boot CPU's MAIR, TCR, TTBR0 and SCTLR (its record and code cleaned to memory first); each has its exception stack and redistributor. The boot CPU's virtual timer ticks; the others get the tick as an SGI | INIT-SIPI-SIPI, local APIC timer IPIs |
+| TLB | `TLBI VMALLE1IS`: a change of an address space is broadcast to every CPU by the instruction itself, no IPIs | reload of CR3 on the next switch |
+| Reset and power off | PSCI `SYSTEM_RESET` and `SYSTEM_OFF` (`reboot`, `reboot --off`) | ACPI reset register, 0xCF9, 8042; no power off yet |
 | Console | PL011: the kernel's lines, and every task's log until the shell gets the PL011 (`mind::dev::Uart`), then the shell's console as on COM1 | COM1, the shell |
 | Instruction cache | Invalidated after the kernel writes program images and the exit page | coherent |
 
@@ -45,13 +47,13 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 
 ## Not yet
 
-- More CPUs, power off (issue 203); a profile with CI on hardware (204).
+- A profile with CI on hardware (204); CPUs beyond eight, and CPU hotplug.
 - FP/SIMD state, so programs are soft-float; sound (virtio-snd); `virtio_rng` for machines without RNDR.
 - The ECAM above 4 GiB (`highmem=on`): the kernel would need to map it.
 - PAN (Privileged Access Never): not enabled yet; the kernel reaches task memory only through its identity map, never through user addresses.
 
 ## Evidence
 
-`tests/qemu_smoke.py --arch aarch64 --suites normal,shell,vfs,net,tls` (CI job `aarch64`) runs the x86 suites on `virt`: programs and the shell (instances, foreground, Ctrl+Z from the VirtIO keyboard, limits, heap baseline, the idle CPU waiting in WFI), line editing and history from both keyboards, files on a raw FAT disk through `virtio_blk` (fsck.fat, mtools, reboot through PSCI), the network (DHCP, DNS, TCP, flow grants, two cards, driver restarts, MSI-X through the ITS) and TLS (with RNDR, and fail-closed on a Cortex-A72 without it).
+`tests/qemu_smoke.py --arch aarch64` (CI job `aarch64`) runs the x86 suites on `virt` with four CPUs: `smp` and `busy` (every CPU online and preempting non-yielding loops that keep values in registers, the system band's reserve under load, remote kill, CPU budgets, all CPUs idle in WFI), and programs and the shell (instances, foreground, Ctrl+Z from the VirtIO keyboard, limits, heap baseline, the idle CPU waiting in WFI), line editing and history from both keyboards, files on a raw FAT disk through `virtio_blk` (fsck.fat, mtools, reboot and power off through PSCI), the network (DHCP, DNS, TCP, flow grants, two cards, driver restarts, MSI-X through the ITS) and TLS (with RNDR, and fail-closed on a Cortex-A72 without it).
 
 `tests/aarch64_smoke.py` (same job), without the shell and without PCI: the boot reaches `[INIT] READY` with `logd`, `loader`, `keystore` (device key from RNDR) and `sysmon`; a service that reads kernel memory, writes its code, executes its stack or runs an undefined instruction is ended with that exception class (`FAULT VECTOR` 36, 36, 32, 0), restarted by init and quarantined after three restarts, while the others keep running.

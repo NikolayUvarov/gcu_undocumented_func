@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds MIND Core for aarch64 (QEMU `virt`, issues 201-202) into aarch64_root/: the UEFI bootloader (BOOTAA64.EFI),
+# Builds MIND Core for aarch64 (QEMU `virt`, issues 201-203) into aarch64_root/: the UEFI bootloader (BOOTAA64.EFI),
 # and every crate of 02_build.sh's USER_CRATES except the x86-only ones (the LEGACY ISA drivers),
 # with the licences and the voice model as on the x86 image. The network driver is built without its legacy (port I/O)
 # interface. With --fixtures, also the fault-test service in four variants (aarch64_root/fault-<case>.elf) for
-# tests/aarch64_smoke.py.
+# tests/aarch64_smoke.py, and the busy fixture (aarch64_root/fixture-busy_app.elf) for the busy and smp suites.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
@@ -31,5 +31,9 @@ if [[ "${1:-}" == --fixtures ]]; then
             --check-cfg 'cfg(case, values("kernel_read","text_write","stack_exec","undefined"))' \
             "$ROOT/tests/aarch64_fault.rs" -o "$OUT/fault-$case.elf"
     done
+    # The busy fixture of the busy and smp suites (issue 203): a loop that never yields.
+    rustc --edition=2021 --target "$TARGET" --crate-type bin -C opt-level=2 -C panic=abort -C relocation-model=pic \
+        -C link-arg=-T"$ROOT/app/linker.ld" -C link-arg=-pie -C link-arg=-zmax-page-size=4096 \
+        -C link-arg=--no-dynamic-linker -C link-arg=-znotext "$ROOT/tests/busy_app.rs" -o "$OUT/fixture-busy_app.elf"
 fi
 echo ">>> aarch64 build ready: $OUT"

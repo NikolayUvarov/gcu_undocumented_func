@@ -114,7 +114,7 @@ jobs:
   # aarch64 on QEMU `virt` (issue 201): boot to init, services without devices, fault containment.
   aarch64:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
@@ -125,8 +125,8 @@ jobs:
         run: ./scripts/build_aarch64.sh --fixtures
       - name: Boot and fault containment
         run: python3 tests/aarch64_smoke.py
-      - name: QEMU suites on virt (issue 202)
-        run: python3 tests/qemu_smoke.py --arch aarch64 --suites normal,shell,vfs,net,tls
+      - name: QEMU suites on virt, four CPUs (issues 202-203)
+        run: python3 tests/qemu_smoke.py --arch aarch64
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -812,6 +812,7 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => cpu::halt_all(),
+            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => crate::acpi::power_off(),
             SYSCALL_REBOOT => crate::acpi::reboot(),
             _ => Err(ERR_INVALID),
         }

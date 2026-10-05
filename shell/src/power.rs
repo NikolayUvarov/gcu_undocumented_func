@@ -1,6 +1,7 @@
-//! `reboot [-f]` (issue 084): writes what `vfs_server` caches to the disks, stops the boot services in reverse start
-//! order through `init`'s lifecycle requests (so drivers quiesce their devices), then resets the machine (`REBOOT`,
-//! kernel issue 152). `-f` skips stopping the services.
+//! `reboot [-f] [--off]` (issue 084): writes what `vfs_server` caches to the disks, stops the boot services in reverse
+//! start order through `init`'s lifecycle requests (so drivers quiesce their devices), then resets the machine
+//! (`REBOOT`, kernel issue 152), or with `--off` turns it off (issue 203: aarch64 only so far). `-f` skips stopping the
+//! services.
 use crate::console::Console;
 use crate::files;
 use core::fmt::Write;
@@ -12,7 +13,10 @@ use mind::ipc::Endpoint;
 const KEEP: [&str; 2] = ["init", "shell"];
 
 pub fn reboot(out: &mut Console, args: &[u8]) {
-    let force = match args.trim_ascii() { b"" => false, b"-f" | b"-F" => true, _ => { let _ = writeln!(out, "USAGE: REBOOT [-F]"); return; } };
+    let (mut force, mut off) = (false, false);
+    for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
+        match word { b"-f" | b"-F" => force = true, b"--off" | b"--OFF" => off = true, _ => { let _ = writeln!(out, "USAGE: REBOOT [-F] [--OFF]"); return; } }
+    }
     files::flush_all();
     if !force {
         match idl_init::list(Endpoint::INIT) {
@@ -27,6 +31,11 @@ pub fn reboot(out: &mut Console, args: &[u8]) {
             }
             _ => { let _ = writeln!(out, "INIT DID NOT ANSWER: THE SERVICES ARE NOT STOPPED"); }
         }
+    }
+    if off {
+        let _ = writeln!(out, "POWERING OFF...");
+        if control::power_off().is_err() { let _ = writeln!(out, "ERROR: POWER OFF REFUSED (NOT ON THIS PLATFORM)"); }
+        return;
     }
     let _ = writeln!(out, "REBOOTING...");
     if control::reboot().is_err() { let _ = writeln!(out, "ERROR: REBOOT REFUSED"); }
