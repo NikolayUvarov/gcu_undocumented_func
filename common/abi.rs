@@ -322,9 +322,9 @@ pub fn pointer_event(buttons: u8, dx: i32, dy: i32, wheel: i32) -> usize {
     let field = (dx.clamp(-256, 255) as u32 & 0x1FF) | (dy.clamp(-256, 255) as u32 & 0x1FF) << 9 | (wheel.clamp(-8, 7) as u32 & 0xF) << 18;
     input_event(0, KEY_POINTER, buttons, true, field)
 }
-// An absolute pointer (a tablet, issue 160): bit 33 set, the character field holds the position in 1/4096 of the screen
-// (bits 0-11 x, 12-23 y) and bits 34-37 the wheel.
-pub const POINTER_ABSOLUTE: usize = 1 << 33;
+// An absolute pointer (a tablet, issue 160): bit 38 set, the character field holds the position in 1/4096 of the screen
+// (bits 0-11 x, 12-23 y) and bits 34-37 the wheel. Bit 33 is mind::window::POINTER_AT (a window's cell, issue u001).
+pub const POINTER_ABSOLUTE: usize = 1 << 38;
 pub const POINTER_SCALE: u32 = 4096;
 pub fn pointer_at_event(buttons: u8, x: u32, y: u32, wheel: i32) -> usize {
     let field = x.min(POINTER_SCALE - 1) | y.min(POINTER_SCALE - 1) << 12;

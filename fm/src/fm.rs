@@ -3,7 +3,8 @@
 //! reached through `Disk` (vfs_server in the system, memory in tests).
 use crate::panel::{VFS_ENTRY_ARCHIVE, VFS_ENTRY_HIDDEN, VFS_ENTRY_READ_ONLY, VFS_ENTRY_SYSTEM};
 use crate::editor::{Editor, Outcome as EditOutcome};
-use crate::keys::{Code, Key};
+use crate::abi::{KEY_DOWN, KEY_F1, KEY_UP, POINTER_LEFT, POINTER_RIGHT};
+use crate::keys::{self, Code, Key};
 use crate::panel::{self, display, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use crate::tui::viewer::{Action, Source, Viewer};
 use crate::tui::widgets::{buttons_key, dialog, fkey_bar, input_dialog, message, progress, Edit, InputLine, KeyBars, ListState, MenuAction, MenuBar};
@@ -44,8 +45,8 @@ pub trait Disk {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
-    /// Starts a program (in the background) with arguments; returns its PID.
-    fn run(&mut self, path: &str, args: &str) -> Result<u64, String>;
+    /// Starts a program with arguments; says where it shows itself.
+    fn run(&mut self, path: &str, args: &str) -> Result<Started, String>;
     /// A file to write: an existing one is emptied if `replace`, else `Failure::Exists`.
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure>;
     /// Makes a directory and missing parents (an existing one is fine).
@@ -60,6 +61,32 @@ pub trait Disk {
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
     /// Writes what is cached for the volume of `path` to the disk.
     fn flush(&mut self, path: &str);
+}
+
+/// Where a program fm started shows itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// A window of its own next to fm's (fm runs in a window of `wm`, issue 099).
+    Window,
+    /// A screen of its own, in the background: fm cannot bring it to the front (Ctrl+Z, then FG in the shell).
+    Screen,
+    /// No screen: a console program, its output in its log.
+    Console,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Started { pub pid: u64, pub place: Place }
+
+impl Started {
+    /// What fm says after starting `name`.
+    pub fn text(&self, name: &str) -> String {
+        let pid = self.pid;
+        match self.place {
+            Place::Window => format!("Started {} (PID {}) in a window of its own", name, pid),
+            Place::Screen => format!("Started {} as PID {} in the background: Ctrl+Z, then FG {} in the shell shows it", name, pid, pid),
+            Place::Console => format!("Started {} as PID {}: a console program, LOGS {} in the shell shows what it printed", name, pid, pid),
+        }
+    }
 }
 
 /// A boxed source as a `Source`.
@@ -99,7 +126,7 @@ const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "", "View", "Edit", "Co
                                          shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["LPanel", "RPanel", "Name", "Ext", "Time", "Size", "", "", "", ""],
                                          alt: ["Left", "Right", "", "", "", "", "Find", "", "", ""] };
 
-const HELP: [&str; 17] = [
+const HELP: [&str; 19] = [
     "Typing goes to the command line: Enter runs it — cd <dir>, edit or view <file>,",
     "  a program with arguments; Esc clears it; Alt+Enter adds the name under the cursor",
     "Ctrl+O — hide or show the panels; Ctrl+F1 / Ctrl+F2 — the left / right panel;",
@@ -114,8 +141,10 @@ const HELP: [&str; 17] = [
     "Ctrl+H — hidden files; Ctrl+R — reread; Ctrl+U — swap panels",
     "Ctrl+L — information, Ctrl+Q — quick view in the other panel",
     "Alt+F1 / Alt+F2 — volume of the left / right panel; Alt+F7 — find",
-    "Programs started here run in the background: FG <pid> in the shell",
-    "shows them. Only ram: and data/ on the boot disk are writable.",
+    "Mouse: click — cursor; double click — open; right click — mark;",
+    "  wheel — move the cursor; a click on the key bar presses that key",
+    "Programs started here open a window of their own under wm; on a screen they run in the",
+    "background (FG <pid> in the shell). Only ram: and data/ on the boot disk are writable.",
     "",
 ];
 
@@ -284,14 +313,23 @@ pub struct Fm<'b> {
     /// Panels hidden with Ctrl+O, Ctrl+F1, Ctrl+F2 or Ctrl+P: their place shows what the command line did.
     pub hidden: [bool; 2],
     output: Vec<String>,
+    /// The grid's size at the last `draw`: where the mouse is (issue u001).
+    size: (usize, usize),
+    /// The buttons held at the last mouse event, and the last click on an entry (panel, entry, ms): a second one soon
+    /// after on the same entry is a double click.
+    buttons: u8,
+    click: Option<(usize, usize, usize)>,
 }
+
+/// Two clicks on an entry within this many milliseconds open it.
+pub const DOUBLE_CLICK_MS: usize = 500;
 
 impl<'b> Fm<'b> {
     /// Both panels on the root; `window` is the viewer's buffer (64 KiB is plenty).
     pub fn new(window: &'b mut [u8], disk: &mut dyn Disk) -> Self {
         let mut fm = Self { panels: [Panel::new(Mode::Full), Panel::new(Mode::Brief)], active: 0, menu: MenuBar::new(&MENU_TITLES, &MENU_ITEMS), dialog: None, notice: None,
                             job: None, editor: None, viewer: None, window: Some(window), quick: vec![0; PREVIEW], preview: None, volumes: [String::new(), String::new()],
-                            modifiers: 0, command: InputLine::new(), hidden: [false; 2], output: Vec::new() };
+                            modifiers: 0, command: InputLine::new(), hidden: [false; 2], output: Vec::new(), size: (0, 0), buttons: 0, click: None };
         fm.load(0, "", None, disk);
         fm.load(1, "", None, disk);
         fm
@@ -443,7 +481,7 @@ impl<'b> Fm<'b> {
         else if entry.dir { self.load(self.active, &path, None, disk); }
         else if entry.is_program() {
             self.notice = Some(match disk.run(&path, "") {
-                Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", entry.name, pid, pid),
+                Ok(started) => started.text(&entry.name),
                 Err(error) => format!("Cannot start {}: {}", entry.name, error),
             });
         } else { self.view(&path, disk); }
@@ -675,7 +713,7 @@ impl<'b> Fm<'b> {
                 };
                 let args: Vec<String> = rest.split_whitespace().map(|arg| entry(arg).map_or_else(|| String::from(arg), |e| join(&here, &e.name))).collect();
                 let text = match disk.run(&program, &args.join(" ")) {
-                    Ok(pid) => format!("Started {} as PID {} in the background; FG {} in the shell shows it", word, pid, pid),
+                    Ok(started) => started.text(word),
                     Err(error) => format!("Cannot start {}: {}", word, error),
                 };
                 self.notice = Some(text.clone());
@@ -885,6 +923,75 @@ impl<'b> Fm<'b> {
         }
     }
 
+    // The panels' places on a grid of `size`, as `draw` lays them out.
+    fn panel_area(&self, side: usize) -> Rect {
+        let (w, h) = self.size;
+        let left = w / 2;
+        if side == 0 { Rect::new(0, 0, left, h.saturating_sub(2)) } else { Rect::new(left, 0, w - left, h.saturating_sub(2)) }
+    }
+
+    // The shown panel at cell (x, y).
+    fn panel_at(&self, x: usize, y: usize) -> Option<usize> {
+        (0..2).find(|&side| !self.hidden[side] && self.panel_area(side).contains(x, y))
+    }
+
+    /// A mouse event at cell (x, y) of the grid last drawn, with `buttons` held (`POINTER_*`) and the wheel turned
+    /// `wheel` steps (negative: up), `now` ms after start (issue u001). A click on an entry makes its panel active and
+    /// puts the cursor on it, a second click soon after opens it as Enter does, a right click marks it as Insert does;
+    /// the wheel moves the cursor of the panel under the mouse, or scrolls the viewer or the editor, three lines a
+    /// step; a click on the key bar presses that key with the modifiers held.
+    pub fn pointer(&mut self, x: usize, y: usize, buttons: u8, wheel: i32, now: usize, disk: &mut dyn Disk) -> Outcome {
+        let pressed = buttons & !self.buttons;
+        self.buttons = buttons;
+        let (w, h) = self.size;
+        if w == 0 || h < 3 { return Outcome::Ignored; }
+        let press = |code: u16, mods: u8| Key::from_event(keys::event(code, 0, mods));
+        if pressed & POINTER_LEFT != 0 && y + 1 == h {
+            let number = (x / (w / 10).max(1)).min(9) as u16;
+            return match press(KEY_F1 + number, self.modifiers) { Some(key) => self.key(key, disk), None => Outcome::Ignored };
+        }
+        let lines = 3 * wheel.unsigned_abs() as usize;
+        if self.job.is_some() || self.dialog.is_some() || self.menu.open { return Outcome::Ignored; }
+        if self.editor.is_some() || self.viewer.is_some() {
+            if wheel == 0 { return Outcome::Ignored; }
+            let Some(key) = press(if wheel < 0 { KEY_UP } else { KEY_DOWN }, 0) else { return Outcome::Ignored };
+            for _ in 0..lines { if self.key(key, disk) == Outcome::Quit { return Outcome::Quit; } }
+            return Outcome::Redraw;
+        }
+        let Some(side) = self.panel_at(x, y) else { return Outcome::Ignored };
+        // A panel showing information or quick view is not a listing.
+        let listing = side == self.active || matches!(self.panels[side].mode, Mode::Full | Mode::Brief);
+        if wheel != 0 && listing {
+            self.activate(side, disk);
+            self.panels[side].move_by(if wheel < 0 { -(lines as isize) } else { lines as isize });
+            self.update_preview(disk);
+            return Outcome::Redraw;
+        }
+        if pressed & (POINTER_LEFT | POINTER_RIGHT) == 0 { return Outcome::Ignored; }
+        self.notice = None;
+        let entry = if listing { self.panels[side].entry_at(self.panel_area(side), x, y) } else { None };
+        self.activate(side, disk);
+        let Some(index) = entry else { self.click = None; return Outcome::Redraw };
+        self.panels[side].select(index);
+        if pressed & POINTER_RIGHT != 0 {
+            self.click = None;
+            let marked = self.panels[side].list.selected;
+            self.panels[side].toggle_mark();
+            self.panels[side].select(marked);
+        } else {
+            let double = self.click.is_some_and(|(s, i, at)| s == side && i == index && now.saturating_sub(at) <= DOUBLE_CLICK_MS);
+            self.click = if double { None } else { Some((side, index, now)) };
+            if double { self.open(disk); }
+        }
+        self.update_preview(disk);
+        Outcome::Redraw
+    }
+
+    // Makes `side` the active panel.
+    fn activate(&mut self, side: usize, disk: &mut dyn Disk) {
+        if self.active != side { self.active = side; self.update_preview(disk); }
+    }
+
     fn info(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
         grid.frame_titled(area, Line::Double, "Information", theme.frame, theme.frame);
         let inner = area.inner();
@@ -956,6 +1063,7 @@ impl<'b> Fm<'b> {
     /// Draws everything; returns the cursor of an open input line.
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme) -> Option<(usize, usize)> {
         let (w, h) = (grid.cols, grid.rows);
+        self.size = (w, h);
         grid.clear(theme.panel);
         if let Some(editor) = self.editor.as_mut() { editor.modifiers = self.modifiers; return editor.draw(grid, theme); }
         if let Some(viewer) = self.viewer.as_mut() { viewer.modifiers = self.modifiers; let area = grid.area(); return viewer.draw(grid, area, theme); }

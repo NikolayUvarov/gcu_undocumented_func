@@ -156,3 +156,23 @@ fn number_formatting() {
     tui::human_size(5 << 30, &mut out); assert_eq!(out.as_bytes(), b"5.0G");
     tui::human_size(999, &mut out); assert_eq!(out.as_bytes(), b"999B");
 }
+
+#[test]
+fn large_digits_fit_and_draw() {
+    use tui::digits;
+    // "12:34:56": six digits of 3 dots, two colons of 1, seven spaces: 27 dots wide, 5 high (3 cells at scale 1).
+    assert_eq!(digits::size("12:34:56", 1), (27, 3));
+    assert_eq!(digits::size("12:34:56", 2), (54, 5));
+    assert_eq!(digits::fit("12:34:56", 80, 25, 8), Some(2));
+    assert_eq!(digits::fit("12:34:56", 160, 46, 8), Some(5));
+    assert_eq!(digits::fit("12:34:56", 26, 10, 8), None, "too narrow");
+    let mut cells = vec![Cell::BLANK; 30 * 3];
+    let mut grid = Grid::new(&mut cells, 30, 3);
+    let area = digits::draw(&mut grid, 1, 0, "10:2", 1, S);
+    assert_eq!(area, Rect::new(1, 0, 13, 3));
+    // Two dots per cell (rows 0+1, 2+3, 4): "1" is .#. ##. .#. .#. ###, the colon's dots are on rows 1 and 3.
+    assert_eq!(text(&grid, 0), " ▄█  █▀█ ▄ ▀▀█                ");
+    assert_eq!(text(&grid, 1), "  █  █ █ ▄ █▀▀                ");
+    assert_eq!(text(&grid, 2), " ▀▀▀ ▀▀▀   ▀▀▀                ");
+    assert_eq!(grid.get(2, 0).style, S);
+}

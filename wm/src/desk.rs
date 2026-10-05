@@ -3,7 +3,7 @@
 //! halves, quarters and the whole screen; what each cell of the screen shows. No system calls: tests/wm_host.rs.
 use crate::keys::{Code, Key};
 use crate::tui::widgets::{message, Edit, InputLine};
-use crate::tui::{Grid, Line, Rect, Style, Theme};
+use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -39,6 +39,9 @@ impl Win {
 /// What is under a cell of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit { Desktop, Title(u32), Close(u32), Corner(u32), Border(u32), Content(u32) }
+
+/// The cell under a pixel window's content: what is still this cell after everything is drawn shows the pixels.
+pub const PIXELS: Cell = Cell { ch: ' ', style: Style { fg: 0, bg: 0 } };
 
 /// Smallest frame, and how near an edge a moved window sticks to it (cells).
 pub const MIN: (usize, usize) = (16, 4);
@@ -219,7 +222,7 @@ impl Desk {
                             grid.put(x, y, ch, Style::new(fg, bg));
                             owner[y * cols + x] = 0;
                         }
-                        Content::Pixels => { grid.put(x, y, ' ', Style::new(0, 0)); owner[y * cols + x] = index as u16 + 1; }
+                        Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
                     }
                 }
             }
@@ -253,6 +256,9 @@ pub enum Action {
     Detach,
     /// Ask every program to end, then leave.
     CloseAll,
+    /// A mouse event for the program of window `id` (issue u001): at cell (x, y) of its content, with the buttons
+    /// held and the wheel's steps.
+    Pointer { id: u32, x: usize, y: usize, buttons: u8, wheel: i32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -268,8 +274,8 @@ pub const HELP: [&str; 13] = [
     "Alt+R — run a program in a new window: fm, top, clock, dzen-clock, edit <file>, …",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
-    "Mouse: a click brings a window to the front; drag the title to move it (it snaps at the edges),",
-    "  the ◆ corner to resize it; [×] closes it",
+    "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
+    "  drag the title to move a window (it snaps at the edges), the ◆ corner to resize it; [×] closes it",
     "Every other key goes to the window in front only.",
     "Programs started here get only what wm holds and they ask for: the user's files,",
     "  system information, a window; nothing else.",
@@ -285,10 +291,12 @@ pub struct Wm {
     /// The mouse in cells, once it moved.
     pub pointer: Option<(usize, usize)>,
     buttons: u8,
+    /// The window whose content got a button's press: it gets the mouse until every button is up.
+    grab: Option<u32>,
 }
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0 } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -341,7 +349,8 @@ impl Wm {
             }
             (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
             (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
-            (Code::F(1), _) | (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
+            // Not Alt+F1: fm chooses the left panel's volume with it.
+            (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
             (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect }; } Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
             (_, Some('q')) => Action::Detach,
@@ -351,20 +360,28 @@ impl Wm {
         }
     }
 
-    /// The mouse went to cell (x, y) with `buttons` held (bit 0: left).
-    pub fn pointer(&mut self, x: usize, y: usize, buttons: u8) -> Action {
+    /// The mouse went to cell (x, y) with `buttons` held (bit 0: left) and the wheel turned `wheel` steps. A press on
+    /// a window's content brings it to the front and goes to its program, which then gets the mouse until every
+    /// button is up; the wheel goes to the window under the mouse. Moves with no button held are not passed on.
+    pub fn pointer(&mut self, x: usize, y: usize, buttons: u8, wheel: i32) -> Action {
         let (x, y) = (x.min(self.desk.cols.saturating_sub(1)), y.min(self.desk.rows.saturating_sub(1)));
         let pressed = buttons & 1 != 0 && self.buttons & 1 == 0;
         let released = buttons & 1 == 0 && self.buttons & 1 != 0;
+        let other_pressed = buttons & !1 & !self.buttons != 0;
         self.buttons = buttons;
         self.pointer = Some((x, y));
-        if pressed {
-            if !matches!(self.mode, Mode::Normal) { return Action::Redraw; }
+        if let Some(id) = self.grab {
+            if buttons == 0 { self.grab = None; }
+            return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
+        }
+        if (pressed || other_pressed || wheel != 0) && !matches!(self.mode, Mode::Normal) { return Action::Redraw; }
+        if pressed || (other_pressed && self.drag.is_none()) {
             return match self.desk.hit(x, y) {
-                Hit::Close(id) => Action::Close(id),
-                Hit::Title(id) => { self.desk.raise(id); let r = self.desk.get(id).unwrap().rect; self.drag = Some(Drag::Move { id, dx: x - r.x, dy: y - r.y }); Action::Redraw }
-                Hit::Corner(id) => { self.desk.raise(id); self.drag = Some(Drag::Resize { id }); Action::Redraw }
-                Hit::Border(id) | Hit::Content(id) => { self.desk.raise(id); Action::Redraw }
+                Hit::Close(id) if pressed => Action::Close(id),
+                Hit::Title(id) if pressed => { self.desk.raise(id); let r = self.desk.get(id).unwrap().rect; self.drag = Some(Drag::Move { id, dx: x - r.x, dy: y - r.y }); Action::Redraw }
+                Hit::Corner(id) if pressed => { self.desk.raise(id); self.drag = Some(Drag::Resize { id }); Action::Redraw }
+                Hit::Content(id) => { self.desk.raise(id); self.grab = Some(id); self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw) }
+                Hit::Border(id) | Hit::Title(id) | Hit::Corner(id) | Hit::Close(id) => { self.desk.raise(id); Action::Redraw }
                 Hit::Desktop => Action::Redraw,
             };
         }
@@ -379,15 +396,27 @@ impl Wm {
                 if released { self.drag = None; }
                 Action::Redraw
             }
-            None => Action::Redraw,
+            None => match self.desk.hit(x, y) {
+                Hit::Content(id) if wheel != 0 => self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw),
+                _ => Action::Redraw,
+            },
         }
+    }
+
+    // The event for window `id` at screen cell (x, y), as a cell of its content (the nearest one when outside it).
+    fn to_window(&self, id: u32, x: usize, y: usize, buttons: u8, wheel: i32) -> Option<Action> {
+        let inner = self.desk.get(id)?.rect.inner();
+        if inner.w == 0 || inner.h == 0 { return None; }
+        let (x, y) = (x.clamp(inner.x, inner.right() - 1) - inner.x, y.clamp(inner.y, inner.bottom() - 1) - inner.y);
+        Some(Action::Pointer { id, x, y, buttons, wheel })
     }
 
     fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP" } }
 
-    /// Draws everything; returns the text cursor (of the run line, or the focused text window's from `cursor`).
+    /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
+    /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>, cursor: Option<(usize, usize)>) -> (Vec<u16>, Option<(usize, usize)>) {
-        let owner = self.desk.draw(grid, theme, cell);
+        let mut owner = self.desk.draw(grid, theme, cell);
         let cols = grid.cols;
         let bar = Style::new(0x101820, 0x80A0C0);
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
@@ -407,6 +436,10 @@ impl Wm {
             Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); shown = None; }
             Mode::Run(line) => { shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
             _ => {}
+        }
+        // A dialog over a pixel window: its cells are no longer the window's.
+        for (index, tag) in owner.iter_mut().enumerate() {
+            if *tag != 0 && grid.get(index % cols, index / cols) != PIXELS { *tag = 0; }
         }
         (owner, shown)
     }

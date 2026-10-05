@@ -1,6 +1,9 @@
 //! Host tests of window surfaces (libmind/src/window.rs, issue 157): the header the broker writes, what the manager
 //! accepts from a program it cannot trust, the input queue and the changed rectangle.
 #[allow(dead_code)]
+#[path = "../common/abi.rs"]
+mod abi;
+#[allow(dead_code)]
 #[path = "../libmind/src/window.rs"]
 mod window;
 
@@ -98,4 +101,17 @@ fn cursor_resize_and_pixels() {
     unsafe { p.content().cast::<u32>().add(3 * 8 + 7).write(0x00A6E3A1); }
     assert_eq!(p.pixel(7, 3), Some(0x00A6E3A1));
     assert_eq!((p.pixel(8, 0), p.pixel(0, 4), s.pixel(0, 0)), (None, None, None), "outside, or not a pixel surface");
+}
+
+#[test]
+fn pointer_events_of_a_window() {
+    use abi::{event_key, pointer_event, pointer_fields, KEY_POINTER, POINTER_LEFT};
+    let word = window::pointer_at(POINTER_LEFT, 77, 21, -1);
+    assert_eq!(event_key(word), KEY_POINTER);
+    assert_eq!(window::pointer_position(word), Some((77, 21)));
+    assert_eq!(pointer_fields(word), (POINTER_LEFT, 77, 21, -1));
+    assert_eq!(window::pointer_position(window::pointer_at(0, 300, 255, 0)), Some((255, 255)), "kept within the field");
+    // The kernel's pointer events carry motion, not a cell.
+    assert_eq!(window::pointer_position(pointer_event(0, 5, -3, 0)), None);
+    assert_eq!(window::pointer_position(window::POINTER_AT), None, "not a pointer event");
 }

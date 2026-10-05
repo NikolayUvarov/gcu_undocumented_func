@@ -150,7 +150,12 @@ fn keys_wm_keeps_and_passes_on() {
     wm.desk = desk_of_four();
     assert_eq!(wm.key(chr('x')), Action::Forward, "plain keys go to the window in front");
     assert_eq!(wm.key(key(KEY_F1)), Action::Forward);
-    assert_eq!(wm.key(Key(event(KEY_F1, 0, MOD_ALT))), Action::Redraw, "Alt+F1: wm's keys");
+    assert_eq!(wm.key(Key(event(KEY_F1, 0, MOD_ALT))), Action::Forward, "Alt+F1 is fm's (the left panel's volume)");
+    assert_eq!(wm.key(Key(event(KEY_F1 + 1, 0, MOD_ALT))), Action::Forward);
+    assert_eq!(wm.key(Key(event(KEY_F1 + 6, 0, MOD_ALT))), Action::Forward, "fm's Alt+F7");
+    assert_eq!(wm.key(Key(event(KEY_F1 + 7, 0, MOD_ALT))), Action::Forward, "edit's Alt+F8");
+    assert_eq!(wm.key(Key(event(KEY_BACKSPACE, 8, MOD_ALT))), Action::Forward, "edit's Alt+Backspace");
+    assert_eq!(wm.key(alt_char('h')), Action::Redraw, "Alt+H: wm's keys");
     assert!(wm.status().starts_with("MODE=HELP"));
     wm.key(key(KEY_ESC));
     assert_eq!(wm.key(alt(KEY_TAB, '\t')), Action::Redraw);
@@ -199,30 +204,63 @@ fn keys_wm_keeps_and_passes_on() {
 fn the_mouse_drags_titles_and_corners() {
     let mut wm = Wm::new(160, 50);
     wm.desk = desk_of_four();
-    // A click in window 1 brings it to the front.
-    assert_eq!(wm.pointer(10, 10, 1), Action::Redraw);
-    wm.pointer(10, 10, 0);
+    // A click in window 1 brings it to the front and goes to its program, at the cell of its content.
+    assert_eq!(rect(&wm.desk, 1), (0, 1, 80, 24));
+    assert_eq!(wm.pointer(10, 10, 1, 0), Action::Pointer { id: 1, x: 9, y: 8, buttons: 1, wheel: 0 });
+    assert_eq!(wm.pointer(10, 10, 0, 0), Action::Pointer { id: 1, x: 9, y: 8, buttons: 0, wheel: 0 });
     assert_eq!(wm.desk.focus(), Some(1));
     // Drag window 2's title to the left edge: it follows, then snaps to the left half.
-    wm.pointer(100, 1, 0);
-    wm.pointer(100, 1, 1);
+    wm.pointer(100, 1, 0, 0);
+    wm.pointer(100, 1, 1, 0);
     assert_eq!(wm.desk.focus(), Some(2));
-    wm.pointer(60, 20, 1);
+    wm.pointer(60, 20, 1, 0);
     assert_eq!(rect(&wm.desk, 2), (40, 20, 80, 24));
-    wm.pointer(20, 20, 1);
+    wm.pointer(20, 20, 1, 0);
     assert_eq!(rect(&wm.desk, 2), (0, 20, 80, 24));
-    wm.pointer(20, 20, 0);
+    wm.pointer(20, 20, 0, 0);
     assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
     // The corner resizes.
     wm.desk.place(2, Rect::new(40, 10, 30, 10));
-    wm.pointer(69, 19, 1);
-    wm.pointer(89, 24, 1);
-    wm.pointer(89, 24, 0);
+    wm.pointer(69, 19, 1, 0);
+    wm.pointer(89, 24, 1, 0);
+    wm.pointer(89, 24, 0, 0);
     assert_eq!(rect(&wm.desk, 2), (40, 10, 50, 15));
     // [×] closes.
-    assert_eq!(wm.pointer(86, 10, 1), Action::Close(2));
-    wm.pointer(86, 10, 0);
+    assert_eq!(wm.pointer(86, 10, 1, 0), Action::Close(2));
+    wm.pointer(86, 10, 0, 0);
     assert_eq!(wm.pointer.unwrap(), (86, 10));
+}
+
+#[test]
+fn the_mouse_goes_to_the_programs() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let inner = wm.desk.get(2).unwrap().rect.inner();
+    // Moves with no button held stay with wm.
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, 0), Action::Redraw);
+    // The wheel goes to the window under the mouse, which stays where it is in the stack.
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, -1), Action::Pointer { id: 2, x: 3, y: 2, buttons: 0, wheel: -1 });
+    assert_eq!(wm.desk.focus(), Some(4));
+    assert_eq!(wm.pointer(0, 0, 0, 1), Action::Redraw, "not over a window's content");
+    // A press grabs the mouse: the window gets the moves and the release, at the nearest cell when outside it.
+    assert_eq!(wm.pointer(inner.x, inner.y, 2, 0), Action::Pointer { id: 2, x: 0, y: 0, buttons: 2, wheel: 0 }, "the right button too");
+    assert_eq!(wm.desk.focus(), Some(2));
+    assert_eq!(wm.pointer(5, 40, 2, 0), Action::Pointer { id: 2, x: 0, y: inner.h - 1, buttons: 2, wheel: 0 });
+    assert_eq!(wm.pointer(5, 40, 0, 0), Action::Pointer { id: 2, x: 0, y: inner.h - 1, buttons: 0, wheel: 0 });
+    assert_eq!(wm.pointer(5, 40, 0, 0), Action::Redraw, "released");
+    // A right click on a frame raises the window; no drag starts.
+    let title = wm.desk.get(3).unwrap().rect;
+    assert_eq!(wm.pointer(title.x + 2, title.y, 2, 0), Action::Redraw);
+    assert_eq!(wm.desk.focus(), Some(3));
+    let before = rect(&wm.desk, 3);
+    wm.pointer(title.x + 10, title.y + 5, 2, 0);
+    wm.pointer(title.x + 10, title.y + 5, 0, 0);
+    assert_eq!(rect(&wm.desk, 3), before);
+    // In a dialog of wm the mouse goes nowhere.
+    wm.key(alt_char('h'));
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 1, 0), Action::Redraw);
+    wm.pointer(inner.x + 3, inner.y + 2, 0, 0);
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, 1), Action::Redraw);
 }
 
 #[test]
@@ -261,6 +299,24 @@ fn what_each_cell_shows() {
     wm.key(alt_char('r'));
     let (_, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((3, 0)));
     assert!(cursor.is_some() && cursor != Some((84, 2)));
+    // A dialog over a pixel window (Alt+H over the clocks): the cells it covers are not the window's, so its pixels
+    // are not copied over the dialog; the rest of the window still shows them.
+    wm.key(key(KEY_ESC));
+    let mut clocks = Wm::new(160, 50);
+    let mut big = pixels(1, "dzen-clock", 1200, 700);
+    big.rect = Rect::new(10, 5, 140, 40);
+    clocks.desk.add(big);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!((owner[25 * 160 + 80], owner[6 * 160 + 11]), (1, 1));
+    clocks.key(alt_char('h'));
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[25 * 160 + 80], 0, "under the help dialog");
+    assert_eq!(owner[6 * 160 + 11], 1, "outside the dialog");
+    clocks.key(key(KEY_ESC));
+    let (owner, _) = clocks.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[25 * 160 + 80], 1, "the dialog closed: the pixels come back");
     // Every size draws.
     for (cols, rows) in [(20, 6), (40, 12), (100, 30)] {
         let mut wm = Wm::new(cols, rows);

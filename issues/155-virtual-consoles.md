@@ -20,6 +20,7 @@ There is one console: the shell's screen and line, with one foreground program a
   A program in a console that is not shown keeps running. Its console output goes to its own console's buffer.
 - **Key routing (kernel, done in 154).** The switch keys must reach the shell even while another program has the focus, and never that program. `INPUT_LISTEN` (`mind::input::listen(KEY_F1, MOD_ALT, true)` … `KEY_F1 + 3`) takes each key with exactly those modifiers out of the focused stream and into the shell's own input queue, presses and releases; up to 8 registrations. The shell reads them in its main loop while a program has the focus, as it does for F12. Ctrl+Z keeps its meaning in each console. What remains here is the shell's part.
 - **COM1** stays attached to console 1, the test harness's channel. The status line names the console shown. `ps` names the console of every program.
+- **Console faces of the clocks** (left from [089](../issues-done/089-text-clock-faces.done)): `clock` and `dzen-clock` started as console programs of a console print the time on one line updated in place. Their text faces for a screen or a `wm` window are done in 089.
 
 ## Acceptance criteria
 

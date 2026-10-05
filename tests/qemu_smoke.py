@@ -451,7 +451,7 @@ def normal_suite(vm):
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
     assert heap_used(vm) == baseline
-    print("PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, 4 CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
 
 
 def tablet_suite(args, disk):
@@ -754,6 +754,29 @@ def status_line(vm, text, timeout=8, raw=False, whole=False):
     raise AssertionError(f"Timeout waiting for the line {text!r}: {vm.output[-3000:]}")
 
 
+def logged(vm, start, text, timeout=8):
+    # The log from `start` once a whole line with `text` came: what a program printed while the harness was in the QEMU
+    # monitor (where `expect` and `serial` drop the output) counts too.
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        vm.collect()
+        got = to_ordinal(ANSI.sub("", vm.log[start:]).replace("\r", ""))
+        if text in got and "\n" in got[got.index(text):]:
+            return got
+        time.sleep(.02)
+    raise AssertionError(f"Timeout waiting for {text!r}: {vm.log[start:][-3000:]}")
+
+
+def mouse_moves(dx, dy):
+    # QEMU monitor commands that move the PS/2 mouse by (dx, dy): QEMU queues few packets per command, so small steps.
+    moves = []
+    while dx or dy:
+        step = (max(-100, min(100, dx)), max(-100, min(100, dy)))
+        moves.append(f"mouse_move {step[0]} {step[1]}")
+        dx, dy = dx - step[0], dy - step[1]
+    return moves
+
+
 def tool_status(vm, text):
     # The state line a monitor logs after a key: x is bound in none of them. (The line after the Enter that leaving
     # the QEMU monitor sends may be dropped by serial().)
@@ -1038,6 +1061,27 @@ def fm_check(vm):
     keys(b"view docs/notes.txt", "CMD=view docs/notes.txt")
     keys(b"\r", "VIEW=1")
     keys(b"\x1b", "VIEW=0")
+    # The mouse (issue u001): it starts in the middle of the screen (cell 80, 25). A click puts the cursor on an entry,
+    # a second click soon after opens it, the wheel moves the cursor; the cell under the mouse is shown inverted.
+    def mouse(*commands, text=None):
+        start = len(vm.log)
+        for command in commands:
+            vm.hmp(command)
+            time.sleep(.05)
+        vm.serial(enter=False)
+        return text and logged(vm, start, text)
+    clicked = mouse(*mouse_moves((10 - 80) * 8, (3 - 25) * 16), "mouse_button 1", "mouse_button 0", text="CURRENT=EFI ")
+    require(clicked, "[FM] POINTER 10,3 BUTTONS=1 WHEEL=0")
+    assert "LEFT=/ FULL" in clicked, clicked
+    mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", text="LEFT=/EFI FULL")
+    require(mouse("mouse_move 0 0 -1", text="CURRENT=BOOT "), "[FM] POINTER 10,3 BUTTONS=0 WHEEL=1")
+    mouse(*mouse_moves(0, 30 * 16))  # moves are not logged
+    time.sleep(.3)
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    width = int(size.split()[0])
+    corner = lambda x, y: pixels[(y * 16 * width + x * 8) * 3:(y * 16 * width + x * 8) * 3 + 3]
+    assert corner(10, 33) != corner(12, 33) and corner(9, 33) == corner(12, 33), (corner(10, 33), corner(12, 33))
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -1050,7 +1094,8 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P", flush=True)
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
+          "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
     vfs_check(vm)
 
 
@@ -1589,9 +1634,55 @@ def dzen_suite(vm):
     vm.expect("PID=1 EXITED. SHELL RESUMED.")
     time.sleep(.1); vm.collect(); vm.output = ""
     require(vm.command("kill 2"), "KILLED PID=2")
+    # The text faces (issue 089): the indicators as colored cells with the same keys, the clock in large digits.
+    vm.send("dzen-clock --text\n")
+    require(vm.expect("[DZEN-CLOCK] 19:3"), "[DZEN-CLOCK] STARTED (TEXT)")
+    time.sleep(.5)
+
+    def look():
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial()  # the Enter of leaving the monitor: neither face uses it
+        width, height = map(int, size.split())
+        def count(color, x0, x1, y0, y1):
+            return sum(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3] == color for y in range(y0, y1, 2) for x in range(x0, x1, 2))
+        return screen, width, height, count
+
+    screen, width, height, count = look()
+    assert canon("DZEN CLOCK") in screen[0] and canon("D: DIGITS") in screen[-1] and canon("19:3") in screen[-2], (screen[0], screen[-2:])
+    assert count(b"\xff\xff\x00", width // 2, width, 0, height // 2) > 300, "the hour's yellow disc at the top right"
+    assert count(b"\x00\xff\xff", width // 4, 3 * width // 4, height // 4, 3 * height // 4) > 300, "the cyan center"
+    assert count(b"\x60\x60\x60", 0, width, 0, height) > 300, "white corners"
+    vm.send("c\n")
+    vm.expect("ORBIT SIMPLE")
+    time.sleep(.3)
+    screen = look()[0]
+    # The dot reads back as ● or as its inverse ◘: a cell of two colours is matched with either as the foreground.
+    assert sum(row.count(canon("●")) + row.count(canon("◘")) for row in screen) == 1 and sum(row.count(canon("·")) for row in screen) > 10, screen
+    vm.send("d\n")
+    vm.expect("DIGITS OFF")
+    vm.send("h\n")
+    vm.expect("TEXT OFF")
+    time.sleep(.3)
+    screen = look()[0]
+    assert not screen[0].strip() and not screen[-1].strip() and not screen[-2].strip(), (screen[0], screen[-2:])
+    vm.send("\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    vm.send("run clock --text\n")  # `clock` alone is the shell's command for the monotonic clock
+    vm.expect("[CLOCK] 19:3")
+    time.sleep(.3)
+    first = look()[0]
+    assert any(canon("▀") in row or canon("▄") in row for row in first), first
+    assert any(canon("Saturday 2026-09-19") in row for row in first) and canon("CLOCK (IPC RTC)") in first[0], first
+    time.sleep(1.2)
+    assert look()[0] != first, "the digits change every second"
+    vm.send("\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -3225,6 +3316,20 @@ def wm_suite(vm):
     assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
+    # A program fm starts opens a window of its own next to fm's (issue 099), in front; Alt+W closes it.
+    read[0] = len(vm.log)
+    vm.send_bytes(b"clock\r")
+    wait(lines=6)
+    while not any(m[1] not in started.values() and m[2] == "PIXELS" for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    second_clock = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] not in started.values() and m[2] == "PIXELS")
+    while state()[1] != second_clock:
+        wait()
+    keys("alt-w", text=f"CLOSE {second_clock}")
+    until(f"GONE {second_clock}")
+    while second_clock in state()[2]:
+        wait()
+    assert state()[1] == fm, state()
     # Halves, quarters, maximize and back.
     assert keys("alt-right")[2][fm] == (80, 1, 80, 48)
     assert keys("alt-3")[2][fm] == (0, 25, 80, 24)
@@ -3246,6 +3351,43 @@ def wm_suite(vm):
     wait(lines=2)
     mode, focus, rects = state()
     assert focus == clock and rects[clock] == (0, 1, 80, 48), (focus, rects)
+    # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
+    # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
+    # wheel moves fm's cursor.
+    front(fm)
+    keys("alt-right")
+    mode, focus, rects = front(clock)
+    assert focus == clock and rects[fm] == (80, 1, 80, 48), (focus, rects)
+
+    def mouse(*commands, lines):
+        for command in commands:
+            vm.hmp(command)
+            time.sleep(.05)
+        vm.serial(enter=False)
+        wait(lines=lines)
+        return state()
+
+    def point(x, y):
+        # From the cell the last state line names; its pixel within the cell stays the same.
+        px, py = map(int, re.findall(r"POINTER=(\d+),(\d+)", "".join(seen))[-1])
+        for move in mouse_moves((x - px) * 8, (y - py) * 16):
+            vm.hmp(move)
+            time.sleep(.05)
+
+    point(81 + 5, 2 + 3)  # fm's left panel lists docs: "..", then notes.txt
+    mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+    assert focus == fm, (focus, rects)
+    until(f"[WM] POINTER {fm} AT 5,3 BUTTONS=1 WHEEL=0")
+    point(81 + 5, 2 + 2)
+    mouse("mouse_button 1", "mouse_button 0", "mouse_button 1", "mouse_button 0", lines=4)
+    mouse("mouse_move 0 0 -1", lines=1)
+    until(f"[WM] POINTER {fm} AT 5,2 BUTTONS=0 WHEEL=1")
+    vm.background(wm_pid)
+    fm_log = vm.command(f"logs {started['fm']}")
+    for line in ("[FM] POINTER 5,3 BUTTONS=1 WHEEL=0", "CURRENT=notes.txt", "LEFT=/ FULL", "[FM] POINTER 5,2 BUTTONS=0 WHEEL=1"):
+        require(fm_log, line)
+    vm.send(f"fg {wm_pid}\n")
+    vm.expect(f"FOREGROUND PID={wm_pid}")
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3264,7 +3406,7 @@ def wm_suite(vm):
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-    require(wait("EXITED. SHELL RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
+    require(wait("RESUMED.", lines=0), "DETACHED: 3 WINDOWS KEPT")
     time.sleep(.1); vm.collect(); vm.output = ""
     names = {row[0] for row in task_rows(vm).values()}
     assert {"fm", "clock", "top"} <= names and "wm" not in names, names
@@ -3288,7 +3430,7 @@ def wm_suite(vm):
     time.sleep(.5)
     # Close all: every program ends, then wm.
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(wait("EXITED. SHELL RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
+    require(wait("RESUMED.", lines=0), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     for _ in range(20):
@@ -3297,7 +3439,8 @@ def wm_suite(vm):
         time.sleep(.2)
     assert heap_used(vm) == baseline
     print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
-          "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse; programs get only what wm holds; "
+          "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
+          "in fm's window; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 

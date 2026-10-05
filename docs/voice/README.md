@@ -2,7 +2,7 @@
 
 **Version:** 0.4 (2026-10-04) · **Status:** V0–V2 done, V3–V4 planned · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Art. 8 (cognitive plane), 11.5, 11.11 (untrusted input), MC-3.7, MC-3.11 · **Roadmap:** [track G](../../ROADMAP.md) (input methods, UI), D (network for V4) · [Russian](README_RU.md)
 
-The system is meant to talk with people: to speak, to listen and to act on what it heard. This plan says what exists, what is missing, how the pieces fit the Constitution, and which work belongs to the **tools track** (this branch, issues 077–099) and which to the **kernel track** (issues 150–199; the network track has 100–149).
+The system is meant to talk with people: to speak, to listen and to act on what it heard. This plan says what exists, what is missing, how the pieces fit the Constitution, and which work belongs to the **tools track** (this branch, issues 077–099, then u001, u002, …) and which to the **kernel track** (issues 150–199; the network track has 100–149).
 
 ## 1. What exists
 

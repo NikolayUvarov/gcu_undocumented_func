@@ -1,6 +1,7 @@
 //! Text UI: a grid of character cells drawn with the 8x16 font (MIND Mono 16), frames, bars, graphs and widgets
 //! (`widgets`). `Grid` is plain memory and builds on the host for tests; `Terminal` puts it on the program's screen
 //! and redraws only cells that changed.
+pub mod digits;
 pub mod viewer;
 pub mod widgets;
 #[cfg(target_os = "none")]
@@ -37,6 +38,7 @@ impl Rect {
     pub fn centered(self, w: usize, h: usize) -> Self { let (w, h) = (w.min(self.w), h.min(self.h)); Self { x: self.x + (self.w - w) / 2, y: self.y + (self.h - h) / 2, w, h } }
     pub fn right(self) -> usize { self.x + self.w }
     pub fn bottom(self) -> usize { self.y + self.h }
+    pub fn contains(self, x: usize, y: usize) -> bool { x >= self.x && x < self.right() && y >= self.y && y < self.bottom() }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

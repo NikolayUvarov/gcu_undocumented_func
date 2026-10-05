@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
-use mind::{abi, font};
+use mind::{abi, font, tui};
 mod cycle;
 mod face;
+mod text;
 mod view;
 use abi::BootInfo;
 use cycle::{point_at, Cycle, OrbitMode};
@@ -13,7 +14,8 @@ fn print(text: &[u8]) { mind::process::log(text) }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("dzen-clock — the Dzen clock on its own screen, or in a window under wm.\nUsage: dzen-clock\nEsc: exit.");
+    mind::about!("dzen-clock — the Dzen clock on its own screen, or in a window under wm.\nUsage: dzen-clock [--text]   (--text: the indicators in colored text cells, sized to the screen or the window)\nD digital time, C orbit, P orbit with 10 s ticks, H title and keys, Esc: exit.");
+    if mind::process::args_str().split_whitespace().any(|a| a == "--text") { return text_face(info); }
     // Started by a window manager: a 400 × 320 window instead of the screen (issue 088).
     let info = mind::windowed::pixels(info, 400, 320, "dzen-clock");
     print(
@@ -114,6 +116,41 @@ fn main(info: &'static BootInfo) {
             previous_mode = orbit_mode;
         }
         // Sleep instead of polling continuously, including when digits are hidden.
+        mind::time::sleep(100);
+    }
+}
+
+// The text face (issue 089): the same keys and log lines as the pixel face; drawn again every 100 ms.
+fn text_face(info: &'static BootInfo) {
+    let Some(mut term) = mind::tui::Terminal::open(info, "dzen-clock") else { return };
+    print(b"\r\n[DZEN-CLOCK] STARTED (TEXT). D: DIGITS, C: ORBIT, P: 10S TICKS, H: TEXT, CTRL+Z: SHELL, ESC: EXIT.\r\n");
+    let mut show = text::Show { digits: true, hints: true, mode: OrbitMode::Off };
+    let mut cycle = Cycle::new();
+    let mut previous_face = None;
+    loop {
+        let key = mind::input::read_key();
+        if key.is_some_and(mind::input::is_escape) { print(b"[DZEN-CLOCK] RETURNING TO KERNEL.\r\n"); return; }
+        match key.and_then(|k| k.char()).map(|c| c.to_ascii_lowercase()) {
+            Some('d') => { show.digits = !show.digits; print(if show.digits { b"[DZEN-CLOCK] DIGITS ON\r\n" } else { b"[DZEN-CLOCK] DIGITS OFF\r\n" }); }
+            Some('h') => { show.hints = !show.hints; print(if show.hints { b"[DZEN-CLOCK] TEXT ON\r\n" } else { b"[DZEN-CLOCK] TEXT OFF\r\n" }); }
+            Some(c @ ('c' | 'p')) => {
+                show.mode = show.mode.toggle(if c == 'c' { OrbitMode::Simple } else { OrbitMode::Ticks });
+                print(match show.mode { OrbitMode::Off => b"[DZEN-CLOCK] ORBIT OFF\r\n", OrbitMode::Simple => b"[DZEN-CLOCK] ORBIT SIMPLE\r\n", OrbitMode::Ticks => b"[DZEN-CLOCK] ORBIT 10S TICKS\r\n" });
+            }
+            _ => {}
+        }
+        let seconds = mind::rtc::seconds_since_midnight().filter(|&s| s < 86400);
+        let now = mind::time::uptime_ms();
+        if let Some(s) = seconds { cycle.observe(s, now); }
+        let current = seconds.and_then(Face::at);
+        if let (Some(face), Some(s)) = (current, seconds) {
+            if previous_face != Some(face) { previous_face = Some(face); print(b"[DZEN-CLOCK] "); print(&time_text(s)); print(b"\r\n"); }
+        }
+        {
+            let mut grid = term.grid();
+            text::draw(&mut grid, current.or(previous_face).unwrap_or(Face::DARK), seconds, cycle.phase(now), show);
+        }
+        term.present();
         mind::time::sleep(100);
     }
 }
