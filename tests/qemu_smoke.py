@@ -1554,7 +1554,7 @@ def dzen_suite(vm):
     vm.send("\x1b")
     require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
     time.sleep(.1); vm.collect(); vm.output = ""
-    vm.send("clock --text\n")
+    vm.send("run clock --text\n")  # `clock` alone is the shell's command for the monotonic clock
     vm.expect("[CLOCK] 19:3")
     time.sleep(.3)
     first = look()[0]
