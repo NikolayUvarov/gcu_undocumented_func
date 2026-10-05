@@ -3486,7 +3486,9 @@ def tablet_suite(vm):
     time.sleep(1)
     out = click(153, 1, f"{top}@0,1,160x48")
     assert re.search(fr"FOCUS={top} .*POINTER=153,1", out), out[-600:]
+    start = len(vm.log)
     require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
+    logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
     # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
     # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
