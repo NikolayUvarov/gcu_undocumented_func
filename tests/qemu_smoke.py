@@ -2697,10 +2697,18 @@ def listen_suite(vm, starts):
     require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "HEAR: THE MICROPHONE IS BUSY (ANOTHER PROGRAM RECORDS)")
     vm.command(f"kill {pid}")
     voice_control(vm)
+    # say's screen (issue u010): its text in the 8x16 font, Cyrillic as it is, whole; it stays until Esc.
+    vm.send("say\n")
+    pid = re.findall(r"STARTED PID=(\d+) NAME=say FOREGROUND", vm.expect("[SAY] DONE", timeout=30))[-1]
+    screen = screen_text(vm)
+    assert any(canon("Привет. Я разум корабля. Система готова к работе. Hello world.") in row for row in screen), screen[:8]
+    vm.serial(enter=False)  # the screenshot was taken in QEMU's monitor
+    vm.send("\x1b\n")
+    vm.expect(f"PID={pid} EXITED. SHELL RESUMED.")
     assert "FAULT PID=" not in vm.command("faults")
     print(f"PASS: microphone capture through audio_gw (48 kHz, AC97 PCM in, one owner), playback{' on an interrupt line shared with the network card, both drivers interrupted' if shared else ''}, program arguments, run by name, "
           f"speech detection on the microphone and in a WAV file ({len(starts)} phrases at {found} ms), "
-          "voice commands recognized by hear, voice control in the shell (a tool started, the time spoken, a service stopped "
+          "voice commands recognized by hear, say's text on its screen (Cyrillic, whole), voice control in the shell (a tool started, the time spoken, a service stopped "
           "only after yes, a file read aloud, a phrase outside the grammar answered and nothing run)", flush=True)
 
 
@@ -3541,9 +3549,13 @@ def tablet_suite(vm):
     vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
     time.sleep(.2)
     require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    # The top bar's items can be clicked (issue u008): help opens and a click closes it; the run line opens.
+    assert "MODE=HELP" in click(80, 0, "MODE=HELP")
+    assert "MODE=NORMAL" in click(80, 30, "MODE=NORMAL")
+    assert "MODE=RUN" in click(40, 0, "MODE=RUN")
     # A console program started in wm runs in a window of console, which shows what it prints (issue u004).
     start = len(vm.log)
-    for key in ("alt-r", "u", "p", "t", "i", "m", "e", "ret"):
+    for key in ("u", "p", "t", "i", "m", "e", "ret"):
         vm.hmp(f"sendkey {key}")
         time.sleep(.08)
     vm.serial(enter=False)
@@ -3562,7 +3574,7 @@ def tablet_suite(vm):
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
-          "the desktop menu opened by a right click, a program started from its Clocks submenu; uptime from Alt+R in a console window", flush=True)
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window", flush=True)
 
 
 def windows_suite(vm):

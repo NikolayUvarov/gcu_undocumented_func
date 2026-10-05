@@ -1,0 +1,26 @@
+# u010 — say: its text on the screen whole, Cyrillic as it is — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user, with a screenshot of `say`'s greeting: question marks instead of the text, and the line cut short ("…. HELLO W").
+
+`say` drew its text in the 8x8 font, which knows only ASCII: every byte that was not ASCII became a `?`, so each Cyrillic letter (two bytes) showed as two. The text was cut at 96 bytes, whatever the screen's width; the greeting is 109 bytes. A `say.txt` longer than the 4 KiB read, cut in the middle of a letter, was not valid UTF-8 and was replaced by the greeting.
+
+## Plan
+
+- The text in the 8x16 font (MIND Mono 16, which has Cyrillic), as the shell and the text programs draw it.
+- Cut into rows of the screen's width by characters, at the last space that fits (a word longer than a row is cut in it); the lines of the text kept. When it has more rows than the screen, the last row shown ends in "…".
+- `say.txt`: the valid part of the first 4 KiB.
+
+## Acceptance criteria
+
+- Host: the greeting fits a 1024-pixel screen in one row; rows cut at spaces by characters lose nothing; a long word is cut; empty lines stay.
+- QEMU (`audio` suite): `say` shows "Привет. Я разум корабля. Система готова к работе. Hello world." on its screen, read back from the screenshot, and Esc ends it.
+
+## Resolution
+
+- `say/src/wrap.rs` (new): `cut`, `rows`. `say/src/main.rs`: `show` draws the rows with `Screen::glyph16`; the 8x8 text and its 96-byte buffer are gone; `say.txt` read as its valid UTF-8.
+- Tests: `tests/say_host.rs` (CI host tests), QEMU `audio` suite.
+- Docs: README (`say`, host tests).

@@ -316,11 +316,62 @@ fn the_mouse_goes_to_the_programs() {
     wm.pointer(title.x + 10, title.y + 5, 2, 0);
     wm.pointer(title.x + 10, title.y + 5, 0, 0);
     assert_eq!(rect(&wm.desk, 3), before);
-    // In a dialog of wm the mouse goes nowhere.
-    wm.key(alt_char('h'));
+    // In wm's run line the mouse goes nowhere; the help closes on a click (issue u008).
+    wm.key(alt_char('r'));
     assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 1, 0), Action::Redraw);
     wm.pointer(inner.x + 3, inner.y + 2, 0, 0);
     assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 0, 1), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=RUN"));
+    wm.key(key(KEY_ESC));
+    wm.key(alt_char('h'));
+    assert_eq!(wm.pointer(inner.x + 3, inner.y + 2, 1, 0), Action::Redraw);
+    wm.pointer(inner.x + 3, inner.y + 2, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
+}
+
+#[test]
+fn the_top_bar_can_be_clicked() {
+    // A host that keeps Alt+Tab and the like for itself: the bar's items do what their keys do (issue u008).
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    wm.programs = catalogue(&programs(false));
+    let items = desk::bar_items(160);
+    assert_eq!(items[0], (0, 3, desk::Bar::Programs), "\"wm\" at the left");
+    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13)]);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    let bar: String = (0..102).map(|x| grid.get(x, 0).ch).collect();
+    assert_eq!(bar, " wm │ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ Alt+Q leave ");
+    let click = |wm: &mut Wm, x: usize| { let action = wm.pointer(x, 0, 1, 0); wm.pointer(x, 0, 0, 0); action };
+    // The item under the mouse is lit.
+    wm.pointer(80, 0, 0, 0);
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    assert_ne!(grid.get(80, 0).style, grid.get(65, 0).style);
+    assert_eq!(wm.desk.focus(), Some(4));
+    click(&mut wm, 10);
+    assert_eq!(wm.desk.focus(), Some(1), "next");
+    click(&mut wm, 25);
+    assert!(wm.status().starts_with("MODE=MENU"), "{}", wm.status());
+    let Mode::Menu(open) = &wm.mode else { panic!() };
+    assert_eq!((open.x, open.y), (20, 1), "the programs below their item");
+    click(&mut wm, 25);
+    assert!(wm.status().starts_with("MODE=NORMAL"), "clicked again: closed");
+    click(&mut wm, 1);
+    assert!(wm.status().starts_with("MODE=MENU"), "\"wm\": the programs");
+    click(&mut wm, 40);
+    assert!(wm.status().starts_with("MODE=RUN"), "{}", wm.status());
+    click(&mut wm, 50);
+    assert!(wm.status().starts_with("MODE=MOVE"), "{}", wm.status());
+    click(&mut wm, 80);
+    assert!(wm.status().starts_with("MODE=HELP"), "{}", wm.status());
+    click(&mut wm, 80);
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    assert_eq!(click(&mut wm, 65), Action::Close(1));
+    assert_eq!(click(&mut wm, 95), Action::Detach);
+    assert_eq!(click(&mut wm, 4), Action::Redraw, "a separator");
+    assert_eq!(click(&mut wm, 120), Action::Redraw, "past the items");
 }
 
 #[test]
