@@ -51,4 +51,4 @@ Split into `KRN` tasks (TRACKS.md), one for each step of the plan:
 | `171-KRN-0002` | 2. Task and endpoint tables from memory, paid from quotas; no `MAX_APPS`, `APP_ENDPOINTS`; STAT pages | next |
 | `171-KRN-0003` | 3. As many CPUs as the firmware reports | planned |
 | `171-KRN-0004` | 4. Capability spaces that grow within the memory quota | planned |
-| `171-KRN-0005` | 5. Frame pool ranges that grow with the firmware map | planned |
+| [171-KRN-0005](../issues-done/171-KRN-0005-frame-pool-ranges.done) | 5. Frame pool ranges that grow with the firmware map | done (2026-10-06) |

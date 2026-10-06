@@ -1,0 +1,25 @@
+# 171-KRN-0005 — The frame pool takes every free range of the firmware map — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 5 · **Constitution:** MC-1.7, MC-5.1
+
+## Problem
+
+The frame pool kept the 16 largest free ranges of the firmware map (`RANGES`, a fixed array of heaps). On a machine whose firmware lists more free ranges, the RAM in the others went unused.
+
+## Plan
+
+One heap per free range of at least 2 MiB, in a vector the kernel heap holds, with the highest range first. A test compares the pool's size with the sum of the free ranges the firmware lists.
+
+## Acceptance criteria
+
+The pool's size equals the sum of the ranges, computed from the firmware map by the same rules, on x86 and aarch64, with and without RAM above 4 GiB.
+
+## Resolution
+
+- **Code:** `kernel/src/frames.rs`. `Pool` holds `Vec<Heap>`, with no `RANGES`. `init` takes every range: below 4 GiB, and above it as far as `mmu::high_ram` maps it.
+- **Test:** `pool_covers_free_ram` in the `normal` suite computes the expected size from `physmap`. The pool equals it in every configuration run:
+  - x86 at 512 MiB: 3 ranges, 387 MiB;
+  - x86 at 6 GiB: 5 ranges, 6018 MiB;
+  - aarch64 `highmem=on` at 6 GiB: 6 ranges, 6033 MiB.
+- **What the test does not show:** QEMU's firmware lists only a few free ranges, so more than 16 ranges were not tested. The code has no limit left that a larger map could reach, apart from the kernel heap the vector lives in (24 bytes or so a range).
+- **Profile:** `kernel-objects.md` (frame pool).

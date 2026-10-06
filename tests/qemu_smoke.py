@@ -433,6 +433,25 @@ def qemu_cpu_seconds(vm, seconds):
     return total() - start
 
 
+def pool_covers_free_ram(vm):
+    """Issue 171 (171-KRN-0005): the frame pool takes every free range of the firmware map (at least 2 MiB, from 1 MiB
+    up; above 4 GiB on x86 whole 2 MiB pages), however many there are: its size is their sum."""
+    expected, ranges = 0, 0
+    for start, end in re.findall(r"^(0x[0-9a-f]+)-(0x[0-9a-f]+) +\d+K free RAM$", vm.command("physmap"), re.M):
+        start, end = int(start, 16), int(end, 16) + 1
+        start = -(-max(start, 0x100000) // 4096) * 4096
+        pieces = [(start, min(end, 1 << 32))] if vm.arch == "x86_64" else [(start, min(end, 1 << 40))]
+        if vm.arch == "x86_64":
+            pieces.append((-(-max(start, 1 << 32) // (2 << 20)) * (2 << 20), min(end, 1 << 39) // (2 << 20) * (2 << 20)))
+        for a, b in pieces:
+            if b > a and b - a >= 2 << 20:
+                expected, ranges = expected + b - a, ranges + 1
+    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", vm.command("free"))[1])
+    assert total == expected, (total, expected, ranges)
+    print(f"PASS: the frame pool is every free range of the firmware map ({ranges} ranges, {total >> 20} MiB)", flush=True)
+    return ranges
+
+
 def ram_above_4g(vm):
     """Issue 171 (171-KRN-0001): with more than 4 GiB the frame pool holds the RAM above 4 GiB too, and task memory
     comes from there first (the highest range is used first); a program fills and checks 128 MiB of it."""
@@ -564,6 +583,7 @@ def normal_suite(vm):
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
     assert heap_used(vm) == baseline
+    pool_covers_free_ram(vm)
     memory = getattr(vm.args, "memory", None) or ""
     if memory.upper().endswith("G") and float(memory[:-1]) > 4:
         ram_above_4g(vm)
