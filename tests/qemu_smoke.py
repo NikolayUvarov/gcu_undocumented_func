@@ -1263,9 +1263,12 @@ def busy_suite(vm):
     share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
     assert 0.12 < share < 0.35, share
     require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
+    # Over 3 s, as with the budget: the window also holds the harness typing the next command while the shell takes
+    # its share of a single CPU (over 1 s that alone brought a loop at full speed to 0.57 on a slow runner).
     start_run, start = run_ms(), time.monotonic()
-    time.sleep(1)
-    assert (run_ms() - start_run) / ((time.monotonic() - start) * 1000) > 0.6, "no budget: the loop takes most of its CPU"
+    time.sleep(3)
+    share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
+    assert share > 0.6, ("no budget: the loop takes most of its CPU", share)
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
