@@ -37,3 +37,17 @@ On 2026-10-06 the maintainer replaced the per-track counters with one scheme for
 ### Acceptance criteria
 
 The tools plans describe the new numbering, and the next tools task is numbered `NNN-APP-0001`.
+
+## `top` and `memmap`: the capability table grows
+
+### Problem
+
+Since 171-KRN-0004 a task's capability table starts with 96 slots (`CAP_SLOTS`) and grows on demand up to 4095 (`CAP_SLOTS_MAX`). `monitor/src/top.rs` and `monitor/src/memmap.rs` still show a task's capabilities as `n/95` (`CAP_SLOTS - 1`). The shell's `stat <pid>` shows `CAPS=n/4095`.
+
+### Plan
+
+Show `n/4095` (`CAP_SLOTS_MAX - 1`), or the count alone.
+
+### Acceptance criteria
+
+The views show the new bound; the tools tests that check them are updated.

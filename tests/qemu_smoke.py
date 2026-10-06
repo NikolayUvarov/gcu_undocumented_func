@@ -2392,7 +2392,7 @@ def services_suite(vm):
     details = vm.command("stat 4")
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
-    require(details, "CAPS=5/95")
+    require(details, "CAPS=5/4095")
     # The standard client endpoints in slots 2..6, write and grant only; no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):

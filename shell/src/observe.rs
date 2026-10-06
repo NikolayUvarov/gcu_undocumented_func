@@ -39,7 +39,7 @@ pub fn task_details(out: &mut impl Write, pid: u64) {
     let _ = writeln!(out, "TASK PID={} NAME={} STATE={} WAIT={} CPU={} PARENT={}{}{}", t.pid, name(&t.name), stat::state_name(t.wait), t.wait_on, t.cpu, t.parent,
                      if t.service != 0 { " SERVICE" } else { "" }, if focus { " FOCUS" } else { "" });
     let _ = writeln!(out, "  RUN_MS={} AGE_MS={} RUNS={} TICKS={} SYSCALLS={} SENT={} RECEIVED={}", t.run_ns / 1_000_000, now.saturating_sub(t.started_ns) / 1_000_000, t.runs, t.ticks, t.calls, t.sends, t.receives);
-    let _ = writeln!(out, "  IMAGE={} STACK={} SCREEN={} HEAP={} BLOCKS={}/{} MAPPED={} RETAINED={} KERNEL={} CAPS={}/{}", t.image_bytes, t.stack_bytes, t.screen_bytes, t.heap_bytes, t.heap_blocks, HEAP_MAX_BLOCKS, t.shared_bytes, t.retained_bytes, t.kernel_bytes, t.caps, CAP_SLOTS - 1);
+    let _ = writeln!(out, "  IMAGE={} STACK={} SCREEN={} HEAP={} BLOCKS={}/{} MAPPED={} RETAINED={} KERNEL={} CAPS={}/{}", t.image_bytes, t.stack_bytes, t.screen_bytes, t.heap_bytes, t.heap_blocks, HEAP_MAX_BLOCKS, t.shared_bytes, t.retained_bytes, t.kernel_bytes, t.caps, CAP_SLOTS_MAX - 1);
     let _ = writeln!(out, "  QUOTA TASKS={}/{} ENDPOINTS={}/{} MEMORY={}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints, t.memory_used, t.memory_quota);
     let _ = writeln!(out, "  BAND={} BUDGET_US={} PERIOD_US={}{}", t.band, t.budget_ns / 1000, t.period_ns / 1000, if t.throttled != 0 { " THROTTLED" } else { "" });
 }

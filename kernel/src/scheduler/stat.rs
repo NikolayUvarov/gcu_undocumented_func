@@ -92,7 +92,8 @@ impl Scheduler {
                     quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 },
                     band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
                     budget_ns: task.budget_ns, period_ns: task.period_ns,
-                    kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
+                    kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096
+                        + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * 4 + task.nodes.capacity() * core::mem::size_of::<Node>()) as u64,
                     memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
                 });
             },
@@ -153,7 +154,7 @@ impl Scheduler {
                         out.push(StatRegion { start: start as u64, size: size as u64, kind, flags: REGION_READ | if writable { REGION_WRITE } else { 0 } | if executable { REGION_EXECUTE } else { 0 } });
                     });
                 } else {
-                    for index in 1..CAP_SLOTS {
+                    for index in 1..task.cspace.len() {
                         let Some(cap) = task.cspace[index] else { continue };
                         let endpoint = if let Capability::Endpoint(ep, ..) = cap { ep as u32 } else { 0 };
                         let (kind, rights, size, badge) = match cap {

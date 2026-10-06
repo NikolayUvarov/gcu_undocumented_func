@@ -70,8 +70,9 @@ struct Task {
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, dirty: bool,
-    cspace: [Option<Capability>; CAP_SLOTS], generations: [u32; CAP_SLOTS], // generation of each kernel-allocated slot
-    nodes: [Node; CAP_SLOTS],
+    // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
+    cspace: Vec<Option<Capability>>, generations: Vec<u32>,
+    nodes: Vec<Node>,
     pending_cap: Option<Pending>, pending_call: bool, pending_badge: u16, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64, u64)>, // slot, PID and call number of the client awaiting a reply
     call_seq: u64, // number of this task's current call; a reply must name it
@@ -338,11 +339,12 @@ impl Scheduler {
         self.tasks[slot].as_mut().unwrap().state = State::Ready;
     }
     fn find(&self, pid: u64) -> Option<usize> { (1..SLOTS).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
-    fn free_slot(cspace: &[Option<Capability>; CAP_SLOTS]) -> Option<usize> { (SLOT_DYNAMIC..CAP_SLOTS).find(|&i| cspace[i].is_none()) }
+    // A free kernel-allocated slot, or the next one the table can grow by (issue 171).
+    fn free_slot(cspace: &[Option<Capability>]) -> Option<usize> { (SLOT_DYNAMIC..cspace.len()).find(|&i| cspace[i].is_none()).or((cspace.len() < CAP_SLOTS_MAX).then_some(cspace.len())) }
     // Handle -> slot index (MC-3.2): fixed slots take generation 0, kernel-allocated ones their current generation.
     fn index(&self, slot: usize, handle: usize) -> Option<usize> {
         let (index, generation) = (handle & HANDLE_SLOT_MASK, handle >> HANDLE_GENERATION_SHIFT);
-        if index == 0 || index >= CAP_SLOTS { return None; }
+        if index == 0 || index >= self.tasks[slot].as_ref().unwrap().cspace.len() { return None; }
         let expected = if index < SLOT_DYNAMIC { 0 } else { self.tasks[slot].as_ref().unwrap().generations[index] as usize };
         (generation == expected).then_some(index)
     }
@@ -350,18 +352,27 @@ impl Scheduler {
     // Stores a new capability in a free kernel-allocated slot and returns its handle.
     fn fresh(&mut self) -> u64 { self.next_node += 1; self.next_node }
     // Stores a new capability with its node in a free kernel-allocated slot and returns its handle.
-    fn insert(task: &mut Task, cap: Capability, node: Node) -> Option<usize> { let index = Self::free_slot(&task.cspace)?; task.cspace[index] = Some(cap); task.nodes[index] = node; Some(Self::handle(task, index)) }
+    fn insert(task: &mut Task, cap: Capability, node: Node) -> Option<usize> {
+        let index = Self::free_slot(&task.cspace)?;
+        // The table doubles when full; a kernel heap that cannot grow it refuses the capability.
+        if index == task.cspace.len() {
+            let more = task.cspace.len().min(CAP_SLOTS_MAX - task.cspace.len());
+            if task.cspace.try_reserve_exact(more).is_err() || task.generations.try_reserve_exact(more).is_err() || task.nodes.try_reserve_exact(more).is_err() { return None; }
+            task.cspace.resize(task.cspace.len() + more, None); task.generations.resize(task.generations.len() + more, 1); task.nodes.resize(task.nodes.len() + more, Node::default());
+        }
+        task.cspace[index] = Some(cap); task.nodes[index] = node; Some(Self::handle(task, index))
+    }
     fn root(&mut self) -> Node { Node { id: self.fresh(), parent: 0 } }
-    // Frees a slot; a kernel-allocated slot moves to the next generation (24 bits) so old handles stay invalid.
+    // Frees a slot; a kernel-allocated slot moves to the next generation (20 bits) so old handles stay invalid.
     fn clear(task: &mut Task, index: usize) {
         task.cspace[index] = None;
-        if index >= SLOT_DYNAMIC { task.generations[index] = (task.generations[index] % 0xFF_FFFF) + 1; }
+        if index >= SLOT_DYNAMIC { task.generations[index] = (task.generations[index] % HANDLE_GENERATION_MAX as u32) + 1; }
     }
 
     // Whether anything still derives from node `id`: a capability, a send in flight, a mapping or another ghost.
     fn derived(&self, id: u64) -> bool {
         self.ghosts.iter().any(|g| g.parent == id) || self.tasks.iter().flatten().any(|t| {
-            (1..CAP_SLOTS).any(|i| t.cspace[i].is_some() && t.nodes[i].parent == id) || t.pending_cap.is_some_and(|p| p.node.parent == id) || t.heap.made_from(id)
+            (1..t.cspace.len()).any(|i| t.cspace[i].is_some() && t.nodes[i].parent == id) || t.pending_cap.is_some_and(|p| p.node.parent == id) || t.heap.made_from(id)
         })
     }
     // Removes a capability from a table (drop, overwrite, exit); its descendants stay revocable through a ghost node.
@@ -395,7 +406,7 @@ impl Scheduler {
         let mut released: Vec<Region> = Vec::new();
         for slot in 1..SLOTS {
             if self.current.contains(&slot) || !self.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { continue; }
-            for index in 1..CAP_SLOTS { self.remove(slot, index); }
+            for index in 1..self.tasks[slot].as_ref().unwrap().cspace.len() { self.remove(slot, index); }
             let mut task = self.tasks[slot].take().unwrap();
             released.extend(task.heap.take_regions()); released.extend(task.screen.take());
         }
@@ -489,7 +500,7 @@ impl Scheduler {
     }
 
     // New task from an ELF with the given capabilities; flags are SPAWN_SERVICE / SPAWN_SCREEN.
-    fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; CAP_SLOTS], nodes: [Node; CAP_SLOTS], parent: Option<(usize, u64)>, quotas: (usize, usize, usize)) -> Result<u64, &'static str> {
+    fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; SLOT_DYNAMIC], nodes: [Node; SLOT_DYNAMIC], parent: Option<(usize, u64)>, quotas: (usize, usize, usize)) -> Result<u64, &'static str> {
         let (service, has_screen) = (flags & SPAWN_SERVICE != 0, flags & SPAWN_SCREEN != 0);
         let slot = (1..SLOTS).find(|&i| self.tasks[i].is_none()).ok_or("NO FREE TASK SLOT")?;
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
@@ -516,7 +527,12 @@ impl Scheduler {
         if let Some((spawner, _)) = parent { if !self.charge(spawner, fixed) { return Err("OVER MEMORY QUOTA"); } }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
+        // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
+        let (mut cspace, mut generations, mut table) = (Vec::new(), Vec::new(), Vec::new());
+        if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
+        cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
+        let nodes = table;
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -548,11 +564,12 @@ impl Scheduler {
     // Removes every descendant of `root` from all tables and blocked sends and unmaps the mappings made from them; returns
     // how many capabilities were removed and whether another CPU still runs an affected address space (flush pending).
     fn revoke(&mut self, root: u64, cpu: usize) -> (usize, bool) {
-        let mut ids = alloc::vec![0u64; SLOTS * (CAP_SLOTS + 1) + GHOSTS_MAX]; ids[0] = root; let (mut known, mut removed) = (1, 0);
+        let slots: usize = self.tasks.iter().flatten().map(|t| t.cspace.len() + 1).sum();
+        let mut ids = alloc::vec![0u64; slots + GHOSTS_MAX + 1]; ids[0] = root; let (mut known, mut removed) = (1, 0);
         loop {
             let mut changed = false;
             for task in self.tasks.iter_mut().flatten() {
-                for index in 1..CAP_SLOTS {
+                for index in 1..task.cspace.len() {
                     if task.cspace[index].is_some() && ids[..known].contains(&task.nodes[index].parent) && !ids[..known].contains(&task.nodes[index].id) {
                         ids[known] = task.nodes[index].id; known += 1; Self::clear(task, index); removed += 1; changed = true;
                     }
@@ -747,7 +764,7 @@ impl Scheduler {
         let args = if name_len < length { &text[name_len + 1..length] } else { &[][..] };
         let mut raw = [0u8; SPAWN_GRANTS_MAX * 8];
         for (i, byte) in raw[..grant_bytes].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[2] + i).unwrap() as *const u8); }
-        let (mut caps, mut nodes, mut moves) = ([None; CAP_SLOTS], [Node::default(); CAP_SLOTS], [None; SPAWN_GRANTS_MAX]);
+        let (mut caps, mut nodes, mut moves) = ([None; SLOT_DYNAMIC], [Node::default(); SLOT_DYNAMIC], [None; SPAWN_GRANTS_MAX]);
         for (n, grant) in raw[..grant_bytes].chunks(8).enumerate() {
             let (own, child, rights, flags) = (u32::from_le_bytes([grant[0], grant[1], grant[2], grant[3]]) as usize, grant[4] as usize, grant[5] as usize, u16::from_le_bytes([grant[6], grant[7]]));
             if !(1..SLOT_DYNAMIC).contains(&child) { return Err(ERR_INVALID); }
@@ -1193,7 +1210,7 @@ impl Scheduler {
 // spawn privileges; everything else is distributed by init.
 pub fn spawn_init() -> Result<u64, &'static str> {
     locked(|| unsafe {
-        let mut caps = [None; CAP_SLOTS];
+        let mut caps = [None; SLOT_DYNAMIC];
         let s = scheduler(); let ep = FIRST_ENDPOINT; s.endpoints[ep] = true; // init's own endpoint, charged to its quota below
         caps[SLOT_SERVICE] = Some(Capability::Endpoint(ep, ENDPOINT_ALL, 0));
         caps[SLOT_DEV0] = Some(Capability::Platform); caps[SLOT_DEV1] = Some(Capability::Spawn);

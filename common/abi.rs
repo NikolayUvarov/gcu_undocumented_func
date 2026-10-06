@@ -176,7 +176,9 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
-pub const CAP_SLOTS: usize = 96; // init keeps a client and a keeper of every service for restarts
+// Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX, what a handle can name (issue 171).
+pub const CAP_SLOTS: usize = 96;
+pub const CAP_SLOTS_MAX: usize = HANDLE_SLOT_MASK + 1;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;
@@ -244,9 +246,12 @@ pub const SLOT_CAMERA: usize = 24;
 pub const SLOT_DYNAMIC: usize = 25;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
-// Received capabilities and the compositor's screen are placed only in fixed slots.
-pub const HANDLE_SLOT_MASK: usize = 0xFF;
-pub const HANDLE_GENERATION_SHIFT: usize = 8;
+// Received capabilities and the compositor's screen are placed only in fixed slots. A handle fits in 32 bits (grants,
+// IPC timeouts above it): 12 bits name up to 4095 slots, 20 bits the generation, which wraps after 1 048 575 reuses of
+// one slot (issue 171; before: 8 and 24 bits).
+pub const HANDLE_SLOT_MASK: usize = 0xFFF;
+pub const HANDLE_GENERATION_SHIFT: usize = 12;
+pub const HANDLE_GENERATION_MAX: usize = 0xF_FFFF;
 
 // Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
 // through capabilities (MC-3.3).
@@ -446,7 +451,7 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
     pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
-    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables
+    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables, the capability table
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
 // `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
