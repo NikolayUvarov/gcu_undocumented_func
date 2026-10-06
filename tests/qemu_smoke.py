@@ -57,6 +57,7 @@ class VM:
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
+        self.temporary = []
         self.monitor_used, self.monitor_cpu = False, None
         extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         if tablet:
@@ -78,7 +79,8 @@ class VM:
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
             # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
-            variables = Path(tempfile.mkdtemp()) / "vars.fd"
+            variables = Path(tempfile.mkdtemp(prefix="mind-vars-")) / "vars.fd"
+            self.temporary.append(variables.parent)  # 64 MiB a boot: removed in close
             shutil.copyfile(args.aavmf_vars, variables)
             machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
                        "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
@@ -272,6 +274,8 @@ class VM:
             self.process.terminate()
             self.process.wait(timeout=10)
         shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
+        for path in self.temporary:
+            shutil.rmtree(path, ignore_errors=True)
         self.collect()
 
 
@@ -1654,7 +1658,7 @@ def isolation_suite(vm):
         rows, faults = task_rows(vm), vm.command("faults")
         assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
         return pid, faults
-    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 1, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
+    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
     # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).

@@ -50,4 +50,5 @@ MPL-2.0 is a file-level copyleft: it applies to those crates' own files, not to 
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.
 - QEMU, Rust toolchain, Python.
+- The TLA+ tools (`tla2tools.jar` 1.8.0, MIT licence, [tlaplus/tlaplus](https://github.com/tlaplus/tlaplus)) to check the models of `docs/assurance`; `scripts/model_check.sh` fetches them and checks their SHA-256; Java.
 - Optional: a Vosk speech model for the `tts` test (`--asr-model`).

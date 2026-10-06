@@ -37,6 +37,15 @@ jobs:
           python3 tests/idl_test.py
           python3 tests/font_test.py
 
+  # TLA+ models of revoke and MOVE checked by TLC (issue 167, docs/assurance).
+  models:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: TLC on the models
+        run: scripts/model_check.sh
+
   qemu:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

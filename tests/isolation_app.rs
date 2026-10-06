@@ -73,6 +73,8 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             if mode == 5 { loop { core::ptr::read_volatile(address as *const usize); } }
         }
         6 => {}
+        // Whether a capability came with the reply (a refused move delivers none).
+        7 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 100 + got_cap, 0]) != 0 { fail(); },
         4 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [abi::SLOT_INIT, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 5, 0]) != 0 { fail(); },
         _ => fail(),
     }
@@ -408,6 +410,15 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
                 core::ptr::write_volatile(block as *mut usize, 0x0B1EC7);
                 let object = call(mb, abi::SYSCALL_MEM_DETACH, block, 0);
+                // Mapped, it does not move: our mapping would be a second writer (issue 167). We keep it.
+                let mapped = call(mb, abi::SYSCALL_MEM_MAP, object, 0);
+                if mapped >= abi::ERR_FIRST { fail(); }
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 7, object, abi::CAP_TRANSFER_MOVE);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 100 { fail(); }
+                if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_MEMORY { fail(); }
+                // Unmapped, it moves.
+                if call(mb, abi::SYSCALL_FREE, mapped, 0) != 0 { fail(); }
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 3, object, abi::CAP_TRANSFER_MOVE);
                 if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_NONE { fail(); }

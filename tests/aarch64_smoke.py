@@ -6,6 +6,7 @@ puts the ECAM above 4 GiB): the boot path without devices.
 
 Needs `scripts/build_aarch64.sh --fixtures` first, qemu-system-aarch64 and AAVMF (qemu-efi-aarch64)."""
 import argparse
+import atexit
 import re
 import shutil
 import subprocess
@@ -51,11 +52,13 @@ def boot_once(args, disk, until, timeout):
     finally:
         process.kill()
         process.wait()
+        shutil.rmtree(variables.parent, ignore_errors=True)  # 64 MiB a boot
     return output.decode(errors="replace")
 
 
 def disk_with(rtc=None):
     disk = Path(tempfile.mkdtemp()) / "root"
+    atexit.register(shutil.rmtree, disk.parent, True)  # a copy of the build: removed when the test ends
     shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
