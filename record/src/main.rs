@@ -2,7 +2,7 @@
 #![no_main]
 // record (issue 093): what is on the screen, as an AVI file of Motion JPEG frames. The screen comes through the
 // compositor client the shell lends for REQUEST_DISPLAY (idl/display.wit: a sealed copy of the screen in front); while
-// it records, the compositor shows a red dot in the screen's corner (issue 164). Started in the background
+// it records, the compositor shows a red dot in the screen's corner (issue 165). Started in the background
 // (`run record -t 10 &`), it records the program then brought to the front.
 extern crate alloc;
 use alloc::format;

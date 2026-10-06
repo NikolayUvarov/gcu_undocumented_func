@@ -1,6 +1,6 @@
 # 205 — aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI
 
-**Type:** porting · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** — (201–204 done) · **Roadmap:** track H · **Constitution:** MC-12.1, Appendix A (profiles)
+**Type:** porting · **Owner:** porting track · **Priority:** P2 · **Status:** open (steps 1–4 done 2026-10-05) · **Blocked by:** — (201–204 done) · **Roadmap:** track H · **Constitution:** MC-12.1, Appendix A (profiles)
 
 ## Problem
 
@@ -13,6 +13,16 @@ MIND Core runs on aarch64 only in QEMU's `virt` machine (`aarch64/QEMU-virt-0`).
 - **GICv2** (Raspberry Pi 4: GIC-400) beside GICv3.
 - **Drivers:** NVMe or USB storage on the board's PCIe/xHCI (`usb_storage` exists for xHCI), a USB keyboard (HID), the GOP framebuffer as on QEMU; a network card (the Pi's GENET or a USB adapter) later.
 - **Profiles:** one per board family (`aarch64/RPi4-EDK2-0`, `aarch64/ACPI-server-0`), with their TCB (the board's firmware) and evidence on hardware.
+
+## Progress (2026-10-05)
+
+- **Done — platform from ACPI:** `arch/aarch64/acpi.rs` reads the MADT (GICC, GICD, GICv2m, GICR, ITS), SPCR, GTDT, MCFG and the FADT's PSCI conduit into `arch/aarch64/board.rs`; `virt`'s values are only the defaults. The kernel prints the layout it found (`MIND CORE KERNEL: BOARD …`).
+- **Done — memory:** the identity map covers 1 TiB with memory types from the UEFI map; the ECAM comes from the MCFG. Tested with `-m 6G` and `highmem=on` (normal, net, tls).
+- **Done — GICv2:** GICC CPU interface, SGIs through GICD_SGIR, MSIs through GICv2m. Tested with `gic-version=2` (normal, shell, smp, net).
+- **Done — NVMe:** the `nvme` service (admin and one I/O queue, polled, PRP lists) is a boot disk on both architectures; CI's "NVMe boot disk" groups.
+- **Open — USB HID keyboard** (the boards have no PS/2 or virtio-input): issue [164](164-usb-hid-keyboard-and-mouse.md).
+- **Open — hardware or `sbsa-ref`:** the SBSA firmware is not packaged and its download needs an account, so the acceptance run could not be made here.
+- **Open — board profiles** (`aarch64/RPi4-EDK2-0`, `aarch64/ACPI-server-0`) wait for that run.
 
 ## Acceptance criteria
 

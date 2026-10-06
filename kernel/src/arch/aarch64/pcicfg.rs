@@ -1,6 +1,6 @@
 // PCI configuration through ECAM (issue 202), at the base the ACPI MCFG gives, within the kernel's identity map (1 TiB,
 // issue 205): `virt` puts it at 0x3F00_0000 with `highmem=off`, at 0x40_1000_0000 otherwise. Legacy
-// interrupts INTA-D of slot s, pin p are SPIs 3 + (s + p - 1) % 4: device lines 3-6. MSI goes through the GICv3 ITS.
+// interrupts INTA-D of slot s, pin p are SPIs 3 + (s + p - 1) % 4: device lines 3-6. MSI goes through the GICv3 ITS or a GICv2m frame.
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 static ECAM: AtomicUsize = AtomicUsize::new(0); // base | last bus (bits 0-7); 0: none
@@ -25,4 +25,4 @@ pub unsafe fn line(bus: u8, device: u8, function: u8) -> u8 {
     3 + (device + pin - 1) % 4
 }
 /// MSI message for MSI line `index` of the function at `location` (its requester ID is the ITS device ID).
-pub unsafe fn msi_message(location: u32, index: usize) -> Option<(u64, u32)> { crate::interrupts::its_route(location, index) }
+pub unsafe fn msi_message(location: u32, index: usize) -> Option<(u64, u32)> { crate::interrupts::msi_route(location, index) }

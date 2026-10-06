@@ -1,4 +1,4 @@
-# 164 — A launcher may lend the compositor client; the compositor shows when the screen is captured — done
+# 165 — A launcher may lend the compositor client; the compositor shows when the screen is captured — done
 
 **Type:** loader + compositor (core services) · **Owner:** kernel track (done from the tools branch, which needed it for `record`, 093) · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.3, MC-3.11, MC-10.2
 

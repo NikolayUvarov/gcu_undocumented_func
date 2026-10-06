@@ -3,7 +3,7 @@
 // Ring 3 compositor: copies changed pixels of the active screen into the GOP framebuffer. Between frames it serves
 // idl/display.wit on its service endpoint: the mode, and a sealed copy of the screen in front (the shell's
 // `screenshot`, issue 086; `record`, issue 093). While the screen is being captured a red dot in its top right corner
-// says so (issue 164): drawn here, on the framebuffer only, so no capture holds it and no program can hide it.
+// says so (issue 165): drawn here, on the framebuffer only, so no capture holds it and no program can hide it.
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, SLOT_MEM};
 use mind::dev::{compositor_pull, Frame};
 use mind::idl::display::{self, Error, Mode, Request};

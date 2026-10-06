@@ -67,6 +67,7 @@ USER_CRATES=(
     "ahci:ahci:ahci.elf"
     "usb_storage:usb_storage:usb_storage.elf"
     "virtio_blk:virtio_blk:virtio_blk.elf"
+    "nvme:nvme:nvme.elf"
     "logd:logd:logd.elf"
     "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"

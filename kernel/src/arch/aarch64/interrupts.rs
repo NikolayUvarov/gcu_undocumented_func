@@ -12,14 +12,26 @@ fn gicd() -> usize { super::board::get(&super::board::GICD) }
 fn gicr() -> usize { super::board::get(&super::board::GICR) }
 fn gits() -> usize { super::board::get(&super::board::GITS) }
 fn timer_ppi() -> u32 { super::board::get(&super::board::TIMER_PPI) as u32 }
+// GICv2 (issue 205): the CPU interface in memory (GICC, banked per CPU), SGIs through the distributor, MSIs through a
+// GICv2m frame that raises the SPI written to it.
+fn v2() -> bool { super::board::get(&super::board::GIC_VERSION) == 2 }
+fn gicc() -> usize { super::board::get(&super::board::GICC) }
+static V2M_SPI: AtomicU64 = AtomicU64::new(0); // GICv2m: the first SPI of its frame, and how many (bits 16-31); 0 unread
 const TICK_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TIMER_STEP: AtomicU64 = AtomicU64::new(0);
 // SGIs (software interrupts between CPUs, issue 203): stop, tick, wake.
 pub const SGI_STOP: u32 = 1; pub const SGI_TICK: u32 = 2; pub const SGI_WAKE: u32 = 3;
 
-/// Sends SGI `intid` to the CPU with MPIDR affinity `affinity` (Aff3.Aff2.Aff1.Aff0 in 32 bits, Aff0 below 16).
-pub unsafe fn sgi(affinity: u64, intid: u32) {
+/// Sends SGI `intid` to CPU `index` with MPIDR affinity `affinity` (Aff3.Aff2.Aff1.Aff0 in 32 bits, Aff0 below 16).
+pub unsafe fn sgi(index: usize, affinity: u64, intid: u32) {
+    if v2() {
+        // GICD_SGIR: the target interface in the CPU target list.
+        let interface = super::board::get(&super::board::INTERFACE[index]) & 7;
+        asm!("dsb ishst");
+        write32(gicd() + 0xF00, 1 << (16 + interface) | intid);
+        return;
+    }
     let value = 1u64 << (affinity & 0xF) | (affinity >> 8 & 0xFF) << 16 | (intid as u64) << 24 | (affinity >> 16 & 0xFF) << 32 | (affinity >> 24 & 0xFF) << 48;
     asm!("dsb ishst", "msr icc_sgi1r_el1, {}", "isb", in(reg) value);
 }
@@ -44,11 +56,18 @@ pub fn without<T>(f: impl FnOnce() -> T) -> T {
 
 /// The distributor, this CPU's redistributor and CPU interface, and the tick.
 pub unsafe fn init() {
-    write32(gicd(), 1 << 4 | 1 << 1); // ARE_NS, Group 1 non-secure
-    // Device lines (SPIs): group 1, to CPU 0, level-triggered as reset; enabled by their drivers.
     let lines = ((read32(gicd() + 4) & 0x1F) as usize + 1) * 32;
-    for word in 1..lines / 32 { write32(gicd() + 0x80 + 4 * word, u32::MAX); }
-    for spi in 32..lines { core::ptr::write_volatile((gicd() + 0x6000 + 8 * spi) as *mut u64, 0); }
+    if v2() {
+        // Device lines (SPIs) to the boot CPU's interface (GICD_ITARGETSR, a byte each); the non-secure group.
+        let target = 0x0101_0101u32 << (super::board::get(&super::board::INTERFACE[0]) & 7);
+        for word in 8..lines / 4 { write32(gicd() + 0x800 + 4 * word, target); }
+        write32(gicd(), 1);
+    } else {
+        write32(gicd(), 1 << 4 | 1 << 1); // ARE_NS, Group 1 non-secure
+        // Device lines (SPIs): group 1, to CPU 0, level-triggered as reset; enabled by their drivers.
+        for word in 1..lines / 32 { write32(gicd() + 0x80 + 4 * word, u32::MAX); }
+        for spi in 32..lines { core::ptr::write_volatile((gicd() + 0x6000 + 8 * spi) as *mut u64, 0); }
+    }
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);
@@ -72,6 +91,13 @@ pub fn redistributor() -> usize {
 
 // This CPU's redistributor and CPU interface.
 pub unsafe fn load() {
+    if v2() {
+        // SGIs and PPIs are banked per CPU in the distributor; the CPU interface takes every priority.
+        write32(gicd() + 0x100, 1 << timer_ppi() | 1 << SGI_STOP | 1 << SGI_TICK | 1 << SGI_WAKE);
+        write32(gicc() + 0x4, 0xFF); // GICC_PMR
+        write32(gicc(), 1); // GICC_CTLR: enabled
+        return;
+    }
     let gicr = redistributor();
     let waker = gicr + 0x14;
     write32(waker, read32(waker) & !(1 << 1)); // ProcessorSleep off
@@ -101,20 +127,24 @@ pub unsafe fn set_irq_masked(line: u8, masked: bool) {
 // Takes the pending interrupt from the CPU interface and ends it; a device line stays disabled until its driver
 // acknowledges it.
 pub unsafe fn acknowledge() -> Event {
-    let intid: u64;
-    asm!("mrs {}, icc_iar1_el1", out(reg) intid);
-    let intid = intid as u32 & 0xFF_FFFF;
+    let iar: u64;
+    if v2() { iar = read32(gicc() + 0xC) as u64; } else { asm!("mrs {}, icc_iar1_el1", out(reg) iar); }
+    let intid = if v2() { iar as u32 & 0x3FF } else { iar as u32 & 0xFF_FFFF };
     if (1020..1024).contains(&intid) { return Event::Wake; } // spurious
+    // A GICv2m SPI is an MSI line: edge-triggered, not masked.
+    let v2m = V2M_SPI.load(Ordering::Relaxed);
+    let (v2m_first, v2m_count) = (v2m as u32 & 0xFFFF, (v2m >> 16) as u32 & 0xFFFF);
     let event = match intid {
         id if id == timer_ppi() => { rearm(); advance(); super::cpu::tick_others(); Event::Tick }
         SGI_STOP => Event::Stop,
         SGI_TICK => Event::Tick,
         SGI_WAKE => Event::Wake,
         LPI_FIRST.. => Event::Irq(MSI_FIRST + (intid - LPI_FIRST) as usize),
+        id if id >= v2m_first && id < v2m_first + v2m_count.min(16) => Event::Irq(MSI_FIRST + (id - v2m_first) as usize),
         32..1020 => { set_irq_masked((intid - 32) as u8, true); Event::Irq((intid - 32) as usize) }
         _ => Event::Wake,
     };
-    asm!("msr icc_eoir1_el1, {}", "isb", in(reg) intid as u64);
+    if v2() { write32(gicc() + 0x10, iar as u32); } else { asm!("msr icc_eoir1_el1, {}", "isb", in(reg) intid as u64); }
     event
 }
 
@@ -196,8 +226,10 @@ impl Its {
     }
 }
 
-/// The MSI message of line MSI_FIRST + `index` for the PCI function with requester ID `device`.
-pub unsafe fn its_route(device: u32, index: usize) -> Option<(u64, u32)> {
+/// The MSI message of line MSI_FIRST + `index` for the PCI function with requester ID `device`: through the ITS, or
+/// a GICv2m frame (the SPI number written to MSI_SETSPI_NS; any device could write any of the frame's SPIs).
+pub unsafe fn msi_route(device: u32, index: usize) -> Option<(u64, u32)> {
+    if gits() == 0 { return v2m_route(index); }
     without(|| {
         while LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); }
         let state = &mut *core::ptr::addr_of_mut!(STATE);
@@ -206,4 +238,20 @@ pub unsafe fn its_route(device: u32, index: usize) -> Option<(u64, u32)> {
         LOCK.store(false, Ordering::Release);
         routed.map(|()| (gits() as u64 + 0x1_0040, index as u32)) // GITS_TRANSLATER
     })
+}
+
+unsafe fn v2m_route(index: usize) -> Option<(u64, u32)> {
+    let frame = super::board::get(&super::board::V2M);
+    if frame == 0 { return None; }
+    // MSI_TYPER: the first SPI (bits 16-25) and how many (bits 0-9).
+    let typer = read32(frame + 0x8);
+    let (first, count) = (typer >> 16 & 0x3FF, typer & 0x3FF);
+    if index as u32 >= count.min(16) { return None; }
+    V2M_SPI.store(first as u64 | (count as u64) << 16, Ordering::Relaxed);
+    let spi = first + index as u32;
+    // Edge-triggered (GICD_ICFGR: bit 1 of the line's two), enabled.
+    let config = gicd() + 0xC00 + (spi as usize / 16) * 4;
+    write32(config, read32(config) | 2 << (spi % 16 * 2));
+    write32(gicd() + 0x100 + (spi as usize / 32) * 4, 1 << (spi % 32));
+    Some((frame as u64 + 0x40, spi))
 }

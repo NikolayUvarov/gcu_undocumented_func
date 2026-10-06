@@ -28,7 +28,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "nvme", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
 BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
@@ -68,7 +68,8 @@ class VM:
                     "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
-                   if ahci else ["-drive", source])
+                   if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
+                   if getattr(args, "disk", None) == "nvme" else ["-drive", source])
         self.arch = getattr(args, "arch", "x86_64")  # usb_image_smoke.py passes no architecture
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
@@ -2213,7 +2214,7 @@ def vfs_suite(args):
             shot = re.search(r"SCREENSHOT data/screen.bmp: (\d+)x(\d+), (\d+) BYTES", slow("screenshot data/screen.bmp"))
             assert shot, vm.log[-2000:]
             screen = vm.screenshot()
-            # The capture dot (issue 164) goes out 1.5 s after the last capture.
+            # The capture dot (issue 165) goes out 1.5 s after the last capture.
             time.sleep(1.6)
             after = vm.screenshot()
             vm.serial()
@@ -3884,6 +3885,7 @@ def main():
     parser.add_argument("--cpus", type=int)
     parser.add_argument("--machine", help="aarch64: QEMU -machine (default virt,gic-version=3,highmem=off; issue 205: highmem=on, gic-version=2)")
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
+    parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
     parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
@@ -3908,6 +3910,8 @@ def main():
         fixture = ROOT / IMAGE / "fixture-busy_app.elf"
         args.busy_elf = args.busy_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
+    if args.disk == "nvme":
+        BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")

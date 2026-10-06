@@ -26,4 +26,4 @@ QEMU `wm` suite: `record -w -t 2 data/win.avi` for the clock's window. The AVI's
 
 ## Related
 
-[093](../issues-done/093-screen-recording.done), [088](../issues-done/088-text-window-manager.done), [157](../issues-done/157-window-broker.done), [164](../issues-done/164-display-client-for-programs.done).
+[093](../issues-done/093-screen-recording.done), [088](../issues-done/088-text-window-manager.done), [157](../issues-done/157-window-broker.done), [165](../issues-done/165-display-client-for-programs.done).

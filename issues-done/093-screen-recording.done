@@ -1,6 +1,6 @@
 # 093 — `record`: screen recording — done
 
-**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** 164 (done) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2 (what is on the screen is the user's), MC-2.6
+**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** 165 (done) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2 (what is on the screen is the user's), MC-2.6
 
 ## Problem
 
@@ -40,7 +40,7 @@
 Screen recording is done. Recording one window of `wm` (`-w`) moved to [u014](../issues/u014-record-a-window.md): it needs `wm`, which holds the windows' surfaces, to lend one.
 
 What was built, and where it differs from the plan:
-- **`record [-r fps] [-t seconds] [file]` is a program, not a shell command.** It encodes every frame, so it runs beside the program it records (`run record -t 10 data/demo.avi &`, then that program in front). It asks for `REQUEST_DISPLAY`, and the shell lends it its compositor client in `SLOT_DISPLAY`; the loader takes that slot since kernel issue 164. It stops after its time or when the disk is full; `kill` leaves a file whose header was last written within the second.
+- **`record [-r fps] [-t seconds] [file]` is a program, not a shell command.** It encodes every frame, so it runs beside the program it records (`run record -t 10 data/demo.avi &`, then that program in front). It asks for `REQUEST_DISPLAY`, and the shell lends it its compositor client in `SLOT_DISPLAY`; the loader takes that slot since kernel issue 165. It stops after its time or when the disk is full; `kill` leaves a file whose header was last written within the second.
 - **Frames:**
   - `idl/display.wit` stayed at 1.0: `record` compares each capture with the last one. An unchanged screen becomes an empty chunk, which players show as the previous frame.
   - A changed screen is coded again only in the rows of 16×16 blocks that changed: a restart marker ends every row, so the other rows' data is reused as it was.
@@ -49,7 +49,7 @@ What was built, and where it differs from the plan:
   - baseline JPEG, 4:2:0, the Annex K tables scaled by quality as libjpeg scales them, the standard Huffman tables written into every frame;
   - libjpeg's accurate integer DCT: under QEMU's emulation a full 1280 × 800 frame takes about 180 ms, against 1.4 s with a floating-point DCT, and a clock's second about one fifth of that.
 - **`mind::avi`:** the 224-byte header (avih, strh `vids`/`MJPG`, strf), `00dc` chunks, `idx1`.
-- **The red dot** (kernel issue 164): the compositor draws it on the display for 1.5 s after any capture, by `record` or `screenshot`, and puts the screen under it back. It is in no capture.
+- **The red dot** (kernel issue 165): the compositor draws it on the display for 1.5 s after any capture, by `record` or `screenshot`, and puts the screen under it back. It is in no capture.
 - **Sound:** not done (left optional in the plan).
 
 Tests:

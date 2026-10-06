@@ -139,7 +139,7 @@ impl Launcher {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         // The fixed slots a launcher may fill: an endpoint for the program's INIT slot (a ping/pong pair), its file
         // client, its window broker client, where its output goes (issue 162), sysinfo, lifecycle control, the system log,
-        // a flow grant, the compositor's client (what is on the screen, issue 164). The standard grants (2..6) cannot be
+        // a flow grant, the compositor's client (what is on the screen, issue 165). The standard grants (2..6) cannot be
         // replaced.
         if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
