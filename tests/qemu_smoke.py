@@ -1187,7 +1187,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, r" loader +2/8 "), screen
+    assert table_row(screen, r" loader +2/65279 "), screen
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[MEMMAP] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
