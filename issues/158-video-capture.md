@@ -1,6 +1,6 @@
 # 158 — Video capture devices: cameras through a video gateway
 
-**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P2 · **Status:** open · **Blocked by:** — (the USB stack is the first part) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
+**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P2 · **Status:** open · **Blocked by:** [164](164-usb-hid-keyboard-and-mouse.md) for the USB stack (step 1 below is done there) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
 
 ## Problem
 
