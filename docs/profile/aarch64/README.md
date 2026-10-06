@@ -63,7 +63,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | xHCI (PCI) with USB keyboards, mice, tablets, hubs, mass storage | `usb_host`, `usb_hid`, `usb_storage` (both architectures, issue 164) | devices behind USB 2 hubs, plugged in and out at run time; the keyboard service is `usb_hid`'s when there is no VirtIO keyboard; the boards' only keyboards |
 | virtio-keyboard, virtio-tablet (PCI) | `virtio_input` | up to two devices; keys go through the PS/2 decoder (layouts, Ctrl+Z, the keyboard service `idl/keyboard.wit`), the tablet gives absolute pointer events |
 | PL011 | `shell` | its console, as COM1 on x86 |
-| Pin controllers (PL061, BCM2711 GPIO) named in the DSDT or SSDTs | none yet (`gpio`, issue 207) | the kernel finds them (`MIND CORE KERNEL: PINS …`) and gives their registers to `init` by index; QEMU `virt` with ACPI has none (its PL061 is replaced by the GED) |
+| Pin controllers (PL061, BCM2711 GPIO) named in the DSDT or SSDTs | `gpio` (issue 207) | the kernel finds them (`MIND CORE KERNEL: PINS …`) and gives their registers to `init` by index; `gpio` serves `idl/gpio.wit`. QEMU `virt` with ACPI has none (its PL061 is replaced by the GED), so `gpio` is tested on the host only and has not run on hardware |
 | PL031 | `rtc` | seconds since 1970, UTC |
 | ramfb | `compositor` | the firmware's GOP framebuffer (800x600) |
 

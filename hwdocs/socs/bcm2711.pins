@@ -1,0 +1,63 @@
+# The BCM2711's GPIO pins and their alternate functions (the Raspberry Pi 4).
+soc bcm2711
+source "BCM2711 ARM Peripherals", Raspberry Pi Ltd, RP-008248-DS-1, section 5.3 "Alternative Function Assignments", table 94
+pins 58
+# pin  pull  alt0  alt1  alt2  alt3  alt4  alt5    (- : reserved, empty or internal; pull at reset: up, down, none)
+0   up    SDA0        SA5          PCLK        SPI3_CE0_N      TXD2              SDA6
+1   up    SCL0        SA4          DE          SPI3_MISO       RXD2              SCL6
+2   up    SDA1        SA3          LCD_VSYNC   SPI3_MOSI       CTS2              SDA3
+3   up    SCL1        SA2          LCD_HSYNC   SPI3_SCLK       RTS2              SCL3
+4   up    GPCLK0      SA1          DPI_D0      SPI4_CE0_N      TXD3              SDA3
+5   up    GPCLK1      SA0          DPI_D1      SPI4_MISO       RXD3              SCL3
+6   up    GPCLK2      SOE_N/SE     DPI_D2      SPI4_MOSI       CTS3              SDA4
+7   up    SPI0_CE1_N  SWE_N/SRW_N  DPI_D3      SPI4_SCLK       RTS3              SCL4
+8   up    SPI0_CE0_N  SD0          DPI_D4      BSCSL/CE_N      TXD4              SDA4
+9   down  SPI0_MISO   SD1          DPI_D5      BSCSL/MISO      RXD4              SCL4
+10  down  SPI0_MOSI   SD2          DPI_D6      BSCSL_SDA/MOSI  CTS4              SDA5
+11  down  SPI0_SCLK   SD3          DPI_D7      BSCSL_SCL/SCLK  RTS4              SCL5
+12  down  PWM0_0      SD4          DPI_D8      SPI5_CE0_N      TXD5              SDA5
+13  down  PWM0_1      SD5          DPI_D9      SPI5_MISO       RXD5              SCL5
+14  down  TXD0        SD6          DPI_D10     SPI5_MOSI       CTS5              TXD1
+15  down  RXD0        SD7          DPI_D11     SPI5_SCLK       RTS5              RXD1
+16  down  -           SD8          DPI_D12     CTS0            SPI1_CE2_N        CTS1
+17  down  -           SD9          DPI_D13     RTS0            SPI1_CE1_N        RTS1
+18  down  PCM_CLK     SD10         DPI_D14     SPI6_CE0_N      SPI1_CE0_N        PWM0_0
+19  down  PCM_FS      SD11         DPI_D15     SPI6_MISO       SPI1_MISO         PWM0_1
+20  down  PCM_DIN     SD12         DPI_D16     SPI6_MOSI       SPI1_MOSI         GPCLK0
+21  down  PCM_DOUT    SD13         DPI_D17     SPI6_SCLK       SPI1_SCLK         GPCLK1
+22  down  SD0_CLK     SD14         DPI_D18     SD1_CLK         ARM_TRST          SDA6
+23  down  SD0_CMD     SD15         DPI_D19     SD1_CMD         ARM_RTCK          SCL6
+24  down  SD0_DAT0    SD16         DPI_D20     SD1_DAT0        ARM_TDO           SPI3_CE1_N
+25  down  SD0_DAT1    SD17         DPI_D21     SD1_DAT1        ARM_TCK           SPI4_CE1_N
+26  down  SD0_DAT2    -            DPI_D22     SD1_DAT2        ARM_TDI           SPI5_CE1_N
+27  down  SD0_DAT3    -            DPI_D23     SD1_DAT3        ARM_TMS           SPI6_CE1_N
+28  none  SDA0        SA5          PCM_CLK     -               MII_A_RX_ERR      RGMII_MDIO
+29  none  SCL0        SA4          PCM_FS      -               MII_A_TX_ERR      RGMII_MDC
+30  down  -           SA3          PCM_DIN     CTS0            MII_A_CRS         CTS1
+31  down  -           SA2          PCM_DOUT    RTS0            MII_A_COL         RTS1
+32  down  GPCLK0      SA1          -           TXD0            SD_CARD_PRES      TXD1
+33  down  -           SA0          -           RXD0            SD_CARD_WRPROT    RXD1
+34  up    GPCLK0      SOE_N/SE     -           SD1_CLK         SD_CARD_LED       RGMII_IRQ
+35  up    SPI0_CE1_N  SWE_N/SRW_N  -           SD1_CMD         RGMII_START_STOP  -
+36  up    SPI0_CE0_N  SD0          TXD0        SD1_DAT0        RGMII_RX_OK       MII_A_RX_ERR
+37  down  SPI0_MISO   SD1          RXD0        SD1_DAT1        RGMII_MDIO        MII_A_TX_ERR
+38  down  SPI0_MOSI   SD2          RTS0        SD1_DAT2        RGMII_MDC         MII_A_CRS
+39  down  SPI0_SCLK   SD3          CTS0        SD1_DAT3        RGMII_IRQ         MII_A_COL
+40  down  PWM1_0      SD4          -           SD1_DAT4        SPI0_MISO         TXD1
+41  down  PWM1_1      SD5          -           SD1_DAT5        SPI0_MOSI         RXD1
+42  down  GPCLK1      SD6          -           SD1_DAT6        SPI0_SCLK         RTS1
+43  down  GPCLK2      SD7          -           SD1_DAT7        SPI0_CE0_N        CTS1
+44  none  GPCLK1      SDA0         SDA1        -               SPI0_CE1_N        SD_CARD_VOLT
+45  none  PWM0_1      SCL0         SCL1        -               SPI0_CE2_N        SD_CARD_PWR0
+46  up    -           -            -           -               -                 -
+47  up    -           -            -           -               -                 -
+48  up    -           -            -           -               -                 -
+49  up    -           -            -           -               -                 -
+50  up    -           -            -           -               -                 -
+51  up    -           -            -           -               -                 -
+52  up    -           -            -           -               -                 -
+53  up    -           -            -           -               -                 -
+54  up    -           -            -           -               -                 -
+55  up    -           -            -           -               -                 -
+56  up    -           -            -           -               -                 -
+57  up    -           -            -           -               -                 -

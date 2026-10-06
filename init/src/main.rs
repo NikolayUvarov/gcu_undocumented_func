@@ -21,7 +21,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -234,6 +234,16 @@ impl Init {
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
                 self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
             }
+            // Pin controllers the firmware's tables name (issue 207): the first BCM2711 GPIO and the first PL061.
+            "gpio" => {
+                let bcm2711 = minted.mint(PLATFORM_MMIO, PLATFORM_PINS_BCM2711, 0).ok();
+                let pl061 = minted.mint(PLATFORM_MMIO, PLATFORM_PINS_PL061, 0).ok();
+                if bcm2711.is_none() && pl061.is_none() { return Err(Error::NotFound); }
+                if let Some(slot) = bcm2711 { grants.add(SLOT_DEV0, slot, 0); }
+                if let Some(slot) = pl061 { grants.add(SLOT_DEV1, slot, 0); }
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+                self.lend(&mut grants, SLOT_VFS, "vfs_server")?; // hwdocs/ on the boot disk
+            }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
                 self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
@@ -321,6 +331,7 @@ impl Init {
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
+                if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
             }
             _ => return Err(Error::NotFound),
         }

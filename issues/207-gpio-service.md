@@ -1,6 +1,6 @@
 # 207 — `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061)
 
-**Type:** porting (driver service) · **Owner:** porting track · **Priority:** P2 · **Status:** open (206 done; the plan's QEMU test replaced: no pin controller there) · **Blocked by:** — ([206](../issues-done/206-pin-controllers-from-firmware.done) done) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-3.7, MC-6.1, MC-8.2, MC-8.3, MC-10.2
+**Type:** porting (driver service) · **Owner:** porting track · **Priority:** P2 · **Status:** open (done except the run on hardware, 2026-10-06) · **Blocked by:** — ([206](../issues-done/206-pin-controllers-from-firmware.done) done) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-2.3, MC-3.1, MC-3.3, MC-3.7, MC-6.1, MC-8.2, MC-8.3, MC-10.2
 
 ## Problem
 
@@ -19,6 +19,16 @@ The `pins` tool (tools track) is to list a board's pins, show each pin's functio
 - **Log:** every change goes to `logd` (who, pin, old → new), MC-10.2.
 - **Failure:** on restart `gpio` reads the hardware state again and does not reset pins (the physics decides the safe state, MC-8.4); it never drives a pin on its own.
 - **hwdocs data:** `hwdocs/socs/bcm2711.pins` (the alternate-function table of the BCM2711 datasheet, with its source recorded) and `hwdocs/boards/rpi4b.board` (the 40-pin header, reserved pins), in the format of [hwdocs/README.md](../hwdocs/README.md); `hwdocs/socs/pl061.pins` for QEMU.
+
+## Progress (2026-10-06)
+
+- **Done — service** `gpio` (`gpio/src/main.rs`): `init` gives it the first BCM2711 GPIO (`SLOT_DEV0`) and the first PL061 (`SLOT_DEV1`) by `PLATFORM_MMIO` index, and a VFS client for `hwdocs/`; not started without a controller.
+- **Done — model** `mind::gpio` (`libmind/src/gpio.rs`): both controllers' registers (BCM2711 FSEL codes, GPSET/GPCLR/GPLEV, GPIO_PUP_PDN_CNTRL; PL061 DIR and masked DATA), `may_change` (control badge for pins the board does not reserve, platform badge for reserved ones), the hwdocs parsers.
+- **Done — interface** `idl/gpio.wit` 1.0: `controllers`, `pins`, `functions` (names from hwdocs), `set-function`, `write`, `set-pull`; every change is logged with the caller's PID, the function and the level before and after.
+- **Done — clients**: the shell holds a control-badged client in `SLOT_GPIO` (23; `SLOT_DYNAMIC` is now 24) and lends it for `REQUEST_GPIO` (and the script word `gpio`), only where `gpio` runs. The `pins` tool ([u015](u015-pins.md)) can use these.
+- **Done — hwdocs**: `hwdocs/socs/bcm2711.pins` (BCM2711 ARM Peripherals, table 94, checked against the document's text by a script: all 58 rows and pulls), `hwdocs/socs/pl061.pins`, `hwdocs/boards/rpi4b.board` (the reduced schematics' J8; 0–1, 14–15 and 28–57 reserved); `make_usb_image.py --hwdocs` puts them on the disk; sources in THIRD_PARTY.md.
+- **Done — tests**: `tests/gpio_host.rs` (register models, policy, the real hwdocs files, malformed tables); the `normal` suite checks that `gpio` does not start on QEMU.
+- **Open — hardware**: a Raspberry Pi 4 run (with 205). **Open — pin masks** per client (the plan's "pins 17–27 only"): one control badge for every pin the board does not reserve for now. **Open — the board's identity**: the first board file for the controller's SoC is used.
 
 ## Acceptance criteria
 

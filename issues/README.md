@@ -30,7 +30,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` | tools | P2 | 207 | track H |
 | [u016](u016-clock-console-faces.md) | Console faces of `clock` and `dzen-clock`: the time on one line rewritten with `\r` (the shell's console and `console` honour it) | tools | P3 | — | track G |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
-| [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting | P2 | — (206 done) | track H |
+| [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 
 ## Finished tasks (`issues-done/`)
 

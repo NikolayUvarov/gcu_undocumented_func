@@ -1,0 +1,38 @@
+# The Raspberry Pi 4 Model B: its 40-pin header J8 and the pins its firmware and board keep for themselves.
+board rpi4b
+name "Raspberry Pi 4 Model B"
+soc bcm2711
+source "Raspberry Pi 4 Model B Reduced Schematics", Raspberry Pi Ltd, RP-008345-DS-1, connector J8
+header J8 40
+# position  pin   (the other positions are power and ground)
+3   2
+5   3
+7   4
+8   14
+10  15
+11  17
+12  18
+13  27
+15  22
+16  23
+18  24
+19  10
+21  9
+22  25
+23  11
+24  8
+26  7
+27  0
+28  1
+29  5
+31  6
+32  12
+33  13
+35  19
+36  16
+37  26
+38  20
+40  21
+reserved 0-1 the HAT ID EEPROM (ID_SD, ID_SC: "do not use these pins for anything other than attaching an I2C ID EEPROM")
+reserved 14-15 the firmware's serial console (TXD0, RXD0)
+reserved 28-57 not on the header: used on the board

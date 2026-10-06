@@ -169,6 +169,7 @@ def main():
     parser.add_argument("--no-build", action="store_true", help="use the already built usb_root/")
     parser.add_argument("--force", action="store_true", help="overwrite an existing image file")
     parser.add_argument("--qemu-img", default=os.environ.get("QEMU_IMG"), help="path to qemu-img[.exe]")
+    parser.add_argument("--hwdocs", action="store_true", help="also put the hardware tables of hwdocs/ in /hwdocs (gpio and pins read them)")
     args = parser.parse_args()
     output = args.output.absolute()
     if output.suffix.lower() != ".img":
@@ -182,6 +183,11 @@ def main():
         print(">>> Building the project...", flush=True)
         subprocess.run(["bash", str(ROOT / "02_build.sh")], cwd=ROOT, check=True)
     payloads = read_payloads(ROOT / "usb_root")
+    if args.hwdocs:
+        # Not part of the system: only on request, so the image stays the same without them (hwdocs/README.md).
+        for file in sorted((ROOT / "hwdocs").rglob("*")):
+            if file.is_file() and file.name != "README.md":
+                payloads[file.relative_to(ROOT).as_posix()] = file.read_bytes()
     output.parent.mkdir(parents=True, exist_ok=True)
     # Stage ONLY boot files. Never include old test disks, image files or local
     # firmware variables from usb_root. Conversion never touches the live tree.
