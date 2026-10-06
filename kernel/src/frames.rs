@@ -8,7 +8,7 @@ use linked_list_allocator::Heap;
 
 const RANGES: usize = 16;
 const CONVENTIONAL: u32 = 7; // EfiConventionalMemory: free after ExitBootServices
-const IDENTITY_END: u64 = crate::mmu::IDENTITY_END; // RAM the kernel's identity map covers (x86: 4 GiB, aarch64: 1 TiB)
+const IDENTITY_END: u64 = crate::mmu::IDENTITY_END; // what the identity map covers whole (x86: 4 GiB, aarch64: 1 TiB); x86 RAM above: mmu::high_ram
 const MIN_RANGE: u64 = 2 * 1024 * 1024;
 
 struct Pool { heaps: [Heap; RANGES], count: usize }
@@ -29,14 +29,20 @@ fn locked<T>(f: impl FnOnce(&mut Pool) -> T) -> T {
 /// boot images, kernel, memory map) as loader data, so conventional memory is unused.
 pub unsafe fn init(map: &[StatPhys]) {
     let mut ranges = [(0u64, 0u64); RANGES];
-    for entry in map.iter().filter(|e| e.kind == CONVENTIONAL) {
-        let start = entry.start.max(0x10_0000).next_multiple_of(4096);
-        let end = (entry.start + entry.pages * 4096).min(IDENTITY_END);
-        if end <= start || end - start < MIN_RANGE { continue; }
+    let mut take = |start: u64, end: u64| {
+        if end <= start || end - start < MIN_RANGE { return; }
         // Keep the RANGES largest.
         let smallest = (0..RANGES).min_by_key(|&i| ranges[i].1 - ranges[i].0).unwrap();
         if end - start > ranges[smallest].1 - ranges[smallest].0 { ranges[smallest] = (start, end); }
+    };
+    for entry in map.iter().filter(|e| e.kind == CONVENTIONAL) {
+        let (start, end) = (entry.start.max(0x10_0000).next_multiple_of(4096), entry.start + entry.pages * 4096);
+        take(start, end.min(IDENTITY_END));
+        // x86-64: RAM above 4 GiB, as far as the kernel maps it (issue 171).
+        if let Some((high, top)) = crate::mmu::high_ram(start, end) { take(high, top); }
     }
+    // Highest first: task memory comes from above 4 GiB while there is some; nothing a device reaches is task memory.
+    ranges.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     locked(|pool| {
         for &(start, end) in ranges.iter().filter(|r| r.1 > r.0) {
             pool.heaps[pool.count].init(start as *mut u8, (end - start) as usize);

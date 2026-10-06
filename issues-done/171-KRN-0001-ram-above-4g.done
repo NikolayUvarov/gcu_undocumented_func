@@ -1,0 +1,37 @@
+# 171-KRN-0001 — x86-64: task memory from all RAM, above 4 GiB too — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 1 · **Constitution:** MC-1.7, MC-5.1
+
+## Problem
+
+On x86-64 the kernel's identity map ended at 4 GiB (`IDENTITY_END`). The frame pool therefore took only the RAM below it, and a machine with 8 GiB used about 3.
+
+## Plan
+
+- The x86 identity map also covers the free conventional RAM above 4 GiB, up to 512 GiB (root entry 0). It uses whole 2 MiB pages, write-back, and only ranges the firmware lists as conventional memory, so device windows are never mapped.
+- The frame pool takes those ranges too, and uses the highest first. Devices never get task memory: DMA regions come from the arena, and `MEM_PHYS` answers only for DMA capabilities. So task memory above what a 32-bit device can reach is safe.
+- The identity map is built before the frame pool, which writes its lists into that memory.
+- A check in the `normal` suite when the machine has more than 4 GiB, and a CI group for x86 with 6 GiB.
+
+## Acceptance criteria
+
+With 6 GiB, the frame pool reports more than 4 GiB, and a program's 128 MiB heap is written and read back. Default runs are unchanged.
+
+## Resolution
+
+- **Code:**
+  - `kernel/src/arch/x86_64/mmu.rs` (`RAM_END`, `high_ram`, the extra page directories in `init`);
+  - `kernel/src/arch/aarch64/mmu.rs` (the same names; nothing extra to map below 1 TiB);
+  - `kernel/src/frames.rs` (the high ranges, highest first);
+  - `kernel/src/main.rs` (the identity map before the frame pool).
+- **Tests:**
+  - `ram_above_4g` in the `normal` suite;
+  - x86 with 6 GiB: the pool holds 6018 MiB, and `memtest alloc 128` reads back intact;
+  - aarch64 `highmem=on` with 6 GiB: 6033 MiB, intact;
+  - x86 at 512 MiB: the `normal` and `memory` suites pass.
+- **CI:** group "RAM above 4 GiB" in `ci.yml` and `scripts/ci_local.sh`.
+- **Profile:** `kernel-objects.md` (frame pool) and `evidence.md`; README "Current scope".
+- **Limits stated there:**
+  - the GOP framebuffer and devices must still be below 4 GiB;
+  - beyond 512 GiB RAM is not used;
+  - no test reads the physical address of a block, so "used first" rests on the pool's order, not on a measurement.

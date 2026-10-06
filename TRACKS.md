@@ -25,8 +25,8 @@ Requests to another track: `issues/requests-<TRK>.md`. Only the owning track num
 
 | Code | Track | Roadmap | Main tasks | Directories (mainly) | Owner and branch | Status | Start with |
 |---|---|---|---|---|---|---|---|
-| `KRN` | kernel | A (kernel side), II | 150–199 | `kernel/` (generic part), `common/abi.rs`, `init`, `loader`, the core of `libmind` | kernel session, `claude/youthful-mendel-mf1soy` | active | — |
-| `PRT` | porting | H | 200–249 | `kernel/src/arch/`, `bootloader/` (architecture lines), `hwdocs/`, `gpio` | kernel session, `claude/youthful-mendel-mf1soy` | active | [205](issues/205-aarch64-boards.md), [207](issues/207-gpio-service.md) (runs on boards) |
+| `KRN` | kernel | A (kernel side), II | 150–199 | `kernel/` (generic part), `common/abi.rs`, `init`, `loader`, the core of `libmind` | kernel session, `claude/youthful-mendel-mf1soy` | active | [171](issues/171-limits-from-the-hardware.md) (limits from the hardware) |
+| `PRT` | porting | H | 200–249 | `kernel/src/arch/`, `bootloader/` (architecture lines), `hwdocs/`, `gpio` | kernel session, `claude/youthful-mendel-mf1soy` | active | [205](issues/205-aarch64-boards.md), [207](issues/207-gpio-service.md) (runs on boards), [210](issues/210-apple-silicon-native.md) (Apple Silicon) |
 | `NET` | network | D | 100–149 | `virtio_net`, `netstack`, `netpolicy`, `tls`, `keystore` | network session | active | the next step of track D in the roadmap |
 | `APP` | tools | G | 250–299 (before: `u001`–`u017`) | user tools: `wm`, `fm`, `edit`, `view`, `monitor`, `pins`, voice, shell commands | tools session, `claude/wizardly-franklin-kec1a9` | active | [u017](issues/u017-pins-view.md), [requests-APP.md](issues/requests-APP.md) |
 | `DRV` | drivers | A | 550–599 | ring-3 drivers: `ahci`, `nvme`, `ata`, `virtio_blk`, `virtio_input`, `usb_host`, `usb_storage`, `usb_hid`, `audio_gw`, `video_gw` | — | **open** | [158](issues/158-video-capture.md): UVC cameras over `usb_host` (isochronous transfers) |

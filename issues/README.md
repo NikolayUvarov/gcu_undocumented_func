@@ -22,9 +22,10 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
-| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96); all RAM on x86 (now below 4 GiB) | kernel | P1 | — | K4 |
+| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96) — step 1, all RAM on x86-64, done (171-KRN-0001) | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
+| [210](210-apple-silicon-native.md) | Apple Silicon Macs natively (M1 first): boot through m1n1 and U-Boot, device tree, AIC, spin table, DART, DWC3 USB | main task, `PRT` | P3 | a Mac with M1; 205 | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the identifier format is done (`300-STO-0001`), the service is built (`300-STO-0002`) | main task, `STO` | P2 | — | track B |
 | [302](302-names-and-current-roots.md) | Names and their current roots (track B, third step): versions published by compare-and-swap, only complete roots (`302-STO-0001` done in the store) | main task, `STO` | P2 | — | track B |
 | [301](301-objects-as-merkle-dags.md) | Objects larger than a block as a Merkle-DAG of chunks and DAG-CBOR nodes (track B, second step): the format, the library and the store's nodes are done (`301-STO-0001`, `0002`); objects over the running service wait for it | main task, `STO` | P2 | — | track B |
@@ -34,7 +35,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers; the `pinmap` check's race), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively), [requests-KRN.md](requests-KRN.md) (start `blockstore` at boot with a RAM disk of its own).
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers; the `pinmap` check's race), [requests-KRN.md](requests-KRN.md) (start `blockstore` at boot with a RAM disk of its own).
 
 
 ## Finished tasks (`issues-done/`)
@@ -192,6 +193,7 @@ Requests that wait for a track to number them: [requests-APP.md](requests-APP.md
 | [169](../issues-done/169-recovery-reserve.done) | A recovery reserve of the frame pool (32 MiB, set by init): applications cannot take the memory a service restart needs (MC-6.5) | done (2026-10-06) |
 | [209](../issues-done/209-aarch64-smoke-interleaved-lines.done) | aarch64 smoke: a line goes out in one write, so lines of services printing at once stay whole (reported by the tools track) | done (2026-10-06) |
 | [170](../issues-done/170-supervisor-without-usable-privileges.done) | The supervisor without usable privileges: init keeps the privileges it grants in escrow and holds no process control (MC-3.12, C6) | done (2026-10-06) |
+| [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | x86-64: task memory from all RAM, above 4 GiB too (171, step 1) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |
 | [301-STO-0001](../issues-done/301-STO-0001-object-format.done) | The object format: 16 KiB chunks and DAG-CBOR nodes with a shape fixed by the size, a builder and a checking reader (`mind::dag`) | done (2026-10-06) |
 | [301-STO-0002](../issues-done/301-STO-0002-store-takes-nodes.done) | The block store takes nodes: `put(codec, data)`, a `dag-cbor` block stored only if it is a canonical node of `mind::dag` | done (2026-10-06) |

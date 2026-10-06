@@ -433,6 +433,17 @@ def qemu_cpu_seconds(vm, seconds):
     return total() - start
 
 
+def ram_above_4g(vm):
+    """Issue 171 (171-KRN-0001): with more than 4 GiB the frame pool holds the RAM above 4 GiB too, and task memory
+    comes from there first (the highest range is used first); a program fills and checks 128 MiB of it."""
+    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", vm.command("free"))[1])
+    assert total > 4 << 30, f"the frame pool has {total} bytes: the RAM above 4 GiB is not used"
+    output = vm.command("memtest alloc 128")
+    require(output, "[MEMTEST] HELD 128 MiB INTACT=true")
+    require(output, "[MEMTEST] FREED")
+    print(f"PASS: RAM above 4 GiB in the frame pool ({total >> 20} MiB in all); 128 MiB of a program's heap written and checked there", flush=True)
+
+
 def normal_suite(vm):
     # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
     assert "gpio" not in vm.services()
@@ -553,6 +564,9 @@ def normal_suite(vm):
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
     assert heap_used(vm) == baseline
+    memory = getattr(vm.args, "memory", None) or ""
+    if memory.upper().endswith("G") and float(memory[:-1]) > 4:
+        ram_above_4g(vm)
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
 
 

@@ -65,6 +65,7 @@ X86_GROUPS=(
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
+    "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal"
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"
     "x86: AVX state|$X86 --cpu-model max --suites busy,smp"
     "x86: AVX state, one CPU|$X86 --cpu-model max --cpus 1 --suites busy,smp"
