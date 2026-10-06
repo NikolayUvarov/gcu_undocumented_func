@@ -82,7 +82,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`, `SPAWN_*`, quotas) → PID [spawn privilege] |
+| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`, `SPAWN_*`, quotas) → PID; `SPAWN_FOREGROUND` with a PID: in front, see the focus rules below (`ERR_FOCUS`) [spawn privilege] |
 | 28 | `TASK_ALIVE` | `arg1` = PID → 1 if it exists [none] |
 | 48 | `TASK_WATCH` | `arg1` = PID of an own child, `arg2` = endpoint with read right; its exit arrives there as a `MSG_FLAG_EXIT` message |
 | 52 | `SCHED_SET` | `arg1` = PID, `arg2` = budget µs per period (0: none), `msg[0]` = period µs (≥ 10 000), `msg[1]` = band [lifecycle owner or process control] |
@@ -123,9 +123,22 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
 | 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
 | 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
-| 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID sent to the background [process control] |
+| 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID \| `NOTICE_FRONT` (started in front by the task in front, issue 160) / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs [process control] |
 | 55 | `REBOOT` | resets the machine: the ACPI FADT reset register, else port 0xCF9, else the 8042 controller, else a triple fault; on aarch64 PSCI `SYSTEM_RESET`; does not return. `arg1` = `REBOOT_POWER_OFF` turns the machine off instead (aarch64: PSCI `SYSTEM_OFF`; x86: `ERR_INVALID`, no ACPI sleep states yet) [process control] |
+
+**The focus** (MC-10.2): one task is in front. Its screen is shown and it gets the input events, except keys taken with `INPUT_LISTEN`.
+
+- **`FOCUS`.** A holder of process control (the shell) puts a task with a screen in front and becomes the *focus owner*. The task it focuses returns to it.
+- **`SPAWN_FOREGROUND`.** The spawner (the loader, for `commit-in-front`) starts a task with a screen in front, for the task whose PID it names.
+  - The kernel checks, under the same lock as the start, that the named task is in front. Otherwise `SPAWN` fails with `ERR_FOCUS` and nothing starts, so a task in the background cannot take the screen.
+  - The new task's input starts empty, as after `FOCUS` (issue 160).
+  - The focus owner gets a `NOTICE` with the new task's PID and `NOTICE_FRONT`. The shell then also shows what that task prints.
+- **Ctrl+Z** (the attention key) puts the focus owner in front, and the owner gets a `NOTICE` with the PID that was sent to the background.
+- **When the task in front ends:**
+  - A task started with `SPAWN_FOREGROUND` gives the focus back to the task that started it, if that task still runs and is not the focus owner. The owner gets no notice: for it, that task never left the front.
+  - Otherwise the focus goes to the focus owner, which gets `NOTICE_EXITED`, or to no task if the owner has ended.
+- **A `FOCUS` on a task** makes it return to the focus owner from then on.
 
 ## libmind
 

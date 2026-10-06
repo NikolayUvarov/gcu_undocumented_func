@@ -1,7 +1,7 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits.
-package mind:loader@1.4.0;
+package mind:loader@1.5.0;
 
 interface loader {
     /// Why a launch session failed.
@@ -34,4 +34,8 @@ interface loader {
     /// Gives the new program a copy of read-only memory `cap` in its fixed slot `slot`: only SLOT_DISPLAY, where a
     /// window manager lends the surface of the window to record (issue u014); a writable one is refused (1.3).
     grant-memory: func(session: u32, slot: u8, cap: borrow<memory>) -> result<_, error>;
+    /// `commit` in front: the caller must have the focus now; the program takes it and gives it back when it ends.
+    /// `rights` when the caller is not in front: nothing starts and the session stays open for `commit`. A console
+    /// program starts as with `commit` (issue 160, 1.5).
+    commit-in-front: func(session: u32) -> result<u64, error>;
 }

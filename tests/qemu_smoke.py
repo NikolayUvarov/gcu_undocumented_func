@@ -1273,19 +1273,51 @@ def fm_check(vm):
     assert canon("A:/EFI/BOOT") in screen[0] and table_row(screen, r"║BOOTX64\.EFI +│ +\d+│"), screen
     assert "CURRENT=BOOT" in poke("[FM] LEFT=/EFI FULL")
     keys(b"\x7f", "LEFT=/ FULL")
-    # A program started from the panel runs in the background.
+    # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
+    # without the shell being told (fm stayed in front for it).
     for _ in range(60):
-        if "CURRENT=clock.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
+        if "CURRENT=top.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
+            break
+    else:
+        raise AssertionError("top.elf not reached")
+    mark = len(vm.log)
+    vm.send_bytes(b"\r")
+    vm.expect("[TOP] READY")
+    vm.send_bytes(b"N")
+    vm.expect("[TOP] SORT=PID")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" fm +"), screen
+    vm.send_bytes(b"\x1b")
+    vm.expect("[TOP] DONE")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    started = table_row(screen, re.escape(canon("Started top.elf (PID")))
+    assert started and canon("fm comes back when it ends") in started, screen
+    assert table_row(screen, canon("1Help")), screen
+    vm.collect(); vm.output = ""
+    poke("[FM] LEFT=/ FULL")  # fm has the keys again
+    assert "SHELL RESUMED" not in vm.log[mark:], vm.log[mark:]
+    # Ctrl+Z from a program fm started still goes to the shell; FG brings fm back, the program stays in the background.
+    for _ in range(60):
+        if "CURRENT=clock.elf " in keys(b"\x1b[A", "[FM] LEFT=/ FULL"):
             break
     else:
         raise AssertionError("clock.elf not reached")
-    keys(b"\r", "CURRENT=clock.elf")
+    vm.send_bytes(b"\r")
+    time.sleep(.5)
+    vm.send_bytes(b"\x1a")
+    pid = int(re.search(r"PID=(\d+) BACKGROUND\. SHELL RESUMED\.", vm.expect("BACKGROUND. SHELL RESUMED."))[1])
     time.sleep(.2)
-    screen = screen_text(vm)
-    vm.serial()
-    started = table_row(screen, canon("Started clock.elf as PID"))
-    assert started, screen
-    pid = int(re.search(r"PID (\d+)", started)[1])
+    rows = task_rows(vm)
+    assert rows[pid][0] == "clock", rows
+    fm = next(p for p, row in rows.items() if row[0] == "fm")
+    vm.send(f"fg {fm}\n")
+    time.sleep(.3)
+    vm.collect(); vm.output = ""
+    poke("[FM] LEFT=/ FULL")
     # The command line (issue 097): typing goes under the panels, Enter runs it (cd, edit, view, a program with its
     # arguments); Ctrl+O hides both panels and shows what it did there, Ctrl+F1 / Ctrl+F2 one, Ctrl+P the other.
     keys(b"cd docs", "CMD=cd docs")
@@ -1335,16 +1367,17 @@ def fm_check(vm):
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
-    assert pid - BASE in task_rows(vm), task_rows(vm)
+    assert pid in task_rows(vm), task_rows(vm)
     time.sleep(1.2)
-    require(vm.command(f"logs {pid - BASE}"), "[CLOCK] ")
-    require(vm.command(f"kill {pid - BASE}"), "KILLED")
+    require(vm.command(f"logs {pid}"), "[CLOCK] ")
+    require(vm.command(f"kill {pid}"), "KILLED")
     for _ in range(20):
         if heap_used(vm) == baseline:
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
-    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
+    print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel in front and fm back after it, "
+          "Ctrl+Z from it to the shell, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
           "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
     vfs_check(vm)
     console_check(vm)
@@ -1382,7 +1415,24 @@ def console_check(vm):
     require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, ps and ls of its own, shell commands named, exit returns to the shell", flush=True)
+    # Only the task in front hands over the focus (issue 160): console in the background starts top in the background
+    # too, and the shell keeps the keys.
+    console = int(re.search(r"PID=(\d+) NAME=console BACKGROUND", vm.command("run console top &"))[1])
+    got = ""
+    for _ in range(25):  # a program in the background prints into its log, not to the serial line
+        got += vm.command(f"logs {console}")
+        if "[CONSOLE] RUN top PID" in got:
+            break
+        time.sleep(.2)
+    assert "[CONSOLE] RUN top PID" in got and "ITS OWN SCREEN IN FRONT" not in got, got
+    rows = task_rows(vm)
+    top = next(p for p, row in rows.items() if row[0] == "top")
+    assert rows[top][2] == "BG" and rows[console][2] == "BG", rows
+    require(vm.command(f"kill {top}"), "KILLED")
+    require(vm.command(f"kill {console}"), "KILLED")
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: console: uptime and grep print into its terminal, an unknown program is named, ps and ls of its own, shell commands named, exit returns to the shell; "
+          "in the background it cannot give its program the focus", flush=True)
 
 
 def vfs_check(vm):

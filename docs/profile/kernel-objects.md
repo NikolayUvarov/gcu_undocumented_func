@@ -17,7 +17,7 @@
 | Input queue | 64 event words per task (key, modifiers, press/release, character, legacy byte), oldest dropped | `INPUT_EVENT` | Per task |
 | Log and console queues | 4096 bytes each per task, oldest dropped; the unread console output of the last focused or screenless task that exited is kept until the next such exit | `LOG` | Per task |
 | Fault records | 16, ring buffer | User exceptions | Global |
-| Notices for the focus owner | 8, further ones dropped | Focused task exits, attention key | Global |
+| Notices for the focus owner | 8, further ones dropped | Focused task exits, attention key, a task started in front (`SPAWN_FOREGROUND`) | Global |
 
 ## Capability kinds
 

@@ -68,7 +68,9 @@ pub trait Disk {
 pub enum Place {
     /// A window of its own next to fm's (fm runs in a window of `wm`, issue 099).
     Window,
-    /// A screen of its own, in the background: fm cannot bring it to the front (Ctrl+Z, then FG in the shell).
+    /// A screen of its own, in front: fm handed it the focus and gets it back when the program ends (issue 160).
+    Front,
+    /// A screen of its own, in the background: fm was not in front to hand over the focus (Ctrl+Z, then FG in the shell).
     Screen,
     /// No screen: a console program, its output in its log.
     Console,
@@ -85,6 +87,7 @@ impl Started {
         let pid = self.pid;
         match self.place {
             Place::Window => format!("Started {} (PID {}) in a window of its own", name, pid),
+            Place::Front => format!("Started {} (PID {}): fm comes back when it ends", name, pid),
             Place::Screen => format!("Started {} as PID {} in the background: Ctrl+Z, then FG {} in the shell shows it", name, pid, pid),
             Place::Console => format!("Started {} as PID {}: a console program, LOGS {} in the shell shows what it printed", name, pid, pid),
             Place::InConsole => format!("Started {} in a console window (PID {})", name, pid),

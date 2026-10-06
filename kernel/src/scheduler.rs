@@ -79,6 +79,7 @@ struct Task {
     // the task that pays above it (its spawner, or the spawner's payer once the spawner ended; MC-3.13, issue 150).
     memory_quota: usize, memory_tree: usize, payer: Option<(usize, u64)>,
     exit_reason: usize, // why it ended (EXIT_*), for a watch that comes after the exit
+    handed_by: Option<(usize, u64)>, // the task in front that started it with SPAWN_FOREGROUND: the focus returns there (issue 160)
 }
 // A driver bound to an interrupt line (IRQ_BIND): its endpoint, the binder, an interrupt it has not received yet, and
 // one it has not acknowledged. A shared line stays masked until every binder acknowledged (issue 159).
@@ -266,9 +267,15 @@ impl Scheduler {
             // Output the focus owner has not read yet is kept until the next focused task exits.
             let console = core::mem::replace(&mut self.tasks[slot].as_mut().unwrap().console, Queue::new());
             self.exited_console = Some((pid, console));
-            let owner = if self.live(self.focus_owner) { self.focus_owner } else { 0 };
-            self.focus(owner);
-            if notify { self.push_notice(pid as usize | NOTICE_EXITED); }
+            // A task started in front (SPAWN_FOREGROUND) gives the focus back to the one that started it, which the focus
+            // owner still sees in front: no notice (issue 160).
+            let handed = self.tasks[slot].as_ref().unwrap().handed_by.filter(|&(s, p)| s != self.focus_owner && self.tasks[s].as_ref().is_some_and(|t| t.pid == p) && self.live(s));
+            if let Some((back, _)) = handed { self.focus(back); }
+            else {
+                let owner = if self.live(self.focus_owner) { self.focus_owner } else { 0 };
+                self.focus(owner);
+                if notify { self.push_notice(pid as usize | NOTICE_EXITED); }
+            }
         }
         else if self.tasks[slot].as_ref().is_some_and(|t| t.screen.is_none() && !t.service && !t.console.is_empty()) {
             // A console program (no screen) that exits: its launcher reads the last output after the exit.
@@ -484,7 +491,7 @@ impl Scheduler {
         if let Some((spawner, _)) = parent { if !self.charge(spawner, fixed) { return Err("OVER MEMORY QUOTA"); } }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0 });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -697,6 +704,13 @@ impl Scheduler {
         let parent = Some((slot, spawner.pid));
         if length == 0 || length > NAME_MAX + 1 + ARGS_MAX || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
         if flags & SPAWN_SERVICE != 0 && !platform { return Err(ERR_RIGHTS); }
+        // In front only for a task with a screen, and only from the task that has the focus now (issue 160).
+        let front = if flags & SPAWN_FOREGROUND != 0 {
+            if flags & SPAWN_SCREEN == 0 { return Err(ERR_INVALID); }
+            let owner = self.find((request.msg[1] >> 32) as u64).ok_or(ERR_FOCUS)?;
+            if owner != self.foreground || !self.live(owner) { return Err(ERR_FOCUS); }
+            Some((owner, self.tasks[owner].as_ref().unwrap().pid))
+        } else { None };
         let grant_bytes = count * core::mem::size_of::<Grant>(); // 8 bytes: own handle u32, child u8, rights u8
         if count > 0 && !task.space.validate_read(request.msg[2], grant_bytes) { return Err(ERR_INVALID); }
         // `name\0arguments`
@@ -721,13 +735,19 @@ impl Scheduler {
             Source::Boot(request.msg[0] & !SPAWN_BOOT)
         } else {
             match self.cap(slot, request.msg[0]) {
-                Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 && request.msg[1] <= size => Source::Image(core::slice::from_raw_parts(physical as *const u8, request.msg[1])),
+                Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 && request.msg[1] & 0xFFFF_FFFF <= size => Source::Image(core::slice::from_raw_parts(physical as *const u8, request.msg[1] & 0xFFFF_FFFF)),
                 _ => return Err(ERR_INVALID),
             }
         };
         let pid = self.spawn_internal(source, Name::new(&text[..name_len]), args, flags, caps, nodes, parent, quotas).map_err(spawn_error)?;
         // Moved capabilities leave the spawner only once the child exists.
         for index in moves.into_iter().flatten() { Self::clear(self.tasks[slot].as_mut().unwrap(), index); }
+        if let Some(owner) = front {
+            let child = self.find(pid).unwrap();
+            self.tasks[child].as_mut().unwrap().handed_by = Some(owner); self.focus(child);
+            // The focus owner learns who is in front now (it shows that task's output too).
+            if owner.0 != self.focus_owner && self.live(self.focus_owner) { self.push_notice(pid as usize | NOTICE_FRONT); }
+        }
         Ok(pid as usize)
     }
 
@@ -766,6 +786,7 @@ impl Scheduler {
                 let target = task_slot(self, request.arg1).ok_or(ERR_NOT_FOUND)?;
                 if self.tasks[target].as_ref().unwrap().screen.is_none() { return Err(ERR_INVALID); }
                 if request.arg2 == 0 { self.tasks[target].as_mut().unwrap().console.clear(); }
+                self.tasks[target].as_mut().unwrap().handed_by = None; // it returns to the caller now (issue 160)
                 self.focus_owner = slot; self.focus(target); Ok(self.tasks[target].as_ref().unwrap().pid as usize)
             }
             SYSCALL_INPUT_LISTEN => {

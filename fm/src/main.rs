@@ -68,8 +68,16 @@ impl Disk for Vfs {
         let window = !console && mind::windowed::active() && requests & mind::process::REQUEST_WINDOW_MANAGER == 0 && lend(SLOT_WINDOW);
         if needs.files && holds(SLOT_FILE) { lend(SLOT_FILE); }
         if needs.sysinfo && requests & mind::process::REQUEST_AUTHORITY == 0 && holds(SLOT_SYSINFO) { lend(SLOT_SYSINFO); }
-        let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
-        Ok(Started { pid, place: if console { Place::Console } else if window { Place::Window } else { Place::Screen } })
+        if console || window {
+            let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
+            return Ok(Started { pid, place: if console { Place::Console } else { Place::Window } });
+        }
+        // On a screen of its own: in front, as fm is (issue 160); `rights` if fm is not in front, then in the background.
+        match loader::commit_in_front(Endpoint::LOADER, session).map_err(lost)? {
+            Ok(pid) => Ok(Started { pid, place: Place::Front }),
+            Err(loader::Error::Rights) => loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed).map(|pid| Started { pid, place: Place::Screen }),
+            Err(error) => Err(failed(error)),
+        }
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         let mode = fs::MODE_WRITE | fs::MODE_CREATE | if replace { fs::MODE_TRUNCATE } else { fs::MODE_NEW };

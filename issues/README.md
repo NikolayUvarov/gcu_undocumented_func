@@ -20,7 +20,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
-| [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` | tools | P2 | 207 | track H |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
@@ -158,7 +157,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [156](../issues-done/156-ps2-mouse.done) | PS/2 mouse: pointer events for the focused program | done (2026-10-04) |
 | [157](../issues-done/157-window-broker.done) | `windows`: window broker, windows that outlive the window manager | done (2026-10-04) |
 | [159](../issues-done/159-shared-interrupt-lines.done) | Shared interrupt lines reach every driver on them | done (2026-10-05) |
-| [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator (the porting stream's; the same work as 161, merged into it; the open 160 above is another issue) | merged into 161 (2026-10-05) |
+| [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator (the porting stream's; the same work as 161, merged into it; 160-focus-for-a-started-program is another issue) | merged into 161 (2026-10-05) |
 | [200](../issues-done/200-architecture-layer.done) | Architecture layer in the kernel and libmind (x86-64 first) | done (2026-10-05) |
 | [201](../issues-done/201-aarch64-boot.done) | aarch64 on QEMU `virt`: boot to init | done (2026-10-05) |
 | [202](../issues-done/202-aarch64-devices.done) | aarch64 devices: PCIe ECAM and the ITS, VirtIO block/net/input, PL011, PL031, display | done (2026-10-05) |
@@ -175,6 +174,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) | USB keyboards, mice and tablets: `usb_host` (xHCI, hubs, hot plug, `idl/usb.wit`), `usb_hid`, `usb_storage` over it; no `ps2_kbd` without a controller; Intel chipsets' ports moved from EHCI | done (2026-10-06) |
 | [155](../issues-done/155-virtual-consoles.done) | Virtual consoles: the shell's four consoles, Ctrl+Alt+F1…F4 whatever program has the keyboard, each with its own text, history and programs | done (2026-10-06) |
 | [166](../issues-done/166-exit-status-for-launchers.done) | `EXIT` with a code, `EXIT_STATUS` (58) for the last 16 tasks that ended; `grep` exits 0/1/2; `msh` makes a failed program `err` | done (2026-10-06) |
+| [160](../issues-done/160-focus-for-a-started-program.done) | The task in front hands the focus to a program it starts (`SPAWN_FOREGROUND`, `loader.wit` 1.5 `commit-in-front`) and gets it back when it ends; `fm` and `console` on a full screen use it | done (2026-10-06) |
 | [167](../issues-done/167-models-of-revoke-and-move.done) | TLA+ models of revoke and MOVE checked by TLC (stage II exit); a mapped memory capability no longer moves (the bug the model found) | done (2026-10-06) |
 | [168](../issues-done/168-task-memory-charged-to-spawner.done) | A task's image, stack and screen are charged to its spawner's memory quota (MC-1.7) | done (2026-10-06) |
 

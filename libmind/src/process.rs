@@ -96,8 +96,17 @@ pub struct Quota { pub tasks: u16, pub endpoints: u16, pub memory_mib: u16 }
 
 /// Starts a task with exactly the granted capabilities and quotas; `flags` are SPAWN_SERVICE / SPAWN_SCREEN.
 /// `name` may be `name\0arguments`.
-pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota) -> Result<u64> {
-    let (source, len) = match image { Image::Memory { cap, len } => (cap, len), Image::Boot(index) => (SPAWN_BOOT | index, 0) };
+pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota) -> Result<u64> { spawn_packed(name, image, grants, flags, quota, 0) }
+
+/// `spawn_raw` with a screen, in front for `front`, the task that has the focus now; the focus returns to it when the
+/// new task ends. `Error::Other(ERR_FOCUS)` when `front` is not in front: nothing is started (issue 160).
+pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota, front: u64) -> Result<u64> {
+    if front >> 32 != 0 { return Err(crate::sys::Error::Other(ERR_FOCUS)); }
+    spawn_packed(name, image, grants, SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
+}
+
+fn spawn_packed(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<u64> {
+    let (source, len) = match image { Image::Memory { cap, len } => (cap, len | (front as usize) << 32), Image::Boot(index) => (SPAWN_BOOT | index, (front as usize) << 32) };
     let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32 | (quota.memory_mib as usize) << 48;
     check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed]).result).map(|pid| pid as u64)
 }
