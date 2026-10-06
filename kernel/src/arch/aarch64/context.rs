@@ -144,16 +144,17 @@ pub unsafe fn event(sp: usize) -> Event {
     }
 }
 
-// The code a task returns into when its entry function returns: EXIT through the mailbox at `mailbox`.
-pub fn exit_stub(mailbox: u64) -> [u8; 32] {
+// The code a task returns into when its entry function returns: EXIT with code 0 through the mailbox at `mailbox`.
+pub fn exit_stub(mailbox: u64) -> [u8; 36] {
     let movz = |hw: u32, imm: u64| 0xD280_0000u32 | hw << 21 | ((imm >> (16 * hw)) as u32 & 0xFFFF) << 5; // movz x0
     let movk = |hw: u32, imm: u64| 0xF280_0000u32 | hw << 21 | ((imm >> (16 * hw)) as u32 & 0xFFFF) << 5; // movk x0
     let words = [movz(0, mailbox), movk(1, mailbox), movk(2, mailbox), movk(3, mailbox),
                  0xD280_00E1, // mov x1, #7 (EXIT)
                  0xF900_0001, // str x1, [x0]
+                 0xF900_041F, // str xzr, [x0, #8] (arg1: the code, issue 166)
                  0xD400_0001, // svc #0
                  0x0000_0000]; // udf #0
-    let mut code = [0u8; 32];
+    let mut code = [0u8; 36];
     for (bytes, word) in code.chunks_exact_mut(4).zip(words) { bytes.copy_from_slice(&word.to_le_bytes()); }
     code
 }

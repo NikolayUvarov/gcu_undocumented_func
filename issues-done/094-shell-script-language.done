@@ -47,7 +47,7 @@ The shell runs one command at a time from the keyboard or the UART. Nothing can 
 
 ## Related
 
-[RFC 001 Marain](../constitution/EN/RFC_001_Marain_v0.4.md), [155](155-virtual-consoles.done), [088](088-text-window-manager.done), [docs/tools](../docs/tools/README.md), [166](../issues/166-exit-status-for-launchers.md).
+[RFC 001 Marain](../constitution/EN/RFC_001_Marain_v0.4.md), [155](155-virtual-consoles.done), [088](088-text-window-manager.done), [docs/tools](../docs/tools/README.md), [166](166-exit-status-for-launchers.done).
 
 ## Resolution
 
@@ -70,7 +70,7 @@ The shell runs one command at a time from the keyboard or the UART. Nothing can 
   - What the user types has the session's authority.
 - **The shell's stack.** The shell now has a heap (libmind `alloc`), and its state is a `Box`. On the 64 KiB stack, the `Shell` value left too little for a script listing a directory: a page fault, the shell restarted by init.
 - **Kernel part:**
-  - Exit statuses are issue [166](../issues/166-exit-status-for-launchers.md).
+  - Exit statuses are issue [166](166-exit-status-for-launchers.done).
   - Capturing a program's output needed nothing new: the shell drains a program's console output (`CONSOLE_READ`).
 - **Tests:**
   - `tests/script_host.rs`: parse errors with positions, expressions and interpolation, results, commands against a mock host, functions and scopes, budgets, `--check`.

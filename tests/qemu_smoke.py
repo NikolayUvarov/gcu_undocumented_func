@@ -840,6 +840,11 @@ def msh_check(vm):
     vm.command("fn sq(x) { return x * x }")
     require(vm.command('print("n = {n}, n squared = {sq(n)}")'), "n = 5, n squared = 25")
     require(vm.command('msh -c "let s = 0; for i in range(1, 5) { s = s + i }; print(s)"'), "10")
+    # How a program ended (issue 166): grep that finds nothing exits with 1, a failure the script handles.
+    require(vm.command('msh -c "grep zzz ram:a.txt or { print(error) }"'), "grep exited with 1")
+    out = vm.command('msh -c "grep hel ram:a.txt; print(40 + 2)"')
+    require(out, "hello")
+    require(out, "42")
     require(vm.command("print(undefined_name)"), "SCRIPT FAILED: undefined_name is not defined (LINE 1)")
     # msh --check: names that do not exist, parse errors with line and column.
     require(vm.command("msh --check data/check.msh"), "MSH: data/check.msh: line 3, column 13: no function nope")

@@ -10,6 +10,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 use mind::control;
+use mind::process::Exit;
 use mind::script::{parse, Host, Interpreter, Script, Value};
 
 /// The functions the shell gives scripts (beside mind::script's).
@@ -52,6 +53,7 @@ impl ShellHost<'_> {
         let outer = shell.term.capture.replace(Vec::new());
         shell.command(line.as_bytes());
         // A program it started runs to its end (a console program) or until it leaves the foreground.
+        let program = shell.console.or(shell.focused);
         loop {
             if let Some(pid) = shell.console {
                 shell.pump_console(pid);
@@ -73,9 +75,13 @@ impl ShellHost<'_> {
         let bytes = core::mem::replace(&mut shell.term.capture, outer).unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes).into_owned();
         if !keep { for &byte in &bytes { shell.term.print_char(byte); } }
-        match text.lines().find_map(|l| l.strip_prefix("ERROR: ")) {
-            Some(reason) => Err(reason.to_string()),
-            None => Ok(text),
+        if let Some(reason) = text.lines().find_map(|l| l.strip_prefix("ERROR: ")) { return Err(reason.to_string()); }
+        // How the program ended (issue 166): a code other than 0, a kill or a fault is a failure.
+        match program.filter(|&pid| !mind::process::alive(pid)).and_then(control::exit_status) {
+            Some(Exit::Code(0)) | None => Ok(text),
+            Some(Exit::Code(code)) => Err(alloc::format!("{} exited with {}", word, code)),
+            Some(Exit::Killed) => Err(alloc::format!("{} was stopped", word)),
+            Some(Exit::Fault(vector)) => Err(alloc::format!("{} ended with a fault (vector {})", word, vector)),
         }
     }
 }

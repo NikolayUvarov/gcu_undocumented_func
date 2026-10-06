@@ -50,7 +50,8 @@ print("done: {total}")
   quoted word puts in the expression's value. `\` takes the next character as it is.
 - **End of a command.** The line, `;` or `}` ends it. A last word `or` followed by a handler handles its failure.
 - **Commands.** A command is one of the shell's own (`ls`, `write`, `ping`, …) or a program. It waits for a console
-  program to end. It returns `ok(nil)`, or `err(reason)` when it printed an `ERROR:` line.
+  program to end. It returns `ok(nil)`, or `err(reason)` when it printed an `ERROR:` line, or when its program ended badly:
+  an exit code other than 0 (`grep exited with 1`: nothing matched), a kill, a fault (issue 166).
 - **Statements:**
 
 | Statement | |
@@ -135,6 +136,5 @@ after an error**:
 
 ## Not yet
 
-- **Exit statuses:** a program's result is `ok` once it started. A program that fails is told apart only by the `ERROR:` lines the shell prints. An exit code readable by the launcher is kernel issue [166](../issues/166-exit-status-for-launchers.md).
 - **Foreground programs:** a script waits for one to end or to leave the foreground. Keys typed on the serial line do not reach it while the script waits.
 - **`ip()`:** the addresses through a typed answer; for later.

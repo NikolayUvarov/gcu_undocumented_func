@@ -552,7 +552,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 3 | LOG | buffer, length → bytes logged |
 | 5 | WAIT | milliseconds (10 ms steps, ≤ 60 s) → uptime at sleep |
 | 6 | UPTIME | → milliseconds since boot |
-| 7 | EXIT | — |
+| 7 | EXIT | code (0: success; issue 166) → does not return; a watch and EXIT_STATUS see `EXIT_NORMAL \| code << 8` |
 | 8 / 9 | ALLOC / FREE | bytes → address / address → 0 |
 | 10 / 22 | IPC_SEND / IPC_CALL | endpoint handle \| timeout ms << 32, reply-capability slot; msg = [cap slot, rights mask, data, data] |
 | 11 | IPC_RECV | endpoint handle \| timeout ms << 32, slot for a received capability → arg1 = sender PID, arg2 = badge of the sender's capability, msg = [cap received, flags, data, data] |
@@ -568,6 +568,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 46 | CAP_REVOKE | slot → number of descendants removed; their mappings are gone everywhere when it returns |
 | 49 | DEVICE_STATE | device index, `DEVICE_STOP`/`DEVICE_START` → 0 — platform privilege or a capability over one of the device's BARs |
 | 48 | TASK_WATCH | PID of a task the caller spawned, endpoint with the read right → 0; the task's exit arrives there as a message with `MSG_FLAG_EXIT` (PID, reason) |
+| 58 | EXIT_STATUS | PID of one of the last 16 tasks that ended → how it ended: `EXIT_NORMAL \| code << 8`, `EXIT_KILLED`, `EXIT_FAULT \| vector << 8` — needs process control (issue 166) |
 | 47 | MEM_DETACH | heap block address → slot of a move-only memory object; `ERR_BUSY` if the block is shared |
 | 15 / 16 | MEM_SHARE / MEM_MAP | block address, bytes → slot / slot → address (arg2 = size) |
 | 17 / 18 | PORT_IN / PORT_OUT | port-range slot, port; msg[1] = width 1/2/4, msg[0] = value |
