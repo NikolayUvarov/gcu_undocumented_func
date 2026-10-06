@@ -2,8 +2,9 @@
 //! System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
 //! an endpoint from the shell at launch (SLOT_SYSINFO); `sysmon` holds the observe privilege and limits each client's
 //! request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`; 3.0:
-//! `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks` and `endpoints` from a position
-//! on, since the kernel has no limit on either, and a sample counts tasks in 32 bits (171-APP-0002).
+//! `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
+//! position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
+//! its mean and maximum (171-APP-0002, 171-APP-0007).
 //!
 //! Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 //! carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
@@ -142,13 +143,14 @@ impl Wire for AuthorityEntry {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { node: Wire::decode(r)?, parent: Wire::decode(r)?, pid: Wire::decode(r)?, size: Wire::decode(r)?, slot: Wire::decode(r)?, generation: Wire::decode(r)?, kind: Wire::decode(r)?, rights: Wire::decode(r)?, badge: Wire::decode(r)?, endpoint: Wire::decode(r)? }) }
 }
 
-/// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
+/// One sample of the load history: busy per mille of CPUs 0..15 (as many as are online; a graph each is what one
+/// screen holds), the mean over every online CPU and the busiest one, and counts during the interval.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sample { pub busy_low: u64, pub busy_high: u64, pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u32, pub runnable: u32 }
+pub struct Sample { pub busy: List<u16, 16>, pub busy_total: u16, pub busy_max: u16, pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u32, pub runnable: u32 }
 impl Wire for Sample {
-    const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.busy_low.encode(w)?; self.busy_high.encode(w)?; self.interrupts.encode(w)?; self.syscalls.encode(w)?; self.messages.encode(w)?; self.switches.encode(w)?; self.used_kib.encode(w)?; self.tasks.encode(w)?; self.runnable.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { busy_low: Wire::decode(r)?, busy_high: Wire::decode(r)?, interrupts: Wire::decode(r)?, syscalls: Wire::decode(r)?, messages: Wire::decode(r)?, switches: Wire::decode(r)?, used_kib: Wire::decode(r)?, tasks: Wire::decode(r)?, runnable: Wire::decode(r)? }) }
+    const MAX: usize = <List<u16, 16> as Wire>::MAX + <u16 as Wire>::MAX + <u16 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.busy.encode(w)?; self.busy_total.encode(w)?; self.busy_max.encode(w)?; self.interrupts.encode(w)?; self.syscalls.encode(w)?; self.messages.encode(w)?; self.switches.encode(w)?; self.used_kib.encode(w)?; self.tasks.encode(w)?; self.runnable.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { busy: Wire::decode(r)?, busy_total: Wire::decode(r)?, busy_max: Wire::decode(r)?, interrupts: Wire::decode(r)?, syscalls: Wire::decode(r)?, messages: Wire::decode(r)?, switches: Wire::decode(r)?, used_kib: Wire::decode(r)?, tasks: Wire::decode(r)?, runnable: Wire::decode(r)? }) }
 }
 
 /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
@@ -175,17 +177,19 @@ pub fn tasks(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Task, 40> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-pub fn cpus(endpoint: Endpoint) -> Result<core::result::Result<List<Cpu, 8>, Error>> {
+/// The CPUs from position `start` on, at most 64 (the kernel starts up to 256).
+pub fn cpus(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<Cpu, 64>, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 426, false, false)?;
+    let length = wire::buffer_reply(&reply, 3394, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Cpu, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Cpu, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 pub fn memory(endpoint: Endpoint) -> Result<core::result::Result<Memory, Error>> {
@@ -229,12 +233,13 @@ pub fn vmap(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<List<Re
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Region, 80> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-/// Capabilities of task `pid`.
-pub fn caps(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<List<Capability, 64>, Error>> {
+/// Capabilities of task `pid` from position `start` on, at most 64 (a table grows to 4095).
+pub fn caps(endpoint: Endpoint, pid: u64, start: u32) -> Result<core::result::Result<List<Capability, 64>, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         pid.encode(&mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
@@ -288,7 +293,7 @@ pub fn devices(endpoint: Endpoint) -> Result<core::result::Result<List<Device, 6
 /// The last `count` samples, oldest first: every 100 ms (`slow` false, up to 300) or every second (up to 600); a reply
 /// holds those from position `start` on, at most 150 (call again with a larger `start` for the rest).
 pub fn history(endpoint: Endpoint, slow: bool, count: u16, start: u16) -> Result<core::result::Result<List<Sample, 150>, Error>> {
-    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         slow.encode(&mut w).ok_or(SysError::Invalid)?;
@@ -298,7 +303,7 @@ pub fn history(endpoint: Endpoint, slow: bool, count: u16, start: u16) -> Result
     };
     let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 6602, false, false)?;
+    let length = wire::buffer_reply(&reply, 9902, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Sample, 150> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -352,11 +357,11 @@ pub fn authority(endpoint: Endpoint, start: u32) -> Result<core::result::Result<
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Tasks { start: u32 },
-    Cpus,
+    Cpus { start: u32 },
     Memory,
     Physmap,
     Vmap { pid: u64 },
-    Caps { pid: u64 },
+    Caps { pid: u64, start: u32 },
     Endpoints { start: u32 },
     Irqs,
     Devices,
@@ -382,11 +387,12 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             Ok((Request::Tasks { start }, call))
         }
         2 => {
-            let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 426, &mut copy)?;
+            let mut copy = [0u8; 4];
+            let (call, length) = wire::take_buffer(request, cap, 3394, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
             if !r.done() { return Err(Reject::Invalid); }
-            Ok((Request::Cpus, call))
+            Ok((Request::Cpus { start }, call))
         }
         3 => {
             let mut copy = [0u8; 1];
@@ -411,12 +417,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             Ok((Request::Vmap { pid }, call))
         }
         6 => {
-            let mut copy = [0u8; 8];
+            let mut copy = [0u8; 12];
             let (call, length) = wire::take_buffer(request, cap, 3074, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             let pid = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
             if !r.done() { return Err(Reject::Invalid); }
-            Ok((Request::Caps { pid }, call))
+            Ok((Request::Caps { pid, start }, call))
         }
         7 => {
             let mut copy = [0u8; 4];
@@ -442,7 +449,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         }
         10 => {
             let mut copy = [0u8; 5];
-            let (call, length) = wire::take_buffer(request, cap, 6602, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 9902, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             let slow = <bool as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
             let count = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
@@ -483,7 +490,7 @@ pub fn reply_tasks(call: Call, value: core::result::Result<&[Task], Error>) -> R
 }
 pub fn reply_cpus(call: Call, value: core::result::Result<&[Cpu], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
-    wire::reply_buffer(call, |w| codec::encode_slice::<Cpu, 8>(value, w))
+    wire::reply_buffer(call, |w| codec::encode_slice::<Cpu, 64>(value, w))
 }
 pub fn reply_memory(call: Call, value: core::result::Result<&Memory, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

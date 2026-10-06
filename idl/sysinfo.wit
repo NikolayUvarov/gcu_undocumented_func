@@ -1,8 +1,9 @@
 /// System information from `sysmon` (MC-10.2): the kernel's STAT records and a history of load samples. Clients get
 /// an endpoint from the shell at launch (SLOT_SYSINFO); `sysmon` holds the observe privilege and limits each client's
 /// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`; 3.0:
-/// `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks` and `endpoints` from a position
-/// on, since the kernel has no limit on either, and a sample counts tasks in 32 bits (171-APP-0002).
+/// `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
+/// position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
+/// its mean and maximum (171-APP-0002, 171-APP-0007).
 ///
 /// Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 /// carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
@@ -53,20 +54,22 @@ interface sysinfo {
     /// A capability of some task with its derivation links (3.0): `node` is its derivation node, `parent` the node it
     /// was derived from (0: a root); revoking a capability removes the subtree below its node.
     record authority-entry { node: u64, parent: u64, pid: u64, size: u64, slot: u32, generation: u32, kind: u32, rights: u32, badge: u32, endpoint: u32 }
-    /// One sample of the load history: busy per mille of CPUs 0..3 and 4..7 (16 bits each), counts during the interval.
-    record sample { busy-low: u64, busy-high: u64, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u32, runnable: u32 }
+    /// One sample of the load history: busy per mille of CPUs 0..15 (as many as are online; a graph each is what one
+    /// screen holds), the mean over every online CPU and the busiest one, and counts during the interval.
+    record sample { busy: list<u16, 16>, busy-total: u16, busy-max: u16, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u32, runnable: u32 }
     /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
     record load { one: u32, five: u32, fifteen: u32, uptime-ms: u64, fast-ms: u32, slow-ms: u32, fast-count: u32, slow-count: u32 }
 
     /// The tasks from position `start` on, at most 40 (call again with a larger `start` for the rest).
     tasks: func(start: u32) -> result<list<task, 40>, error>;
-    cpus: func() -> result<list<cpu, 8>, error>;
+    /// The CPUs from position `start` on, at most 64 (the kernel starts up to 256).
+    cpus: func(start: u32) -> result<list<cpu, 64>, error>;
     memory: func() -> result<memory, error>;
     physmap: func() -> result<list<range, 256>, error>;
     /// Address space of task `pid`.
     vmap: func(pid: u64) -> result<list<region, 80>, error>;
-    /// Capabilities of task `pid`.
-    caps: func(pid: u64) -> result<list<capability, 64>, error>;
+    /// Capabilities of task `pid` from position `start` on, at most 64 (a table grows to 4095).
+    caps: func(pid: u64, start: u32) -> result<list<capability, 64>, error>;
     /// The endpoints from position `start` on, at most 128 (call again with a larger `start` for the rest).
     endpoints: func(start: u32) -> result<list<endpoint-info, 128>, error>;
     irqs: func() -> result<list<irq, 16>, error>;

@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 /// What a graph shows; values per sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Series { Cpu(usize), CpuTotal, Interrupts, Syscalls, Messages, Switches, Arena, Tasks }
+pub enum Series { Cpu(usize), CpuTotal, CpuMax, Interrupts, Syscalls, Messages, Switches, Arena, Tasks }
 
 /// `values` squeezed into `points` points by averaging neighbours (or as they are, if they fit).
 pub fn resample(values: &[u64], points: usize) -> Vec<u64> {
@@ -38,7 +38,9 @@ impl LoadView {
     fn period_ms(&self) -> u64 { let p = if self.slow { self.load.slow_ms } else { self.load.fast_ms }; if p == 0 { if self.slow { 1000 } else { 100 } } else { p as u64 } }
 
     pub fn series(&self) -> Vec<Series> {
-        let mut list: Vec<Series> = if self.total { alloc::vec![Series::CpuTotal] } else { (0..self.online.clamp(1, 8)).map(Series::Cpu).collect() };
+        let mut list: Vec<Series> = if self.total { alloc::vec![Series::CpuTotal] } else { (0..self.online.clamp(1, CPUS_KEPT)).map(Series::Cpu).collect() };
+        // More CPUs than a sample keeps one by one: every CPU in the mean and the busiest (issue 171).
+        if !self.total && self.online > CPUS_KEPT { list.extend([Series::CpuTotal, Series::CpuMax]); }
         list.extend([Series::Interrupts, Series::Syscalls, Series::Messages, Series::Switches, Series::Arena, Series::Tasks]);
         list
     }
@@ -46,10 +48,9 @@ impl LoadView {
     /// The values of a series, one per sample; rates per second.
     pub fn values(&self, series: Series) -> Vec<u64> {
         let per_second = |count: u32| count as u64 * 1000 / self.period_ms();
-        let online = self.online.clamp(1, 8);
         self.samples.iter().map(|s| match series {
-            Series::Cpu(i) => s.busy[i] as u64,
-            Series::CpuTotal => s.busy[..online].iter().map(|&b| b as u64).sum::<u64>() / online as u64,
+            Series::Cpu(i) => s.busy.get(i).copied().unwrap_or(0) as u64,
+            Series::CpuTotal => s.busy_total as u64, Series::CpuMax => s.busy_max as u64,
             Series::Interrupts => per_second(s.interrupts), Series::Syscalls => per_second(s.syscalls),
             Series::Messages => per_second(s.messages), Series::Switches => per_second(s.switches),
             Series::Arena => s.used_kib as u64 * 1024, Series::Tasks => s.tasks as u64,
@@ -58,7 +59,7 @@ impl LoadView {
 
     /// The fixed top of a series' scale, or none (scaled to its maximum: the counters and the tasks).
     fn limit(&self, series: Series) -> Option<u64> {
-        match series { Series::Cpu(_) | Series::CpuTotal => Some(1000), Series::Arena => Some(self.memory.arena.max(1)), _ => None }
+        match series { Series::Cpu(_) | Series::CpuTotal | Series::CpuMax => Some(1000), Series::Arena => Some(self.memory.arena.max(1)), _ => None }
     }
 
     /// Title of a graph: the current, average and highest value.
@@ -67,8 +68,8 @@ impl LoadView {
         let avg = if values.is_empty() { 0 } else { values.iter().sum::<u64>() / values.len() as u64 };
         let max = values.iter().copied().max().unwrap_or(0);
         match series {
-            Series::Cpu(_) | Series::CpuTotal => {
-                let name = if let Series::Cpu(i) = series { format!("CPU{}", i) } else { format!("CPU total ({})", self.online) };
+            Series::Cpu(_) | Series::CpuTotal | Series::CpuMax => {
+                let name = match series { Series::Cpu(i) => format!("CPU{}", i), Series::CpuTotal => format!("CPU total ({})", self.online), _ => String::from("busiest CPU") };
                 format!("{}  {}%  avg {}%  max {}%", name, text::permille(now as u32), text::permille(avg as u32), text::permille(max as u32))
             }
             Series::Arena => format!("kernel arena  {} of {}  max {}", text::size(now), text::size(self.memory.arena), text::size(max)),
@@ -82,13 +83,13 @@ impl LoadView {
     }
 
     fn color(series: Series) -> u32 {
-        match series { Series::Cpu(_) | Series::CpuTotal => 0xA6E3A1, Series::Arena => 0xF080C0, Series::Tasks => 0xE0E060, _ => 0x80D0FF }
+        match series { Series::Cpu(_) | Series::CpuTotal | Series::CpuMax => 0xA6E3A1, Series::Arena => 0xF080C0, Series::Tasks => 0xE0E060, _ => 0x80D0FF }
     }
 
     /// The top of a series' graph and its label (`100%`, `50 000/s`, `64.0M`, `32`).
     fn scale(&self, series: Series, values: &[u64]) -> (u64, String) {
         let max = self.limit(series).unwrap_or_else(|| text::nice_max(values.iter().copied().max().unwrap_or(0).max(1)));
-        let label = match series { Series::Cpu(_) | Series::CpuTotal => String::from("100%"), Series::Arena => text::size(max), Series::Tasks => format!("{}", max), _ => format!("{}/s", text::count(max)) };
+        let label = match series { Series::Cpu(_) | Series::CpuTotal | Series::CpuMax => String::from("100%"), Series::Arena => text::size(max), Series::Tasks => format!("{}", max), _ => format!("{}/s", text::count(max)) };
         (max, label)
     }
 

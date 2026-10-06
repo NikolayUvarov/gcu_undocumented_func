@@ -5,10 +5,10 @@
 // (MC-10.2): each may make 20 requests at once and 40 per second. Sampling runs at a fixed period into rings allocated
 // once at start; replies are built on the program heap (the 64 KiB stack is too small for 600 samples).
 // Who holds what (`holders`, `authority`, the derivation links in `caps`) goes only to clients whose capability carries
-// the authority badge (sysinfo.wit 2.2). The kernel has no task or endpoint limit (issue 171): STAT is read page by page,
-// and the lists go to clients from a position on (sysinfo.wit 4.0).
+// the authority badge (sysinfo.wit 2.2). The kernel has no fixed count of tasks, endpoints, capabilities or CPUs (issue
+// 171): STAT is read page by page, the lists go to clients from a position on, and a sample keeps CPUs 0..15 one by one
+// and every CPU in its mean and maximum (sysinfo.wit 4.0).
 extern crate alloc;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use mind::abi::*;
 use mind::idl::codec::Text;
@@ -26,23 +26,27 @@ const FAST_MS: u64 = 100;
 const FAST: usize = 300;
 const SLOW: usize = 600;
 
-#[derive(Clone, Copy, Default)]
-struct Sample { busy: [u16; 8], interrupts: u32, syscalls: u32, messages: u32, switches: u32, used_kib: u32, tasks: u32, runnable: u32 }
+const CPUS_KEPT: usize = 16; // CPUs whose busy share a sample keeps one by one
 
-struct Ring<const N: usize> { items: [Sample; N], next: usize, count: usize }
+#[derive(Clone, Copy, Default)]
+struct Sample { busy: [u16; CPUS_KEPT], cpus: u16, busy_total: u16, busy_max: u16, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used_kib: u32, tasks: u32, runnable: u32 }
+
+// The samples are on the heap from the start: 600 of them would not fit the 64 KiB stack on their way into a box.
+struct Ring<const N: usize> { items: Vec<Sample>, next: usize, count: usize }
 impl<const N: usize> Ring<N> {
-    const fn new() -> Self { Self { items: [Sample { busy: [0; 8], interrupts: 0, syscalls: 0, messages: 0, switches: 0, used_kib: 0, tasks: 0, runnable: 0 }; N], next: 0, count: 0 } }
+    fn new() -> Self { Self { items: alloc::vec![Sample::default(); N], next: 0, count: 0 } }
     fn push(&mut self, sample: Sample) { self.items[self.next] = sample; self.next = (self.next + 1) % N; self.count = (self.count + 1).min(N); }
     // The last `count` samples, oldest first.
     fn last(&self, count: usize) -> impl Iterator<Item = &Sample> { let count = count.min(self.count); (0..count).map(move |i| &self.items[(self.next + N - count + i) % N]) }
 }
 
-// Totals at the previous sample, to turn the kernel's counters into rates.
+// Totals at the previous sample, to turn the kernel's counters into rates; busy and idle time of every CPU.
 #[derive(Default)]
-struct Totals { busy: [u64; 8], idle: [u64; 8], interrupts: u64, syscalls: u64, messages: u64, switches: u64 }
+struct Totals { busy: Vec<u64>, idle: Vec<u64>, interrupts: u64, syscalls: u64, messages: u64, switches: u64 }
 
 struct Monitor {
-    scratch: Pages, fast: Box<Ring<FAST>>, slow: Box<Ring<SLOW>>, totals: Totals, pending: [Sample; 10], pending_count: usize,
+    scratch: Pages, fast: Ring<FAST>, slow: Ring<SLOW>, totals: Totals, pending: [Sample; 10], pending_count: usize,
+    pending_busy: Vec<u32>, // every CPU's busy share summed over the pending samples, for the slow sample's maximum
     load: [u64; 3], // runnable tasks, fixed point x 2048
     limiter: Limiter,
 }
@@ -55,16 +59,24 @@ impl Monitor {
 
     fn sample(&mut self) {
         let mut sample = Sample::default();
-        let (mut interrupts, mut switches) = (0u64, 0u64);
-        if let Ok(records) = stat::read(STAT_CPUS, 0, self.scratch.as_mut_slice()) {
-            for (index, cpu) in records.iter::<StatCpu>().enumerate().take(8) {
-                let busy = cpu.busy_ns.saturating_sub(self.totals.busy[index]);
-                let idle = cpu.idle_ns.saturating_sub(self.totals.idle[index]);
-                sample.busy[index] = if busy + idle == 0 { 0 } else { (busy * 1000 / (busy + idle)) as u16 };
-                self.totals.busy[index] = cpu.busy_ns; self.totals.idle[index] = cpu.idle_ns;
-                interrupts += cpu.interrupts; switches += cpu.switches;
+        let (mut interrupts, mut switches, mut index, mut sum) = (0u64, 0u64, 0usize, 0u64);
+        let (totals, pending_busy) = (&mut self.totals, &mut self.pending_busy);
+        let _ = stat::each::<StatCpu>(STAT_CPUS, 0, self.scratch.as_mut_slice(), |cpu| {
+            if totals.busy.len() <= index { totals.busy.resize(index + 1, 0); totals.idle.resize(index + 1, 0); pending_busy.resize(index + 1, 0); }
+            let busy = cpu.busy_ns.saturating_sub(totals.busy[index]);
+            let idle = cpu.idle_ns.saturating_sub(totals.idle[index]);
+            let share = if busy + idle == 0 { 0 } else { (busy * 1000 / (busy + idle)) as u16 };
+            totals.busy[index] = cpu.busy_ns; totals.idle[index] = cpu.idle_ns;
+            if cpu.online != 0 {
+                if index < CPUS_KEPT { sample.busy[index] = share; }
+                sample.cpus += 1; sum += share as u64; sample.busy_max = sample.busy_max.max(share);
+                pending_busy[index] += share as u32;
             }
-        }
+            interrupts += cpu.interrupts; switches += cpu.switches;
+            index += 1;
+            true
+        });
+        sample.busy_total = (sum / sample.cpus.max(1) as u64) as u16;
         let (mut syscalls, mut tasks, mut runnable) = (0u64, 0u32, 0u32);
         let _ = stat::each::<StatTask>(STAT_TASKS, 0, self.scratch.as_mut_slice(), |task| {
             syscalls += task.calls; tasks += 1;
@@ -86,7 +98,11 @@ impl Monitor {
         if self.pending_count == self.pending.len() {
             let pending = &self.pending[..self.pending_count];
             let mut slow = *pending.last().unwrap();
-            for cpu in 0..8 { slow.busy[cpu] = (pending.iter().map(|s| s.busy[cpu] as u32).sum::<u32>() / pending.len() as u32) as u16; }
+            for cpu in 0..CPUS_KEPT { slow.busy[cpu] = (pending.iter().map(|s| s.busy[cpu] as u32).sum::<u32>() / pending.len() as u32) as u16; }
+            slow.busy_total = (pending.iter().map(|s| s.busy_total as u32).sum::<u32>() / pending.len() as u32) as u16;
+            // The busiest CPU over the second, not the mean of each sample's busiest.
+            slow.busy_max = (self.pending_busy.iter().copied().max().unwrap_or(0) / pending.len() as u32) as u16;
+            self.pending_busy.iter_mut().for_each(|b| *b = 0);
             slow.interrupts = pending.iter().map(|s| s.interrupts).sum(); slow.syscalls = pending.iter().map(|s| s.syscalls).sum();
             slow.messages = pending.iter().map(|s| s.messages).sum(); slow.switches = pending.iter().map(|s| s.switches).sum();
             let runnable = pending.iter().map(|s| s.runnable as u64).sum::<u64>() * 2048 / pending.len() as u64;
@@ -98,8 +114,9 @@ impl Monitor {
 }
 
 fn wire_sample(s: &Sample) -> sysinfo::Sample {
-    let pack = |range: &[u16]| range.iter().enumerate().fold(0u64, |word, (i, &v)| word | (v as u64) << (16 * i));
-    sysinfo::Sample { busy_low: pack(&s.busy[..4]), busy_high: pack(&s.busy[4..]), interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages, switches: s.switches, used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }
+    let busy = mind::idl::codec::List::from_slice(&s.busy[..(s.cpus as usize).min(CPUS_KEPT)]).unwrap_or_default();
+    sysinfo::Sample { busy, busy_total: s.busy_total, busy_max: s.busy_max, interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages, switches: s.switches,
+                      used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }
 }
 
 fn name(bytes: &[u8; NAME_MAX]) -> Text<16> {
@@ -132,8 +149,8 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
             }).collect());
             sysinfo::reply_tasks(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Cpus => {
-            let items: Result<Vec<sysinfo::Cpu>, Error> = records!(STAT_CPUS, 0).map(|r| r.iter::<StatCpu>().take(8).map(|c| sysinfo::Cpu {
+        Request::Cpus { start } => {
+            let items: Result<Vec<sysinfo::Cpu>, Error> = records!(STAT_CPUS, 0, start as usize).map(|r| r.iter::<StatCpu>().take(64).map(|c| sysinfo::Cpu {
                 busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current_pid, apic: c.apic_id, online: c.online != 0 }).collect());
             sysinfo::reply_cpus(call, items.as_deref().map_err(|e| *e))
         }
@@ -153,10 +170,10 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
             let items: Result<Vec<sysinfo::Region>, Error> = records!(STAT_VMAP, pid).map(|r| r.iter::<StatRegion>().take(80).map(|v| sysinfo::Region { start: v.start, size: v.size, kind: v.kind, flags: v.flags }).collect());
             sysinfo::reply_vmap(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Caps { pid } => {
+        Request::Caps { pid, start } => {
             // Without the authority badge: no derivation links.
             let links = |c: &StatCap| if authority { (c.node, c.parent) } else { (0, 0) };
-            let items: Result<Vec<sysinfo::Capability>, Error> = records!(STAT_CAPS, pid).map(|r| r.iter::<StatCap>().take(64).map(|c| { let (node, parent) = links(&c); sysinfo::Capability {
+            let items: Result<Vec<sysinfo::Capability>, Error> = records!(STAT_CAPS, pid, start as usize).map(|r| r.iter::<StatCap>().take(64).map(|c| { let (node, parent) = links(&c); sysinfo::Capability {
                 node, parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint } }).collect());
             sysinfo::reply_caps(call, items.as_deref().map_err(|e| *e))
         }
@@ -229,7 +246,7 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
 fn refuse(request: Request, call: Call) -> mind::Result<()> {
     let busy = Error::Busy;
     match request {
-        Request::Tasks { .. } => sysinfo::reply_tasks(call, Err(busy)), Request::Cpus => sysinfo::reply_cpus(call, Err(busy)),
+        Request::Tasks { .. } => sysinfo::reply_tasks(call, Err(busy)), Request::Cpus { .. } => sysinfo::reply_cpus(call, Err(busy)),
         Request::Memory => sysinfo::reply_memory(call, Err(busy)), Request::Physmap => sysinfo::reply_physmap(call, Err(busy)),
         Request::Vmap { .. } => sysinfo::reply_vmap(call, Err(busy)), Request::Caps { .. } => sysinfo::reply_caps(call, Err(busy)),
         Request::Endpoints { .. } => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
@@ -242,7 +259,8 @@ fn refuse(request: Request, call: Call) -> mind::Result<()> {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let Some(scratch) = Pages::new(16 * 1024) else { mind::println!("[SYSMON] NO MEMORY"); return };
-    let mut monitor = Monitor { scratch, fast: Box::new(Ring::new()), slow: Box::new(Ring::new()), totals: Totals::default(), pending: [Sample::default(); 10], pending_count: 0, load: [0; 3], limiter: Limiter::new() };
+    let mut monitor = Monitor { scratch, fast: Ring::new(), slow: Ring::new(), totals: Totals::default(), pending: [Sample::default(); 10], pending_count: 0,
+                                pending_busy: Vec::new(), load: [0; 3], limiter: Limiter::new() };
     if stat::read(STAT_CPUS, 0, monitor.buffer()).is_err() { mind::println!("[SYSMON] NO OBSERVE PRIVILEGE"); return; }
     monitor.sample();
     mind::println!("[SYSMON] READY: SAMPLES EVERY {} MS", FAST_MS);

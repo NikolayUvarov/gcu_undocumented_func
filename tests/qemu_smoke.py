@@ -482,6 +482,26 @@ def applications_until_memory_ends(vm):
     print(f"PASS: {len(pids) + 3} clocks at once until memory ran out (no task limit), a clean refusal; uptime and top see all {rows} tasks; arena and frames back", flush=True)
 
 
+def monitors_every_cpu(vm):
+    """171-APP-0007: with more CPUs than the former 8, top draws a bar for every CPU and load a graph for each of the 16
+    a sample keeps."""
+    def screen_of(program):
+        vm.send(f"{program}\n")
+        vm.expect(f"[{program.upper()}] READY")
+        time.sleep(2.5)  # two refreshes: top's shares since the last one
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        vm.send("q")
+        require(vm.expect("EXITED. SHELL RESUMED."), f"[{program.upper()}] DONE")
+        time.sleep(.1); vm.collect(); vm.output = ""
+        return "\n".join(screen)
+    bars = {int(c) for c in re.findall(r"CPU(\d+) +\[", screen_of("top"))}
+    assert bars == set(range(vm.cpus)), bars
+    graphs = {int(c) for c in re.findall(r"CPU(\d+)  \d+\.\d%", screen_of("load"))}
+    assert graphs == set(range(min(vm.cpus, 16))), graphs
+    print(f"PASS: top shows {len(bars)} CPUs, load {len(graphs)} CPU graphs", flush=True)
+
+
 def pool_covers_free_ram(vm):
     """Issue 171 (171-KRN-0005): the frame pool takes every free range of the firmware map (at least 2 MiB, from 1 MiB
     up; above 4 GiB on x86 whole 2 MiB pages), however many there are: its size is their sum."""
@@ -663,6 +683,8 @@ def normal_suite(vm):
     assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
     assert heap_used(vm) == baseline
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
+    if vm.cpus > 8:
+        monitors_every_cpu(vm)
     pool_covers_free_ram(vm)
     memory = gibibytes(getattr(vm.args, "memory", None))
     # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80.
@@ -1199,6 +1221,13 @@ def monitors_check(vm):
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=PID"))
     vm.send_bytes(b"\x1b")
     vm.expect("DETAILS=0")
+    # init's details list every capability it holds, page by page past 64 (171-APP-0007).
+    vm.send_bytes(b"\x1b[H")
+    vm.expect("SELECTED=1 ")
+    vm.send("\n")
+    listed = int(re.search(r"LISTED=(\d+)", status_line(vm, "DETAILS=1 "))[1])
+    vm.send_bytes(b"\x1b")
+    vm.expect("DETAILS=0")
     vm.send("S")
     assert "ROWS=2" in status_line(vm, "HIDE=1"), "only clock and top are applications"
     vm.send("t")
@@ -1206,6 +1235,8 @@ def monitors_check(vm):
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
+    total = int(re.search(r"STAT CAPS VERSION=\d+ COUNT=\d+ TOTAL=(\d+)", vm.command("stat caps 1", raw=True))[1])
+    assert listed == total > 64, (listed, total)
     # memmap: physical map, kernel arena, the known layout of clock's address space, quotas.
     vm.send("memmap\n")
     vm.expect("[MEMMAP] READY")

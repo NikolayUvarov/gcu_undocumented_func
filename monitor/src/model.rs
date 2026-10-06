@@ -77,9 +77,12 @@ pub struct Holder { pub pid: u64, pub slot: u32, pub rights: u32, pub badge: u32
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuthorityEntry { pub node: u64, pub parent: u64, pub pid: u64, pub size: u64, pub slot: u32, pub generation: u32, pub kind: u32, pub rights: u32, pub badge: u32, pub endpoint: u32 }
 
-/// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
+/// CPUs whose busy share a sample keeps one by one (sysinfo.wit 4.0); the mean and the maximum cover every CPU.
+pub const CPUS_KEPT: usize = 16;
+
+/// One load sample: busy per mille of CPUs 0..15, of every CPU on average and of the busiest, and counts during the period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sample { pub busy: [u16; 8], pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u32, pub runnable: u32 }
+pub struct Sample { pub busy: [u16; CPUS_KEPT], pub busy_total: u16, pub busy_max: u16, pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u32, pub runnable: u32 }
 
 /// Load averages (runnable tasks x 100), uptime and sampling periods.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

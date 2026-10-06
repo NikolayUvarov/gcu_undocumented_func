@@ -19,14 +19,11 @@ fn main(_info: &'static BootInfo) {
     let seconds = load.uptime_ms / 1000;
     mind::print!("up {}:{:02}:{:02}, load {}.{:02} {}.{:02} {}.{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60,
                  load.one / 100, load.one % 100, load.five / 100, load.five % 100, load.fifteen / 100, load.fifteen % 100);
-    if let (Ok(Ok(cpus)), Ok(Ok(samples))) = (sysinfo::cpus(Endpoint::SYSINFO), sysinfo::history(Endpoint::SYSINFO, false, 10, 0)) {
-        let online = cpus.as_slice().iter().filter(|c| c.online).count().max(1) as u64;
+    // The mean busy share of every CPU over the last second.
+    if let Ok(Ok(samples)) = sysinfo::history(Endpoint::SYSINFO, false, 10, 0) {
         let (mut busy, mut count, mut tasks) = (0u64, 0u64, 0u32);
-        for s in samples.as_slice() {
-            busy += (0..4).map(|i| (s.busy_low >> (16 * i)) & 0xFFFF).chain((0..4).map(|i| (s.busy_high >> (16 * i)) & 0xFFFF)).sum::<u64>();
-            count += 1; tasks = s.tasks;
-        }
-        if count > 0 { mind::print!(", cpu {}%, {} tasks", busy / count / online / 10, tasks); }
+        for s in samples.as_slice() { busy += s.busy_total as u64; count += 1; tasks = s.tasks; }
+        if count > 0 { mind::print!(", cpu {}%, {} tasks", busy / count / 10, tasks); }
     }
     mind::println!();
 }

@@ -65,8 +65,13 @@ impl Source for Client {
         }
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
-        let list = take(sysinfo::cpus(Endpoint::SYSINFO))?;
-        Ok(list.as_slice().iter().map(|c| Cpu { busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current, apic: c.apic, online: c.online }).collect())
+        // Page by page: the kernel starts every CPU the firmware reports (sysinfo.wit 4.0).
+        let mut cpus = Vec::new();
+        loop {
+            let list = take(sysinfo::cpus(Endpoint::SYSINFO, cpus.len() as u32))?;
+            cpus.extend(list.as_slice().iter().map(|c| Cpu { busy_ns: c.busy_ns, idle_ns: c.idle_ns, ticks: c.ticks, switches: c.switches, interrupts: c.interrupts, current: c.current, apic: c.apic, online: c.online }));
+            if list.len() < 64 { return Ok(cpus); }
+        }
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
         let m = take(sysinfo::memory(Endpoint::SYSINFO))?;
@@ -83,8 +88,13 @@ impl Source for Client {
         Ok(list.as_slice().iter().map(|r| Region { start: r.start, bytes: r.size, kind: r.kind, flags: r.flags }).collect())
     }
     fn caps(&mut self, pid: u64) -> Result<Vec<Capability>, Problem> {
-        let list = take(sysinfo::caps(Endpoint::SYSINFO, pid))?;
-        Ok(list.as_slice().iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint }).collect())
+        // Page by page: a capability table grows to 4095 slots (sysinfo.wit 4.0).
+        let mut caps = Vec::new();
+        loop {
+            let list = take(sysinfo::caps(Endpoint::SYSINFO, pid, caps.len() as u32))?;
+            caps.extend(list.as_slice().iter().map(|c| Capability { node: c.node, parent: c.parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint }));
+            if list.len() < 64 { return Ok(caps); }
+        }
     }
     fn irqs(&mut self) -> Result<Vec<Irq>, Problem> {
         let list = take(sysinfo::irqs(Endpoint::SYSINFO))?;
@@ -95,13 +105,16 @@ impl Source for Client {
         Ok(list.as_slice().iter().enumerate().map(|(i, d)| Device { bars: [d.bar0, d.bar1, d.bar2, d.bar3, d.bar4, d.bar5], class: d.class, irq: d.irq, holder: d.holder, index: i as u32, location: d.location, io_bars: d.io_bars }).collect())
     }
     fn history(&mut self, slow: bool, count: u16) -> Result<Vec<Sample>, Problem> {
-        let unpack = |low: u64, high: u64| core::array::from_fn(|i| (if i < 4 { low >> (16 * i) } else { high >> (16 * (i - 4)) } & 0xFFFF) as u16);
         // In replies of up to 150 samples.
         let mut samples = Vec::new();
         while samples.len() < count as usize {
             let list = take(sysinfo::history(Endpoint::SYSINFO, slow, count, samples.len() as u16))?;
-            samples.extend(list.as_slice().iter().map(|s| Sample { busy: unpack(s.busy_low, s.busy_high), interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages,
-                                                                  switches: s.switches, used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }));
+            samples.extend(list.as_slice().iter().map(|s| {
+                let mut busy = [0; CPUS_KEPT];
+                busy[..s.busy.len()].copy_from_slice(s.busy.as_slice());
+                Sample { busy, busy_total: s.busy_total, busy_max: s.busy_max, interrupts: s.interrupts, syscalls: s.syscalls, messages: s.messages,
+                         switches: s.switches, used_kib: s.used_kib, tasks: s.tasks, runnable: s.runnable }
+            }));
             if list.len() < 150 { break; }
         }
         Ok(samples)

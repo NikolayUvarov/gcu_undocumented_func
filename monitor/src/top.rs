@@ -33,6 +33,7 @@ pub struct Top {
     previous: Vec<(u64, u64, u64)>, // pid, run_ns, calls at the last refresh
     previous_ns: u64,
     pub busy: Vec<u16>, // per online CPU, per mille over the last interval
+    cpu_times: Vec<(u64, u64)>, // busy and idle ns of every CPU at the last refresh
     pub memory: Memory,
     pub load: Load,
     pub rates: Rates,
@@ -44,7 +45,6 @@ pub struct Top {
     pub details: Option<Details>,
     pub interval_ms: u64,
     pub notice: Option<String>,
-    online: usize,
     height: usize, // table rows on screen at the last draw
     /// k or r asked for: (restart, PID, name, service) and the selected button.
     pub confirm: Option<(bool, u64, String, bool)>,
@@ -55,9 +55,9 @@ impl Default for Top { fn default() -> Self { Self::new() } }
 
 impl Top {
     pub fn new() -> Self {
-        Self { tasks: Vec::new(), usage: Vec::new(), previous: Vec::new(), previous_ns: 0, busy: Vec::new(), memory: Memory::default(), load: Load::default(),
+        Self { tasks: Vec::new(), usage: Vec::new(), previous: Vec::new(), previous_ns: 0, busy: Vec::new(), cpu_times: Vec::new(), memory: Memory::default(), load: Load::default(),
                rates: Rates::default(), sort: Sort::Cpu, hide_services: false, tree: false, list: ListState::default(), selected: None, details: None,
-               interval_ms: 1000, notice: None, online: 0, height: 10, confirm: None, choice: 1 }
+               interval_ms: 1000, notice: None, height: 10, confirm: None, choice: 1 }
     }
 
     /// New task records at `now_ns`: CPU use and syscall rate from the deltas since the previous ones; a task seen
@@ -76,10 +76,23 @@ impl Top {
         self.tasks = tasks;
     }
 
-    /// Per-CPU load and rates from the samples of the last interval.
+    /// Every online CPU's busy share since the last refresh (since boot at the first; issue 171: no fixed count of CPUs).
+    pub fn cpus(&mut self, cpus: &[Cpu]) {
+        let mut busy = Vec::new();
+        for (index, c) in cpus.iter().enumerate() {
+            let (was_busy, was_idle) = self.cpu_times.get(index).copied().unwrap_or((0, 0));
+            let (b, i) = (c.busy_ns.saturating_sub(was_busy), c.idle_ns.saturating_sub(was_idle));
+            // No time passed on it (a refresh right after the last): the share it had.
+            let share = if b + i == 0 { self.busy.get(busy.len()).copied().unwrap_or(0) } else { (b as u128 * 1000 / (b + i) as u128) as u16 };
+            if c.online { busy.push(share); }
+        }
+        self.busy = busy;
+        self.cpu_times = cpus.iter().map(|c| (c.busy_ns, c.idle_ns)).collect();
+    }
+
+    /// Rates from the samples of the last interval.
     pub fn sampled(&mut self, samples: &[Sample], period_ms: u32) {
         let n = samples.len().max(1) as u64;
-        self.busy = (0..self.online.clamp(1, 8)).map(|cpu| (samples.iter().map(|s| s.busy[cpu] as u64).sum::<u64>() / n) as u16).collect();
         let window = n * period_ms.max(1) as u64;
         let rate = |f: fn(&Sample) -> u32| samples.iter().map(|s| f(s) as u64).sum::<u64>() * 1000 / window;
         self.rates = Rates { messages: rate(|s| s.messages), syscalls: rate(|s| s.syscalls), interrupts: rate(|s| s.interrupts), switches: rate(|s| s.switches) };
@@ -163,21 +176,33 @@ impl Top {
             self.tasks.len(), count(&[WAIT_RUNNING]), count(&[WAIT_NONE]), count(&[WAIT_SLEEP]), count(&[WAIT_SEND, WAIT_RECEIVE, WAIT_REPLY, WAIT_IRQ, WAIT_FLUSH]),
             text::count(self.rates.messages), text::count(self.rates.syscalls), text::count(self.rates.interrupts), text::count(self.rates.switches));
         grid.text(1, 1, &summary, theme.panel);
-        // A busy bar per CPU, two per row when the screen is wide enough.
-        let columns = if w >= 80 { 2 } else { 1 };
+        // A busy bar per CPU in at most 8 rows: two per row on a wide screen, more for more CPUs while a bar keeps 24
+        // cells; the CPUs that still do not fit share the last row.
+        let n = self.busy.len();
+        let columns = (if w >= 80 { 2 } else { 1 }).max(n.div_ceil(8)).min(((w - 1) / 24).max(1));
+        let rows = n.div_ceil(columns).min(8);
+        let shown = if n > rows * columns { (rows - 1) * columns } else { n };
         let width = (w - 1) / columns;
+        let label = 3 + format!("{}", n.max(1) - 1).len();
         let fill = Style::new(theme.accent.fg, theme.panel.bg);
         let empty = Style::new(theme.dim.fg, theme.panel.bg);
-        for (cpu, &busy) in self.busy.iter().enumerate() {
+        for (cpu, &busy) in self.busy.iter().enumerate().take(shown) {
             let (x, y) = (1 + cpu % columns * width, 2 + cpu / columns);
             grid.text(x, y, &format!("CPU{}", cpu), theme.header);
-            let bar = width.saturating_sub(14);
-            grid.put(x + 5, y, '[', theme.dim);
-            grid.bar(x + 6, y, bar, busy as u64, 1000, fill, empty);
-            grid.put(x + 6 + bar, y, ']', theme.dim);
+            let bar = width.saturating_sub(label + 10);
+            grid.put(x + label + 1, y, '[', theme.dim);
+            grid.bar(x + label + 2, y, bar, busy as u64, 1000, fill, empty);
+            grid.put(x + label + 2 + bar, y, ']', theme.dim);
             grid.text_right(x + width - 1, y, &format!("{}%", text::permille(busy as u32)), theme.panel);
         }
-        let y = 2 + self.busy.len().div_ceil(columns);
+        if shown < n {
+            let rest = &self.busy[shown..];
+            let mean = rest.iter().map(|&b| b as u32).sum::<u32>() / rest.len() as u32;
+            let (busiest, most) = rest.iter().enumerate().fold((0, 0), |best, (i, &b)| if b > best.1 { (i, b) } else { best });
+            grid.text_max(1, 2 + rows - 1, &format!("CPU{}–{}: {}%, the busiest CPU{} {}%", shown, n - 1, text::permille(mean), shown + busiest, text::permille(most as u32)),
+                          w.saturating_sub(2), theme.header);
+        }
+        let y = 2 + rows;
         let m = &self.memory;
         grid.text(1, y, "Mem", theme.header);
         let bar = (w / 3).max(10);
@@ -217,7 +242,8 @@ impl Top {
 
 impl Tool for Top {
     fn refresh(&mut self, source: &mut dyn Source) -> Result<(), Problem> {
-        if self.online == 0 { self.online = source.cpus()?.iter().filter(|c| c.online).count().max(1); }
+        let cpus = source.cpus()?;
+        self.cpus(&cpus);
         let tasks = source.tasks()?;
         self.update(tasks, source.now_ns());
         self.follow();
@@ -325,7 +351,8 @@ impl Tool for Top {
     fn status(&self) -> String {
         let sort = match self.sort { Sort::Cpu => "CPU", Sort::Memory => "MEM", Sort::Pid => "PID", Sort::Time => "TIME" };
         let confirm = match &self.confirm { None => "NONE", Some((true, ..)) => "RESTART", Some((false, ..)) => "STOP" };
-        format!("SORT={} TREE={} HIDE={} SELECTED={} DETAILS={} ROWS={} CONFIRM={}", sort, self.tree as u8, self.hide_services as u8, self.selected.unwrap_or(0),
-                self.details.as_ref().map_or(0, |d| d.task.pid), self.rows().len(), confirm)
+        // LISTED: the capabilities in the details window.
+        format!("SORT={} TREE={} HIDE={} SELECTED={} DETAILS={} ROWS={} LISTED={} CONFIRM={}", sort, self.tree as u8, self.hide_services as u8, self.selected.unwrap_or(0),
+                self.details.as_ref().map_or(0, |d| d.task.pid), self.rows().len(), self.details.as_ref().map_or(0, |d| d.caps.len()), confirm)
     }
 }

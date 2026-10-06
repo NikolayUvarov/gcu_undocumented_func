@@ -34,6 +34,14 @@ use tui::{Cell, Grid, DARK};
 
 const MS: u64 = 1_000_000;
 
+// A sample's busy shares of CPUs 0.. as sysmon keeps them.
+fn busy(values: &[u16]) -> [u16; CPUS_KEPT] { let mut busy = [0; CPUS_KEPT]; busy[..values.len()].copy_from_slice(values); busy }
+
+// `n` online CPUs, each with `busy` and `idle` ns so far.
+fn cpus(n: u32, busy: impl Fn(u32) -> u64, idle: impl Fn(u32) -> u64) -> Vec<Cpu> {
+    (0..n).map(|i| Cpu { apic: i, online: true, busy_ns: busy(i), idle_ns: idle(i), ..Cpu::default() }).collect()
+}
+
 fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
     Task { pid, parent, name: name.into(), state: WAIT_RECEIVE, flags: if service { TASK_SERVICE } else { 0 }, caps: 3, quota_endpoints: 4, kernel: 40 << 10, ..Task::default() }
 }
@@ -42,11 +50,16 @@ fn task(pid: u64, parent: u64, name: &str, service: bool) -> Task {
 struct Fake { tasks: Vec<Task>, now: u64, ranges: Vec<Range>, samples: Vec<Sample>, slow_requested: Vec<(bool, u16)>, vmap_requests: Vec<u64>, devices: Vec<Device>, irqs: Vec<Irq>,
               lifecycle: bool, stopped: Vec<u64>, restarted: Vec<String>, endpoints: Vec<EndpointInfo>, holder_requests: Vec<u32>,
               /// sysmon's authority answer: None stands for a client without the authority badge.
-              authority: Option<Vec<AuthorityEntry>> }
+              authority: Option<Vec<AuthorityEntry>>,
+              /// The CPUs; none: four, two of them online.
+              cpus: Vec<Cpu> }
 
 impl Source for Fake {
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> { Ok(self.tasks.clone()) }
-    fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> { Ok((0..4).map(|i| Cpu { apic: i, online: i < 2, ..Cpu::default() }).collect()) }
+    fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
+        if !self.cpus.is_empty() { return Ok(self.cpus.clone()); }
+        Ok((0..4).map(|i| Cpu { apic: i, online: i < 2, ..Cpu::default() }).collect())
+    }
     fn memory(&mut self) -> Result<Memory, Problem> {
         Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
                     tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535, ..Memory::default() })
@@ -157,13 +170,18 @@ fn cpu_use_comes_from_run_time_deltas() {
 }
 
 #[test]
-fn per_cpu_load_and_rates_from_samples() {
+fn per_cpu_load_and_rates() {
     let mut source = system();
-    source.samples = (0..10).map(|i| Sample { busy: [1000, 200, 0, 0, 0, 0, 0, 0], messages: 3, syscalls: 50 + i, interrupts: 10, switches: 20, ..Sample::default() }).collect();
+    source.samples = (0..10).map(|i| Sample { messages: 3, syscalls: 50 + i, interrupts: 10, switches: 20, ..Sample::default() }).collect();
+    source.cpus = vec![Cpu { busy_ns: 1000, online: true, ..Cpu::default() }, Cpu { apic: 1, busy_ns: 200, idle_ns: 800, online: true, ..Cpu::default() },
+                       Cpu { apic: 2, busy_ns: 5000, ..Cpu::default() }];
     let mut top = top::Top::new();
     top.refresh(&mut source).unwrap();
     assert_eq!(source.slow_requested.last(), Some(&(false, 10)), "a 1 s interval reads ten 100 ms samples");
-    assert_eq!(top.busy, vec![1000, 200], "two CPUs online");
+    assert_eq!(top.busy, vec![1000, 200], "two CPUs online, since boot at first");
+    source.cpus[0].busy_ns += 500; source.cpus[0].idle_ns += 500; source.cpus[1].idle_ns += 1000;
+    top.refresh(&mut source).unwrap();
+    assert_eq!(top.busy, vec![500, 0], "then since the last refresh");
     assert_eq!(top.rates.messages, 30);
     assert_eq!(top.rates.syscalls, 545);
     assert_eq!(top.rates.interrupts, 100);
@@ -371,7 +389,7 @@ fn graphs() {
     assert_eq!(load::resample(&[4, 4], 10), [4, 4]);
     assert_eq!(load::resample(&[1, 2, 3], 2), [1, 2]);
     let mut source = system();
-    source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 7, used_kib: 16384, tasks: 5 + (i % 2) as u32, ..Sample::default() }).collect();
+    source.samples = (0..300).map(|i| Sample { busy: busy(&[500, 1000]), busy_total: 750, interrupts: 7, used_kib: 16384, tasks: 5 + (i % 2) as u32, ..Sample::default() }).collect();
     let mut view = load::LoadView::new();
     view.refresh(&mut source).unwrap();
     assert_eq!(source.slow_requested, [(false, 300)]);
@@ -394,7 +412,7 @@ fn graphs() {
 fn task_graph_to_its_own_scale() {
     // 171-APP-0006: the task graph is scaled to its own maximum, not to the root quota the kernel reports (65 535).
     let mut source = system();
-    source.samples = (0..300).map(|i| Sample { busy: [500, 0, 0, 0, 0, 0, 0, 0], tasks: if i < 150 { 20 } else { 60 }, ..Sample::default() }).collect();
+    source.samples = (0..300).map(|i| Sample { busy: busy(&[500]), tasks: if i < 150 { 20 } else { 60 }, ..Sample::default() }).collect();
     let mut view = load::LoadView::new();
     view.refresh(&mut source).unwrap();
     assert_eq!(view.title(load::Series::Tasks, &view.values(load::Series::Tasks)), "tasks  60  max 60");
@@ -406,6 +424,41 @@ fn task_graph_to_its_own_scale() {
     let rows = |column: usize| plot.iter().filter(|l| l.get(column).is_some_and(|&c| ('\u{2801}'..='\u{28FF}').contains(&c))).count();
     let (low, high) = (rows(20), rows(120));
     assert!(low >= 1 && high >= 2 * low, "20 then 60 tasks: {} and {} rows of {}: {:#?}", low, high, plot.len(), screen);
+}
+
+#[test]
+fn every_cpu() {
+    // 171-APP-0007: top draws a bar for every CPU, more to a row for more CPUs, at most 8 rows; load draws a graph for
+    // each of the 16 a sample keeps, and the mean and the busiest of all.
+    let mut source = system();
+    source.cpus = cpus(16, |i| 10 * i as u64, |i| 1000 - 10 * i as u64);
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    assert_eq!(top.busy.len(), 16);
+    let screen = draw(&mut top, 100, 37);
+    for cpu in 0..16 { assert!(screen.iter().any(|l| l.contains(&format!("CPU{} ", cpu))), "CPU{}: {:#?}", cpu, screen); }
+    assert!(screen.iter().any(|l| l.contains("CPU15 [") && l.contains("15.0%")), "{:#?}", screen);
+    let header = screen.iter().position(|l| l.contains("PID") && l.contains("NAME")).unwrap();
+    assert!(header <= 2 + 8 + 2, "8 rows of two bars: {:#?}", screen);
+    // 64 CPUs on 100 columns: four to a row, 8 rows; the last row sums up the CPUs that do not fit.
+    source.cpus = cpus(64, |i| if i == 63 { 900 } else { 100 }, |i| if i == 63 { 100 } else { 900 });
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    let screen = draw(&mut top, 100, 37);
+    assert!(screen.iter().any(|l| l.contains("CPU27 [")) && !screen.iter().any(|l| l.contains("CPU28 [")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("CPU28–63: 12.2%, the busiest CPU63 90.0%")), "{:#?}", screen);
+    // load: 20 CPUs online, a sample keeps 16 one by one and every CPU in its mean and maximum.
+    source.cpus = cpus(20, |_| 0, |_| 0);
+    source.samples = (0..300).map(|_| Sample { busy: busy(&[100; 16]), busy_total: 150, busy_max: 900, ..Sample::default() }).collect();
+    let mut view = load::LoadView::new();
+    view.refresh(&mut source).unwrap();
+    let series = view.series();
+    assert_eq!(series[..16], (0..16).map(load::Series::Cpu).collect::<Vec<_>>()[..]);
+    assert_eq!(series[16..18], [load::Series::CpuTotal, load::Series::CpuMax]);
+    assert_eq!(view.title(load::Series::CpuMax, &view.values(load::Series::CpuMax)), "busiest CPU  90.0%  avg 90.0%  max 90.0%");
+    assert_eq!(view.title(load::Series::CpuTotal, &view.values(load::Series::CpuTotal)), "CPU total (20)  15.0%  avg 15.0%  max 15.0%");
+    let screen = draw(&mut view, 100, 37);
+    assert!(screen.iter().any(|l| l.contains("CPU15  10.0%")) && screen.iter().any(|l| l.contains("busiest CPU  90.0%")), "every graph on a 100x37 screen: {:#?}", screen);
 }
 
 #[test]
@@ -585,7 +638,7 @@ fn load_graphs_line_up() {
     // Issue u012: whatever the width of its scale label (100%, 50 000/s, 64.0M, 32), every graph starts and ends at
     // the same columns as the others in its column of graphs, and the labels end in one column.
     let mut source = system();
-    source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 5000, syscalls: 30, messages: 400, switches: 2, used_kib: 16384,
+    source.samples = (0..300).map(|i| Sample { busy: busy(&[500, 1000]), busy_total: 750, interrupts: 5000, syscalls: 30, messages: 400, switches: 2, used_kib: 16384,
                                                 tasks: 5 + (i % 2) as u32, ..Sample::default() }).collect();
     let mut view = load::LoadView::new();
     view.refresh(&mut source).unwrap();
