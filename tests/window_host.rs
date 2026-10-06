@@ -1,8 +1,12 @@
 //! Host tests of window surfaces (libmind/src/window.rs, issue 157): the header the broker writes, what the manager
-//! accepts from a program it cannot trust, the input queue and the changed rectangle.
+//! accepts from a program it cannot trust, the input queue and the changed rectangle; a surface drawn as a frame for
+//! a recorder (issue u014).
 #[allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
+#[allow(dead_code)]
+#[path = "../common/font16.rs"]
+mod font16;
 #[allow(dead_code)]
 #[path = "../libmind/src/window.rs"]
 mod window;
@@ -115,4 +119,42 @@ fn pointer_events_of_a_window() {
     // The kernel's mouse events carry motion, not a position.
     assert_eq!(window::pointer_position(pointer_event(0, 5, -3, 0)), None);
     assert_eq!(window::pointer_position(abi::POINTER_ABSOLUTE), None, "not a pointer event");
+}
+
+#[test]
+fn a_surface_drawn_as_a_frame() {
+    // Pixels as they are, cut at the frame's edge; the frame beyond the content black.
+    let mut memory = region(bytes(Kind::Pixels, 8, 4));
+    let p = surface(&mut memory);
+    let mut frame = vec![7u32; 6 * 6];
+    assert!(!p.draw(&mut frame, 6, 6), "no header yet");
+    p.init(Kind::Pixels, 8, 4, "clock");
+    for i in 0..32 { unsafe { p.content().cast::<u32>().add(i).write(i as u32 + 1); } }
+    assert!(p.draw(&mut frame, 6, 6));
+    assert_eq!(&frame[..6], &[1, 2, 3, 4, 5, 6]);
+    assert_eq!(&frame[3 * 6..4 * 6], &[25, 26, 27, 28, 29, 30]);
+    assert!(frame[4 * 6..].iter().all(|&px| px == 0), "below the content");
+    // Text: each cell in the 8×16 font in its colours, as a window manager draws it.
+    let mut memory = region(bytes(Kind::Text, 3, 2));
+    let t = surface(&mut memory);
+    t.init(Kind::Text, 3, 2, "top");
+    t.set_cell(0, 0, 'T', 0xFFFFFF, 0x0000AA);
+    t.set_cell(1, 1, 'ж', 0x00FF00, 0x000000);
+    let (w, h) = (3 * 8, 2 * 16);
+    let mut frame = vec![0u32; w * h];
+    assert!(t.draw(&mut frame, w, h));
+    for (cx, cy, ch, fg, bg) in [(0, 0, 'T', 0xFFFFFF, 0x0000AA), (1, 1, 'ж', 0x00FF00, 0)] {
+        for (row, &bits) in font16::glyph(ch).iter().enumerate() {
+            for col in 0..8 {
+                let expected = if bits & (0x80 >> col) != 0 { fg } else { bg };
+                assert_eq!(frame[(cy * 16 + row) * w + cx * 8 + col], expected, "{} at row {} column {}", ch, row, col);
+            }
+        }
+    }
+    assert!(frame.iter().any(|&px| px == 0xFFFFFF) && frame.iter().any(|&px| px == 0x00FF00));
+    // A frame smaller than the cells: the cells cut at its edge.
+    let mut small = vec![0u32; 12 * 20];
+    assert!(t.draw(&mut small, 12, 20));
+    assert_eq!(&small[..8], &frame[..8]);
+    assert_eq!(small[19 * 12 + 11], frame[19 * w + 11]);
 }

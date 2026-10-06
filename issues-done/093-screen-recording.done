@@ -37,7 +37,7 @@
 
 ## Resolution
 
-Screen recording is done. Recording one window of `wm` (`-w`) moved to [u014](../issues/u014-record-a-window.md): it needs `wm`, which holds the windows' surfaces, to lend one.
+Screen recording is done. Recording one window of `wm` (`-w`) moved to [u014](u014-record-a-window.done): it needs `wm`, which holds the windows' surfaces, to lend one.
 
 What was built, and where it differs from the plan:
 - **`record [-r fps] [-t seconds] [file]` is a program, not a shell command.** It encodes every frame, so it runs beside the program it records (`run record -t 10 data/demo.avi &`, then that program in front). It asks for `REQUEST_DISPLAY`, and the shell lends it its compositor client in `SLOT_DISPLAY`; the loader takes that slot since kernel issue 165. It stops after its time or when the disk is full; `kill` leaves a file whose header was last written within the second.

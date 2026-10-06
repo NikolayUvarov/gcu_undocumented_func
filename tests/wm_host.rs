@@ -375,6 +375,31 @@ fn the_top_bar_can_be_clicked() {
 }
 
 #[test]
+fn a_recorded_window_is_marked() {
+    // Issue u014: while wm lends a recorder a lease of a window, " ● REC " is on its frame's top, at the left.
+    let mut desk = desk_of_four();
+    desk.place(3, Rect::new(70, 5, 42, 13));
+    desk.raise(3);
+    let index = desk.index(3).unwrap();
+    desk.windows[index].recording = true;
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| Some(('.', 0xFFFFFF, 0x0000AA));
+    desk.draw(&mut grid, &DARK, &mut text);
+    let top: String = (70..112).map(|x| grid.get(x, 5).ch).collect();
+    assert!(top.starts_with("╔ ● REC ═") && top.contains(" clock "), "{}", top);
+    assert_eq!(grid.get(73, 5).style.bg, 0xC02020);
+    // Not on a frame too narrow for it and the title, nor once the recording ends.
+    desk.place(3, Rect::new(70, 5, 20, 13));
+    desk.draw(&mut grid, &DARK, &mut text);
+    assert!(!(70..90).map(|x| grid.get(x, 5).ch).collect::<String>().contains("REC"));
+    desk.place(3, Rect::new(70, 5, 42, 13));
+    desk.windows[index].recording = false;
+    desk.draw(&mut grid, &DARK, &mut text);
+    assert!(!(70..112).map(|x| grid.get(x, 5).ch).collect::<String>().contains("REC"));
+}
+
+#[test]
 fn what_each_cell_shows() {
     let mut desk = desk_of_four();
     desk.place(3, Rect::new(70, 5, 42, 13)); // the clock under window 2's corner

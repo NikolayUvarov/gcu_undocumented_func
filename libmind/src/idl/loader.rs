@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed.
@@ -148,6 +148,16 @@ pub fn inspect_requests(endpoint: Endpoint, name: &str) -> Result<core::result::
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Gives the new program a copy of read-only memory `cap` in its fixed slot `slot`: only SLOT_DISPLAY, where a
+/// window manager lends the surface of the window to record (issue u014); a writable one is refused (1.3).
+pub fn grant_memory(endpoint: Endpoint, session: u32, slot: u8, cap: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [9 | MAJOR << 8 | ((session) as usize) << 16 | ((slot) as usize) << 48, 0];
+    let reply = wire::call(endpoint, words, Some((cap, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -159,6 +169,7 @@ pub enum Request {
     Abort { session: u32 },
     Inspect { name: Text<64> },
     InspectRequests { name: Text<64> },
+    GrantMemory { session: u32, slot: u8, cap: usize },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -221,6 +232,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::InspectRequests { name }, call))
         }
+        9 => {
+            wire::body(request, cap, [0xffffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
+            Ok((Request::GrantMemory { session: wire::field(&words, 0, 16, 32) as u32, slot: wire::field(&words, 0, 48, 8) as u8, cap: cap }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -255,4 +270,8 @@ pub fn reply_inspect(call: Call, value: core::result::Result<&Needs, Error>) -> 
 pub fn reply_inspect_requests(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_grant_memory(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

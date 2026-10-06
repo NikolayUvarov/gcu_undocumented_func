@@ -58,6 +58,11 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
         }
     }
     if needs.sysinfo && requests & mind::process::REQUEST_AUTHORITY == 0 && holds(SLOT_SYSINFO) { grant(SLOT_SYSINFO, SLOT_SYSINFO); }
+    // The window wm lent console to see, for the recorder console was started with (issue u014): passed on once.
+    if requests & mind::process::REQUEST_DISPLAY != 0 && mind::dev::cap_info(SLOT_DISPLAY).0 == CAP_KIND_MEMORY {
+        let _ = loader::grant_memory(Endpoint::LOADER, session, SLOT_DISPLAY as u8, SLOT_DISPLAY);
+        let _ = ipc::drop_cap(SLOT_DISPLAY);
+    }
     let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
     Ok(Job { pid, name: String::from(name), console: needs.console, printed: false })
 }
