@@ -27,9 +27,8 @@ impl Names {
         if let Some((_, name)) = self.cache.iter().find(|(p, _)| *p == pid && pid != 0) { return *name; }
         let mut name = *b"?\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
         if let Some(scratch) = self.scratch.as_mut() {
-            if let Ok(records) = stat::read(STAT_TASKS, 0, scratch.as_mut_slice()) {
-                if let Some(task) = records.iter::<StatTask>().find(|t| t.pid == pid) { name.copy_from_slice(&task.name[..NAME]); }
-            }
+            // Every page: there is no limit on tasks (issue 171).
+            let _ = stat::each::<StatTask>(STAT_TASKS, scratch.as_mut_slice(), |t| { if t.pid == pid { name.copy_from_slice(&t.name[..NAME]); } t.pid != pid });
         }
         self.cache[self.next] = (pid, name); self.next = (self.next + 1) % CACHE;
         name

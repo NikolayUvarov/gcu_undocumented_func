@@ -455,6 +455,22 @@ def applications_until_memory_ends(vm):
     assert len(pids) > 32, len(pids)
     assert len(task_rows(vm)) == len(pids), (len(task_rows(vm)), len(pids))
     assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system goes on after the refusal"
+    # Room for two more programs: sysmon's samples and top's list see every task, past one page of 40 (171-APP-0002).
+    for pid in pids[-3:]:
+        vm.command(f"kill {pid}")
+    pids = pids[:-3]
+    time.sleep(1)
+    running = len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M))
+    sampled = int(re.search(r"(\d+) tasks", vm.command("uptime"))[1])
+    assert sampled > 40 and abs(sampled - running) <= 1, (sampled, running)
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(1.5)
+    rows = int(re.search(r"ROWS=(\d+)", tool_status(vm, "[TOP] SORT="))[1])
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert rows > 40 and rows >= running, (rows, running)
     for pid in pids:
         vm.command(f"kill {pid}")
     for _ in range(40):
@@ -463,7 +479,7 @@ def applications_until_memory_ends(vm):
         time.sleep(.25)
     else:
         raise AssertionError(f"arena {heap_used(vm)} (was {baseline}), frame pool {frames_free(vm)} (was {frames})")
-    print(f"PASS: {len(pids)} clocks at once until memory ran out (no task limit), a clean refusal, arena and frames back", flush=True)
+    print(f"PASS: {len(pids) + 3} clocks at once until memory ran out (no task limit), a clean refusal; uptime and top see all {rows} tasks; arena and frames back", flush=True)
 
 
 def ram_above_4g(vm):

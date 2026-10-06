@@ -371,7 +371,7 @@ fn graphs() {
     assert_eq!(load::resample(&[4, 4], 10), [4, 4]);
     assert_eq!(load::resample(&[1, 2, 3], 2), [1, 2]);
     let mut source = system();
-    source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 7, used_kib: 16384, tasks: 5 + (i % 2) as u8, ..Sample::default() }).collect();
+    source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 7, used_kib: 16384, tasks: 5 + (i % 2) as u32, ..Sample::default() }).collect();
     let mut view = load::LoadView::new();
     view.refresh(&mut source).unwrap();
     assert_eq!(source.slow_requested, [(false, 300)]);
@@ -568,7 +568,7 @@ fn load_graphs_line_up() {
     // the same columns as the others in its column of graphs, and the labels end in one column.
     let mut source = system();
     source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 5000, syscalls: 30, messages: 400, switches: 2, used_kib: 16384,
-                                                tasks: 5 + (i % 2) as u8, ..Sample::default() }).collect();
+                                                tasks: 5 + (i % 2) as u32, ..Sample::default() }).collect();
     let mut view = load::LoadView::new();
     view.refresh(&mut source).unwrap();
     let braille = |c: char| ('\u{2800}'..='\u{28FF}').contains(&c);

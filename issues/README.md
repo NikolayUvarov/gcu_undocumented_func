@@ -22,7 +22,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
-| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks, applications, endpoints, CPUs (8), capability slots (96) or a program's memory; steps 1–2 done (all RAM on x86-64; no task or endpoint limit but memory) | kernel | P1 | — | K4 |
+| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks, applications, endpoints, CPUs (8), capability slots (96) or a program's memory; steps 1–2 done (all RAM on x86-64; no task or endpoint limit but memory); steps 3–6 for the kernel track | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step) | main task, `STO` (open) | P2 | — | track B |
@@ -152,6 +152,7 @@ Requests that wait for a track to number them: [requests-PRT.md](requests-PRT.md
 | [u014](../issues-done/u014-record-a-window.done) | `record -w` in wm's run line records the window in front alone: wm lends a read-only lease of its surface and marks its frame " ● REC " | done (2026-10-06) |
 | [u016](../issues-done/u016-clock-console-faces.done) | `clock --line`, `dzen-clock --line`: console programs whose line is written again with `\r`; `REQUEST_LINE` and `mind::process::console_run` | done (2026-10-06) |
 | [170-APP-0001](../issues-done/170-APP-0001-escrow-in-caps.done) | `caps` and `top` name the escrow capability kind (issue 170): `escrow ----  of control` | done (2026-10-06) |
+| [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) | `sysinfo.wit` 4.0: tasks and endpoints page by page; `sysmon`, `top`, the console's `ps`, `logd` see every task (171 step 2) | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

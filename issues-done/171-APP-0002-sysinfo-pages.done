@@ -1,0 +1,37 @@
+# 171-APP-0002 — `sysinfo` 4.0: tasks and endpoints page by page — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** G (monitors), K4 · **Constitution:** MC-10.2, MC-1.7
+
+## Problem
+
+Issue 171 step 2 took the kernel's limits off tasks and endpoints: 80 programs with screens run at once in a 512 MiB machine. The monitoring path still assumed the old limits:
+
+- `idl/sysinfo.wit` 3.0 `tasks` gave at most 40 tasks and `endpoints` 128, with no way to ask for the rest;
+- `sysmon` read one buffer of `STAT_TASKS` and `STAT_ENDPOINTS` for its samples and for `holders` and `authority`;
+- a sample counted tasks and runnable tasks in a byte;
+- `logd` looked task names up in one buffer of `STAT_TASKS`.
+
+So `top`, `ipc`, the console's `ps`, `uptime`, `netbench` and the system log's source names missed tasks past the first page.
+
+## Plan
+
+- `sysinfo.wit` 4.0: `tasks(start)` and `endpoints(start)` from a position on (40 and 128 a reply); a sample's `tasks` and `runnable` in 32 bits.
+- `sysmon` reads `STAT` page by page (`mind::stat::each`, STAT version 3) for samples, `holders` and `authority`, and answers a page from `start`.
+- The clients ask page after page until a short one.
+
+## Acceptance criteria
+
+- With more than 40 tasks running, `uptime` and `top` count every task (QEMU).
+- Host tests and the monitors' QEMU checks pass with the new interface.
+
+## Resolution
+
+- `idl/sysinfo.wit` 4.0.0 and `libmind/src/idl/sysinfo.rs` (generated).
+- `sysmon/src/main.rs`: samples, `holders` and `authority` over every page; `tasks` and `endpoints` from `start`.
+- Clients: `monitor/src/app.rs` (`top`, `memmap`, `ipc`, `caps`), `console/src/builtins.rs` (`ps`), `netbench`, `uptime`; `logd` finds names on every page.
+- `tests/qemu_smoke.py` (`applications_until_memory_ends`): with 77 clocks running, `uptime` counts the tasks and `top` lists all 97, past one page of 40. `tests/monitor_host.rs` follows the 32-bit sample.
+- `docs/idl/README.md`.
+
+## Related
+
+[171](../issues/171-limits-from-the-hardware.md) (step 2), [076](076-monitors-show-restored-stat-fields.done) (sysinfo 2.0).

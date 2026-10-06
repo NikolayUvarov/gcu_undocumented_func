@@ -79,7 +79,7 @@ pub struct AuthorityEntry { pub node: u64, pub parent: u64, pub pid: u64, pub si
 
 /// One load sample: busy per mille of CPUs 0..7 and counts during the sample period.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sample { pub busy: [u16; 8], pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u8, pub runnable: u8 }
+pub struct Sample { pub busy: [u16; 8], pub interrupts: u32, pub syscalls: u32, pub messages: u32, pub switches: u32, pub used_kib: u32, pub tasks: u32, pub runnable: u32 }
 
 /// Load averages (runnable tasks x 100), uptime and sampling periods.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

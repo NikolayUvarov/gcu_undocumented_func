@@ -5,7 +5,8 @@
 // (MC-10.2): each may make 20 requests at once and 40 per second. Sampling runs at a fixed period into rings allocated
 // once at start; replies are built on the program heap (the 64 KiB stack is too small for 600 samples).
 // Who holds what (`holders`, `authority`, the derivation links in `caps`) goes only to clients whose capability carries
-// the authority badge (sysinfo.wit 2.2).
+// the authority badge (sysinfo.wit 2.2). The kernel has no task or endpoint limit (issue 171): STAT is read page by page,
+// and the lists go to clients from a position on (sysinfo.wit 4.0).
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -26,7 +27,7 @@ const FAST: usize = 300;
 const SLOW: usize = 600;
 
 #[derive(Clone, Copy, Default)]
-struct Sample { busy: [u16; 8], interrupts: u32, syscalls: u32, messages: u32, switches: u32, used_kib: u32, tasks: u8, runnable: u8 }
+struct Sample { busy: [u16; 8], interrupts: u32, syscalls: u32, messages: u32, switches: u32, used_kib: u32, tasks: u32, runnable: u32 }
 
 struct Ring<const N: usize> { items: [Sample; N], next: usize, count: usize }
 impl<const N: usize> Ring<N> {
@@ -64,15 +65,14 @@ impl Monitor {
                 interrupts += cpu.interrupts; switches += cpu.switches;
             }
         }
-        let (mut syscalls, mut tasks, mut runnable) = (0u64, 0u8, 0u8);
-        if let Ok(records) = stat::read(STAT_TASKS, 0, self.scratch.as_mut_slice()) {
-            for task in records.iter::<StatTask>() {
-                syscalls += task.calls; tasks += 1;
-                if stat::runnable(task.wait) { runnable += 1; }
-            }
-        }
+        let (mut syscalls, mut tasks, mut runnable) = (0u64, 0u32, 0u32);
+        let _ = stat::each::<StatTask>(STAT_TASKS, self.scratch.as_mut_slice(), |task| {
+            syscalls += task.calls; tasks += 1;
+            if stat::runnable(task.wait) { runnable += 1; }
+            true
+        });
         let mut messages = 0u64;
-        if let Ok(records) = stat::read(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice()) { messages = records.iter::<StatEndpoint>().map(|e| e.messages).sum(); }
+        let _ = stat::each::<StatEndpoint>(STAT_ENDPOINTS, self.scratch.as_mut_slice(), |e| { messages += e.messages; true });
         if let Ok(memory) = stat::one::<StatMemory>(STAT_MEMORY) { sample.used_kib = (memory.used / 1024) as u32; }
         let delta = |now: u64, before: &mut u64| { let d = now.saturating_sub(*before); *before = now; d.min(u32::MAX as u64) as u32 };
         sample.interrupts = delta(interrupts, &mut self.totals.interrupts);
@@ -107,14 +107,21 @@ fn name(bytes: &[u8; NAME_MAX]) -> Text<16> {
     Text::new(core::str::from_utf8(&bytes[..len]).unwrap_or("?")).unwrap_or_default()
 }
 
+// The PIDs of every live task, all pages of STAT_TASKS.
+fn live_pids(scratch: &mut [u8]) -> Result<Vec<u64>, Error> {
+    let mut pids = Vec::new();
+    stat::each::<StatTask>(STAT_TASKS, scratch, |t| { if t.wait != WAIT_EXITED { pids.push(t.pid); } true }).map_err(|_| Error::Unavailable)?;
+    Ok(pids)
+}
+
 fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -> mind::Result<()> {
     macro_rules! records { ($class:expr, $arg:expr) => {{
         let scratch = monitor.scratch.as_mut_slice();
         match stat::read($class, $arg, scratch) { Ok(records) => Ok(records), Err(mind::Error::NotFound) => Err(Error::NotFound), Err(_) => Err(Error::Unavailable) }
     }}; }
     match request {
-        Request::Tasks => {
-            let items: Result<Vec<sysinfo::Task>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().take(40).map(|t| sysinfo::Task {
+        Request::Tasks { start } => {
+            let items: Result<Vec<sysinfo::Task>, Error> = records!(STAT_TASKS, start as u64).map(|r| r.iter::<StatTask>().take(40).map(|t| sysinfo::Task {
                 pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, ticks: t.ticks, calls: t.calls, sends: t.sends, receives: t.receives, started_ns: t.started_ns,
                 image: t.image_bytes, stack: t.stack_bytes, screen: t.screen_bytes, heap: t.heap_bytes, shared: t.shared_bytes, retained: t.retained_bytes,
                 budget_ns: t.budget_ns, period_ns: t.period_ns, wait_on: t.wait_on, heap_blocks: t.heap_blocks, caps: t.caps,
@@ -152,8 +159,8 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
                 node, parent, size: c.size, slot: c.slot, generation: c.generation, kind: c.kind, rights: c.rights, badge: c.badge, endpoint: c.endpoint } }).collect());
             sysinfo::reply_caps(call, items.as_deref().map_err(|e| *e))
         }
-        Request::Endpoints => {
-            let items: Result<Vec<sysinfo::EndpointInfo>, Error> = records!(STAT_ENDPOINTS, 0).map(|r| r.iter::<StatEndpoint>().take(128).map(|e| sysinfo::EndpointInfo {
+        Request::Endpoints { start } => {
+            let items: Result<Vec<sysinfo::EndpointInfo>, Error> = records!(STAT_ENDPOINTS, start as u64).map(|r| r.iter::<StatEndpoint>().take(128).map(|e| sysinfo::EndpointInfo {
                 messages: e.messages, busy: e.busy, timeouts: e.timeouts, creator: e.creator, index: e.index, receivers: e.receivers, senders: e.waiting_senders, receiving: e.waiting_receivers,
                 server: e.server, holders: e.holders, irq: e.irq }).collect());
             sysinfo::reply_endpoints(call, items.as_deref().map_err(|e| *e))
@@ -176,7 +183,7 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
         Request::Authority { .. } if !authority => sysinfo::reply_authority(call, Err(Error::Denied)),
         Request::Authority { start } => {
             // Every task's capabilities in PID and slot order; the reply holds those from `start` on.
-            let pids: Result<Vec<u64>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().filter(|t| t.wait != WAIT_EXITED).map(|t| t.pid).collect());
+            let pids = live_pids(monitor.scratch.as_mut_slice());
             let entries = pids.map(|mut pids| {
                 pids.sort_unstable();
                 let (mut skipped, mut out) = (0usize, Vec::new());
@@ -194,9 +201,10 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
         }
         Request::Holders { index } => {
             // Every task's capabilities (STAT_CAPS), filtered for the endpoint: the PIDs first, the scratch buffer is reused.
-            let pids: Result<Vec<u64>, Error> = records!(STAT_TASKS, 0).map(|r| r.iter::<StatTask>().filter(|t| t.wait != WAIT_EXITED).map(|t| t.pid).collect());
+            let pids = live_pids(monitor.scratch.as_mut_slice());
             let holders = pids.and_then(|pids| {
-                let exists = records!(STAT_ENDPOINTS, 0)?.iter::<StatEndpoint>().any(|e| e.index == index);
+                let mut exists = false;
+                stat::each::<StatEndpoint>(STAT_ENDPOINTS, monitor.scratch.as_mut_slice(), |e| { exists |= e.index == index; !exists }).map_err(|_| Error::Unavailable)?;
                 if !exists { return Err(Error::NotFound); }
                 let mut out = Vec::new();
                 for pid in pids {
@@ -220,10 +228,10 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
 fn refuse(request: Request, call: Call) -> mind::Result<()> {
     let busy = Error::Busy;
     match request {
-        Request::Tasks => sysinfo::reply_tasks(call, Err(busy)), Request::Cpus => sysinfo::reply_cpus(call, Err(busy)),
+        Request::Tasks { .. } => sysinfo::reply_tasks(call, Err(busy)), Request::Cpus => sysinfo::reply_cpus(call, Err(busy)),
         Request::Memory => sysinfo::reply_memory(call, Err(busy)), Request::Physmap => sysinfo::reply_physmap(call, Err(busy)),
         Request::Vmap { .. } => sysinfo::reply_vmap(call, Err(busy)), Request::Caps { .. } => sysinfo::reply_caps(call, Err(busy)),
-        Request::Endpoints => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
+        Request::Endpoints { .. } => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
         Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
         Request::Load => sysinfo::reply_load(call, Err(busy)), Request::Holders { .. } => sysinfo::reply_holders(call, Err(busy)),
         Request::Authority { .. } => sysinfo::reply_authority(call, Err(busy)),

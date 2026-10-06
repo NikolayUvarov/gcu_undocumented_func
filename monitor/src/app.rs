@@ -53,11 +53,16 @@ impl Source for Client {
     }
     fn restart(&mut self, name: &str) -> Result<u64, String> { lifecycle_call(lifecycle::restart(LIFECYCLE, name)) }
     fn tasks(&mut self) -> Result<Vec<Task>, Problem> {
-        let list = take(sysinfo::tasks(Endpoint::SYSINFO))?;
-        Ok(list.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
+        // Page by page: there is no limit on tasks (sysinfo.wit 4.0).
+        let mut tasks = Vec::new();
+        loop {
+            let list = take(sysinfo::tasks(Endpoint::SYSINFO, tasks.len() as u32))?;
+            tasks.extend(list.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
             image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, retained: t.retained, wait: t.wait_on as u64, heap_blocks: t.heap_blocks, caps: t.caps,
             quota_tasks: t.quota_tasks as u32, used_tasks: t.used_tasks as u32, quota_endpoints: t.quota_endpoints as u32, used_endpoints: t.used_endpoints as u32,
-            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel }).collect())
+            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel }));
+            if list.len() < 40 { return Ok(tasks); }
+        }
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
         let list = take(sysinfo::cpus(Endpoint::SYSINFO))?;
@@ -106,9 +111,13 @@ impl Source for Client {
         Ok(Load { one: l.one, five: l.five, fifteen: l.fifteen, uptime_ms: l.uptime_ms, fast_ms: l.fast_ms, slow_ms: l.slow_ms, fast_count: l.fast_count, slow_count: l.slow_count })
     }
     fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> {
-        let list = take(sysinfo::endpoints(Endpoint::SYSINFO))?;
-        Ok(list.as_slice().iter().map(|e| EndpointInfo { index: e.index, creator: e.creator, server: e.server, holders: e.holders, receivers: e.receivers, senders: e.senders,
-                                                         receiving: e.receiving, messages: e.messages, busy: e.busy, timeouts: e.timeouts, irq: e.irq }).collect())
+        let mut endpoints = Vec::new();
+        loop {
+            let list = take(sysinfo::endpoints(Endpoint::SYSINFO, endpoints.len() as u32))?;
+            endpoints.extend(list.as_slice().iter().map(|e| EndpointInfo { index: e.index, creator: e.creator, server: e.server, holders: e.holders, receivers: e.receivers, senders: e.senders,
+                                                                           receiving: e.receiving, messages: e.messages, busy: e.busy, timeouts: e.timeouts, irq: e.irq }));
+            if list.len() < 128 { return Ok(endpoints); }
+        }
     }
     fn holders(&mut self, index: u32) -> Result<Vec<Holder>, Problem> {
         let list = take(sysinfo::holders(Endpoint::SYSINFO, index))?;

@@ -25,13 +25,17 @@ fn ipv4(text: &str) -> Option<u32> {
 
 // CPU time so far of netstack and of the card drivers (virtio_net and its instances), in ns.
 fn cpu() -> (u64, u64) {
-    let Ok(Ok(tasks)) = sysinfo::tasks(SYSMON) else { return (0, 0) };
     let mut out = (0, 0);
-    for t in tasks.as_slice() {
-        let name = t.name.as_str();
-        if name == "netstack" { out.0 += t.run_ns; } else if name.starts_with("virtio_net") { out.1 += t.run_ns; }
+    let mut start = 0;
+    loop {
+        let Ok(Ok(tasks)) = sysinfo::tasks(SYSMON, start) else { return out };
+        for t in tasks.as_slice() {
+            let name = t.name.as_str();
+            if name == "netstack" { out.0 += t.run_ns; } else if name.starts_with("virtio_net") { out.1 += t.run_ns; }
+        }
+        if tasks.len() < 40 { return out; }
+        start += tasks.len() as u32;
     }
-    out
 }
 
 struct Phase { started: u64, cpu: (u64, u64) }

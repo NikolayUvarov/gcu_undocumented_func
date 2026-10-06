@@ -30,15 +30,20 @@ fn state(wait: u8) -> &'static str {
     match wait { WAIT_RUNNING => "RUN", WAIT_NONE => "READY", WAIT_SEND => "SEND", WAIT_RECEIVE => "RECV", WAIT_REPLY => "CALL", WAIT_SLEEP => "SLEEP", WAIT_IRQ => "IRQ", WAIT_FLUSH => "FLUSH", WAIT_EXITED => "EXITED", _ => "?" }
 }
 
-// The tasks as sysmon reports them (console asks for system information to pass it on, and uses it here).
+// The tasks as sysmon reports them, page by page (console asks for system information to pass it on, and uses it here).
 fn ps(out: &mut String) -> bool {
-    let tasks = match sysinfo::tasks(Endpoint::SYSINFO) {
-        Ok(Ok(tasks)) => tasks,
-        Ok(Err(error)) => { let _ = write!(out, "ps: sysmon: {:?}", error); return false; }
-        Err(_) => { let _ = write!(out, "ps: no system information (console was started without it)"); return false; }
-    };
+    let mut tasks: alloc::vec::Vec<sysinfo::Task> = alloc::vec::Vec::new();
+    loop {
+        let page = match sysinfo::tasks(Endpoint::SYSINFO, tasks.len() as u32) {
+            Ok(Ok(page)) => page,
+            Ok(Err(error)) => { let _ = write!(out, "ps: sysmon: {:?}", error); return false; }
+            Err(_) => { let _ = write!(out, "ps: no system information (console was started without it)"); return false; }
+        };
+        tasks.extend(page.as_slice().iter().cloned());
+        if page.len() < 40 { break; }
+    }
     let _ = writeln!(out, "{:>4} {:<16} {:<6} {:>3} {:>9} {:>8}", "PID", "NAME", "STATE", "CPU", "TIME", "MEMORY");
-    let mut list: alloc::vec::Vec<&sysinfo::Task> = tasks.as_slice().iter().collect();
+    let mut list: alloc::vec::Vec<&sysinfo::Task> = tasks.iter().collect();
     list.sort_by_key(|t| t.pid);
     for t in &list {
         let seconds = t.run_ns / 1_000_000_000;
