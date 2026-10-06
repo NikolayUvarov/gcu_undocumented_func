@@ -1222,7 +1222,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
                 Event::Tick => {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
-                    if s.expire(now) { s.wake_idle(cpu); }
+                    // Idle CPUs get no tick: the one that ticks wakes those with a task ready (issue 171).
+                    s.expire(now); s.wake_idle(cpu);
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }

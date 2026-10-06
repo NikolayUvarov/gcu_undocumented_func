@@ -64,6 +64,7 @@ X86_GROUPS=(
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
+    "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal"
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"
     "x86: AVX state|$X86 --cpu-model max --suites busy,smp"
@@ -79,6 +80,7 @@ A64_GROUPS=(
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
+    "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
 )
 
 host_tests() {

@@ -22,7 +22,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
-| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96) — steps 1 (all RAM on x86-64) and 5 (every free range) done | kernel | P1 | — | K4 |
+| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96) — steps 1 (all RAM on x86-64), 3 (every CPU) and 5 (every free range) done | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [210](210-apple-silicon-native.md) | Apple Silicon Macs natively (M1 first): boot through m1n1 and U-Boot, device tree, AIC, spin table, DART, DWC3 USB | main task, `PRT` | P3 | a Mac with M1; 205 | track H |
@@ -191,5 +191,6 @@ Requests that wait for a track to number them: [requests-APP.md](requests-APP.md
 | [170](../issues-done/170-supervisor-without-usable-privileges.done) | The supervisor without usable privileges: init keeps the privileges it grants in escrow and holds no process control (MC-3.12, C6) | done (2026-10-06) |
 | [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | x86-64: task memory from all RAM, above 4 GiB too (171, step 1) | done (2026-10-06) |
 | [171-KRN-0005](../issues-done/171-KRN-0005-frame-pool-ranges.done) | The frame pool takes every free range of the firmware map (171, step 5) | done (2026-10-06) |
+| [171-KRN-0003](../issues-done/171-KRN-0003-every-cpu.done) | Every CPU the firmware reports (x86 up to xAPIC's 255); no tick for idle CPUs (171, step 3) | done (2026-10-06) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

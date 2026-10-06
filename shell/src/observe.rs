@@ -17,8 +17,9 @@ pub fn free(out: &mut impl Write) {
 }
 
 pub fn cpus(out: &mut impl Write) {
-    let mut buffer = [0u8; 1024];
-    let Ok(records) = stat::read(STAT_CPUS, 0, &mut buffer) else { return };
+    // Room for every CPU the kernel can start (issue 171: 255 on x86).
+    let Some(mut pages) = mind::mem::Pages::new(4 * 4096) else { return };
+    let Ok(records) = stat::read(STAT_CPUS, 0, pages.as_mut_slice()) else { return };
     for (index, c) in records.iter::<StatCpu>().enumerate() {
         // aarch64 saves no FP/SIMD state yet: programs are soft-float.
         let state = if cfg!(target_arch = "aarch64") { "NONE" } else if c.xsave & 4 != 0 { "XSAVE+AVX" } else if c.xsave != 0 { "XSAVE" } else { "FXSAVE" };

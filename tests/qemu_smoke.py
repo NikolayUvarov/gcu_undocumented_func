@@ -582,6 +582,9 @@ def normal_suite(vm):
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
+    # Every CPU the machine has is online in the guest (issue 171: no cap of 8).
+    online = vm.command("cpus")
+    assert len(re.findall(r"ONLINE=true", online)) == vm.cpus, online
     assert heap_used(vm) == baseline
     pool_covers_free_ram(vm)
     memory = getattr(vm.args, "memory", None) or ""

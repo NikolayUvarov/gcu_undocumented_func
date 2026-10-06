@@ -22,6 +22,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
+| Every CPU of the machine comes online, beyond the former 8 (issue 171); idle CPUs get no tick and still pass the idle check | `normal` suite with `--cpus 16` on x86 and aarch64 (`cpus`: 16 online), groups "16 CPUs" |
 | The frame pool is every free range of the firmware map (issue 171) | `normal` suite (`pool_covers_free_ram`), at 512 MiB and 6 GiB |
 | The frame pool holds the RAM above 4 GiB, and a program's heap there is written and read back (issue 171) | `normal` suite with `--memory 6G` (`ram_above_4g`), x86 group "RAM above 4 GiB" and the aarch64 `highmem=on` group |
 | A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |

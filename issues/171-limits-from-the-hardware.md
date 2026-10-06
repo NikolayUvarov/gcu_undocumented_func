@@ -49,6 +49,7 @@ Split into `KRN` tasks (TRACKS.md), one for each step of the plan:
 |---|---|---|
 | [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | 1. All RAM on x86-64 | done (2026-10-06) |
 | `171-KRN-0002` | 2. Task and endpoint tables from memory, paid from quotas; no `MAX_APPS`, `APP_ENDPOINTS`; STAT pages | next |
-| `171-KRN-0003` | 3. As many CPUs as the firmware reports | planned |
+| [171-KRN-0003](../issues-done/171-KRN-0003-every-cpu.done) | 3. As many CPUs as the firmware reports; no tick for idle CPUs | done (2026-10-06) |
 | `171-KRN-0004` | 4. Capability spaces that grow within the memory quota | planned |
+| `171-KRN-0006` | `sysmon`'s per-CPU samples for every CPU (`idl/sysinfo.wit` 2.0), with `APP` for `top` and the load monitor | planned |
 | [171-KRN-0005](../issues-done/171-KRN-0005-frame-pool-ranges.done) | 5. Frame pool ranges that grow with the firmware map | done (2026-10-06) |

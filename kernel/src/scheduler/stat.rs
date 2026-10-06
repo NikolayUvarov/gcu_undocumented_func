@@ -99,7 +99,9 @@ impl Scheduler {
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
                 let a = &self.accounting;
                 out.push(StatCpu { apic_id: cpu::apic_id(index), online: cpu::ONLINE[index].load(Ordering::Acquire) as u32, ticks: cpu::TICKS[index].load(Ordering::Relaxed),
-                    busy_ns: a.busy_ns[index], idle_ns: a.idle_ns[index], interrupts: a.interrupts[index], switches: a.switches[index], current_pid: pid_of(self.current[index]),
+                    // Time since the CPU's last switch counts too: an idle CPU may not switch for long (no tick).
+                    busy_ns: a.busy_ns[index] + if self.current[index] != 0 { crate::clock::now_ns().saturating_sub(a.last_switch[index]) } else { 0 },
+                    idle_ns: a.idle_ns[index] + if self.current[index] == 0 { crate::clock::now_ns().saturating_sub(a.last_switch[index]) } else { 0 }, interrupts: a.interrupts[index], switches: a.switches[index], current_pid: pid_of(self.current[index]),
                     xsave: crate::context::saved_state() });
             },
             STAT_MEMORY => {

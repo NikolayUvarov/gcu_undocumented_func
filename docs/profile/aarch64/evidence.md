@@ -24,5 +24,5 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 
 ## Not covered by any test
 
-- The FADT's SMC conduit (QEMU uses HVC), a MADT with more than eight CPUs, addresses beyond the first TiB, real hardware, QEMU `sbsa-ref`.
+- The FADT's SMC conduit (QEMU uses HVC), a MADT with more than 16 CPUs (16 are tested, issue 171), addresses beyond the first TiB, real hardware, QEMU `sbsa-ref`.
 - A board without a PL031 (its `rtc` would not start) or whose SPCR names no PL011.

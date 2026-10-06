@@ -43,7 +43,7 @@ Variants tested as stand-ins for boards (issue 205): `highmem=on` with 6 GiB (RA
 | Tick and clock | EL1 virtual timer, 100 Hz; `CNTVCT_EL0` at `CNTFRQ_EL0` for the monotonic clock | PIT, TSC |
 | FP/SIMD | Disabled (`CPACR_EL1`): programs and kernel are soft-float, no FP state is saved yet | x87/SSE/AVX saved per task |
 | Entropy | `RNDR` when `ID_AA64ISAR0_EL1` lists it; the kernel tells tasks in `BootInfo.cpu_features` (EL0 cannot read ID registers) | `RDRAND` |
-| CPUs | The boot CPU and up to seven more from the MADT, started with PSCI `CPU_ON` into a trampoline that turns on the MMU with the boot CPU's MAIR, TCR, TTBR0 and SCTLR (its record and code cleaned to memory first); each has its exception stack and redistributor. The boot CPU's virtual timer ticks; the others get the tick as an SGI | INIT-SIPI-SIPI, local APIC timer IPIs |
+| CPUs | The boot CPU and the others the MADT lists (a table of 256; issue 171), started with PSCI `CPU_ON` into a trampoline that turns on the MMU with the boot CPU's MAIR, TCR, TTBR0 and SCTLR (its record and code cleaned to memory first); each has its exception stack and redistributor. The boot CPU's virtual timer ticks; the others get the tick as an SGI | INIT-SIPI-SIPI, local APIC timer IPIs |
 | TLB | `TLBI VMALLE1IS`: a change of an address space is broadcast to every CPU by the instruction itself, no IPIs | reload of CR3 on the next switch |
 | Reset and power off | PSCI `SYSTEM_RESET` and `SYSTEM_OFF` (`reboot`, `reboot --off`) | ACPI reset register, 0xCF9, 8042; no power off yet |
 | Console | PL011: the kernel's lines, and every task's log until the shell gets the PL011 (`mind::dev::Uart`), then the shell's console as on COM1 | COM1, the shell |
