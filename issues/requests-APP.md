@@ -97,3 +97,32 @@ vm.expect("NO PIN CONTROLLER", after="[PINMAP] READY")
 ### Acceptance criteria
 
 The check passes however the line is split on the serial line.
+
+## `sysinfo` and `sysmon` for any number of tasks, endpoints and CPUs
+
+**Recorded by:** the kernel track (KRN), 2026-10-06, for issue 171.
+
+### Problem
+
+Since issue 171 the kernel has no fixed count of tasks or endpoints, and it starts every CPU the firmware reports (up to 255 on x86). STAT reads any number of records page by page (171-KRN-0007, `msg[2]`, `mind::control::stat_from`). `idl/sysinfo.wit` (the tools track's interface) still caps its lists at what the kernel used to have:
+
+- `tasks` at 40;
+- `cpus` at 8;
+- `endpoints` at 128;
+- `caps` at 64;
+- the load samples' `busy-low` and `busy-high` at 8 CPUs.
+
+`sysmon` reads each class into one buffer.
+
+### Plan (the tools track decides)
+
+- A new major version of `idl/sysinfo.wit`:
+  - `tasks(start)`, `endpoints(start)` and `caps(pid, start)` return a page and the total;
+  - `cpus` returns every CPU;
+  - samples carry the load of every CPU, or of the busiest and the total.
+- `sysmon` pages through STAT with `stat_from`.
+- `top`, `memmap` and the load monitor page through the lists.
+
+### Acceptance criteria
+
+`top` lists more than 40 tasks and shows more than 8 CPUs. Tests with 16 CPUs (the CI groups "16 CPUs") and 40 applications (the `normal` suite) check it.

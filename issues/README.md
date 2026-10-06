@@ -22,7 +22,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
-| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96) — steps 1–5 done (all RAM, growing task and endpoint tables, every CPU, growing capability tables, every free range); STAT paging and per-CPU samples open | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [210](210-apple-silicon-native.md) | Apple Silicon Macs natively (M1 first): boot through m1n1 and U-Boot, device tree, AIC, spin table, DART, DWC3 USB | main task, `PRT` | P3 | a Mac with M1; 205 | track H |
@@ -36,7 +35,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers; the capability bound in `top` and `memmap`; the task graph's scale; the `pinmap` check's race).
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers; the capability bound in `top` and `memmap`; the task graph's scale; the `pinmap` check's race; `sysinfo` for any number of tasks and CPUs).
 
 
 ## Finished tasks (`issues-done/`)
@@ -194,6 +193,7 @@ Requests that wait for a track to number them: [requests-APP.md](requests-APP.md
 | [169](../issues-done/169-recovery-reserve.done) | A recovery reserve of the frame pool (32 MiB, set by init): applications cannot take the memory a service restart needs (MC-6.5) | done (2026-10-06) |
 | [209](../issues-done/209-aarch64-smoke-interleaved-lines.done) | aarch64 smoke: a line goes out in one write, so lines of services printing at once stay whole (reported by the tools track) | done (2026-10-06) |
 | [170](../issues-done/170-supervisor-without-usable-privileges.done) | The supervisor without usable privileges: init keeps the privileges it grants in escrow and holds no process control (MC-3.12, C6) | done (2026-10-06) |
+| [171](../issues-done/171-limits-from-the-hardware.done) | Limits from the hardware: all RAM, every CPU, growing task, endpoint and capability tables, STAT pages (`KRN` tasks 0001–0005, 0007); `sysinfo` requested from `APP` | done (2026-10-06) |
 | [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | x86-64: task memory from all RAM, above 4 GiB too (171, step 1) | done (2026-10-06) |
 | [171-KRN-0005](../issues-done/171-KRN-0005-frame-pool-ranges.done) | The frame pool takes every free range of the firmware map (171, step 5) | done (2026-10-06) |
 | [171-KRN-0003](../issues-done/171-KRN-0003-every-cpu.done) | Every CPU the firmware reports (x86 up to xAPIC's 255); no tick for idle CPUs (171, step 3) | done (2026-10-06) |

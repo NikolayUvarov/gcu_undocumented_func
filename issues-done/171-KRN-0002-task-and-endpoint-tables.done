@@ -1,6 +1,6 @@
 # 171-KRN-0002 — No fixed count of tasks, applications or endpoints — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 2 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done), step 2 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
 
 ## Problem
 

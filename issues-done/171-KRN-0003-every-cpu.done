@@ -1,6 +1,6 @@
 # 171-KRN-0003 — Every CPU the firmware reports, and no tick for idle CPUs — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 3 · **Constitution:** MC-5.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done), step 3 · **Constitution:** MC-5.1
 
 ## Problem
 
@@ -42,5 +42,5 @@ The kernel used at most 8 CPUs (`cpu::MAX`). On x86 it took them from the bootlo
 - **Profile:** README "CPU configuration" and "Current scope"; `kernel-objects.md` (STAT); the aarch64 profile's CPUs row, its evidence and its threat model.
 - **Remaining:**
   - x2APIC (CPUs with IDs above 254) is not supported;
-  - `sysmon`'s samples (`idl/sysinfo.wit`) carry the load of the first 8 CPUs only, so `top`'s and the load monitor's per-CPU views show 8 — `171-KRN-0006`;
+  - `sysmon`'s samples (`idl/sysinfo.wit`) carry the load of the first 8 CPUs only, so `top`'s and the load monitor's per-CPU views show 8 — requested from the tools track ([requests-APP.md](../issues/requests-APP.md));
   - more than 16 CPUs were not tested.

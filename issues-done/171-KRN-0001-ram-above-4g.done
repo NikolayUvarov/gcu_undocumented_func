@@ -1,6 +1,6 @@
 # 171-KRN-0001 — x86-64: task memory from all RAM, above 4 GiB too — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 1 · **Constitution:** MC-1.7, MC-5.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done), step 1 · **Constitution:** MC-1.7, MC-5.1
 
 ## Problem
 

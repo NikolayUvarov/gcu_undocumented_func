@@ -1,6 +1,6 @@
 # 171-KRN-0007 — STAT pages: callers read any number of records — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md) · **Constitution:** MC-10.2, MC-1.7
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-10.2, MC-1.7
 
 ## Problem
 
@@ -19,4 +19,4 @@ With more than 60 tasks, `stat tasks` writes every record, and `stat tasks from 
 - **Code:** `common/abi.rs` (the STAT comment), `kernel/src/scheduler/stat.rs` (`Out.skip`), `libmind/src/control.rs` (`stat_from`), `shell/src/main.rs` (`stat … from N`).
 - **Test:** the `normal` suite checks the full read and the page from 40 while 40 applications run. The `services` suite's STAT check reads the new header line.
 - **Docs:** `docs/api` (the STAT row) and `kernel-objects.md` (STAT).
-- **Not done:** `sysmon` and `top` still read one buffer each. They page in 171-KRN-0006, with the tools track.
+- **Not done:** `sysmon` and `top` still read one buffer each. Their interface, `idl/sysinfo.wit`, is the tools track's: requested in [requests-APP.md](../issues/requests-APP.md).
