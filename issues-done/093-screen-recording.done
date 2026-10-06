@@ -1,0 +1,68 @@
+# 093 — `record`: screen recording — done
+
+**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** 164 (done) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2 (what is on the screen is the user's), MC-2.6
+
+## Problem
+
+`screenshot` (086) takes one frame. There is no way to record what happens on the screen or in one window: a demo, a bug report, the voice dialogue with the shell.
+
+## Plan
+
+- **`record [-w window] [-r fps] [-t seconds] [file]`** in the shell, like `screenshot`. Without `-w` it records the screen in front; with `-w` it records one window of `wm`. It stops on a key (Esc), after the time, or when the disk is full. The default file is the first free `ram:record-NNN.avi`.
+- **Frames:**
+  - The screen comes through the compositor (`idl/display.wit` 1.1: a `capture` that also says which rectangle changed since the caller's last capture, so unchanged frames cost nothing).
+  - A window comes through `wm`, which holds its surface lease from the broker (157) and copies its pixels or renders its cells.
+  - Frames are taken at the requested rate (default 10 per second), and an unchanged frame repeats the previous one in the container.
+- **Format: AVI with Motion JPEG**, which every player opens. That needs:
+  - a small baseline JPEG encoder in libmind (`mind::jpeg`: 8×8 DCT, fixed quality tables, 4:2:0, Huffman with the standard tables);
+  - a writer for the AVI index, streaming in 64 KiB writes like `screenshot`.
+  
+  A frame of the 1280×800 screen is about 50–150 KiB, so ten seconds at 10 frames per second fit the 8 MiB RAM disk. `data/` holds longer recordings.
+- **Sound** (optional, later): the audio gateway's playback mixed into the AVI as PCM, so a recording of `say` has its voice.
+- **Authority:**
+  - `record` needs the shell's compositor client (the screen) or `wm` (its windows). No program records another's window without the user starting it.
+  - While recording, a red dot in the corner of the screen tells the user. The compositor draws it, so a recorder cannot hide it.
+
+## Acceptance criteria
+
+- QEMU suite: `record -t 3 data/rec.avi` while `clock` runs. The file read back with mtools is valid AVI/MJPEG: ffprobe on the host, when present, reports the frame count, size and rate. Frames differ as the clock changes.
+- A recording of one `wm` window has the window's size.
+- Host tests:
+  - the JPEG encoder: a decoded test image stays within an error bound of the original;
+  - the AVI writer: header, index and chunk sizes.
+
+## Related
+
+[086](../issues-done/086-screenshot.done), [088](../issues-done/088-text-window-manager.done), [157](../issues-done/157-window-broker.done), [158](158-video-capture.md).
+
+## Resolution
+
+Screen recording is done. Recording one window of `wm` (`-w`) moved to [u014](../issues/u014-record-a-window.md): it needs `wm`, which holds the windows' surfaces, to lend one.
+
+What was built, and where it differs from the plan:
+- **`record [-r fps] [-t seconds] [file]` is a program, not a shell command.** It encodes every frame, so it runs beside the program it records (`run record -t 10 data/demo.avi &`, then that program in front). It asks for `REQUEST_DISPLAY`, and the shell lends it its compositor client in `SLOT_DISPLAY`; the loader takes that slot since kernel issue 164. It stops after its time or when the disk is full; `kill` leaves a file whose header was last written within the second.
+- **Frames:**
+  - `idl/display.wit` stayed at 1.0: `record` compares each capture with the last one. An unchanged screen becomes an empty chunk, which players show as the previous frame.
+  - A changed screen is coded again only in the rows of 16×16 blocks that changed: a restart marker ends every row, so the other rows' data is reused as it was.
+  - Frames whose time passed while one was coded are filled with empty chunks, so the file plays in real time.
+- **`mind::jpeg`:**
+  - baseline JPEG, 4:2:0, the Annex K tables scaled by quality as libjpeg scales them, the standard Huffman tables written into every frame;
+  - libjpeg's accurate integer DCT: under QEMU's emulation a full 1280 × 800 frame takes about 180 ms, against 1.4 s with a floating-point DCT, and a clock's second about one fifth of that.
+- **`mind::avi`:** the 224-byte header (avih, strh `vids`/`MJPG`, strf), `00dc` chunks, `idx1`.
+- **The red dot** (kernel issue 164): the compositor draws it on the display for 1.5 s after any capture, by `record` or `screenshot`, and puts the screen under it back. It is in no capture.
+- **Sound:** not done (left optional in the plan).
+
+Tests:
+- Host, `tests/jpeg_host.rs` (CI host tests):
+  - the tables;
+  - pictures read back by a baseline decoder in the test within PSNR bounds, at sizes that are not multiples of 16;
+  - a frame like the last one coding only the changed rows, byte for byte as a full encode;
+  - the AVI header, chunks and index.
+  
+  PIL decodes the frames too (37 dB on the test picture).
+- QEMU, `vfs` suite:
+  - `run record -t 3 data/rec.avi &` while `clock` is in front, with the dot on the display during the recording;
+  - the file read back with mtools: RIFF/AVI, 30 frames of the screen's size at 10 per second, JPEG frames, at least two different pictures, the index;
+  - `ffprobe`, when present: `mjpeg,1280,800,10/1,30`.
+
+Docs: README (`record`, `REQUEST_DISPLAY`), docs/api (slot 15), docs/tools (EN/RU).

@@ -137,7 +137,8 @@ impl Shell {
     // VFS client, which writes on `ram:` and in `data/`, for `REQUEST_FILES`), its log
     // client (reads the system log) for `REQUEST_LOG`, its client of init (lifecycle control) for `REQUEST_LIFECYCLE`,
     // its sysmon client with the authority badge (who holds what) for `REQUEST_AUTHORITY`, in SLOT_SYSINFO in place of
-    // the plain one. Nothing is granted by program name.
+    // the plain one, its compositor client (what is on the screen) for `REQUEST_DISPLAY`. Nothing is granted by
+    // program name.
     fn start(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> { self.start_with(name, args, service, &[]) }
 
     // `start`, lending `extra` (slot in the program, capability here) too.
@@ -160,6 +161,7 @@ impl Shell {
         // A window manager gets the window broker's manager client, a program in a window a plain client (issue 157).
         let window_manager = requests & mind::process::REQUEST_WINDOW_MANAGER != 0;
         let window = requests & mind::process::REQUEST_WINDOW != 0 && !window_manager;
+        let display = requests & mind::process::REQUEST_DISPLAY != 0;
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -173,7 +175,8 @@ impl Shell {
         }
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
-                      (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER)];
+                      (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
+                      (display, SLOT_DISPLAY, SLOT_DISPLAY)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now

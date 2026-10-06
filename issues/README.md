@@ -19,11 +19,11 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
+| [u014](u014-record-a-window.md) | `record -w`: one window of `wm`, through a lease `wm` lends | tools | P2 | — (093 done) | track G |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 
 ## Finished tasks (`issues-done/`)
@@ -122,6 +122,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [090](../issues-done/090-read-only-status-and-modifier-key-bars.done) | Editor says READ-ONLY; key bars follow Shift, Ctrl and Alt | done (2026-10-04) |
 | [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
 | [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
+| [093](../issues-done/093-screen-recording.done) | `record`: the screen as AVI/MJPEG (`mind::jpeg` with a restart per row of blocks, `mind::avi`); one window is u014 | done (2026-10-06) |
 | [095](../issues-done/095-list-by-mask.done) | `list a*`: the programs whose names match a mask (`mind::mask` without allocation) | done (2026-10-04) |
 | [096](../issues-done/096-audio-without-interrupts.done) | `say` and `listen` hung when the sound card shared its interrupt line (`audio_gw` looks at its ring while a client waits) | done (2026-10-05) |
 | [097](../issues-done/097-fm-command-line-and-hidden-panels.done) | fm: the command line under the panels (`cd`, `edit`, `view`, programs with arguments) and hiding panels with Ctrl+O, Ctrl+F1/F2, Ctrl+P | done (2026-10-05) |
@@ -165,5 +166,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
 | [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
 | [163](../issues-done/163-window-broker-memory.done) | init gives the window broker a 128 MiB memory quota: pixel windows with room for the screen | done (2026-10-05) |
+| [164](../issues-done/164-display-client-for-programs.done) | A launcher may lend the compositor client (`REQUEST_DISPLAY`); the compositor shows a red dot while the screen is captured | done (2026-10-06) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

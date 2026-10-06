@@ -2210,10 +2210,33 @@ def vfs_suite(args):
             shot = re.search(r"SCREENSHOT data/screen.bmp: (\d+)x(\d+), (\d+) BYTES", slow("screenshot data/screen.bmp"))
             assert shot, vm.log[-2000:]
             screen = vm.screenshot()
+            # The capture dot (issue 164) goes out 1.5 s after the last capture.
+            time.sleep(1.6)
+            after = vm.screenshot()
             vm.serial()
             require(slow("screenshot"), "SCREENSHOT ram:screen-001.bmp")
             require(slow("screenshot"), "SCREENSHOT ram:screen-002.bmp")
             require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [FILE]")
+            # record (issue 093): 3 s of the screen while clock is in front, into data/; the display shows the dot meanwhile.
+            recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
+            vm.send("clock\n")
+            vm.expect("[CLOCK] ")
+            time.sleep(1)
+            _, size_, _, during = vm.screenshot().split(b"\n", 3)
+            vm.serial(enter=False)
+            dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
+            assert during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)), "the capture dot while recording"
+            time.sleep(3)  # clock stays in front for the rest of the recording
+            vm.send("\x1b")
+            vm.expect("SHELL RESUMED.")
+            time.sleep(.2); vm.collect(); vm.output = ""
+            for _ in range(60):
+                if int(recorder) not in task_rows(vm):
+                    break
+                time.sleep(.5)
+            else:
+                raise AssertionError("record did not end")
+            require(vm.command("sync"), "OK")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-1-{args.cpus}cpu.log").write_text(vm.log)
@@ -2229,16 +2252,45 @@ def vfs_suite(args):
         header, dims, pixels = screen.split(b"\n", 3)[0], screen.split(b"\n", 3)[1], screen.split(b"\n", 3)[3]
         assert header == b"P6" and tuple(map(int, dims.split())) == (width, height), (header, dims)
         stride = (width * 3 + 3) & ~3
-        rows = [bmp[54 + (height - 1 - y) * stride:][:width * 3] for y in range(14)]
-        assert len({row[i:i + 3] for row in rows for i in range(0, width * 3, 3)}) >= 2, "the line has text"
+        rows = [bmp[54 + (height - 1 - y) * stride:][:width * 3] for y in range(30)]
+        assert len({row[i:i + 3] for row in rows[:14] for i in range(0, width * 3, 3)} ) >= 2, "the line has text"
+        # The display shows the screen the BMP holds; the capture dot (a red disc of radius 6 around (width - 24, 18)) may
+        # still be over it (writing the BMP to the disk took a while) and is gone 1.6 s later.
+        in_dot = lambda x, y: (x - (width - 24)) ** 2 + (y - 18) ** 2 <= 36
+        later = after.split(b"\n", 3)[3]
         for y, row in enumerate(rows):
-            assert row == b"".join(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3][::-1] for x in range(width)), y
+            # The command's own line whole (below it the shell has printed since); the dot's corner on the rows below.
+            for x in range(width) if y < 14 else range(width - 31, width - 17):
+                captured, shown, then = row[x * 3:x * 3 + 3][::-1], pixels[(y * width + x) * 3:(y * width + x) * 3 + 3], later[(y * width + x) * 3:(y * width + x) * 3 + 3]
+                assert shown == captured or (in_dot(x, y) and shown == bytes((0xE0, 0x20, 0x20))), (x, y, shown, captured)
+                assert then == captured, ("the dot is gone, the screen under it put back", x, y, then, captured)
+        # The recording: an AVI of 30 Motion JPEG frames of the screen's size at 10 per second, a key frame each time the
+        # screen changed (the clock's seconds) and an empty chunk (the frame again) otherwise, and its index.
+        avi_file = mtype("data/rec.avi")
+        assert avi_file[:4] == b"RIFF" and avi_file[8:12] == b"AVI " and struct.unpack_from("<I", avi_file, 4)[0] == len(avi_file) - 8, avi_file[:16]
+        frames_, = struct.unpack_from("<I", avi_file, 48)
+        assert struct.unpack_from("<II", avi_file, 64) == (width, height) and frames_ == 30 and struct.unpack_from("<I", avi_file, 132)[0] == 10, avi_file[:224]
+        chunks, at = [], 224
+        while avi_file[at:at + 4] == b"00dc":
+            length, = struct.unpack_from("<I", avi_file, at + 4)
+            chunks.append(avi_file[at + 8:at + 8 + length])
+            at += 8 + length + (length & 1)
+        assert len(chunks) == 30 and avi_file[at:at + 4] == b"idx1" and struct.unpack_from("<I", avi_file, at + 4)[0] == 16 * 30, (len(chunks), avi_file[at:at + 8])
+        pictures = [c for c in chunks if c]
+        assert chunks[0] and all(c[:2] == b"\xff\xd8" and c[-2:] == b"\xff\xd9" for c in pictures), "JPEG frames"
+        assert len(set(pictures)) >= 2, "the clock changed while it was recorded"
+        if shutil.which("ffprobe"):
+            probe = Path(tempfile.gettempdir()) / "mind-core-rec.avi"
+            probe.write_bytes(avi_file)
+            info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height,r_frame_rate,nb_frames", "-of", "csv=p=0", str(probe)],
+                                  capture_output=True, text=True).stdout.strip()
+            assert info == f"mjpeg,{width},{height},10/1,30", info
         # After a reboot: the disk keeps its files, the RAM disk starts empty.
         subprocess.run(["mdel", "-i", part, "::/NvVars"], env=MTOOLS_ENV, capture_output=True)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
             require(vm.command("cat data/notes.txt"), "line one")
-            require(vm.command("ls data"), f"3 ENTRIES, 3 FILES, {15 + size} BYTES")  # with the screenshot
+            require(vm.command("ls data"), f"4 ENTRIES, 4 FILES, {15 + size + len(avi_file)} BYTES")  # with the screenshot and the recording
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
@@ -2275,7 +2327,7 @@ def vfs_suite(args):
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
-          f"screenshot writes the screen as a BMP ({width}x{height}); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
+          f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
 
 

@@ -112,6 +112,7 @@ USER_CRATES=(
     "dmesg:dmesg:dmesg.elf"
     "svc:svc:svc.elf"
     "beep:beep:beep.elf"
+    "record:record:record.elf"
 )
 
 echo ">>> [1/3] Building the kernel and apps (ELF)..."

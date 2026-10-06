@@ -1,0 +1,33 @@
+# 164 — A launcher may lend the compositor client; the compositor shows when the screen is captured — done
+
+**Type:** loader + compositor (core services) · **Owner:** kernel track (done from the tools branch, which needed it for `record`, 093) · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.3, MC-3.11, MC-10.2
+
+## Problem
+
+`record` (issue 093) records the screen in front. It runs as its own program, beside the program it records, because it encodes every frame. The screen comes through the compositor (`idl/display.wit`), whose client only the shell holds (`SLOT_DISPLAY` 15, kernel issue 151).
+
+The loader refused to put a capability in slot 15 of a program: a launch session's `grant` takes only the slots it lists.
+
+A recorder also ought not to be invisible. What is on the screen is the user's (MC-10.2), and they should see when it is being copied, whatever program does it.
+
+## Plan
+
+- **Loader:** `grant` accepts `SLOT_DISPLAY`. The shell lends its compositor client there to a program that asks for `REQUEST_DISPLAY` (`mind::process`, 1024), as it lends its other clients. Nothing is granted by program name.
+- **Compositor:** after any capture, it draws a red dot (radius 6 pixels, at 24 pixels from the right edge, 18 from the top) on the framebuffer, over every frame for 1.5 s. Then it puts the screen under the dot back from its shadow copy.
+  - The dot is drawn on the display only: captures copy the screen in front, which never holds it, so no recording or screenshot shows it.
+  - A program cannot hide it: it is not on any program's screen.
+  - A recording at one frame a second keeps it lit.
+
+## Acceptance criteria
+
+QEMU `vfs` suite:
+- while `record` runs with `clock` in front, QEMU's display has the red dot;
+- 1.6 s after a `screenshot` the dot is gone and the pixels under it are the screen's (as the BMP holds them).
+
+## Resolution
+
+- `loader/src/main.rs`: `SLOT_DISPLAY` among the slots a launcher may fill.
+- `compositor/src/main.rs`: `dot`, `DOT_MS`; `serve` says when it captured.
+- `libmind/src/process.rs`: `REQUEST_DISPLAY`. `shell/src/main.rs`: lends `SLOT_DISPLAY` for it.
+- Tests: QEMU `vfs` suite.
+- Docs: README, docs/api (slot 15).
