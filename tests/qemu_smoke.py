@@ -793,6 +793,10 @@ def shell_suite(vm):
     print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
     msh_check(vm)
     line_faces_check(vm)
+    # pins (issue u015): no pin controller on QEMU (issue 206), so no gpio client to show; it says so and ends with 1.
+    require(vm.command("pins"), "pins: no client of the gpio service")
+    require(vm.command("pins 3"), "pins: no client of the gpio service")
+    print("PASS: pins without a pin controller says so", flush=True)
 
 
 def line_faces_check(vm):
