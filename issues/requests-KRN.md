@@ -4,6 +4,27 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file, and the file goes when it is empty.
 
+## With 16 CPUs the system stops answering after about 25 programs with screens
+
+### Problem
+
+The tools track's `applications_until_memory_ends` (`tests/qemu_smoke.py`, `normal` suite) starts `run clock &` until the frame pool refuses one. With 4 CPUs about 80 clocks start on x86 and 172 on aarch64, and the refusal is clean. With 16 CPUs (`--cpus 16`, TCG), after 24–26 clocks the next `run clock &` gets no answer, ever:
+
+- It reproduces on `main` at 0e1d239 (24 clocks, x86), on the tools branch (26, x86) and on CI (x86 and aarch64, groups "16 CPUs").
+- At the hang every CPU is in the kernel (CPL 0). In a first sample they were in `scheduler::reap` and `scheduler::interrupt` spinning on the lock, and in the idle loop (`ap_entry`). In a second sample 5 s later, all but one were in the idle loop (`hlt`) and CPU 0 in `_start`'s `hlt`. Ctrl+Z on the serial line got no answer.
+- The frame pool was far from empty (26 screens of 4 MiB of 385 MiB).
+- `main`'s own check of 40 applications at once (`memtest hold 0`, no screen) passes with 16 CPUs.
+
+Since 171-KRN-0003 an idle CPU gets no tick and sleeps until a wake IPI. A task left ready on an idle CPU, or a wake that does not reach it, would look like this. That is a guess: the probe did not see the tasks' states.
+
+### To reproduce
+
+On `main`, after `./02_build.sh`: the normal suite's first part, then `run clock &` in a loop with `--cpus 16`. The tools branch's `normal` suite runs it (`applications_until_memory_ends`) and leaves it out with more than 8 CPUs until this is fixed.
+
+### Acceptance criteria
+
+With 16 CPUs on x86 and aarch64, clocks start until the frame pool refuses one, and the shell answers throughout. The tools track then runs its check with every CPU count.
+
 ## Kernel structures outside the 64 MiB arena
 
 ### Problem
