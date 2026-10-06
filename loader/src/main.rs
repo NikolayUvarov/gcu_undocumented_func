@@ -14,7 +14,7 @@ use mind::sys::Error;
 use mind::util::FixedBuf;
 
 const RECEIVED_CAP: usize = 9;
-const APP_ENDPOINTS: u16 = 4; // endpoints an application may create
+const APP_ENDPOINTS: u16 = 4; // endpoints an application may create: loader's policy for each program
 const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for (the frame pool limits it further)
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
@@ -149,7 +149,7 @@ impl Launcher {
         // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
         // surface of one window (issue u014), the pin controller's client (issue 207) or the video gateway's (issue 158).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();

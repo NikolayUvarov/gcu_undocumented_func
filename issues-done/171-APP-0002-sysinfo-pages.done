@@ -4,7 +4,7 @@
 
 ## Problem
 
-Issue 171 step 2 took the kernel's limits off tasks and endpoints: 80 programs with screens run at once in a 512 MiB machine. The monitoring path still assumed the old limits:
+Issue 171 took the kernel's fixed counts off tasks and endpoints (171-KRN-0002): about 80 programs with screens run at once in a 512 MiB machine. The monitoring path still assumed the old limits:
 
 - `idl/sysinfo.wit` 3.0 `tasks` gave at most 40 tasks and `endpoints` 128, with no way to ask for the rest;
 - `sysmon` read one buffer of `STAT_TASKS` and `STAT_ENDPOINTS` for its samples and for `holders` and `authority`;
@@ -16,7 +16,7 @@ So `top`, `ipc`, the console's `ps`, `uptime`, `netbench` and the system log's s
 ## Plan
 
 - `sysinfo.wit` 4.0: `tasks(start)` and `endpoints(start)` from a position on (40 and 128 a reply); a sample's `tasks` and `runnable` in 32 bits.
-- `sysmon` reads `STAT` page by page (`mind::stat::each`, STAT version 3) for samples, `holders` and `authority`, and answers a page from `start`.
+- `sysmon` reads `STAT` page by page (`mind::stat::each` over the first record STAT takes, 171-KRN-0007) for samples, `holders` and `authority`, and answers a page from `start`.
 - The clients ask page after page until a short one.
 
 ## Acceptance criteria
@@ -27,6 +27,7 @@ So `top`, `ipc`, the console's `ps`, `uptime`, `netbench` and the system log's s
 ## Resolution
 
 - `idl/sysinfo.wit` 4.0.0 and `libmind/src/idl/sysinfo.rs` (generated).
+- `libmind/src/stat.rs`: `read_from` and `each` (every page of a class, over `mind::control::stat_from`).
 - `sysmon/src/main.rs`: samples, `holders` and `authority` over every page; `tasks` and `endpoints` from `start`.
 - Clients: `monitor/src/app.rs` (`top`, `memmap`, `ipc`, `caps`), `console/src/builtins.rs` (`ps`), `netbench`, `uptime`; `logd` finds names on every page.
 - `tests/qemu_smoke.py` (`applications_until_memory_ends`): with 77 clocks running, `uptime` counts the tasks and `top` lists all 97, past one page of 40. `tests/monitor_host.rs` follows the 32-bit sample.
@@ -34,4 +35,4 @@ So `top`, `ipc`, the console's `ps`, `uptime`, `netbench` and the system log's s
 
 ## Related
 
-[171](../issues/171-limits-from-the-hardware.md) (step 2), [076](076-monitors-show-restored-stat-fields.done) (sysinfo 2.0).
+[171](171-limits-from-the-hardware.done), [171-KRN-0007](171-KRN-0007-stat-pages.done) (STAT pages), [171-APP-0007](../issues/171-APP-0007-sysinfo-every-cpu-and-capability.md) (CPUs and capabilities), [076](076-monitors-show-restored-stat-fields.done) (sysinfo 2.0).

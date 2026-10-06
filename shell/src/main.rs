@@ -93,7 +93,7 @@ fn pid_arg(args: &[u8]) -> Option<u64> {
 fn error_text(error: Error, service: bool) -> &'static str {
     match error {
         Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
-        Error::Other(ERR_LIMIT) => "QUOTA REACHED",
+        Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (QUOTA)",
         Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
         Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
         Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
@@ -106,13 +106,13 @@ fn error_text(error: Error, service: bool) -> &'static str {
 
 fn label(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches([' ', '\0']) }
 
-// Every task: the list grows until it holds them all (the kernel has no task limit, issue 171).
+// Every task: the list doubles until the kernel fills it no more (issue 171: no fixed count of tasks).
 fn tasks() -> (alloc::vec::Vec<TaskInfo>, usize) {
     let mut list = alloc::vec![unsafe { core::mem::zeroed::<TaskInfo>() }; 64];
     loop {
         let count = control::tasks(&mut list).unwrap_or(0);
-        if count < list.len() { list.truncate(count); return (list, count); }
-        list.resize(list.len() * 2, unsafe { core::mem::zeroed() });
+        if count < list.len() { return (list, count); }
+        list.resize(list.len() * 2, unsafe { core::mem::zeroed::<TaskInfo>() });
     }
 }
 
@@ -243,19 +243,23 @@ impl Shell {
     // Kernel statistics (STAT), one record per line.
     fn stat(&mut self, args: &[u8]) {
         let text = core::str::from_utf8(args).unwrap_or("");
-        let mut words = text.split_whitespace();
-        let (name, pid) = (words.next().unwrap_or(""), words.next().and_then(|w| w.parse::<usize>().ok()).unwrap_or(0));
+        // `stat <class> [pid] [from N]`: `from` pages through a class with more records than the buffer holds (issue 171).
+        let words: alloc::vec::Vec<&str> = text.split_whitespace().collect();
+        let name = words.first().copied().unwrap_or("");
+        let from = words.iter().position(|w| *w == "from");
+        let first = from.and_then(|i| words.get(i + 1)).and_then(|w| w.parse::<usize>().ok()).unwrap_or(0);
+        let pid = words.get(1).filter(|_| from != Some(1)).and_then(|w| w.parse::<usize>().ok()).unwrap_or(0);
         let class = match name { "tasks" => STAT_TASKS, "cpus" => STAT_CPUS, "memory" => STAT_MEMORY, "physmap" => STAT_PHYSMAP, "vmap" => STAT_VMAP, "caps" => STAT_CAPS, "endpoints" => STAT_ENDPOINTS, "irqs" => STAT_IRQS, "devices" => STAT_DEVICES, _ => { self.report("STAT <CLASS> [PID]: SEE HELP"); return; } };
         let Some(mut page) = Pages::new(4 * 4096) else { self.report("OUT OF MEMORY"); return };
         // `stat memory` also asks for the largest free block (argument 1).
         let pid = if class == STAT_MEMORY { 1 } else { pid };
-        let header = match control::stat(class, pid, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
+        let header = match control::stat_from(class, pid, first, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
         let buffer = page.as_slice(); let t = &mut self.term;
-        let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={}", Upper(name), header.version, header.count, header.total);
+        let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={} FROM={}", Upper(name), header.version, header.count, header.total, first);
         match class {
             STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={} KERNEL={}{}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps, r.kernel_bytes, if r.focus != 0 { " FOCUS" } else { "" }); },
             STAT_CPUS => for (i, r) in control::records::<StatCpu>(buffer, header).enumerate() { let _ = writeln!(t, "CPU {} APIC={} ONLINE={} BUSY_MS={} IDLE_MS={} INTERRUPTS={} SWITCHES={} PID={}", i, r.apic_id, r.online, r.busy_ns / 1_000_000, r.idle_ns / 1_000_000, r.interrupts, r.switches, r.current_pid); },
-            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} LARGEST={} IMAGES={} STACKS={} TASK_PAGES={} PAGE_TABLES={} SCREENS={} HEAPS={} SHARED={} OBJECTS={} DMA={} TASKS={} ENDPOINTS={} FRAMES={} FRAMES_FREE={}", r.arena, r.used, r.free, r.largest_free, r.images, r.stacks, r.task_pages, r.page_tables, r.screens, r.heaps, r.shared, r.objects, r.dma, r.tasks, r.endpoints, r.frames, r.frames_free); },
+            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} LARGEST={} IMAGES={} STACKS={} TASK_PAGES={} PAGE_TABLES={} SCREENS={} HEAPS={} SHARED={} OBJECTS={} DMA={} TASKS={}/{} ENDPOINTS={}/{} FRAMES={} FRAMES_FREE={}", r.arena, r.used, r.free, r.largest_free, r.images, r.stacks, r.task_pages, r.page_tables, r.screens, r.heaps, r.shared, r.objects, r.dma, r.tasks, r.tasks_limit, r.endpoints, r.endpoints_limit, r.frames, r.frames_free); },
             STAT_PHYSMAP => for r in control::records::<StatPhys>(buffer, header).filter(|r| r.kind >= PHYS_PLATFORM) { let _ = writeln!(t, "KIND={:#x} INDEX={} START={:#x} PAGES={}", r.kind, r.index, r.start, r.pages); },
             STAT_VMAP => for r in control::records::<StatRegion>(buffer, header) {
                 let kind = ["?", "IMAGE", "STACK", "SCREEN", "INFO", "MAILBOX", "EXIT", "HEAP", "SHARED", "DEVICE", "GUARD"].get(r.kind as usize).copied().unwrap_or("?");
@@ -316,6 +320,8 @@ impl Shell {
         let granted = |word: &str| self.script.as_ref().is_none_or(|words| words.iter().any(|w| w == word));
         // The pin controller service's control client, where the board has one (issue 207).
         let gpio = requests & mind::process::REQUEST_GPIO != 0 && mind::dev::cap_info(SLOT_GPIO).0 != 0 && granted("gpio");
+        // The block store client (300-KRN-0001), where the store runs.
+        let blockstore = requests & mind::process::REQUEST_BLOCKSTORE != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE).0 != 0 && granted("blockstore");
         let (needs, authority, window_manager, display) = (loader::Needs { sysinfo: needs.sysinfo && granted("sysinfo"), file: needs.file && (granted("file") || granted("files")),
             lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
@@ -337,7 +343,7 @@ impl Shell {
         let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
-                      (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA)];
+                      (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
@@ -507,7 +513,7 @@ impl Shell {
             // Quotas delegated at spawn (MC-1.7): tasks reserved by live children, endpoints created or delegated.
             let _ = writeln!(self.term, "PID NAME TASKS ENDPOINTS");
             let (list, count) = tasks();
-            for t in &list[..count] { let _ = writeln!(self.term, "{} {} {}/{} {}/{}", t.pid, label(&t.name), observe::Count(t.used_tasks), observe::Count(t.quota_tasks), observe::Count(t.used_endpoints), observe::Count(t.quota_endpoints)); }
+            for t in &list[..count] { let _ = writeln!(self.term, "{} {} {}/{} {}/{}", t.pid, label(&t.name), t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints); }
         } else if is(b"ps") {
             let _ = writeln!(self.term, "PID NAME STATE FOCUS CPU RUNS CPU_TICKS SYSCALLS");
             let (list, count) = tasks();
@@ -515,7 +521,7 @@ impl Shell {
                 let _ = write!(self.term, "{} {} {} {} {} {} {} {}", t.pid, label(&t.name), label(&t.state), if t.focus != 0 { "FG" } else { "BG" }, t.cpu, t.runs, t.ticks, t.calls);
                 let _ = match self.owner(t.pid) { Some(console) => writeln!(self.term, " CONSOLE={}", console + 1), None => writeln!(self.term) };
             }
-            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}", count, self.own);
+            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; NO FIXED LIMIT: MEMORY AND QUOTAS DECIDE", count, self.own);
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"reboot") {

@@ -2,7 +2,10 @@ use crate::{abi::BootInfo, memory::Region, paging};
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-pub const MAX: usize = 8;
+// xAPIC addresses IDs 0..=254 (255 is broadcast): the hardware's limit without x2APIC (issue 171).
+pub const MAX: usize = 255;
+// CPU index of each APIC ID.
+static INDEX: [core::sync::atomic::AtomicU8; 256] = [const { core::sync::atomic::AtomicU8::new(0) }; 256];
 pub static COUNT: AtomicUsize = AtomicUsize::new(1);
 static LAPIC: AtomicUsize = AtomicUsize::new(0xfee00000);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
@@ -31,10 +34,8 @@ unsafe fn cpu(index: usize) -> *mut Cpu {
 }
 
 pub fn id() -> usize {
-    let apic = unsafe { read(0x20) >> 24 };
-    (0..COUNT.load(Ordering::Acquire))
-        .find(|&i| unsafe { (*cpu(i)).apic_id == apic })
-        .unwrap_or(0)
+    let apic = unsafe { read(0x20) >> 24 } as usize;
+    INDEX[apic & 255].load(Ordering::Relaxed) as usize
 }
 pub fn apic_id(index: usize) -> u32 {
     unsafe { (*cpu(index)).apic_id }
@@ -53,19 +54,33 @@ pub unsafe fn eoi() {
     write(0xb0, 0);
 }
 
+// The boot CPU first, then the other enabled processors of the MADT (or the bootloader's list without one).
+fn processors(info: &BootInfo) -> ([u32; MAX], usize) {
+    let mut ids = [0u32; MAX];
+    ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24;
+    let mut count = 1;
+    let madt = super::acpi::CPU_COUNT.load(Ordering::Acquire);
+    let listed = |i: usize| if madt > 0 { super::acpi::CPUS[i].load(Ordering::Relaxed) } else { info.apic_ids[i] };
+    for i in 0..if madt > 0 { madt } else { info.cpu_count.min(info.apic_ids.len()) } {
+        let id = listed(i);
+        if id < 255 && !ids[..count].contains(&id) && count < MAX { ids[count] = id; count += 1; }
+    }
+    (ids, count)
+}
+
 pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
-    assert!((1..=MAX).contains(&info.cpu_count));
-    COUNT.store(info.cpu_count, Ordering::Release);
+    let (ids, count) = processors(info);
+    COUNT.store(count, Ordering::Release);
     let lo: u32;
     let hi: u32;
     asm!("rdmsr", in("ecx") 0x1bu32, out("eax") lo, out("edx") hi);
     assert_eq!(hi, 0, "LAPIC must be below 4 GiB");
     assert_eq!(lo & (1 << 10), 0, "x2APIC is not supported yet");
     LAPIC.store((lo as usize) & 0xfffff000, Ordering::Release);
-    for i in 0..info.cpu_count {
-        assert!(info.apic_ids[i] < 256, "xAPIC ID out of range");
+    for i in 0..count {
         let c = &mut *cpu(i);
-        c.apic_id = info.apic_ids[i];
+        c.apic_id = ids[i];
+        INDEX[ids[i] as usize].store(i as u8, Ordering::Relaxed);
         c.gdt = [
             0,
             0x00af9a000000ffff,
@@ -75,14 +90,15 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
             0,
             0,
         ];
-        let stack = Region::new(64 * 1024, 16)?;
+        // Stacks from the frame pool: 160 KiB a CPU would take a large part of the arena with many CPUs (issue 171).
+        let stack = Region::task(64 * 1024, 16)?;
         core::ptr::write_unaligned(
             c.tss.as_mut_ptr().add(4).cast::<u64>(),
             stack.ptr() as u64 + 64 * 1024,
         );
         core::mem::forget(stack);
         for ist in 0..2 {
-            let stack = Region::new(16 * 1024, 16)?;
+            let stack = Region::task(16 * 1024, 16)?;
             core::ptr::write_unaligned(
                 c.tss.as_mut_ptr().add(36 + ist * 8).cast::<u64>(),
                 stack.ptr() as u64 + 16 * 1024,
@@ -93,7 +109,7 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
         let base = c.tss.as_ptr() as u64;
         c.gdt[5] = 103 | ((base & 0xffffff) << 16) | (0x89 << 40) | (((base >> 24) & 255) << 56);
         c.gdt[6] = base >> 32;
-        let stack = Region::new(64 * 1024, 16)?;
+        let stack = Region::task(64 * 1024, 16)?;
         c.idle_stack = stack.ptr() as usize + stack.len() - 8;
         core::mem::forget(stack);
     }
@@ -153,9 +169,10 @@ pub unsafe fn ipi(target: u32, command: u32) {
     });
 }
 
+// The tick goes only to CPUs that run a task (time slices); an idle CPU sleeps until a wake IPI (issue 171).
 pub unsafe fn tick_others() {
     for i in 1..COUNT.load(Ordering::Acquire) {
-        if ONLINE[i].load(Ordering::Acquire) {
+        if ONLINE[i].load(Ordering::Acquire) && RUNNING[i][0].load(Ordering::Relaxed) != 0 {
             ipi(apic_id(i), 0x30);
         }
     }
@@ -285,7 +302,7 @@ pub unsafe fn start(info: &BootInfo) {
         .write_unaligned(paging::kernel_root() as u64);
     (target(core::ptr::addr_of!(ap_boot_entry)) as *mut u64)
         .write_unaligned(ap_entry as *const () as u64);
-    for i in 1..info.cpu_count {
+    for i in 1..COUNT.load(Ordering::Acquire) {
         (target(core::ptr::addr_of!(ap_boot_stack)) as *mut u64)
             .write_unaligned((*cpu(i)).idle_stack as u64);
         (target(core::ptr::addr_of!(ap_boot_index)) as *mut u64).write_unaligned(i as u64);
@@ -298,14 +315,10 @@ pub unsafe fn start(info: &BootInfo) {
         if !ONLINE[i].load(Ordering::Acquire) {
             ipi(apic_id(i), 0x600 | (base >> 12) as u32);
         }
+        // A processor the MADT lists that does not start stays offline; the others still start.
         let start = crate::interrupts::milliseconds();
-        while !ONLINE[i].load(Ordering::Acquire) {
-            assert!(
-                crate::interrupts::milliseconds() - start < 1000,
-                "AP startup timeout"
-            );
-            delay(10);
-        }
+        while !ONLINE[i].load(Ordering::Acquire) && crate::interrupts::milliseconds() - start < 1000 { delay(10); }
+        if !ONLINE[i].load(Ordering::Acquire) { crate::serial_print("MIND CORE KERNEL: A CPU DID NOT START\n"); }
     }
 }
 

@@ -361,6 +361,22 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if slot & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || call(mb, abi::SYSCALL_FREE, block, 0) != 0 || call(mb, abi::SYSCALL_CAP_DROP, slot, 0) != 0 {
                     asm!("ud2", options(noreturn));
                 }
+                // Issue 171: the table grows past its first 96 slots. 300 read-only children of one shared page get slots
+                // beyond 255 (the old handle encoding's end), a revoke removes them all, and a reused slot's old handle fails.
+                let block = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+                let memory = call(mb, abi::SYSCALL_MEM_SHARE, block, 0);
+                let (mut highest, mut last) = (0, 0);
+                for _ in 0..300 {
+                    (*mb).msg = [0; 4];
+                    let child = call(mb, abi::SYSCALL_CAP_MINT, memory, abi::CAP_READ as usize);
+                    if child & abi::HANDLE_SLOT_MASK < abi::SLOT_DYNAMIC || call(mb, abi::SYSCALL_CAP_INFO, child, 0) != abi::CAP_KIND_MEMORY { asm!("ud2", options(noreturn)); }
+                    highest = highest.max(child & abi::HANDLE_SLOT_MASK); last = child;
+                }
+                if highest <= 255 || call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 300 || call(mb, abi::SYSCALL_CAP_INFO, last, 0) != abi::CAP_KIND_NONE { asm!("ud2", options(noreturn)); }
+                (*mb).msg = [0; 4];
+                let again = call(mb, abi::SYSCALL_CAP_MINT, memory, abi::CAP_READ as usize);
+                if again == last || call(mb, abi::SYSCALL_CAP_INFO, last, 0) != abi::CAP_KIND_NONE { asm!("ud2", options(noreturn)); }
+                call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0); call(mb, abi::SYSCALL_CAP_DROP, memory, 0); call(mb, abi::SYSCALL_FREE, block, 0);
                 print(mb, b"CAPABILITY CHECKS OK\r\n");
                 return;
             }

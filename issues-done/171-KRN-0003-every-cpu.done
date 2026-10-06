@@ -1,0 +1,46 @@
+# 171-KRN-0003 — Every CPU the firmware reports, and no tick for idle CPUs — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done), step 3 · **Constitution:** MC-5.1
+
+## Problem
+
+The kernel used at most 8 CPUs (`cpu::MAX`). On x86 it took them from the bootloader's list of 8 APIC IDs. Each CPU's three kernel stacks (160 KiB) came from the 64 MiB arena. Every CPU also got a timer tick each 10 ms whether or not it had anything to run. With 16 CPUs that was 1600 wake-ups a second: the aarch64 idle check failed at 3.2 s of host processor time a second, a figure it could not tell from CPUs that spin.
+
+## Plan
+
+- **x86:**
+  - the kernel reads the processors from the ACPI MADT itself (Local APIC entries, enabled), with the bootloader's list as a fallback;
+  - up to xAPIC's limit of 255 IDs: `MAX` = 255, x2APIC entries are not started;
+  - an APIC ID → CPU index table replaces the linear search in `id()`;
+  - a processor that does not start within a second stays offline instead of halting the boot.
+- **aarch64:** a table bound of 256. GICv3 has no limit; GICv2 addresses 8 interfaces.
+- **Both:** CPU stacks come from the frame pool.
+- **Ticks:** the tick goes only to CPUs that run a task. The CPU that ticks wakes, with an IPI, the idle CPUs that have a task ready: sleepers whose time came, expired deadlines, throttled tasks at a new period. STAT adds the time since a CPU's last switch, so an idle CPU's idle time stays current.
+- **Tests:** the `normal` suite checks that `cpus` shows every CPU online. CI groups run with 16 CPUs on x86 and aarch64.
+
+## Acceptance criteria
+
+16 CPUs come online on x86 and aarch64 (QEMU, TCG) and the `normal` suite passes, including the aarch64 idle check. The 4-CPU and 1-CPU groups pass unchanged.
+
+## Resolution
+
+- **Code:**
+  - `kernel/src/arch/x86_64/acpi.rs`: `processors` reads the MADT;
+  - `kernel/src/arch/x86_64/cpu.rs`: `MAX` = 255, `INDEX`, `processors`, stacks from frames, a CPU that does not start is tolerated, `tick_others` skips idle CPUs;
+  - `kernel/src/arch/aarch64/cpu.rs`: `MAX` = 256, stacks from frames, `tick_others` skips idle CPUs;
+  - `kernel/src/scheduler.rs`: the ticking CPU calls `wake_idle` every tick;
+  - `kernel/src/scheduler/stat.rs`: pending busy and idle time;
+  - `shell/src/observe.rs`: `cpus` reads into 16 KiB.
+- **Tests:**
+  - x86 with 16 CPUs: `normal` passes, 16 online;
+  - aarch64 with 16 CPUs: `normal` passes, including the idle check that failed before the tick change;
+  - x86 with 4 CPUs: `busy`, `smp`, `isolation` and `heap` pass;
+  - x86 with 1 CPU: `smp`, `isolation`, `heap` and `services` pass;
+  - aarch64 with 4 CPUs: `normal`, `smp` and `busy` pass;
+  - aarch64 GICv2: `normal` passes.
+- **CI:** groups "16 CPUs" for x86 and aarch64.
+- **Profile:** README "CPU configuration" and "Current scope"; `kernel-objects.md` (STAT); the aarch64 profile's CPUs row, its evidence and its threat model.
+- **Remaining:**
+  - x2APIC (CPUs with IDs above 254) is not supported;
+  - `sysmon`'s samples (`idl/sysinfo.wit`) carry the load of the first 8 CPUs only, so `top`'s and the load monitor's per-CPU views show 8 — requested from the tools track ([171-APP-0007](../issues/171-APP-0007-sysinfo-every-cpu-and-capability.md));
+  - more than 16 CPUs were not tested.

@@ -5,7 +5,8 @@ use crate::memory::Region;
 use core::arch::{asm, global_asm};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-pub const MAX: usize = 8;
+// A table bound, not the hardware's (GICv3 has none; GICv2 addresses 8 interfaces): issue 171.
+pub const MAX: usize = 256;
 pub static COUNT: AtomicUsize = AtomicUsize::new(1);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
 pub static TICKS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
@@ -42,7 +43,8 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
 // This CPU's exception stack (TPIDR_EL1 holds its top), the vectors, no FP/SIMD at EL0 or EL1, and the counter
 // readable but nothing else of the timer at EL0.
 unsafe fn load() -> Result<(), &'static str> {
-    let stack = Region::new(STACK, 16)?;
+    // From the frame pool: many CPUs would otherwise take a large part of the arena (issue 171).
+    let stack = Region::task(STACK, 16)?;
     let top = stack.ptr() as usize + STACK;
     core::mem::forget(stack);
     asm!("msr tpidr_el1, {}", in(reg) top);
@@ -101,7 +103,7 @@ pub unsafe fn start(_info: &BootInfo) {
     let code = core::ptr::addr_of!(ap_boot) as usize;
     clean(code, core::ptr::addr_of!(ap_boot_end) as usize - code);
     for index in 1..COUNT.load(Ordering::Acquire) {
-        let Ok(stack) = Region::new(STACK, 16) else { break };
+        let Ok(stack) = Region::task(STACK, 16) else { break };
         let top = stack.ptr() as u64 + STACK as u64;
         core::mem::forget(stack);
         let record = &mut *core::ptr::addr_of_mut!(RECORDS[index]);
@@ -126,9 +128,10 @@ extern "C" fn ap_entry(index: usize) -> ! {
 }
 
 // SGIs to the other online CPUs: the tick (from the boot CPU's timer), a wake-up, a stop.
+// The tick goes only to CPUs that run a task (time slices); an idle CPU sleeps until a wake SGI (issue 171).
 pub unsafe fn tick_others() {
     for i in 1..COUNT.load(Ordering::Acquire) {
-        if ONLINE[i].load(Ordering::Acquire) { crate::interrupts::sgi(i, IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_TICK); }
+        if ONLINE[i].load(Ordering::Acquire) && RUNNING[i][0].load(Ordering::Relaxed) != 0 { crate::interrupts::sgi(i, IDS[i].load(Ordering::Relaxed), crate::interrupts::SGI_TICK); }
     }
 }
 pub unsafe fn wake(index: usize) {

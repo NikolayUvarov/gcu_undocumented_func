@@ -1,0 +1,35 @@
+# 171-KRN-0004 — Capability tables that grow on demand, up to 4095 slots — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done), step 4 · **Constitution:** MC-3.1, MC-3.2, MC-1.7
+
+## Problem
+
+Every task had a fixed table of 96 capability slots (`CAP_SLOTS`). A handle (`slot | generation << 8`) could name only 256 slots in any case: 8 bits of slot and 24 of generation, in 32 bits, because grants carry a handle in a `u32` and IPC calls carry a timeout above bit 32.
+
+## Plan
+
+- **Handle layout.** The 32 bits of a handle are split again: 12 bits of slot (up to 4095 slots) and 20 of generation. A generation now wraps after 1 048 575 reuses of one slot instead of 16 777 215. Grants and the IPC timeout keep their layout. A wider handle would change the grant record and every IPC word; it is left to a later ABI version if 4095 is not enough.
+- **Table.** A task's table starts with 96 slots. When a kernel-allocated slot is needed and none is free, it doubles, up to 4095. If the kernel heap cannot grow it, the capability is refused with the usual error. The table is counted in the task's `kernel_bytes` (STAT).
+- **Test.** `isolation` case `k` mints 300 read-only children of a shared page, so some have slots beyond 255. It revokes them all (300 removed) and checks that a reused slot's old handle is refused.
+
+## Acceptance criteria
+
+A task holds more than 96 and more than 255 capabilities. Revoke and stale-handle checks hold for them, and the kernel heap returns to its baseline when the task ends.
+
+## Resolution
+
+- **Code:**
+  - `common/abi.rs`: `HANDLE_SLOT_MASK` 0xFFF, `HANDLE_GENERATION_SHIFT` 12, `HANDLE_GENERATION_MAX`, `CAP_SLOTS_MAX`;
+  - `kernel/src/scheduler.rs`: `cspace`, `generations` and `nodes` are vectors, and `free_slot` and `insert` grow them; the spawn grant arrays are `SLOT_DYNAMIC` long; revoke sizes its list from the tables;
+  - `kernel/src/scheduler/stat.rs`: walks each table's length and counts it in `kernel_bytes`;
+  - `shell/src/observe.rs`: `CAPS=n/4095`.
+- **Tests:**
+  - `isolation` passed on x86, including the new check and the heap baseline;
+  - the `services` suite's `CAPS=5/4095`.
+- **Profile:**
+  - README (MC-3.1, 3.2: the handle layout and the wrap after 1 048 575 reuses);
+  - `kernel-objects.md` (capability slot row, STAT, gaps);
+  - `docs/api`, README.
+- **Not done:**
+  - the table is paid from the kernel heap, not charged to the task's memory quota (it is bounded by 4095 slots, about 224 KiB a task);
+  - `top` and `memmap` still show `/95`, which the tools track was asked to change in [171-APP-0006](../issues/171-APP-0006-monitor-bounds.md).

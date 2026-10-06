@@ -1,6 +1,6 @@
 # 301 — Objects larger than a block: manifests as a Merkle-DAG (track B, second step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the service parts wait for [requests-KRN.md](requests-KRN.md), like 300) · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.7, MC-4.13, Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the service parts wait for [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done), like 300) · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.7, MC-4.13, Appendix B.3
 
 ## Problem
 
@@ -31,7 +31,7 @@ The `STO` track numbers its tasks itself and may change the split.
 
 - **Done — [`301-STO-0001`](../issues-done/301-STO-0001-object-format.done):** `mind::dag` and `tests/dag_host.rs`.
 - **Done — [`301-STO-0002`](../issues-done/301-STO-0002-store-takes-nodes.done):** `put(codec, data)`; a node is stored only if it decodes, and a record typed as a node that does not is corrupt.
-- **Next — `301-STO-0003`:** objects over the running service. It waits, like 300-STO-0003, for [requests-KRN.md](requests-KRN.md).
+- **Next — `301-STO-0003`:** objects over the running service. It waits, like 300-STO-0003, for [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done).
 
 ## Related
 

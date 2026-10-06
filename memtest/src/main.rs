@@ -59,6 +59,14 @@ fn fill_all() {
     loop { mind::time::sleep(1000); } // until killed
 }
 
+// Creates endpoints until its quota refuses one and keeps them until killed (issue 171: the endpoint table grows).
+fn endpoints() {
+    let mut count = 0;
+    while Endpoint::create().is_ok() { count += 1; }
+    mind::println!("[MEMTEST] ENDPOINTS {}", count);
+    loop { mind::time::sleep(1000); }
+}
+
 // Whether the contents are the pattern, and their sum, from one word in every 512 bytes (emulation is slow).
 fn check(memory: &[u8]) -> (bool, u64) {
     (0..memory.len() / 512).fold((true, 0u64), |(ok, s), n| {
@@ -115,7 +123,7 @@ fn child() {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill");
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
@@ -123,7 +131,8 @@ fn main(_info: &'static BootInfo) {
         "hold" => alloc(mib, true),
         "share" => share(mib),
         "fill" => fill_all(),
+        "endpoints" => endpoints(),
         "child" => child(),
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL"),
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS"),
     }
 }

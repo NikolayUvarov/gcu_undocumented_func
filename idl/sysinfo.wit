@@ -26,7 +26,7 @@ interface sysinfo {
     /// A CPU (StatCpu).
     record cpu { busy-ns: u64, idle-ns: u64, ticks: u64, switches: u64, interrupts: u64, current: u64, apic: u32, online: bool }
     /// Kernel memory by use (StatMemory, bytes): `largest-free` is the largest block the arena can still allocate,
-    /// `shared` memory of other owners mapped by tasks; the kernel's task and endpoint limits (0: none but memory).
+    /// `shared` memory of other owners mapped by tasks; the kernel's task and endpoint limits (the root quota, 65 535; issue 171).
     record memory {
         arena: u64, used: u64, free: u64, images: u64, stacks: u64, task-pages: u64, screens: u64, heaps: u64,
         objects: u64, objects-limit: u64, dma: u64, dma-limit: u64, tasks: u32, endpoints: u32,

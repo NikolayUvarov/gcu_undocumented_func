@@ -3,12 +3,14 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 28;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 29;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
-pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
+pub const SERVICE_INSTANCES: [&str; 2] = ["virtio_net#1", "ramdisk#1"]; // ramdisk#1: the block store's disk (300-KRN-0001)
+// The largest task or endpoint quota SPAWN can delegate (16 bits): the root quota init holds (issue 171).
+pub const QUOTA_MAX: usize = 0xFFFF;
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
@@ -175,7 +177,9 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
-pub const CAP_SLOTS: usize = 96; // init keeps a client and a keeper of every service for restarts
+// Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX, what a handle can name (issue 171).
+pub const CAP_SLOTS: usize = 96;
+pub const CAP_SLOTS_MAX: usize = HANDLE_SLOT_MASK + 1;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;
@@ -239,13 +243,19 @@ pub const SLOT_GPIO: usize = 23;
 // A client of the video gateway (idl/video.wit, issue 158): the shell's, which it lends for REQUEST_CAMERA to the
 // program's same slot once the user agreed.
 pub const SLOT_CAMERA: usize = 24;
+// A client of the block store (idl/blockstore.wit, 300-KRN-0001): the shell's (get, put and publish), which it lends
+// for REQUEST_BLOCKSTORE to the program's same slot.
+pub const SLOT_BLOCKSTORE: usize = 25;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 25;
+pub const SLOT_DYNAMIC: usize = 26;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
-// Received capabilities and the compositor's screen are placed only in fixed slots.
-pub const HANDLE_SLOT_MASK: usize = 0xFF;
-pub const HANDLE_GENERATION_SHIFT: usize = 8;
+// Received capabilities and the compositor's screen are placed only in fixed slots. A handle fits in 32 bits (grants,
+// IPC timeouts above it): 12 bits name up to 4095 slots, 20 bits the generation, which wraps after 1 048 575 reuses of
+// one slot (issue 171; before: 8 and 24 bits).
+pub const HANDLE_SLOT_MASK: usize = 0xFFF;
+pub const HANDLE_GENERATION_SHIFT: usize = 12;
+pub const HANDLE_GENERATION_MAX: usize = 0xF_FFFF;
 
 // Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
 // through capabilities (MC-3.3).
@@ -290,12 +300,8 @@ pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 // endpoint rights are narrowed by the mask, reply capabilities are not transferable.
 pub const SPAWN_BOOT: usize = 1 << 63;
 // Memory quota (issue 150): private memory (heap blocks, memory objects) of a task and its live descendants is charged
-// to it and to every spawner above; a child's quota is at most its spawner's. init's quota is the frame pool. A spawn
-// also charges the child's image, stack, screen and kernel structure to the spawner (issues 168, 171).
+// to it and to every spawner above; a child's quota is at most its spawner's. init's quota is the frame pool.
 pub const SPAWN_MEMORY_ALL: usize = 0xFFFF;
-// A task or endpoint quota of 0xFFFF has no count: memory alone bounds the tasks and endpoints (issue 171). Only a
-// spawner whose own quota has no count may give one; init's has none. Readers see 0xFFFF for such a quota.
-pub const SPAWN_QUOTA_UNBOUNDED: usize = 0xFFFF;
 pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
 // With SPAWN_SCREEN: the task starts in front if the task named by PID in msg[1] has the focus now, else SPAWN fails with
@@ -405,9 +411,9 @@ pub const BLOCK_MAX_SECTORS: usize = 128;
 pub const AUDIO_RATE: usize = 48_000;
 
 // STAT (observe or control privilege): arg1 = class, arg2 = buffer, msg[0] = capacity in bytes, msg[1] = argument
-// (a PID for VMAP and CAPS; for TASKS and ENDPOINTS the first record to write, so a long list is read page by page,
-// STAT version 3). The buffer receives a StatHeader and then up to (capacity - header) / record_size records; the
-// result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
+// (a PID for VMAP and CAPS), msg[2] = the first record to write (0: from the start; issue 171: callers page through any
+// number). The buffer receives a StatHeader and then up to (capacity - header) / record_size records from that one on;
+// the result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
 // Nothing returned is authority: endpoint indices are labels no system call accepts, and no task memory contents or
 // physical addresses of task memory are exported (MC-10.2).
 pub const SYSCALL_STAT: usize = 51;
@@ -429,7 +435,7 @@ pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
 pub const BAND_KEEP: usize = 0xFF;
-pub const STAT_VERSION: u32 = 3; // 2: the fields of issue 075 appended; 3: `spawn_bytes`, pages of STAT_TASKS and STAT_ENDPOINTS (issue 171)
+pub const STAT_VERSION: u32 = 2; // 2: the fields of issue 075 appended
 pub const STAT_TASKS: usize = 1;
 pub const STAT_CPUS: usize = 2;
 pub const STAT_MEMORY: usize = 3;
@@ -450,9 +456,8 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
     pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
-    pub kernel_bytes: u64, // the task's structure, context, mailbox, info and exit pages, page tables
+    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables, the capability table
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
-    pub spawn_bytes: u64, // charged to its spawner at SPAWN: image, stack, screen, structure and its pages (issue 171)
 }
 // `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }

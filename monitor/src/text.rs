@@ -40,12 +40,6 @@ pub fn uptime(ms: u64) -> String {
 }
 
 /// A value x 100 as a decimal: 12 → 0.12.
-/// A count and its limit, or the count alone when the kernel has no limit for it (0: tasks and endpoints, issue 171).
-pub fn of(value: u64, limit: u32) -> String { if limit == 0 { format!("{}", value) } else { format!("{}/{}", value, limit) } }
-
-/// A task or endpoint quota: "-" when it has no count (0xFFFF, SPAWN_QUOTA_UNBOUNDED; issue 171).
-pub fn quota(value: u32) -> String { if value == 0xFFFF { String::from("-") } else { format!("{}", value) } }
-
 pub fn hundredths(value: u32) -> String { format!("{}.{:02}", value / 100, value % 100) }
 
 /// Per mille as a percentage with one decimal: 425 → 42.5.

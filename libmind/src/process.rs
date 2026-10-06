@@ -138,6 +138,7 @@ pub const REQUEST_DISPLAY: u32 = 1024; // the compositor's client in SLOT_DISPLA
 pub const REQUEST_GPIO: u32 = 2048; // the pin controller service's client with the control badge in SLOT_GPIO (issue 207)
 pub const REQUEST_LINE: u32 = 4096; // with `--line` among its arguments, a console program (no screen): `clock --line`, issue u016
 pub const REQUEST_CAMERA: u32 = 8192; // the video gateway's client in SLOT_CAMERA, lent once the user agreed (issue 158)
+pub const REQUEST_BLOCKSTORE: u32 = 16384; // the shell's block store client in SLOT_BLOCKSTORE (300-KRN-0001)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

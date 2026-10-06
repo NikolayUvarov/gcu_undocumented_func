@@ -71,7 +71,10 @@ jobs:
             args: --suites vfs,edit,disk,block
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
-          # 6 GiB: task memory from the RAM above 4 GiB (issue 171).
+          # Every CPU the machine has, beyond the former 8 (issue 171).
+          - name: 16 CPUs
+            args: --cpus 16 --suites normal
+          # 6 GiB: the frame pool and task memory from the RAM above 4 GiB (issue 171).
           - name: RAM above 4 GiB
             args: --memory 6G --suites normal,display,net,vfs
           - name: one CPU
@@ -154,6 +157,9 @@ jobs:
           - group: NVMe boot disk
             suites: vfs
             disk: nvme
+          - group: 16 CPUs
+            suites: normal
+            cpus: 16
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
@@ -170,9 +176,9 @@ jobs:
         run: |
           python3 scripts/make_usb_image.py --arch aarch64 --no-build --output /tmp/mind-core-usb-aarch64.img
           python3 tests/usb_image_smoke.py --arch aarch64 --image /tmp/mind-core-usb-aarch64.img
-      - name: QEMU suites on virt, four CPUs
+      - name: QEMU suites on virt, four CPUs (or the group's count)
         if: ${{ matrix.suites }}
-        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }}
+        run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.cpus && format('--cpus {0}', matrix.cpus) || '' }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }}
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4

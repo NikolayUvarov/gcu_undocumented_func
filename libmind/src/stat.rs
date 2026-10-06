@@ -29,25 +29,28 @@ impl<'a> Records<'a> {
 }
 
 /// Reads class `class` (STAT_*) with `argument` (a PID for STAT_VMAP/STAT_CAPS) into `buffer`.
-pub fn read(class: usize, argument: u64, buffer: &mut [u8]) -> Result<Records<'_>> {
+pub fn read(class: usize, argument: u64, buffer: &mut [u8]) -> Result<Records<'_>> { read_from(class, argument, 0, buffer) }
+
+/// As `read`, from record `first` on: one page of a class with more records than `buffer` holds (issue 171).
+pub fn read_from(class: usize, argument: u64, first: usize, buffer: &mut [u8]) -> Result<Records<'_>> {
     let header_size = core::mem::size_of::<StatHeader>();
     if buffer.len() < header_size { return Err(Error::Invalid); }
-    let header = crate::control::stat(class, argument as usize, buffer)?;
+    let header = crate::control::stat_from(class, argument as usize, first, buffer)?;
     if header.version != STAT_VERSION { return Err(Error::Invalid); }
     let end = header_size + header.count as usize * header.record_size as usize;
     Ok(Records { header, bytes: &buffer[header_size..end.min(buffer.len())] })
 }
 
-/// Every record of STAT_TASKS or STAT_ENDPOINTS, read page by page into `buffer` (STAT version 3, issue 171): `f` gets
-/// each one and returns false to stop. Records can change between pages: a task that starts meanwhile may be missed.
-pub fn each<T: Copy>(class: usize, buffer: &mut [u8], mut f: impl FnMut(T) -> bool) -> Result<()> {
-    let mut start = 0;
+/// Every record of `class` with `argument`, read page by page into `buffer` (issue 171): `f` gets each one and returns
+/// false to stop. Records can change between pages: a task that starts meanwhile may be missed.
+pub fn each<T: Copy>(class: usize, argument: u64, buffer: &mut [u8], mut f: impl FnMut(T) -> bool) -> Result<()> {
+    let mut first = 0;
     loop {
-        let records = read(class, start as u64, buffer)?;
+        let records = read_from(class, argument, first, buffer)?;
         let (count, total) = (records.len(), records.total());
         for record in records.iter::<T>() { if !f(record) { return Ok(()); } }
-        start += count;
-        if count == 0 || start >= total { return Ok(()); }
+        first += count;
+        if count == 0 || first >= total { return Ok(()); }
     }
 }
 

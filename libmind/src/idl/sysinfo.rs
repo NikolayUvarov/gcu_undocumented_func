@@ -56,7 +56,7 @@ impl Wire for Cpu {
 }
 
 /// Kernel memory by use (StatMemory, bytes): `largest-free` is the largest block the arena can still allocate,
-/// `shared` memory of other owners mapped by tasks; the kernel's task and endpoint limits (0: none but memory).
+/// `shared` memory of other owners mapped by tasks; the kernel's task and endpoint limits (the root quota, 65 535; issue 171).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Memory { pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64, pub heaps: u64, pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub tasks: u32, pub endpoints: u32, pub largest_free: u64, pub page_tables: u64, pub shared: u64, pub tasks_limit: u32, pub endpoints_limit: u32 }
 impl Wire for Memory {

@@ -1,0 +1,44 @@
+# 300-KRN-0001 — The block store starts at boot, over a RAM disk of its own — done
+
+**Type:** kernel (core services) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) (`STO`) · **Constitution:** MC-3.3, MC-3.7, MC-4.1, MC-1.7
+
+Requested by the storage track (STO) in `issues/requests-KRN.md`, 2026-10-06.
+
+## Problem
+
+The block store ([300-STO-0002](300-STO-0002-blockstore-service.md)) was built for both architectures and tested on the host, but nothing started it. It needs a block client of its own: `block::serve` keeps one transfer buffer for all its clients, so it cannot share vfs_server's RAM disk. Starting it touches the kernel track's files: `common/abi.rs`, `init`, the shell's lending and loader's list of slots.
+
+## Plan
+
+The storage track's proposal, as made:
+
+- **A second RAM disk.** `ramdisk#1` in `SERVICE_INSTANCES`; init's `ramdisk` arm serves the instance's own name.
+- **The service at boot.**
+  - `blockstore` in `BOOT_SERVICES` and `BOOT_FILES`, after `vfs_server`, so `BOOT_IMAGES` becomes 29; it is in `02_build.sh` too.
+  - init grants it its server endpoint and a client of `ramdisk#1` with the write badge in slot 2.
+  - If `ramdisk#1` does not run, it is not started.
+- **Clients.**
+  - `SLOT_BLOCKSTORE` = 25 for the shell, so `SLOT_DYNAMIC` moves to 26. Its client carries `BADGE_GET | BADGE_PUT | BADGE_PUBLISH`.
+  - `REQUEST_BLOCKSTORE` (16384): the shell lends its client to the program's slot 25 (a script must declare `blockstore`), and loader accepts that slot.
+- **Task budget.** The request worried about two more services against `MAX_TASKS` = 32. That limit is gone (171-KRN-0002).
+
+## Acceptance criteria
+
+- After boot, blockstore's log has `[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0`, on x86 and aarch64.
+- The shell's slot 25 is a client of the block store with badge 7.
+- A program holding `REQUEST_BLOCKSTORE` reaches the store with the badge it was lent. The storage track's test tool will show this.
+
+## Resolution
+
+- **Code:**
+  - `common/abi.rs`: `BOOT_IMAGES` 29, `blockstore`, `ramdisk#1`, `SLOT_BLOCKSTORE`, `SLOT_DYNAMIC` 26;
+  - `init/src/main.rs`: the `ramdisk` arm uses the instance's name, there is a `blockstore` arm, the shell's slot 25, and its `HOLDS` line;
+  - `loader/src/main.rs`: accepts slot 25;
+  - `libmind/src/process.rs`: `REQUEST_BLOCKSTORE`;
+  - `shell/src/main.rs`: lends slot 25 for that request;
+  - `02_build.sh`: `blockstore.elf` in the image.
+- **Tests:**
+  - x86, `services` suite (`blockstore_check`): the READY line, `ramdisk#1` running, and the shell's slot 25 with badge 7 served by blockstore;
+  - aarch64, `tests/aarch64_smoke.py`: the `ramdisk#1` and READY lines at boot.
+- **Not covered here:** that a program reaches the store with the badge it was lent waits for the storage track's test tool, which needs `REQUEST_BLOCKSTORE` from here. The standalone build steps for `blockstore` in CI and `ci_local.sh` remain; they are the storage track's to drop.
+- **Docs:** README services table, `bootstrap.md`, `docs/api` (slots), `kernel-objects.md`.

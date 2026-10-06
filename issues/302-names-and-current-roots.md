@@ -1,6 +1,6 @@
 # 302 — Names and their current roots: versions published by compare-and-swap (track B, third step)
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the service parts wait for [requests-KRN.md](requests-KRN.md), like 300) · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10, Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the service parts wait for [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done), like 300) · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10, Appendix B.3
 
 ## Problem
 

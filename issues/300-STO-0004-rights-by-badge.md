@@ -1,6 +1,6 @@
 # 300-STO-0004 — Rights to the block store by badge: storing apart from reading
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (clients minted with the badges) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) (clients minted with the badges) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
 
 Part of main task [300](300-checksummed-block-store.md).
 
@@ -17,7 +17,7 @@ Any holder of a `blockstore` client could put and get. MC-4.7 says that a hash d
   - a client without either may do nothing, and bits this version does not know grant nothing.
 - **The service** checks every request against the badge of the caller's capability. A refusal is answered `rights` and logged with the caller's PID and badge.
 - `idl/blockstore.wit` 1.0: `stat` returns `result<stats, error>`, so it can be refused. The interface has not run anywhere yet, so this is still its first version.
-- **The kernel track** mints the clients with these badges (added to [requests-KRN.md](requests-KRN.md)).
+- **The kernel track** mints the clients with these badges (added to [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done)).
 
 ## Acceptance criteria
 

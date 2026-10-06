@@ -45,33 +45,3 @@ impl Drop for Region {
         }
     }
 }
-
-/// A kernel structure in task memory, the frame pool, so the arena does not bound how many there are (issue 171).
-pub struct Boxed<T> {
-    region: Region,
-    _type: core::marker::PhantomData<T>,
-}
-
-impl<T> Boxed<T> {
-    /// Room for a `T`, taken before the value exists (a spawn charges it first).
-    pub fn room() -> Result<Region, &'static str> { Region::task(core::mem::size_of::<T>(), core::mem::align_of::<T>()) }
-    pub fn place(region: Region, value: T) -> Self {
-        assert!(region.len() >= core::mem::size_of::<T>() && region.ptr() as usize % core::mem::align_of::<T>() == 0);
-        unsafe { (region.ptr() as *mut T).write(value); }
-        Self { region, _type: core::marker::PhantomData }
-    }
-    pub fn bytes(&self) -> usize { self.region.len() }
-}
-
-impl<T> core::ops::Deref for Boxed<T> {
-    type Target = T;
-    fn deref(&self) -> &T { unsafe { &*(self.region.ptr() as *const T) } }
-}
-
-impl<T> core::ops::DerefMut for Boxed<T> {
-    fn deref_mut(&mut self) -> &mut T { unsafe { &mut *(self.region.ptr() as *mut T) } }
-}
-
-impl<T> Drop for Boxed<T> {
-    fn drop(&mut self) { unsafe { core::ptr::drop_in_place(self.region.ptr() as *mut T); } }
-}

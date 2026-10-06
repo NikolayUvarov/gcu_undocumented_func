@@ -66,13 +66,13 @@ impl Monitor {
             }
         }
         let (mut syscalls, mut tasks, mut runnable) = (0u64, 0u32, 0u32);
-        let _ = stat::each::<StatTask>(STAT_TASKS, self.scratch.as_mut_slice(), |task| {
+        let _ = stat::each::<StatTask>(STAT_TASKS, 0, self.scratch.as_mut_slice(), |task| {
             syscalls += task.calls; tasks += 1;
             if stat::runnable(task.wait) { runnable += 1; }
             true
         });
         let mut messages = 0u64;
-        let _ = stat::each::<StatEndpoint>(STAT_ENDPOINTS, self.scratch.as_mut_slice(), |e| { messages += e.messages; true });
+        let _ = stat::each::<StatEndpoint>(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice(), |e| { messages += e.messages; true });
         if let Ok(memory) = stat::one::<StatMemory>(STAT_MEMORY) { sample.used_kib = (memory.used / 1024) as u32; }
         let delta = |now: u64, before: &mut u64| { let d = now.saturating_sub(*before); *before = now; d.min(u32::MAX as u64) as u32 };
         sample.interrupts = delta(interrupts, &mut self.totals.interrupts);
@@ -110,18 +110,19 @@ fn name(bytes: &[u8; NAME_MAX]) -> Text<16> {
 // The PIDs of every live task, all pages of STAT_TASKS.
 fn live_pids(scratch: &mut [u8]) -> Result<Vec<u64>, Error> {
     let mut pids = Vec::new();
-    stat::each::<StatTask>(STAT_TASKS, scratch, |t| { if t.wait != WAIT_EXITED { pids.push(t.pid); } true }).map_err(|_| Error::Unavailable)?;
+    stat::each::<StatTask>(STAT_TASKS, 0, scratch, |t| { if t.wait != WAIT_EXITED { pids.push(t.pid); } true }).map_err(|_| Error::Unavailable)?;
     Ok(pids)
 }
 
 fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -> mind::Result<()> {
-    macro_rules! records { ($class:expr, $arg:expr) => {{
+    // STAT records of a class with an argument, from record `first` on (a page of a long list).
+    macro_rules! records { ($class:expr, $arg:expr) => { records!($class, $arg, 0) }; ($class:expr, $arg:expr, $first:expr) => {{
         let scratch = monitor.scratch.as_mut_slice();
-        match stat::read($class, $arg, scratch) { Ok(records) => Ok(records), Err(mind::Error::NotFound) => Err(Error::NotFound), Err(_) => Err(Error::Unavailable) }
+        match stat::read_from($class, $arg, $first, scratch) { Ok(records) => Ok(records), Err(mind::Error::NotFound) => Err(Error::NotFound), Err(_) => Err(Error::Unavailable) }
     }}; }
     match request {
         Request::Tasks { start } => {
-            let items: Result<Vec<sysinfo::Task>, Error> = records!(STAT_TASKS, start as u64).map(|r| r.iter::<StatTask>().take(40).map(|t| sysinfo::Task {
+            let items: Result<Vec<sysinfo::Task>, Error> = records!(STAT_TASKS, 0, start as usize).map(|r| r.iter::<StatTask>().take(40).map(|t| sysinfo::Task {
                 pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, ticks: t.ticks, calls: t.calls, sends: t.sends, receives: t.receives, started_ns: t.started_ns,
                 image: t.image_bytes, stack: t.stack_bytes, screen: t.screen_bytes, heap: t.heap_bytes, shared: t.shared_bytes, retained: t.retained_bytes,
                 budget_ns: t.budget_ns, period_ns: t.period_ns, wait_on: t.wait_on, heap_blocks: t.heap_blocks, caps: t.caps,
@@ -160,7 +161,7 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
             sysinfo::reply_caps(call, items.as_deref().map_err(|e| *e))
         }
         Request::Endpoints { start } => {
-            let items: Result<Vec<sysinfo::EndpointInfo>, Error> = records!(STAT_ENDPOINTS, start as u64).map(|r| r.iter::<StatEndpoint>().take(128).map(|e| sysinfo::EndpointInfo {
+            let items: Result<Vec<sysinfo::EndpointInfo>, Error> = records!(STAT_ENDPOINTS, 0, start as usize).map(|r| r.iter::<StatEndpoint>().take(128).map(|e| sysinfo::EndpointInfo {
                 messages: e.messages, busy: e.busy, timeouts: e.timeouts, creator: e.creator, index: e.index, receivers: e.receivers, senders: e.waiting_senders, receiving: e.waiting_receivers,
                 server: e.server, holders: e.holders, irq: e.irq }).collect());
             sysinfo::reply_endpoints(call, items.as_deref().map_err(|e| *e))
@@ -204,7 +205,7 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
             let pids = live_pids(monitor.scratch.as_mut_slice());
             let holders = pids.and_then(|pids| {
                 let mut exists = false;
-                stat::each::<StatEndpoint>(STAT_ENDPOINTS, monitor.scratch.as_mut_slice(), |e| { exists |= e.index == index; !exists }).map_err(|_| Error::Unavailable)?;
+                stat::each::<StatEndpoint>(STAT_ENDPOINTS, 0, monitor.scratch.as_mut_slice(), |e| { exists |= e.index == index; !exists }).map_err(|_| Error::Unavailable)?;
                 if !exists { return Err(Error::NotFound); }
                 let mut out = Vec::new();
                 for pid in pids {
