@@ -2766,12 +2766,24 @@ def camera_check(vm):
     time.sleep(.2); vm.collect(); vm.output = ""
     ask("camera -r 10 -t 3 data/cam.avi", b"y")
     vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
+    opened = time.monotonic()
     time.sleep(1)
     _, size, _, during = vm.screenshot().split(b"\n", 3)
-    vm.serial(enter=False)
     width = int(size.split()[0])
     mark = ((13 * width) + width - 48 - 6) * 3  # the camera mark's body, left of the capture dot
-    assert during[mark:mark + 3] == bytes((0x20, 0xC0, 0x40)), ("the camera mark while the stream is open", during[mark:mark + 3])
+    if during[mark:mark + 3] != bytes((0x20, 0xC0, 0x40)):
+        # Seen once on CI and never locally (158-APP-0005): what follows tells a mark that comes late or blinks from
+        # one that is not drawn at all. The check still fails.
+        later = []
+        for _ in range(4):
+            time.sleep(.3)
+            later.append((round(time.monotonic() - opened, 2), vm.screenshot().split(b"\n", 3)[3][mark:mark + 3].hex()))
+        vm.serial(enter=False)
+        # The program's own lines first (its 3 s end the stream), then the gateway's log: when it opened and closed.
+        camera = vm.expect("SHELL RESUMED.", timeout=60)
+        raise AssertionError(("the camera mark while the stream is open", during[mark:mark + 3], "later:", later, camera,
+                              vm.service_logs("video_gw", "CLOSED AFTER")))
+    vm.serial(enter=False)
     # 30 frames of camera time; a slow encoder (aarch64 under TCG) gets fewer pictures and repeats the last one.
     video = re.search(r"\[CAMERA\] VIDEO data/cam.avi: 30 FRAMES \((\d+) PICTURES\) 320X240 AT 10/S, SEQUENCE (\d+)\.\.(\d+), TIMESTAMPS ON THE RATE, (\d+) BYTES",
                       vm.expect("SHELL RESUMED.", timeout=60))

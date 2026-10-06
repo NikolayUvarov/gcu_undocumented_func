@@ -33,6 +33,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
+| [158-APP-0005](158-APP-0005-camera-mark-on-ci.md) | The camera mark was missing once on CI (NVMe group); the check now reports what follows such a failure | `APP` | P2 | the next failure | tracks A, G |
 | [171-APP-0006](171-APP-0006-monitor-bounds.md) | `top`, `memmap`, `load`: capabilities as `n/4095`, task and endpoint counts without the root quota's 65535, the task graph to its own scale (requested by `KRN`) | `APP` | P2 | — | G |
 | [171-APP-0007](171-APP-0007-sysinfo-every-cpu-and-capability.md) | `sysinfo`: every CPU (up to 255) and every capability of a task, in `top`, `load` and `caps` (requested by `KRN`) | `APP` | P2 | — | G |
 
