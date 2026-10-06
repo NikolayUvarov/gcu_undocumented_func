@@ -27,6 +27,8 @@ fn mapped(address: u64) -> usize { if address != 0 && address < WINDOW { address
 pub unsafe fn init(rsdp: u64) {
     let Some(root) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { serial_print("MIND CORE KERNEL: ACPI: NO RSDP\n"); return };
     let Some(list) = table(u64_at(root, 24)) else { return };
+    // QEMU (`virt`): its PL011 and PL031, the SPCR naming the same UART.
+    if list.len() >= 16 && &list[10..16] == b"BOCHS " { board::set(&board::UART, board::VIRT_UART); board::set(&board::RTC, board::VIRT_RTC); }
     let mut ecam = false;
     for at in (36..list.len().saturating_sub(7)).step_by(8) {
         let Some(table) = table(u64_at(list, at)) else { continue };
@@ -73,6 +75,7 @@ pub unsafe fn init(rsdp: u64) {
             // The console: interface type at 36 (3 a PL011, 0x0E the SBSA generic UART), the register address (a
             // generic address structure) at 40, its address at 44; the interrupt (GSIV) at 54 when bit 3 of 52 is set.
             b"SPCR" if table.len() >= 58 => {
+                // Another kind of UART (a 16550, a mini UART) is not driven: no console rather than a wrong address.
                 if matches!(table[36], 0x03 | 0x0E) && table[40] == 0 {
                     board::set(&board::UART, mapped(u64_at(table, 44)));
                     if table[52] & 8 != 0 { let gsiv = u32_at(table, 54) as usize; if gsiv >= 32 { board::set(&board::UART_LINE, gsiv - 32); } }
