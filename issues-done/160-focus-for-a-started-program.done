@@ -1,0 +1,59 @@
+# 160 — A program in front hands the focus to the program it starts — done
+
+**Type:** kernel + loader · **Owner:** kernel track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.3, MC-3.11, MC-10.2
+
+## Problem
+
+Reported by the user: a program started from `fm` "does not work and goes to the background". On a screen of its own, `fm` starts programs through the loader (`loader.wit` `begin` / `commit`); the program gets a screen but stays behind `fm`, because only a task with process control (the shell) may call `FOCUS`. The user has to press Ctrl+Z and type `FG <pid>` in the shell, and when the program ends the shell, not `fm`, comes back.
+
+Under `wm` this no longer happens: `fm` in a window lends its broker client and the program opens a window of its own in front ([099](099-fm-starts-programs-in-windows.done)). On a full screen there is no such way.
+
+## Plan
+
+- **Handing over the focus.** A task that has the focus may give it to a task started on its behalf, and only to that one:
+  - `loader.wit` `commit` gets a `foreground` flag. The loader passes it to `SPAWN` as `SPAWN_FOREGROUND` with the session owner's PID;
+  - the kernel honours it only if that PID has the focus at that moment, so a program in the background cannot take the screen;
+  - the new task's input goes to it at once, as after `FG`.
+- **Coming back.** When a task that received the focus this way ends, the focus returns to the task that handed it over, if it still runs; otherwise to the shell, as now. Ctrl+Z still goes to the shell.
+- **Programs:** `fm` (and `wm` for a program that is not in a window) commits with `foreground` and says `Started top (PID n)`; the shell keeps `FOCUS`.
+
+## Acceptance criteria
+
+- QEMU:
+  - `fm` on its screen starts `top` with Enter: `top` is in front and gets the keys; Esc in `top` brings `fm` back with its panels;
+  - a program in the background that commits with `foreground` is refused, and the focus stays where it was;
+  - Ctrl+Z from the started program still returns to the shell.
+- The kernel's focus rules are listed in docs/api.
+
+## Related
+
+[099](099-fm-starts-programs-in-windows.done), [088](088-text-window-manager.done), [155](155-virtual-consoles.done), [154](154-push-to-talk-routing.done).
+
+## Resolution
+
+- **Kernel** (`kernel/src/scheduler.rs`, `common/abi.rs`):
+  - `SPAWN_FOREGROUND` (4), with `SPAWN_SCREEN` and the PID of the task to start it for in `msg[1] >> 32`.
+  - `SPAWN` checks, under the scheduler lock and before anything is created, that this task is in front. Otherwise it fails with `ERR_FOCUS` (new, `usize::MAX - 9`).
+  - The new task is put in front and remembers who handed it the focus (`handed_by`).
+  - The focus owner gets `NOTICE_FRONT` with the new task's PID. The shell then mirrors that task's output to the serial line (or its console) until it ends, as it does for its own foreground program (`fronts` in `shell/src/main.rs`; also while `msh` waits).
+  - When it ends in front, the focus goes back to that task, if it still runs and is not the focus owner, with no notice: the shell still sees that task in front. Otherwise the focus goes to the focus owner with `NOTICE_EXITED`, as before.
+  - Ctrl+Z goes to the focus owner as before. A `FOCUS` on the task makes it return to the focus owner from then on.
+- **Loader** (`loader.wit` 1.5):
+  - `commit-in-front` starts the program in front for the session's owner (the caller the kernel names).
+  - `rights` when the owner is not in front: nothing starts, and the session stays open for a plain `commit`.
+  - A console program starts as with `commit`.
+  - `mind::process::spawn_in_front` makes the call.
+- **Programs:**
+  - `fm` on a full screen commits in front and says `Started top.elf (PID n): fm comes back when it ends` (`Place::Front`). If refused, it starts the program in the background, as before.
+  - `console` on a full screen does the same and logs `ITS OWN SCREEN IN FRONT`.
+  - `wm` needs nothing: it starts every program in a window (or refuses it).
+  - The shell keeps `FOCUS`.
+- **Tests:**
+  - QEMU `tools` suite, `fm_check`: `top` started from the panel gets the keys (`[TOP] SORT=PID`); Esc brings fm back with its panels and the notice, and the shell prints nothing. Then `clock` is started from fm, Ctrl+Z goes to the shell (`PID=n BACKGROUND. SHELL RESUMED.`), and `FG` brings fm back.
+  - QEMU `tools` suite, `console_check`: `run console top &` starts `top` in the background, not in front, and the shell keeps the keys.
+  - `tests/fm_host.rs`: the notice for `Place::Front`.
+- **Docs:**
+  - docs/api: the focus rules and `SPAWN_FOREGROUND`.
+  - docs/idl: loader 1.5.
+  - docs/profile: the TCB names the loader for the focus; an evidence row; the notices in kernel-objects.
+  - README and docs/tools (EN and RU): fm and console.

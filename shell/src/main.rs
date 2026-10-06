@@ -73,6 +73,7 @@ struct Shell {
     parked: [Option<Parked>; CONSOLES], // the other consoles (None: the active one, or not opened yet)
     active: usize, shown: usize, // the console the shell works in now, and the one on the screen
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
+    fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
     msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
     script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
@@ -176,6 +177,29 @@ impl Shell {
             }
         }
         if let Some(pid) = self.console { self.pump_console(pid); }
+        self.mirror_fronts();
+    }
+
+    // Programs started in front by the foreground one (issue 160): their output too, each until it ends.
+    fn mirror_fronts(&mut self) {
+        for index in 0..self.fronts.len() {
+            let Some((pid, _)) = self.fronts[index].filter(|f| f.1 as usize == self.active) else { continue };
+            let ended = !mind::process::alive(pid);
+            self.mirror(pid);
+            if ended { self.fronts[index] = None; }
+        }
+    }
+
+    // NOTICE_FRONT: the program in front of the shown console started `pid` in its place.
+    fn add_front(&mut self, pid: u64) {
+        if let Some(free) = self.fronts.iter_mut().find(|f| f.is_none()) { *free = Some((pid, self.shown as u8)); }
+    }
+
+    // The shell is in front of `console` again: the programs started in front there are not mirrored any more.
+    fn drop_fronts(&mut self, console: usize) {
+        for index in 0..self.fronts.len() {
+            if let Some((pid, _)) = self.fronts[index].filter(|f| f.1 as usize == console) { self.mirror(pid); self.fronts[index] = None; }
+        }
     }
 
     // The console whose foreground program `pid` is (the one shown when none).
@@ -693,7 +717,7 @@ fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), script: None })
 }
 
@@ -715,9 +739,10 @@ fn main(info: &'static BootInfo) {
         for index in 0..CONSOLES { if shell.activate(index) { shell.tend(); } }
         // What happened to the program with the keyboard: it is the foreground program of the console shown.
         while let Some(notice) = control::notice() {
-            let pid = match notice { Notice::Exited(pid) | Notice::Background(pid) => pid };
+            let pid = match notice { Notice::Exited(pid) | Notice::Background(pid) => pid, Notice::Front(pid) => { shell.add_front(pid); continue; } };
             shell.activate(shell.console_of(pid));
-            let what = match notice { Notice::Exited(pid) => { shell.mirror(pid); "EXITED" } Notice::Background(_) => "BACKGROUND" };
+            shell.drop_fronts(shell.active);
+            let what = match notice { Notice::Exited(pid) => { shell.mirror(pid); "EXITED" } Notice::Background(_) | Notice::Front(_) => "BACKGROUND" };
             shell.focused = None;
             let _ = writeln!(shell.term, "\nPID={} {}. SHELL RESUMED.", pid, what);
             shell.prompt();

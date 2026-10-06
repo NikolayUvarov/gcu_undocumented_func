@@ -16,9 +16,9 @@ pub fn exit_status(pid: u64) -> Option<crate::process::Exit> { check(call(SYSCAL
 
 /// What happened to the focused task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Notice { Exited(u64), Background(u64) }
+pub enum Notice { Exited(u64), Background(u64), Front(u64) }
 pub fn notice() -> Option<Notice> {
-    match call(SYSCALL_NOTICE, 0, 0) { 0 => None, v if v & NOTICE_EXITED != 0 => Some(Notice::Exited((v & !NOTICE_EXITED) as u64)), v => Some(Notice::Background(v as u64)) }
+    match call(SYSCALL_NOTICE, 0, 0) { 0 => None, v if v & NOTICE_EXITED != 0 => Some(Notice::Exited((v & !NOTICE_EXITED) as u64)), v if v & NOTICE_FRONT != 0 => Some(Notice::Front((v & !NOTICE_FRONT) as u64)), v => Some(Notice::Background(v as u64)) }
 }
 pub fn faults(out: &mut [FaultInfo]) -> Result<usize> { check(call(SYSCALL_FAULTS, out.as_mut_ptr() as usize, out.len())) }
 

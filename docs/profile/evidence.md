@@ -23,6 +23,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
+| The task in front hands the focus to a program it starts and gets it back when the program ends, without a notice to the shell; a task in the background cannot (the program starts in the background); Ctrl+Z from the program goes to the shell (issue 160) | `tools` suite (`fm_check`, `console_check`) |
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
 | A CPU budget of 20 ms per 100 ms keeps a busy loop at 12–35 % of its CPU and lifting it restores the full share; `init` restarts a service within 5 s while eight busy applications saturate every CPU | `busy`, `smp` suites |
 | Services started by `init` with their capabilities; single instance (`SERVICE ALREADY RUNNING`); IPC call/reply with memory capabilities; a dead server wakes its waiting client with `ERR_PEER`; VFS over ATA; programs loaded from disk by `loader`; a restarted service serves clients granted before its restart | `services` suite |

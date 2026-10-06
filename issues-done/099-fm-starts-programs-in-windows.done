@@ -11,7 +11,7 @@ Reported by the user with a screenshot of `fm` in a window of `wm`: `top` typed 
 - When fm runs in a window (`mind::windowed::active`), lend its broker client to the program it starts: the program opens a window of its own, in front, next to fm's.
 - Lend, of what the program asks for, what fm holds, as the shell and `wm` do: the user's files, and system information — fm asks for it now only to pass it on to the monitors.
 - Say where the program went: a window, a screen in the background (fm cannot bring it forward: Ctrl+Z, then `FG`), or the log of a console program.
-- The full-screen case needs the kernel: [160](../issues/160-focus-for-a-started-program.md).
+- The full-screen case needs the kernel: [160](160-focus-for-a-started-program.done).
 
 ## Acceptance criteria
 

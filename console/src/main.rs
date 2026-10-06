@@ -31,7 +31,7 @@ Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, writ
 clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
 kill, fg, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them there.";
 
-struct Job { pid: u64, name: String, console: bool, printed: bool }
+struct Job { pid: u64, name: String, console: bool, printed: bool, front: bool }
 
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
 
@@ -64,8 +64,15 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
         let _ = loader::grant_memory(Endpoint::LOADER, session, SLOT_DISPLAY as u8, SLOT_DISPLAY);
         let _ = ipc::drop_cap(SLOT_DISPLAY);
     }
-    let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
-    Ok(Job { pid, name: String::from(name), console, printed: false })
+    // On a screen of its own: in front, as console is (issue 160); in the background when console is not in front.
+    let front = !console && !mind::windowed::active();
+    let started = if front { loader::commit_in_front(Endpoint::LOADER, session).map_err(lost)? } else { Err(loader::Error::Rights) };
+    let (pid, front) = match started {
+        Ok(pid) => (pid, true),
+        Err(loader::Error::Rights) => (loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?, false),
+        Err(error) => return Err(failed(error)),
+    };
+    Ok(Job { pid, name: String::from(name), console, printed: false, front })
 }
 
 fn list(screen: &mut Screen) {
@@ -111,9 +118,9 @@ fn main(info: &'static BootInfo) {
                 Command::Run { name: "", .. } => screen.say("run <program> [arguments]", Kind::Error),
                 Command::Run { name, args } => match run(name, args, output) {
                     Ok(job) => {
-                        mind::println!("[CONSOLE] RUN {} PID {}{}", job.name, job.pid, if job.console { "" } else { " ITS OWN SCREEN" });
+                        mind::println!("[CONSOLE] RUN {} PID {}{}", job.name, job.pid, if job.console { "" } else if job.front { " ITS OWN SCREEN IN FRONT" } else { " ITS OWN SCREEN" });
                         if !job.console {
-                            let place = if mind::windowed::active() { "in a window of its own" } else { "on a screen of its own, in the background (FG in the shell)" };
+                            let place = if mind::windowed::active() { "in a window of its own" } else if job.front { "on a screen of its own, in front: console comes back when it ends" } else { "on a screen of its own, in the background (FG in the shell)" };
                             screen.say(&format!("{} (PID {}) {}", job.name, job.pid, place), Kind::Note);
                         } else { jobs.push(job); }
                     }

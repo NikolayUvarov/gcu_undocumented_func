@@ -76,7 +76,8 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
 // child's slots). A program that asked to be a console program gets no screen, nor one its launcher starts in a window
 // (a broker client in SLOT_WINDOW, issue 088): it draws into the window's surface; a window manager keeps its screen.
-fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
+// With `front`, a program with a screen starts in front for that task, which must have the focus (issue 160).
+fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> Result<u64, Error> {
     let (file, task) = open(name)?;
     let size = file.size();
     if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
@@ -103,7 +104,12 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
-    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, &grants[..count], screen, Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib });
+    let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
+    let image = Image::Memory { cap, len: size };
+    let result = match front.filter(|_| screen != 0) {
+        Some(owner) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner),
+        None => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota),
+    };
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
@@ -160,10 +166,12 @@ impl Launcher {
         self.grant(owner, id, slot)
     }
 
-    fn commit(&mut self, owner: u64, id: u32) -> Result<u64, loader::Error> {
+    // `front`: in front for the owner (commit-in-front); refused while the owner is not in front, the session kept.
+    fn commit(&mut self, owner: u64, id: u32, front: bool) -> Result<u64, loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         let mut session = self.sessions[index].take().unwrap();
-        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count]);
+        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count], front.then_some(owner));
+        if let Err(Error::Other(ERR_FOCUS)) = result { self.sessions[index] = Some(session); return Err(loader::Error::Rights); }
         if result.is_err() { session.drop_grants(); }
         result.map_err(|error| match error {
             Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory, Error::Rights => loader::Error::Rights,
@@ -214,11 +222,12 @@ fn main(_info: &'static BootInfo) {
         // Requests in idl/loader.wit; a message that is not a call is dropped with its capability.
         let _ = match loader::decode(&request, RECEIVED_CAP) {
             Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
-            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[])),
+            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[], None)),
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
             Ok((loader::Request::GrantMemory { session, slot, .. }, call)) => loader::reply_grant_memory(call, launcher.grant_memory(owner, session, slot)),
-            Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session)),
+            Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session, false)),
+            Ok((loader::Request::CommitInFront { session }, call)) => loader::reply_commit_in_front(call, launcher.commit(owner, session, true)),
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
             Ok((loader::Request::InspectRequests { name }, call)) => loader::reply_inspect_requests(call, requests(name.as_str())),

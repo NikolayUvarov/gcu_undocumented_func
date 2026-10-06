@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed.
@@ -158,6 +158,17 @@ pub fn grant_memory(endpoint: Endpoint, session: u32, slot: u8, cap: usize) -> R
     Ok(Ok(()))
 }
 
+/// `commit` in front: the caller must have the focus now; the program takes it and gives it back when it ends.
+/// `rights` when the caller is not in front: nothing starts and the session stays open for `commit`. A console
+/// program starts as with `commit` (issue 160, 1.5).
+pub fn commit_in_front(endpoint: Endpoint, session: u32) -> Result<core::result::Result<u64, Error>> {
+    let words = [10 | MAJOR << 8 | ((session) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0x0, 0xffffffffffffffff], false)?;
+    Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -170,6 +181,7 @@ pub enum Request {
     Inspect { name: Text<64> },
     InspectRequests { name: Text<64> },
     GrantMemory { session: u32, slot: u8, cap: usize },
+    CommitInFront { session: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -236,6 +248,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffffff0000, 0x0], CAP_KIND_MEMORY, true)?;
             Ok((Request::GrantMemory { session: wire::field(&words, 0, 16, 32) as u32, slot: wire::field(&words, 0, 48, 8) as u8, cap: cap }, Call::words(request, cap)))
         }
+        10 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::CommitInFront { session: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -274,4 +290,8 @@ pub fn reply_inspect_requests(call: Call, value: core::result::Result<u32, Error
 pub fn reply_grant_memory(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_commit_in_front(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, ((value) as usize) << 0])
 }

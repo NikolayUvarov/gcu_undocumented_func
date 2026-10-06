@@ -64,8 +64,10 @@ impl ShellHost<'_> {
             }
             if let Some(pid) = shell.focused {
                 shell.mirror(pid);
+                shell.mirror_fronts();
                 match control::notice() {
-                    Some(control::Notice::Exited(p) | control::Notice::Background(p)) if p == pid => { shell.mirror(pid); shell.focused = None; }
+                    Some(control::Notice::Exited(p) | control::Notice::Background(p)) if p == pid => { shell.mirror(pid); shell.drop_fronts(shell.active); shell.focused = None; }
+                    Some(control::Notice::Front(p)) => shell.add_front(p),
                     _ => { if !mind::process::alive(pid) { shell.focused = None; } }
                 }
                 if shell.focused.is_some() { mind::time::sleep(10); continue; }

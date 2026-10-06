@@ -484,6 +484,7 @@ fn command_line_and_hidden_panels() {
     assert_eq!((disk.runs.last().unwrap().as_str(), disk.args.last().unwrap().as_str()), ("grep", "-i x docs/notes.txt"));
     assert_eq!(fm.notice.as_deref(), Some("Started grep as PID 42: a console program, LOGS 42 in the shell shows what it printed"));
     assert_eq!(Started { pid: 7, place: Place::InConsole }.text("uptime.elf"), "Started uptime.elf in a console window (PID 7)", "fm in a window (issue u004)");
+    assert_eq!(Started { pid: 9, place: Place::Front }.text("top.elf"), "Started top.elf (PID 9): fm comes back when it ends", "on a screen, in front (issue 160)");
     typed(&mut fm, &mut disk, "cd /");
     fm.key(code(KEY_ENTER), &mut disk);
     typed(&mut fm, &mut disk, "top");

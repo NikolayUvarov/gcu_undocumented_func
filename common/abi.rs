@@ -162,6 +162,7 @@ pub const ERR_NO_MEMORY: usize = usize::MAX - 5;
 pub const ERR_BUSY: usize = usize::MAX - 6; // e.g. the service is already running
 pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
 pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
+pub const ERR_FOCUS: usize = usize::MAX - 9; // SPAWN_FOREGROUND from a task that does not have the focus (issue 160)
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
@@ -272,7 +273,7 @@ pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 // the program name packed into msg[2..4] and an optional endpoint for the child's INIT slot; reply msg[2] = PID or error.
 
 // SPAWN (requires the spawn privilege): arg1/arg2 = name, msg[0] = image memory capability or SPAWN_BOOT | boot image
-// index (boot images need the platform privilege), msg[1] = ELF length, msg[2] = address of a Grant array,
+// index (boot images need the platform privilege), msg[1] = ELF length | PID << 32 (SPAWN_FOREGROUND), msg[2] = address of a Grant array,
 // msg[3] = grant count | SPAWN_* flags << 8 | child task quota << 16 | child endpoint quota << 32 | child memory quota in
 // MiB << 48 (0: HEAP_MAX_BYTES, SPAWN_MEMORY_ALL: the spawner's). The quotas are taken
 // from the spawner's (MC-3.13): a spawner's live children each reserve 1 + their task quota of its task quota, and their
@@ -284,6 +285,10 @@ pub const SPAWN_BOOT: usize = 1 << 63;
 pub const SPAWN_MEMORY_ALL: usize = 0xFFFF;
 pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
+// With SPAWN_SCREEN: the task starts in front if the task named by PID in msg[1] has the focus now, else SPAWN fails with
+// ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
+// (the loader) names the task it starts the program for.
+pub const SPAWN_FOREGROUND: usize = 4;
 pub const SPAWN_GRANTS_MAX: usize = 24;
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
@@ -316,8 +321,10 @@ pub const PLATFORM_PINS_MAX: usize = 4; // controllers of one kind
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct FaultInfo { pub pid: u64, pub cpu: u64, pub vector: u64, pub error: u64, pub rip: u64, pub address: u64 }
 // FOCUS: arg1 = PID (0 = the caller), arg2 = 1 to keep the task's buffered console output; result = PID.
 // The caller becomes the focus owner: focus returns to it when the focused task exits or on an attention key.
-// NOTICE: 0 if none, else PID | NOTICE_EXITED (the focused task exited) or PID (sent to the background).
+// NOTICE: 0 if none, else PID | NOTICE_EXITED (the focused task exited), PID | NOTICE_FRONT (the task in front started it
+// in its place, SPAWN_FOREGROUND) or PID (sent to the background).
 pub const NOTICE_EXITED: usize = 1 << 63;
+pub const NOTICE_FRONT: usize = 1 << 62; // issue 160
 
 // Input events: one word per key press or release, queued per task (64, oldest dropped). The kernel stores and routes
 // them; decoding and layouts live in ring 3 (ps2_kbd, the shell's UART decoder).
