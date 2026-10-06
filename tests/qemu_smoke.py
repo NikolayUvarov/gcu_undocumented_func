@@ -808,7 +808,17 @@ def shell_suite(vm):
     # pins (issue u015): no pin controller on QEMU (issue 206), so no gpio client to show; it says so and ends with 1.
     require(vm.command("pins"), "pins: no client of the gpio service")
     require(vm.command("pins 3"), "pins: no client of the gpio service")
-    print("PASS: pins without a pin controller says so", flush=True)
+    # pinmap (issue u017) says it on its screen; Esc ends it.
+    vm.send("pinmap\n")
+    require(vm.expect("[PINMAP] READY"), "NO PIN CONTROLLER")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any("No pin controller" in row for row in screen), screen
+    vm.send_bytes(b"\x1b")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: pins and pinmap without a pin controller say so", flush=True)
 
 
 def line_faces_check(vm):

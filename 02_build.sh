@@ -119,6 +119,7 @@ USER_CRATES=(
     "beep:beep:beep.elf"
     "record:record:record.elf"
     "pins:pins:pins.elf"
+    "pins:pinmap:pinmap.elf"
     "camera:camera:camera.elf"
 )
 

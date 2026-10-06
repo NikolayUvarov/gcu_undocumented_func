@@ -1,13 +1,23 @@
-//! Host tests of `pins` (pins/src/tool.rs, issue u015) against a gpio service built here as `gpio` builds it: the
+//! Host tests of `pins` (pins/src/tool.rs, issue u015) and `pinmap` (pins/src/view.rs, issue u017) against a gpio service built here as `gpio` builds it: the
 //! register models of the BCM2711 and the PL061 (libmind/src/gpio.rs), who may change a pin, and the hwdocs tables of
 //! this repository (the Raspberry Pi 4's header).
 #![allow(dead_code)]
 extern crate alloc;
 use std::cell::RefCell;
+#[path = "../common/abi.rs"]
+mod abi;
+#[path = "../libmind/src/keys.rs"]
+mod keys;
+#[path = "../libmind/src/util.rs"]
+mod util;
+#[path = "../libmind/src/tui/mod.rs"]
+mod tui;
 #[path = "../libmind/src/gpio.rs"]
 mod gpio;
 #[path = "../pins/src/tool.rs"]
 mod tool;
+#[path = "../pins/src/view.rs"]
+mod view;
 use tool::*;
 
 // The BCM2711 GPIO block: GPSETn and GPCLRn drive the levels (GPLEVn) of output pins; the rest is plain storage.
@@ -195,4 +205,106 @@ fn the_commands() {
     for bad in ["x", "set 4", "set 4 alt6", "write 4 2", "pull 4 sideways", "watch", "watch -t 2", "-c", "-c x 3", "300"] {
         assert_eq!(parse(bad), Err(String::from(USAGE)), "{bad}");
     }
+}
+
+// pinmap (issue u017): the header of the Raspberry Pi 4 on a screen, keys, the session's confirmation.
+use keys::Key;
+use view::{layout, Change, Flow, Pinmap, Slot};
+
+fn key(code: u16) -> Key { Key(keys::event(code, 0, 0)) }
+fn letter(ch: char) -> Key { Key(keys::event(0, ch as u32, 0)) }
+
+fn screen(view: &Pinmap, gpio: &mut Service, cols: usize, rows: usize) -> Vec<String> {
+    let mut cells = vec![tui::Cell::BLANK; cols * rows];
+    let mut grid = tui::Grid::new(&mut cells, cols, rows);
+    view.draw(&mut grid, &tui::DARK, gpio);
+    (0..rows).map(|y| (0..cols).map(|x| grid.get(x, y).ch).collect::<String>().trim_end().to_string()).collect()
+}
+
+#[test]
+fn the_header_as_on_the_board() {
+    let mut pi = raspberry_pi(gpio::BADGE_CONTROL, true);
+    let pins = pi.pins(0).unwrap();
+    let slots = layout(&pins);
+    assert_eq!(slots.len(), 40);
+    assert_eq!(slots[0], Slot { position: 1, pin: None }, "position 1: 3.3 V");
+    assert_eq!(slots[2], Slot { position: 3, pin: Some(2) });
+    assert_eq!(slots[7], Slot { position: 8, pin: Some(14) });
+    assert_eq!(slots[39], Slot { position: 40, pin: Some(21) });
+    let mut view = Pinmap::new(0);
+    view.refresh(&mut pi);
+    let rows = screen(&view, &mut pi, 100, 30);
+    assert!(rows[0].contains("pinmap — bcm2711 on rpi4b: 58 pins"), "{}", rows[0]);
+    let row = rows.iter().find(|r| r.contains("GPIO14")).unwrap();
+    assert!(row.contains("GPIO4  input            0  7") && row.contains(" 8 GPIO14 ALT0 TXD0        0"), "{row}");
+    assert!(rows.iter().any(|r| r.contains("power or ground  1") && r.contains(" 2 power or ground")), "{rows:?}");
+}
+
+#[test]
+fn a_pin_changed_after_one_confirmation() {
+    let mut pi = raspberry_pi(gpio::BADGE_CONTROL, true);
+    let mut view = Pinmap::new(0);
+    view.refresh(&mut pi);
+    for _ in 0..5 { view.key(key(abi::KEY_DOWN), &mut pi); }
+    assert_eq!(view.selected_pin(), Some(17), "position 11");
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    assert!(view.panel.as_ref().is_some_and(|p| p.0 == 17 && p.1 == INPUT));
+    let rows = screen(&view, &mut pi, 100, 30);
+    assert!(rows.iter().any(|r| r.contains("* input")) && rows.iter().any(|r| r.contains("  ALT4 SPI1_CE1_N")), "{rows:?}");
+    view.key(key(abi::KEY_DOWN), &mut pi);
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    assert_eq!(view.confirm, Some(Change::Function(17, OUTPUT)));
+    assert_eq!(pi.pins(0).unwrap()[17].function, INPUT, "nothing changes before the answer");
+    assert!(screen(&view, &mut pi, 100, 30).iter().any(|r| r.contains("Set pin 17 to output.")));
+    view.key(letter('y'), &mut pi);
+    assert_eq!((pi.pins(0).unwrap()[17].function, view.agreed, view.notice.as_str()), (OUTPUT, true, "pin 17: output"));
+    assert!(view.panel.is_none());
+    view.key(letter('w'), &mut pi);
+    assert!(pi.pins(0).unwrap()[17].level && view.notice == "pin 17: level 1", "no second question in the session");
+    view.key(letter('p'), &mut pi);
+    assert_eq!(view.notice, "pin 17: pull none", "down at reset, then the next pull");
+    assert_eq!(view.status(), "SELECTED=17 PANEL=- CONFIRM=NONE AGREED=1 NOTICE=pin 17: pull none");
+}
+
+#[test]
+fn refused_and_cancelled_changes() {
+    let mut pi = raspberry_pi(gpio::BADGE_CONTROL, true);
+    let mut view = Pinmap::new(0);
+    view.refresh(&mut pi);
+    for k in [abi::KEY_DOWN, abi::KEY_DOWN, abi::KEY_DOWN, abi::KEY_RIGHT] { view.key(key(k), &mut pi); }
+    assert_eq!(view.selected_pin(), Some(14), "position 8");
+    view.key(letter('w'), &mut pi);
+    assert_eq!(view.notice, "pin 14 is not an output: Enter, then output");
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    view.key(key(abi::KEY_UP), &mut pi);
+    view.key(key(abi::KEY_UP), &mut pi);
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    view.key(letter('n'), &mut pi);
+    assert_eq!((view.notice.as_str(), view.agreed, view.panel.is_none()), ("nothing changed", false, true));
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    view.key(key(abi::KEY_UP), &mut pi);
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    assert_eq!(view.notice, "pin 14 is reserved by the board: only the platform may change it");
+    assert_eq!(pi.pins(0).unwrap()[14].function, ALT0, "UART0 stays");
+    view.key(key(abi::KEY_LEFT), &mut pi);
+    view.key(key(abi::KEY_UP), &mut pi);
+    assert_eq!(view.selected_pin(), Some(3), "position 5");
+    view.key(key(abi::KEY_UP), &mut pi);
+    view.key(key(abi::KEY_UP), &mut pi);
+    view.key(key(abi::KEY_ENTER), &mut pi);
+    assert_eq!(view.notice, "power or ground: no pin to change");
+    assert!(matches!(view.key(letter('q'), &mut pi), Flow::Quit));
+}
+
+#[test]
+fn without_a_board_file_or_a_controller() {
+    let mut pi = raspberry_pi(gpio::BADGE_CONTROL, false);
+    let pins = pi.pins(0).unwrap();
+    assert_eq!(layout(&pins).len(), 58);
+    assert!(layout(&pins).iter().enumerate().all(|(i, s)| *s == Slot { position: 0, pin: Some(i as u8) }));
+    let mut view = Pinmap::new(1);
+    view.refresh(&mut pi);
+    assert_eq!(view.problem.as_deref(), Some("no pin controller 1"));
+    assert!(screen(&view, &mut pi, 100, 30).iter().any(|r| r.contains("No pin controller")));
 }
