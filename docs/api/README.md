@@ -82,7 +82,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`, `SPAWN_*`, quotas) → PID; `SPAWN_FOREGROUND` with a PID: in front, see the focus rules below (`ERR_FOCUS`) [spawn privilege] |
+| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`, `SPAWN_*`, quotas; a task or endpoint quota of `SPAWN_QUOTA_UNBOUNDED` has no count, only from a spawner whose own has none) → PID; `SPAWN_FOREGROUND` with a PID: in front, see the focus rules below (`ERR_FOCUS`) [spawn privilege] |
 | 28 | `TASK_ALIVE` | `arg1` = PID → 1 if it exists [none] |
 | 48 | `TASK_WATCH` | `arg1` = PID of an own child, `arg2` = endpoint with read right; its exit arrives there as a `MSG_FLAG_EXIT` message |
 | 52 | `SCHED_SET` | `arg1` = PID, `arg2` = budget µs per period (0: none), `msg[0]` = period µs (≥ 10 000), `msg[1]` = band [lifecycle owner or process control] |
@@ -115,7 +115,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS (1 for MEMORY: also find the largest free block) → records written (`StatHeader` with `STAT_VERSION`, then records; a reader accepts records larger than it knows) [observe or process control] |
+| 51 | `STAT` | `arg1` = `STAT_*` class, `arg2` = buffer, `msg[0]` = capacity, `msg[1]` = PID for VMAP/CAPS, the first record for TASKS/ENDPOINTS (version 3: a long list page by page, `mind::stat::each`), 1 for MEMORY (also find the largest free block) → records written (`StatHeader` with `STAT_VERSION`, then records; a reader accepts records larger than it knows) [observe or process control] |
 | 34 | `TASK_LIST` | `arg1` = `TaskInfo` array, `arg2` = capacity → count [observe or process control] |
 | 40 | `FAULTS` | `arg1` = `FaultInfo` array, `arg2` = capacity → count [observe or process control] |
 | 41 | `CPU_INFO` | `arg1` = CPU index → APIC id; `arg2` = online, `msg[2]` = ticks [observe or process control] |

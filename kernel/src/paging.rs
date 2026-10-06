@@ -13,7 +13,7 @@ pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
 pub const USER_END: usize = USER_IMAGE + 0x4000_0000; // 928 MiB heap window: private quota + frame/IPC mappings (issue 150)
-const TABLES: usize = 640; // the whole heap window mapped (each table one page of the arena)
+const TABLES: usize = 640; // the whole heap window mapped (each table one page of the frame pool)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 
 pub struct Space {
@@ -109,13 +109,14 @@ impl Space {
         if self.tables.len() == TABLES {
             return Err("PAGE TABLE LIMIT");
         }
-        let table = Region::new(PAGE, PAGE)?;
+        // From the frame pool, as task memory (issue 171): at most one table per 2 MiB mapped, besides the first few.
+        let table = Region::task(PAGE, PAGE)?;
         let pointer = table.ptr() as usize;
         self.tables.try_reserve(1).map_err(|_| "OUT OF MEMORY")?;
         self.tables.push(table);
         Ok(pointer)
     }
-    /// Page tables owned by this space (each one page of the kernel arena).
+    /// Page tables owned by this space (each one page of the frame pool).
     pub fn table_count(&self) -> usize { self.tables.len() }
     pub fn root(&self) -> usize {
         self.tables[0].ptr() as usize

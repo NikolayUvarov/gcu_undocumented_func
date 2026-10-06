@@ -11,8 +11,9 @@ pub fn free(out: &mut impl Write) {
     let mut buffer = [0u8; 512];
     let Some(m) = stat::read(STAT_MEMORY, 1, &mut buffer).ok().and_then(|r| r.iter::<StatMemory>().next()) else { let _ = writeln!(out, "ERROR: STAT NOT AVAILABLE"); return };
     let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
-    let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
-    let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
+    // Tasks and endpoints have no limit but memory (issue 171).
+    let _ = writeln!(out, "  TASKS={} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
+    let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.shared);
     let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
 }
 
@@ -27,7 +28,15 @@ pub fn cpus(out: &mut impl Write) {
 }
 
 fn task(pid: u64, buffer: &mut [u8]) -> Option<StatTask> {
-    stat::read(STAT_TASKS, 0, buffer).ok()?.iter::<StatTask>().find(|t| t.pid == pid)
+    let mut found = None;
+    stat::each::<StatTask>(STAT_TASKS, buffer, |t| { if t.pid == pid { found = Some(t); } found.is_none() }).ok()?;
+    found
+}
+
+// A task or endpoint quota: "-" when it has no count (SPAWN_QUOTA_UNBOUNDED, issue 171).
+pub struct Count(pub u16);
+impl core::fmt::Display for Count {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { if self.0 as usize == SPAWN_QUOTA_UNBOUNDED { f.write_str("-") } else { write!(f, "{}", self.0) } }
 }
 
 pub fn task_details(out: &mut impl Write, pid: u64) {
@@ -39,7 +48,7 @@ pub fn task_details(out: &mut impl Write, pid: u64) {
                      if t.service != 0 { " SERVICE" } else { "" }, if focus { " FOCUS" } else { "" });
     let _ = writeln!(out, "  RUN_MS={} AGE_MS={} RUNS={} TICKS={} SYSCALLS={} SENT={} RECEIVED={}", t.run_ns / 1_000_000, now.saturating_sub(t.started_ns) / 1_000_000, t.runs, t.ticks, t.calls, t.sends, t.receives);
     let _ = writeln!(out, "  IMAGE={} STACK={} SCREEN={} HEAP={} BLOCKS={}/{} MAPPED={} RETAINED={} KERNEL={} CAPS={}/{}", t.image_bytes, t.stack_bytes, t.screen_bytes, t.heap_bytes, t.heap_blocks, HEAP_MAX_BLOCKS, t.shared_bytes, t.retained_bytes, t.kernel_bytes, t.caps, CAP_SLOTS - 1);
-    let _ = writeln!(out, "  QUOTA TASKS={}/{} ENDPOINTS={}/{} MEMORY={}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints, t.memory_used, t.memory_quota);
+    let _ = writeln!(out, "  QUOTA TASKS={}/{} ENDPOINTS={}/{} MEMORY={}/{} SPAWN={}", Count(t.used_tasks), Count(t.quota_tasks), Count(t.used_endpoints), Count(t.quota_endpoints), t.memory_used, t.memory_quota, t.spawn_bytes);
     let _ = writeln!(out, "  BAND={} BUDGET_US={} PERIOD_US={}{}", t.band, t.budget_ns / 1000, t.period_ns / 1000, if t.throttled != 0 { " THROTTLED" } else { "" });
 }
 

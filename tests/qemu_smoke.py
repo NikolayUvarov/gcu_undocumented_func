@@ -439,6 +439,33 @@ def gibibytes(memory):
     return int(number) / (1 if unit in "Gg" and unit else 1024)
 
 
+def applications_until_memory_ends(vm):
+    """Issue 171: no task limit but memory. Clocks, each with its screen, start until the frame pool runs out, far past
+    the 32 tasks the kernel's table used to hold; the refusal is clean, the system goes on, and once they end the
+    kernel's tables, the arena and the frame pool are back where they were."""
+    baseline, frames = heap_used(vm), frames_free(vm)
+    pids = []
+    while len(pids) < 1000:
+        output = vm.command("run clock &")
+        started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
+        if not started:
+            require(output, "OUT OF MEMORY")
+            break
+        pids.append(int(started[1]))
+    assert len(pids) > 32, len(pids)
+    assert len(task_rows(vm)) == len(pids), (len(task_rows(vm)), len(pids))
+    assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system goes on after the refusal"
+    for pid in pids:
+        vm.command(f"kill {pid}")
+    for _ in range(40):
+        if heap_used(vm) == baseline and frames_free(vm) == frames:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(f"arena {heap_used(vm)} (was {baseline}), frame pool {frames_free(vm)} (was {frames})")
+    print(f"PASS: {len(pids)} clocks at once until memory ran out (no task limit), a clean refusal, arena and frames back", flush=True)
+
+
 def ram_above_4g(vm):
     """Issue 171: the frame pool takes the free RAM above 4 GiB too, the highest range first; a program's heap from
     it is written and read back whole."""
@@ -525,11 +552,10 @@ def normal_suite(vm):
     assert heap_used(vm) == baseline, "task teardown leaked resources"
     for pid in range(6, 14):
         require(vm.command("run clock &"), f"PID={pid} NAME=clock BACKGROUND")
-    require(vm.command("run app &"), "TASK LIMIT REACHED")
     assert len(task_rows(vm)) == 8
     for pid in range(6, 14):
         vm.command(f"kill {pid}")
-    assert heap_used(vm) == baseline, "slot exhaustion/reuse leaked resources"
+    assert heap_used(vm) == baseline, "slot reuse leaked resources"
     # Repeated creation/freeing must retain the same empty-system heap baseline.
     for pid in range(14, 24):
         require(vm.command("run app &"), f"PID={pid} NAME=app BACKGROUND")
@@ -576,7 +602,8 @@ def normal_suite(vm):
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
     assert heap_used(vm) == baseline
-    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
+    applications_until_memory_ends(vm)
     if gibibytes(vm.args.memory) > 4:
         ram_above_4g(vm)
 
@@ -1131,7 +1158,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/32")), screen
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}, endpoints")), screen
     largest = table_row(screen, r"Kernel arena 64\.0M: used .*, largest free block (\d+(?:\.\d)?)M")
     assert largest and table_row(screen, r"Free outside the largest block: "), screen  # issue 076
     vm.send("3")
@@ -1154,7 +1181,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, r" loader +2/8 "), screen
+    assert table_row(screen, r" loader +2/- "), screen  # loader's task quota has no count (issue 171)
     vm.send("q")
     require(vm.expect("EXITED. SHELL RESUMED."), "[MEMMAP] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
@@ -1165,7 +1192,7 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
-    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 32"]:
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks}  max "]:  # no task limit (issue 171)
         assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
     vm.send("c")
     vm.expect("TOTAL=1")
@@ -1794,16 +1821,19 @@ def recovery_reserve(vm):
 
 
 def task_memory(vm, pid, raw=False):
-    # (image + stack + screen, memory used by the task and its descendants) from `stat <pid>`.
+    # (what its spawn was charged: image, stack, screen and its kernel structure; memory used by the task and its
+    # descendants) from `stat <pid>`.
     details = vm.command(f"stat {pid}", raw=raw)
     sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) ", details)
-    used = re.search(r"MEMORY=(\d+)/\d+", details)
+    used = re.search(r"MEMORY=(\d+)/\d+ SPAWN=(\d+)", details)
     assert sizes and used, details
-    return sum(map(int, sizes.groups())), int(used[1])
+    assert int(used[2]) > sum(map(int, sizes.groups())), details  # the kernel structure is charged too (issue 171)
+    return int(used[2]), int(used[1])
 
 
 def memory_charged_to_spawner(vm):
-    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit."""
+    """Issues 168, 171: a program's image, stack, screen and kernel structure are charged to its spawner (loader) and
+    leave its account at exit."""
     loader = vm.services()["loader"]
     def loader_used():
         previous = None
@@ -1835,7 +1865,7 @@ def memory_charged_to_spawner(vm):
         time.sleep(.2)
     else:
         raise AssertionError(f"loader's account {loader_used()} did not return to {before}")
-    print(f"PASS: a program's image, stack and screen ({fixed} bytes) charged to loader and returned at exit", flush=True)
+    print(f"PASS: a program's image, stack, screen and kernel structure ({fixed} bytes) charged to loader and returned at exit", flush=True)
 
 
 def memory_beyond_the_arena(vm):
@@ -2231,7 +2261,7 @@ def services_suite(vm):
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
     tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
-    assert f"TASKS={tasks}/32 " in free and re.search(r"ENDPOINTS=\d+/127 ", free), (tasks, free)
+    assert f"TASKS={tasks} " in free and re.search(r"ENDPOINTS=\d+ ", free), (tasks, free)
     arena, used, free_bytes, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+) LARGEST=(\d+)", free).groups())
     assert arena == 64 << 20 and 0 < used < arena and used + free_bytes <= arena, free
     # Issue 075: the largest free block (found by trial allocations) fits in the free memory; page tables are counted.
@@ -2266,7 +2296,11 @@ def services_suite(vm):
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
     # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
     tasks = vm.command("stat tasks", raw=True)
-    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    count = int(re.search(r"STAT TASKS VERSION=3 COUNT=(\d+)", tasks)[1])
+    assert count == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    # STAT version 3 (issue 171): a long list is read page by page; this page starts at record 3.
+    page = vm.command("stat tasks 3", raw=True)
+    assert f"STAT TASKS VERSION=3 COUNT={count - 3} TOTAL={count}" in page and re.findall(r"^(\d+) PARENT=", page, re.M) == re.findall(r"^(\d+) PARENT=", tasks, re.M)[3:], page
     # Issue 075: every task's kernel memory (context, mailbox, info and exit pages, page tables); the shell has the focus.
     assert all(int(k) >= 4 * 4096 for k in re.findall(r" KERNEL=(\d+)", tasks)) and re.search(r"^\d+ PARENT=\d+ shell .* FOCUS$", tasks, re.M), tasks
     stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])
@@ -2277,9 +2311,9 @@ def services_suite(vm):
         require(layout, region)
     cpus = re.findall(r"CPU \d+ APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", vm.command("stat cpus", raw=True))
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
-    # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
+    # Quotas delegated at spawn: init holds the root quota and gives loader one without a count (issue 171).
     quotas = vm.command("quotas", raw=True)
-    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/31 \d+/127$", quotas, re.M), quotas
+    assert re.search(r"^\d+ loader 0/- 0/-$", quotas, re.M) and re.search(r"^1 init -/- -/-$", quotas, re.M), quotas
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)

@@ -17,13 +17,14 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | `loader` rejects buffer calls with a length past the bound or the buffer and calls without a buffer; program list and start with arguments work through `loader.wit` | `isolation` case `k`; `services`, `listen` suites |
 | A shared block cannot be detached; a memory object cannot be copied over IPC, mints only read-only children and is reported sealed once its writable capability is gone | `isolation` suite, case `k` |
 | Applications cannot use privileged system calls (input, display, ports, IRQ, MMIO, spawn, platform, device enumeration, process control, halt); an application cannot create more endpoints than its quota; a dropped handle stays invalid after its slot is reused; a minted endpoint has only the masked rights and cannot be widened by re-minting; port and memory sub-ranges are validated; revoke removes children and keeps the parent; a keeper cannot receive but mints a receiver | `isolation` suite, case `k` |
-| The application limit is loader's task quota | `normal` suite (`TASK LIMIT REACHED` for the ninth application) |
+| No task limit but memory: 80 clocks with screens run at once in a 512 MiB machine, the next one is refused with `OUT OF MEMORY`, the system goes on, and the kernel arena and the frame pool are back where they were once they end (issue 171) | `normal` suite (`applications_until_memory_ends`) |
+| `STAT` reads tasks page by page (version 3) | `services` suite (`stat tasks 3`) |
 | Memory of exited, killed or faulted tasks is reclaimed; kernel heap returns to its baseline | `normal`, `heap`, `memory`, `services` suites (`heap_used` baseline checks) |
 | Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
 | With 6 GiB of RAM the frame pool holds the free RAM above 4 GiB (about 3 GiB of it), the highest range first, and a 144 MiB heap from it is written and read back; programs, screens, the network and the disks work on it (issue 171) | `normal`, `display`, `net`, `vfs` suites with `--memory 6G` (`ram_above_4g`) |
-| A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |
+| A program's image, stack, screen and kernel structure are charged to its spawner's memory quota and leave it at exit (issues 168, 171) | `memory` suite (`memory_charged_to_spawner`) |
 | Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
 | The task in front hands the focus to a program it starts and gets it back when the program ends, without a notice to the shell; a task in the background cannot (the program starts in the background); Ctrl+Z from the program goes to the shell (issue 160) | `tools` suite (`fm_check`, `console_check`) |

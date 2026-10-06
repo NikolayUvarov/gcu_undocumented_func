@@ -93,7 +93,7 @@ fn pid_arg(args: &[u8]) -> Option<u64> {
 fn error_text(error: Error, service: bool) -> &'static str {
     match error {
         Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
-        Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (8)",
+        Error::Other(ERR_LIMIT) => "QUOTA REACHED",
         Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
         Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
         Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
@@ -106,10 +106,14 @@ fn error_text(error: Error, service: bool) -> &'static str {
 
 fn label(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches([' ', '\0']) }
 
-fn tasks() -> ([TaskInfo; 40], usize) {
-    let mut list = [unsafe { core::mem::zeroed::<TaskInfo>() }; 40];
-    let count = control::tasks(&mut list).unwrap_or(0);
-    (list, count)
+// Every task: the list grows until it holds them all (the kernel has no task limit, issue 171).
+fn tasks() -> (alloc::vec::Vec<TaskInfo>, usize) {
+    let mut list = alloc::vec![unsafe { core::mem::zeroed::<TaskInfo>() }; 64];
+    loop {
+        let count = control::tasks(&mut list).unwrap_or(0);
+        if count < list.len() { list.truncate(count); return (list, count); }
+        list.resize(list.len() * 2, unsafe { core::mem::zeroed() });
+    }
 }
 
 impl Shell {
@@ -251,7 +255,7 @@ impl Shell {
         match class {
             STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={} KERNEL={}{}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps, r.kernel_bytes, if r.focus != 0 { " FOCUS" } else { "" }); },
             STAT_CPUS => for (i, r) in control::records::<StatCpu>(buffer, header).enumerate() { let _ = writeln!(t, "CPU {} APIC={} ONLINE={} BUSY_MS={} IDLE_MS={} INTERRUPTS={} SWITCHES={} PID={}", i, r.apic_id, r.online, r.busy_ns / 1_000_000, r.idle_ns / 1_000_000, r.interrupts, r.switches, r.current_pid); },
-            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} LARGEST={} IMAGES={} STACKS={} TASK_PAGES={} PAGE_TABLES={} SCREENS={} HEAPS={} SHARED={} OBJECTS={} DMA={} TASKS={}/{} ENDPOINTS={}/{} FRAMES={} FRAMES_FREE={}", r.arena, r.used, r.free, r.largest_free, r.images, r.stacks, r.task_pages, r.page_tables, r.screens, r.heaps, r.shared, r.objects, r.dma, r.tasks, r.tasks_limit, r.endpoints, r.endpoints_limit, r.frames, r.frames_free); },
+            STAT_MEMORY => for r in control::records::<StatMemory>(buffer, header) { let _ = writeln!(t, "ARENA={} USED={} FREE={} LARGEST={} IMAGES={} STACKS={} TASK_PAGES={} PAGE_TABLES={} SCREENS={} HEAPS={} SHARED={} OBJECTS={} DMA={} TASKS={} ENDPOINTS={} FRAMES={} FRAMES_FREE={}", r.arena, r.used, r.free, r.largest_free, r.images, r.stacks, r.task_pages, r.page_tables, r.screens, r.heaps, r.shared, r.objects, r.dma, r.tasks, r.endpoints, r.frames, r.frames_free); },
             STAT_PHYSMAP => for r in control::records::<StatPhys>(buffer, header).filter(|r| r.kind >= PHYS_PLATFORM) { let _ = writeln!(t, "KIND={:#x} INDEX={} START={:#x} PAGES={}", r.kind, r.index, r.start, r.pages); },
             STAT_VMAP => for r in control::records::<StatRegion>(buffer, header) {
                 let kind = ["?", "IMAGE", "STACK", "SCREEN", "INFO", "MAILBOX", "EXIT", "HEAP", "SHARED", "DEVICE", "GUARD"].get(r.kind as usize).copied().unwrap_or("?");
@@ -503,7 +507,7 @@ impl Shell {
             // Quotas delegated at spawn (MC-1.7): tasks reserved by live children, endpoints created or delegated.
             let _ = writeln!(self.term, "PID NAME TASKS ENDPOINTS");
             let (list, count) = tasks();
-            for t in &list[..count] { let _ = writeln!(self.term, "{} {} {}/{} {}/{}", t.pid, label(&t.name), t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints); }
+            for t in &list[..count] { let _ = writeln!(self.term, "{} {} {}/{} {}/{}", t.pid, label(&t.name), observe::Count(t.used_tasks), observe::Count(t.quota_tasks), observe::Count(t.used_endpoints), observe::Count(t.quota_endpoints)); }
         } else if is(b"ps") {
             let _ = writeln!(self.term, "PID NAME STATE FOCUS CPU RUNS CPU_TICKS SYSCALLS");
             let (list, count) = tasks();
@@ -511,7 +515,7 @@ impl Shell {
                 let _ = write!(self.term, "{} {} {} {} {} {} {} {}", t.pid, label(&t.name), label(&t.state), if t.focus != 0 { "FG" } else { "BG" }, t.cpu, t.runs, t.ticks, t.calls);
                 let _ = match self.owner(t.pid) { Some(console) => writeln!(self.term, " CONSOLE={}", console + 1), None => writeln!(self.term) };
             }
-            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; LIMIT={} APPS + SERVICES", count, self.own, MAX_APPS);
+            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}", count, self.own);
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"reboot") {

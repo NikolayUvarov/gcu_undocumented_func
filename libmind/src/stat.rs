@@ -38,6 +38,19 @@ pub fn read(class: usize, argument: u64, buffer: &mut [u8]) -> Result<Records<'_
     Ok(Records { header, bytes: &buffer[header_size..end.min(buffer.len())] })
 }
 
+/// Every record of STAT_TASKS or STAT_ENDPOINTS, read page by page into `buffer` (STAT version 3, issue 171): `f` gets
+/// each one and returns false to stop. Records can change between pages: a task that starts meanwhile may be missed.
+pub fn each<T: Copy>(class: usize, buffer: &mut [u8], mut f: impl FnMut(T) -> bool) -> Result<()> {
+    let mut start = 0;
+    loop {
+        let records = read(class, start as u64, buffer)?;
+        let (count, total) = (records.len(), records.total());
+        for record in records.iter::<T>() { if !f(record) { return Ok(()); } }
+        start += count;
+        if count == 0 || start >= total { return Ok(()); }
+    }
+}
+
 /// One record of a single-record class (STAT_MEMORY).
 pub fn one<T: Copy + Default>(class: usize) -> Result<T> {
     let mut buffer = [0u8; 512];

@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum State { Empty, Ready, Sleeping(u64), BlockedSend(usize), BlockedRecv(usize), BlockedReply(usize), BlockedIrq(u8), BlockedFlush, Exited }
+pub enum State { Ready, Sleeping(u64), BlockedSend(usize), BlockedRecv(usize), BlockedReply(usize), BlockedIrq(u8), BlockedFlush, Exited }
 
 impl State {
     pub fn wake(&mut self, now: u64) {
@@ -7,7 +7,6 @@ impl State {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Empty => "EMPTY",
             Self::Ready => "READY",
             Self::Sleeping(_) => "SLEEPING",
             Self::BlockedSend(_) | Self::BlockedRecv(_) | Self::BlockedReply(_) => "IPC_WAIT",
@@ -17,6 +16,7 @@ impl State {
         }
     }
 }
-pub fn next(states: &[State], current: usize) -> usize {
-    (1..=states.len()).map(|step| (current + step) % states.len()).find(|&slot| states[slot] == State::Ready).unwrap_or(0)
+/// The first of `count` slots after `current`, round robin, for which `ready` holds; 0 if none.
+pub fn next_where(count: usize, current: usize, ready: impl Fn(usize) -> bool) -> usize {
+    (1..=count).map(|step| (current + step) % count).find(|&slot| ready(slot)).unwrap_or(0)
 }

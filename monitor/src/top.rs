@@ -149,7 +149,7 @@ impl Top {
         // Endpoint indexes are labels (the `ipc` view and the shell's `endpoints` use the same ones), not authority.
         let endpoints: Vec<String> = details.caps.iter().filter(|c| c.kind as usize == CAP_KIND_ENDPOINT && c.endpoint != 0).map(|c| format!("{}→{}", c.slot, c.endpoint)).collect();
         if !endpoints.is_empty() { lines.push(format!("Endpoints (slot→index): {}", endpoints.join(" "))); }
-        lines.push(format!("Quotas: tasks {}/{}, endpoints {}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints));
+        lines.push(format!("Quotas: tasks {}/{}, endpoints {}/{}", text::quota(t.used_tasks), text::quota(t.quota_tasks), text::quota(t.used_endpoints), text::quota(t.quota_endpoints)));
         lines
     }
 
@@ -184,8 +184,8 @@ impl Top {
         grid.put(6, y, '[', theme.dim);
         grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
-                                         m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
+        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
+                                         text::of(m.tasks as u64, m.tasks_limit), text::of(m.endpoints as u64, m.endpoints_limit)), theme.panel);
         y + 2
     }
 
@@ -209,7 +209,7 @@ impl Top {
             "NAME" => { let mut name = String::new(); for _ in 1..depth { name.push_str("  "); } if depth > 0 { name.push_str("└ "); } name.push_str(&task.name); name }
             "STATE" => String::from(text::state(task.state)), "CPU" => format!("{}", task.cpu), "%CPU" => text::permille(usage.cpu),
             "TIME" => text::cpu_time(task.run_ns), "SYSC/s" => text::count(usage.syscalls), "MEM" => text::size(task.memory()), "HEAP" => text::size(task.heap),
-            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => format!("{}/{}", task.used_endpoints, task.quota_endpoints),
+            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => format!("{}/{}", text::quota(task.used_endpoints), text::quota(task.quota_endpoints)),
             _ => String::new(),
         }
     }

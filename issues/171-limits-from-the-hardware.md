@@ -14,6 +14,12 @@ Asked by the user (2026-10-06): MIND Core is meant to use the most of the machin
 - 16 ranges of free RAM in the frame pool (`RANGES`);
 - on x86-64, RAM below 4 GiB only: the kernel's identity map ends there (`IDENTITY_END`), so a machine with 8 GiB uses about 3.
 
+Found on the way (step 6):
+
+- a program's memory: at most 1024 MiB (`APP_MEMORY_MAX` in loader), in a heap window of 928 MiB (`USER_END`), in at most 64 blocks (`HEAP_MAX_BLOCKS`); 256 MiB of shared mappings a task and 256 MiB of detached objects in all;
+- 8 MiB of DMA regions in all (`DMA_LIMIT`) and the 64 MiB kernel arena;
+- the monitors' interface: `sysinfo` lists 40 tasks, 128 endpoints and 8 CPUs, and a load sample counts tasks in a byte.
+
 MC-1.7, MC-3.13 and MC-5.1 ask that every kernel object be accounted and bounded by a quota delegated from above. They do not ask for fixed numbers. The root of the quotas can be the machine itself.
 
 ## Plan
@@ -27,6 +33,7 @@ MC-1.7, MC-3.13 and MC-5.1 ask that every kernel object be accounted and bounded
 3. **CPUs.** As many as the firmware reports (MADT, PSCI): per-CPU state grows with them.
 4. **Capability slots.** A task's capability space grows on demand within its memory quota; fixed slots stay as they are.
 5. **The frame pool's ranges** grow with the firmware map.
+6. **A program's memory** up to what the machine has: the heap window, the block count and the global caps above from memory.
 
 Each step is its own commit, with the docs/profile statements (kernel-objects.md, bootstrap.md) changed with it.
 
@@ -41,6 +48,15 @@ Each step is its own commit, with the docs/profile statements (kernel-objects.md
     - on x86, RAM between 3 and 4 GiB (real machines can have it) is still mapped uncached;
     - x86 RAM above 512 GiB needs a second kernel root entry;
     - the kernel arena is a fixed 64 MiB (step 2 moves task structures out of it).
+
+- **Step 2, kernel and shell — done (2026-10-06).**
+  - The task table and the endpoint table grow as needed and shrink when their last entries are reclaimed; a slot past the end reads as empty, so a kept (slot, PID) finds no task. `MAX_TASKS` and the 128 endpoints are gone.
+  - A task's structure, context, info and mailbox page and exit page come from the frame pool and are charged to its spawner with its image, stack and screen (`StatTask::spawn_bytes`). Its page tables come from the frame pool, uncharged: at most one per 2 MiB it maps.
+  - `SPAWN_QUOTA_UNBOUNDED` (0xFFFF) is a task or endpoint quota without a count, given only by a spawner without one. init has the root quota without counts and gives one to loader, so `MAX_APPS` is gone. Amendment to the plan: loader still gives each application 4 endpoints. An application's endpoints are bounded by its capability slots until step 4 pays for them from memory.
+  - `STAT` version 3: `argument` is the first record of `STAT_TASKS` and `STAT_ENDPOINTS` (`mind::stat::each` reads every page); `tasks_limit` and `endpoints_limit` are 0. The shell's `ps`, `quotas` and `stat <pid>` see every task; the monitors show no limit and `-` for a quota without a count.
+  - An endpoint named by a watch or a blocked IPC is not handed out again while they last.
+  - Tested in QEMU with 4 CPUs and 512 MiB: 80 clocks with screens at once on x86-64, 171 on aarch64 (its screen is smaller); the next one is refused with `OUT OF MEMORY` and the system goes on; the arena and the frame pool come back. Also the `services`, `memory`, `heap`, `isolation` and `tools` suites on x86-64.
+  - Left for step 2: the `sysinfo` interface (`sysmon`, `top`, the console's `ps`, `logd`'s names) still reads 40 tasks and 128 endpoints.
 
 ## Acceptance criteria
 

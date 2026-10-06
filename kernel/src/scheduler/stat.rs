@@ -4,11 +4,13 @@ use super::*;
 
 const HEADER: usize = core::mem::size_of::<StatHeader>();
 
-// Writes records into the caller's buffer after the header; counts the ones that did not fit.
-struct Out<'a> { space: &'a paging::Space, base: usize, capacity: usize, size: usize, count: usize, total: usize, fault: bool }
+// Writes records into the caller's buffer after the header, from record `skip` on (a page of a long list); counts the
+// ones that did not fit.
+struct Out<'a> { space: &'a paging::Space, base: usize, capacity: usize, size: usize, count: usize, total: usize, fault: bool, skip: usize }
 impl Out<'_> {
     fn push<T: Copy>(&mut self, record: T) {
         self.total += 1;
+        if self.total <= self.skip { return; }
         let offset = HEADER + self.count * self.size;
         if offset + self.size > self.capacity || self.fault { return; }
         let bytes = unsafe { core::slice::from_raw_parts((&record as *const T).cast::<u8>(), self.size) };
@@ -35,17 +37,17 @@ fn largest_free(free: usize) -> usize {
     low
 }
 
-fn wait_of(state: State, running: bool, tasks: &[Option<Task>; SLOTS]) -> (u8, u32) {
+fn wait_of(state: State, running: bool, tasks: &[Option<Boxed<Task>>]) -> (u8, u32) {
     if running { return (WAIT_RUNNING, 0); }
     match state {
         State::BlockedSend(ep) => (WAIT_SEND, ep as u32),
         State::BlockedRecv(ep) => (WAIT_RECEIVE, ep as u32),
-        State::BlockedReply(server) => (WAIT_REPLY, tasks[server].as_ref().map_or(0, |t| t.pid as u32)),
+        State::BlockedReply(server) => (WAIT_REPLY, tasks.get(server).and_then(Option::as_ref).map_or(0, |t| t.pid as u32)),
         State::Sleeping(_) => (WAIT_SLEEP, 0),
         State::BlockedIrq(irq) => (WAIT_IRQ, irq as u32),
         State::BlockedFlush => (WAIT_FLUSH, 0),
         State::Exited => (WAIT_EXITED, 0),
-        State::Ready | State::Empty => (WAIT_NONE, 0),
+        State::Ready => (WAIT_NONE, 0),
     }
 }
 
@@ -59,7 +61,9 @@ impl Scheduler {
             _ => return Err(ERR_INVALID),
         };
         if request.msg[0] < HEADER { return Err(ERR_INVALID); }
-        let mut out = Out { space: &self.tasks[slot].as_ref().unwrap().space, base: request.arg2, capacity: request.msg[0], size, count: 0, total: 0, fault: false };
+        // STAT_TASKS and STAT_ENDPOINTS: `argument` is the first record to write (issue 171).
+        let skip = if matches!(class, STAT_TASKS | STAT_ENDPOINTS) { argument } else { 0 };
+        let mut out = Out { space: &self.tasks[slot].as_ref().unwrap().space, base: request.arg2, capacity: request.msg[0], size, count: 0, total: 0, fault: false, skip };
         let pid_of = |index: usize| self.tasks[index].as_ref().map_or(0, |t| t.pid);
         // The task that uses a capability: the holder of its most recently derived copy (init keeps the copies it granted,
         // to restart a driver; the driver's copy derives from it), and how many live tasks hold a copy.
@@ -88,12 +92,12 @@ impl Scheduler {
                     heap_bytes: task.heap.bytes() as u64, heap_blocks: task.heap.block_count() as u32, caps: task.cspace.iter().flatten().count() as u32,
                     shared_bytes: task.heap.shared_bytes() as u64, retained_bytes: task.heap.retained as u64,
                     image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64, screen_bytes: task.screen.as_ref().map_or(0, |s| s.len() as u64),
-                    quota_tasks: task.quota_tasks as u16, used_tasks: if alive { self.used_tasks(index) as u16 } else { 0 },
-                    quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 },
+                    quota_tasks: narrow(task.quota_tasks), used_tasks: if alive { narrow(self.used_tasks(index)) } else { 0 },
+                    quota_endpoints: narrow(task.quota_endpoints), used_endpoints: if alive { narrow(self.used_endpoints(index)) } else { 0 },
                     band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
                     budget_ns: task.budget_ns, period_ns: task.period_ns,
-                    kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
-                    memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
+                    kernel_bytes: (task.bytes() + task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096) as u64,
+                    memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64, spawn_bytes: task.spawn_bytes as u64,
                 });
             },
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
@@ -105,17 +109,17 @@ impl Scheduler {
             STAT_MEMORY => {
                 let (used, free) = { let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free()) };
                 let mut m = StatMemory { arena: self.boot.heap_len as u64, used: used as u64, free: free as u64, dma_limit: DMA_LIMIT as u64, objects_limit: DETACHED_MAX_BYTES as u64,
-                    largest_free: if argument == 1 { largest_free(free) as u64 } else { 0 }, tasks_limit: MAX_TASKS as u32, endpoints_limit: (ENDPOINTS - FIRST_ENDPOINT) as u32, ..Default::default() };
+                    largest_free: if argument == 1 { largest_free(free) as u64 } else { 0 }, ..Default::default() }; // no task or endpoint limit (0): memory bounds them (issue 171)
                 for task in self.tasks.iter().flatten() {
                     m.images += task._image.len() as u64; m.stacks += task._stack.len() as u64;
-                    m.task_pages += (task.context.len() + task._exit.len() + task.abi.len()) as u64;
+                    m.task_pages += (task.bytes() + task.context.len() + task._exit.len() + task.abi.len()) as u64;
                     m.screens += task.screen.as_ref().map_or(0, |s| s.len() as u64); m.heaps += task.heap.bytes() as u64; m.tasks += 1;
                     m.page_tables += (task.space.table_count() * 4096) as u64; m.shared += task.heap.shared_bytes() as u64;
                 }
                 m.objects = self.orphans.iter().map(|o| o.region.len() as u64).sum();
                 m.dma = self.dma.iter().map(|r| r.len() as u64).sum();
                 let (frames, frames_free) = crate::frames::stats(); m.frames = frames as u64; m.frames_free = frames_free as u64;
-                m.endpoints = (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]).count() as u64;
+                m.endpoints = self.endpoints.iter().skip(FIRST_ENDPOINT).filter(|e| e.used).count() as u64;
                 out.push(m);
             }
             STAT_PHYSMAP => {
@@ -171,15 +175,15 @@ impl Scheduler {
                     }
                 }
             }
-            STAT_ENDPOINTS => for ep in (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]) {
+            STAT_ENDPOINTS => for ep in (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e].used) {
                 let live = || self.tasks.iter().flatten().filter(|t| t.state != State::Exited);
-                let c = self.accounting.endpoint[ep];
+                let c = self.endpoints[ep];
                 out.push(StatEndpoint {
                     index: ep as u32,
                     receivers: live().filter(|t| t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))).count() as u32,
                     waiting_senders: live().filter(|t| t.state == State::BlockedSend(ep)).count() as u32,
                     waiting_receivers: live().filter(|t| t.state == State::BlockedRecv(ep)).count() as u32,
-                    creator: self.endpoint_owner[ep].map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
+                    creator: c.owner.map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
                     server: holder(&|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0)).0,
                     holders: holder(&|c| matches!(c, Capability::Endpoint(id, ..) if *id == ep)).1,
                     irq: self.irq_bind.iter().position(|line| line.iter().flatten().any(|b| b.ep == ep)).map_or(0, |line| line as u32),

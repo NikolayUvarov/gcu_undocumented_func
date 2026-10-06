@@ -26,7 +26,6 @@ const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe priv
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
-const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
 const NVME_DMA_BYTES: usize = 128 * 1024; // queues, identify page, PRP list and a 64 KiB data buffer
 const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
@@ -345,11 +344,11 @@ impl Init {
         // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
         if name == "shell" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
-        // Quotas are init's policy: loader may run MAX_APPS applications with APP_ENDPOINTS endpoints each; the shell
-        // serves voice control on one endpoint of its own (issue 079).
+        // Quotas are init's policy: loader's tasks and endpoints have no count, so memory alone bounds how many
+        // applications run (issue 171); the shell serves voice control on one endpoint of its own (issue 079).
         let quota = match name {
             // The applications' memory is charged to loader too: it may use all of init's (issue 150).
-            "loader" => Quota { tasks: MAX_APPS as u16, endpoints: (MAX_APPS * APP_ENDPOINTS) as u16, memory_mib: SPAWN_MEMORY_ALL as u16 },
+            "loader" => Quota { tasks: SPAWN_QUOTA_UNBOUNDED as u16, endpoints: SPAWN_QUOTA_UNBOUNDED as u16, memory_mib: SPAWN_MEMORY_ALL as u16 },
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).

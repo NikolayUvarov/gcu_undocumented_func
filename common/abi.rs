@@ -9,7 +9,6 @@ pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", 
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
-pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }
@@ -288,8 +287,12 @@ pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 // endpoint rights are narrowed by the mask, reply capabilities are not transferable.
 pub const SPAWN_BOOT: usize = 1 << 63;
 // Memory quota (issue 150): private memory (heap blocks, memory objects) of a task and its live descendants is charged
-// to it and to every spawner above; a child's quota is at most its spawner's. init's quota is the frame pool.
+// to it and to every spawner above; a child's quota is at most its spawner's. init's quota is the frame pool. A spawn
+// also charges the child's image, stack, screen and kernel structure to the spawner (issues 168, 171).
 pub const SPAWN_MEMORY_ALL: usize = 0xFFFF;
+// A task or endpoint quota of 0xFFFF has no count: memory alone bounds the tasks and endpoints (issue 171). Only a
+// spawner whose own quota has no count may give one; init's has none. Readers see 0xFFFF for such a quota.
+pub const SPAWN_QUOTA_UNBOUNDED: usize = 0xFFFF;
 pub const SPAWN_SERVICE: usize = 1; // system service (platform privilege only)
 pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take the focus
 // With SPAWN_SCREEN: the task starts in front if the task named by PID in msg[1] has the focus now, else SPAWN fails with
@@ -398,8 +401,9 @@ pub const BLOCK_MAX_SECTORS: usize = 128;
 pub const AUDIO_RATE: usize = 48_000;
 
 // STAT (observe or control privilege): arg1 = class, arg2 = buffer, msg[0] = capacity in bytes, msg[1] = argument
-// (a PID for VMAP and CAPS). The buffer receives a StatHeader and then up to (capacity - header) / record_size
-// records; the result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
+// (a PID for VMAP and CAPS; for TASKS and ENDPOINTS the first record to write, so a long list is read page by page,
+// STAT version 3). The buffer receives a StatHeader and then up to (capacity - header) / record_size records; the
+// result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
 // Nothing returned is authority: endpoint indices are labels no system call accepts, and no task memory contents or
 // physical addresses of task memory are exported (MC-10.2).
 pub const SYSCALL_STAT: usize = 51;
@@ -421,7 +425,7 @@ pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
 pub const BAND_KEEP: usize = 0xFF;
-pub const STAT_VERSION: u32 = 2; // 2: the fields of issue 075 appended
+pub const STAT_VERSION: u32 = 3; // 2: the fields of issue 075 appended; 3: `spawn_bytes`, pages of STAT_TASKS and STAT_ENDPOINTS (issue 171)
 pub const STAT_TASKS: usize = 1;
 pub const STAT_CPUS: usize = 2;
 pub const STAT_MEMORY: usize = 3;
@@ -442,8 +446,9 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
     pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
-    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables
+    pub kernel_bytes: u64, // the task's structure, context, mailbox, info and exit pages, page tables
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
+    pub spawn_bytes: u64, // charged to its spawner at SPAWN: image, stack, screen, structure and its pages (issue 171)
 }
 // `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }
