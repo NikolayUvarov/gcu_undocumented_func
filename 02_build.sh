@@ -73,6 +73,7 @@ USER_CRATES=(
     "logd:logd:logd.elf"
     "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
+    "gpio:gpio:gpio.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"

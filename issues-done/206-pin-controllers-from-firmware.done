@@ -1,0 +1,38 @@
+# 206 — aarch64: pin controllers from the firmware's tables, for a user-space GPIO service — done
+
+**Type:** porting (kernel platform layer, with the kernel track for `common/abi.rs`) · **Owner:** porting track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-1.1, MC-3.1, MC-3.3, MC-8.2, MC-8.3, MC-12.1
+
+## Problem
+
+ARM boards bring their hardware interfaces out on the pins of the SoC's pin controller: GPIO, UART, SPI, I²C, PWM, each pin multiplexed between several functions. A user is to see these pins and drive them (the `pins` tool, tools track; the `gpio` service, [207](../issues/207-gpio-service.md)). The kernel today knows only the UART and RTC of a board (`arch/aarch64/board.rs`, issue 205); nothing tells `init` where a pin controller is, and nothing names the board, so a tool cannot find the pin tables that describe it ([hwdocs/](../hwdocs/README.md)).
+
+The driver belongs in ring 3 (MC-1.1): the kernel's share is only to find the controller's registers in the firmware's tables and hand them to `init` as a platform resource it validated, as for the UART.
+
+## Plan
+
+- **Finding controllers:** `acpi.rs` scans the DSDT and SSDTs for devices whose `_HID` is a known pin controller — `BCM2845` (Raspberry Pi 4 EDK2: BCM2711 GPIO), `ARMH0061` (PL061, QEMU `virt`), more by table — and takes the register window from the device's `_CRS` (`Memory32Fixed` / QWord memory descriptors). No AML interpreter: a bounded byte scan of `Device` / `Name(_HID)` / `Name(_CRS)` packages; anything it cannot read is reported and skipped. The windows are checked against the identity map (`mapped()`) and the UEFI memory map (never RAM).
+- **ABI:** `PLATFORM_GPIO_BASE` indices in `PLATFORM_MMIO` (`PLATFORM_GPIO_BASE + n` for the n-th controller, up to 4), and a `PLATFORM_INFO` query giving `init` the controller's kind (`BCM2711`, `PL061`, …), its pin count and the board identity (the FADT/DSDT OEM ID and OEM table ID, the SMBIOS board name if the loader passes it), so `gpio` and `pins` can find the board's file in `hwdocs/`. Agreed with the kernel track (ABI changes live in kernel issues); `docs/api` updated with it.
+- **Boot line:** `MIND CORE KERNEL: BOARD …` names the pin controllers it found.
+- **Pins the firmware uses:** the console UART's pins and the boot SD card's pins are named by the board's hwdocs file, not by the kernel; the kernel only reports which device is the console (already in the SPCR).
+- **Profile:** `docs/profile/aarch64` lists the pin controller as a device whose registers `gpio` alone holds; its TCB names the DSDT scan as trusted input.
+
+## Acceptance criteria
+
+On QEMU `virt` the kernel reports the PL061 (where the DSDT lists it; otherwise none, and the test says so), and `init` can obtain its registers by index; a host test feeds the scanner the DSDT of QEMU `virt` and of the Raspberry Pi 4 EDK2 firmware (bytes recorded in `tests/`) and checks the windows and kinds found; an unknown or malformed table yields no controller and no crash. x86 is unchanged.
+
+## Related
+
+[205](../issues/205-aarch64-boards.md), [207](../issues/207-gpio-service.md), the `pins` tool ([u015](u015-pins.md)), [hwdocs/](../hwdocs/README.md), [docs/profile/aarch64](../docs/profile/aarch64/README.md).
+
+## Resolution
+
+- **Scan** (`kernel/src/arch/aarch64/aml.rs`): a bounded byte scan of the DSDT (the FADT's X_DSDT or DSDT) and every SSDT for `Name (_HID, "BCM2845")` and `Name (_HID, "ARMH0061")`, then the first memory window (Memory32Fixed, DWord or QWord memory) of a static `Name (_CRS, Buffer)` of the same device. No AML interpreter; a window outside the identity map is not used.
+- **The Raspberry Pi 4**: its EDK2 firmware computes the GPIO's `_CRS` in a method, which the scan cannot read; the BCM2711 GPIO is then taken at its fixed address 0xFE200000 only when the GIC distributor is the BCM2711's GIC-400 (0xFF841000), which no other known board has.
+- **ABI** (`common/abi.rs`): instead of a separate `PLATFORM_INFO` query, the kind is in the index: `PLATFORM_MMIO` with `PLATFORM_PINS_PL061 + n` or `PLATFORM_PINS_BCM2711 + n` (n < `PLATFORM_PINS_MAX`) gives the n-th controller of that kind; `init` asks for the kinds it has drivers for. `docs/api` updated (it also still described `PLATFORM_MMIO` by address, from before 205).
+- **Boot line**: `MIND CORE KERNEL: PINS BCM2711 AT 0xfe200000 (4096 BYTES)`, or `PINS: NO PIN CONTROLLER IN THE ACPI TABLES`.
+- **Tests**: `tests/aml_host.rs` (QEMU's PL061 device as `acpi_dsdt_add_gpio` builds it, the Pi 4's GPIO device with a method `_CRS`, a QWord window, a window of the next device not taken, unknown IDs, every truncation of a block and random bytes). On QEMU `virt` every aarch64 suite boots with the kernel reporting no pin controller.
+- **Profile**: `docs/profile/aarch64` 1.3 (the device table, the TCB, the evidence).
+
+Not as planned:
+- **QEMU has no pin controller with ACPI.** With UEFI and ACPI, `virt` replaces its PL061 with the ACPI GED (`info qtree`); the PL061 exists only with `acpi=off`, which this kernel cannot boot, and `-acpitable` is not supported on ARM. So no QEMU run finds a controller; the host tests are built from the ASL the firmware sources use, not from the real tables (the Raspberry Pi 4's could not be fetched here).
+- **The board's identity** (OEM IDs, SMBIOS) for choosing a hwdocs board file is not given: 207 picks the board file by the controller's kind and leaves a board-specific match to a later step.

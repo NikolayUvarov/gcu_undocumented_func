@@ -28,7 +28,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
 BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
@@ -405,6 +405,10 @@ def qemu_cpu_seconds(vm, seconds):
 
 
 def normal_suite(vm):
+    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
+    assert "gpio" not in vm.services()
+    if vm.arch == "aarch64":
+        require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
     baseline = heap_used(vm)
     require(vm.command("list"), "clock")
     require(vm.command("run clock &"), "PID=1 NAME=clock BACKGROUND")

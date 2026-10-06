@@ -1,8 +1,8 @@
 # hwdocs/ — hardware descriptions kept apart from the system
 
-**Status:** format proposed; the first files come with issue [207](../issues/207-gpio-service.md).
+**Status:** in use (issue [207](../issues/207-gpio-service.md)): `socs/bcm2711.pins`, `socs/pl061.pins`, `boards/rpi4b.board`; parsed by `mind::gpio` (`tests/gpio_host.rs` checks these files).
 
-Facts about hardware that the system cannot read from the hardware itself — which signal each multiplexed function of a pin carries, how a board's header is numbered, which pins the board's firmware uses — are taken from vendors' documentation and kept here, as small text files. They are **not** part of the kernel or of the boot image: `02_build.sh` does not copy them; `scripts/make_usb_image.py --hwdocs` (to be added with 207) puts them in `/hwdocs` on the boot volume, and the tools (`pins`) and services (`gpio`) read them through the VFS when they are there. Without them everything still works and shows function numbers instead of names.
+Facts about hardware that the system cannot read from the hardware itself — which signal each multiplexed function of a pin carries, how a board's header is numbered, which pins the board's firmware uses — are taken from vendors' documentation and kept here, as small text files. They are **not** part of the kernel or of the boot image: `02_build.sh` does not copy them; `scripts/make_usb_image.py --hwdocs` puts them in `/hwdocs` on the boot volume, and the tools (`pins`) and services (`gpio`) read them through the VFS when they are there. Without them everything still works and shows function numbers instead of names.
 
 ## Layout
 
@@ -14,7 +14,7 @@ hwdocs/
 
 ## `.pins`
 
-The values in the two examples below show the format only; the real files are checked against their sources.
+The examples below are excerpts of the real files.
 
 ```
 soc bcm2711

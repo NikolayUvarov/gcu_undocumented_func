@@ -1,0 +1,29 @@
+/// The pins of ARM boards (issue 207): the `gpio` service drives the pin controllers the firmware's tables name
+/// (BCM2711, PL061) and serves this interface. Reading is open to every client; changing a pin needs the control badge
+/// (`mind::gpio::BADGE_CONTROL`), and a pin the board's hwdocs file reserves needs the platform badge. Functions are
+/// numbered input 0, output 1, then the alternates ALT0, ALT1, ... from 2. Every change is logged.
+package mind:gpio@1.0.0;
+
+interface gpio {
+    enum kind { bcm2711, pl061 }
+    enum pull { none, up, down, unknown }
+    enum error { no-controller, no-pin, reserved, denied, unsupported }
+    /// A controller: its kind, its pins, and the hwdocs tables found for it (empty names: none).
+    record controller { kind: kind, pins: u8, soc: string<24>, board: string<24> }
+    /// A pin's state: its active function of `functions`, its level, its pull, whether the board reserves it, and its
+    /// position on the board's header (0: not on it).
+    record pin { pin: u8, function: u8, functions: u8, level: bool, pull: pull, reserved: bool, position: u8 }
+
+    /// The controllers, in the order the other calls number them.
+    controllers: func() -> list<controller, 4>;
+    /// The state of every pin of a controller.
+    pins: func(controller: u8) -> result<list<pin, 64>, error>;
+    /// The names of a pin's functions in function order (from hwdocs; an empty name: none, or no table).
+    functions: func(controller: u8, pin: u8) -> result<list<string<24>, 8>, error>;
+    /// Selects a pin's function (input, output, an alternate).
+    set-function: func(controller: u8, pin: u8, function: u8) -> result<_, error>;
+    /// Drives an output pin high or low.
+    write: func(controller: u8, pin: u8, high: bool) -> result<_, error>;
+    /// Selects a pin's pull (unsupported where the controller has none).
+    set-pull: func(controller: u8, pin: u8, pull: pull) -> result<_, error>;
+}

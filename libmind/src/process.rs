@@ -119,7 +119,8 @@ pub const REQUEST_AUTHORITY: u32 = 128; // the sysmon client with the authority 
 pub const REQUEST_WINDOW: u32 = 256; // a client of the window broker in SLOT_WINDOW: the program shows itself in a window (issue 157)
 pub const REQUEST_WINDOW_MANAGER: u32 = 512; // the broker's manager client in SLOT_WINDOW: a window manager (issue 157)
 pub const REQUEST_DISPLAY: u32 = 1024; // the compositor's client in SLOT_DISPLAY: what is on the screen (`record`, issue 093)
-pub const REQUEST_LINE: u32 = 2048; // with `--line` among its arguments, a console program (no screen): `clock --line`, issue u016
+pub const REQUEST_GPIO: u32 = 2048; // the pin controller service's client with the control badge in SLOT_GPIO (issue 207)
+pub const REQUEST_LINE: u32 = 4096; // with `--line` among its arguments, a console program (no screen): `clock --line`, issue u016
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

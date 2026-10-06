@@ -1,0 +1,13 @@
+# Arm's PL061 GPIO: eight pins, each an input or an output, no multiplexing.
+soc pl061
+source "PrimeCell GPIO (PL061) Technical Reference Manual", Arm, DDI 0190B, chapter 3 "Programmers Model"
+pins 8
+# pin  pull  (no alternate functions)
+0  none
+1  none
+2  none
+3  none
+4  none
+5  none
+6  none
+7  none

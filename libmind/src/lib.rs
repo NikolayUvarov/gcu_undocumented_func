@@ -17,6 +17,7 @@ pub mod control;
 pub mod dev;
 pub mod fs;
 pub mod gfx;
+pub mod gpio;
 pub mod heap;
 pub mod hid;
 pub mod idl;

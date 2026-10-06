@@ -100,6 +100,7 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/keystore.wit`](../../idl/keystore.wit) | `keystore` (no call returns the private key; `sign` only for the signer's badge, a purpose and a budget) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `virtio_blk`, `nvme`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
 | [`idl/usb.wit`](../../idl/usb.wit) | `usb_host` (clients: the USB class drivers `usb_hid`, `usb_storage`, each badged for one device class; issue 164) | 1.0.0 |
+| [`idl/gpio.wit`](../../idl/gpio.wit) | `gpio` (clients: anyone reads; the control badge changes pins; issue 207) | 1.0.0 |
 | [`idl/vfs.wit`](../../idl/vfs.wit) | `vfs_server` (client: `mind::fs`): handles of roots, directories and files, the write path, `check` (2.1), `scope` (2.2: a client confined to one directory, a capability result), `format` of the RAM disk (2.3) | 2.3.0 |
 | [`idl/init.wit`](../../idl/init.wit) | `init` (client: the shell's `RUN <service> &`; 1.1 adds the lifecycle requests of `svc` and `top`) | 1.1.0 |
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; 1.1 adds launch sessions: `begin`, `grant`, `commit`, `abort`, `inspect`) | 1.1.0 |

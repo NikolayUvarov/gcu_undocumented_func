@@ -26,7 +26,7 @@ QEMU `shell` suite: `clock --line` for 3 s leaves one line of time in the shell'
 
 ## Resolution
 
-- **Decided: a request read with the arguments.** `REQUEST_LINE` (2048, `mind::process`) means: with `--line` among its arguments, the program is a console program (no screen).
+- **Decided: a request read with the arguments.** `REQUEST_LINE` (4096, `mind::process`; 2048 is `REQUEST_GPIO`, issue 207) means: with `--line` among its arguments, the program is a console program (no screen).
   - `mind::process::console_run(requests, args)` decides it for everyone: the loader (no screen at spawn), the shell (from the started task, as before), `wm` and `fm` (a `console` window in `wm`) and `console` (its output endpoint).
   - The loader's `needs` and its interface are unchanged: `needs.console` is the ELF's `REQUEST_CONSOLE` alone, and the launchers combine it with the arguments.
 - **`clock --line`:** `HH:MM:SS  YYYY-MM-DD`, written again with `\r` when the second changes.

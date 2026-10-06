@@ -5,6 +5,7 @@ pub mod wire;
 pub mod audio;
 pub mod block;
 pub mod display;
+pub mod gpio;
 pub mod init;
 pub mod keyboard;
 pub mod keystore;

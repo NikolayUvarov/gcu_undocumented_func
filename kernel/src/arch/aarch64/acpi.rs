@@ -30,8 +30,16 @@ pub unsafe fn init(rsdp: u64) {
     // QEMU (`virt`): its PL011 and PL031, the SPCR naming the same UART.
     if list.len() >= 16 && &list[10..16] == b"BOCHS " { board::set(&board::UART, board::VIRT_UART); board::set(&board::RTC, board::VIRT_RTC); }
     let mut ecam = false;
+    let mut definitions = [0u64; 8]; // the DSDT (from the FADT) and the SSDTs, scanned for pin controllers
+    let mut count = 0;
     for at in (36..list.len().saturating_sub(7)).step_by(8) {
         let Some(table) = table(u64_at(list, at)) else { continue };
+        if &table[..4] == b"SSDT" && count < definitions.len() { definitions[count] = u64_at(list, at); count += 1; }
+        // The DSDT: X_DSDT at 140 (64-bit), else DSDT at 40.
+        if &table[..4] == b"FACP" && count < definitions.len() {
+            let x = if table.len() >= 148 { u64_at(table, 140) } else { 0 };
+            definitions[count] = if x != 0 { x } else if table.len() >= 44 { u32_at(table, 40) as u64 } else { 0 }; count += 1;
+        }
         match &table[..4] {
             // Allocation entries of 16 bytes from offset 44: base, segment, first bus, last bus.
             b"MCFG" => for entry in (44..table.len().saturating_sub(15)).step_by(16) {
@@ -89,10 +97,12 @@ pub unsafe fn init(rsdp: u64) {
         }
     }
     if !ecam { serial_print("MIND CORE KERNEL: ACPI: NO MCFG\n"); }
+    for &address in &definitions[..count] { if let Some(block) = table(address).filter(|t| t.len() > 36) { pins(&block[36..]); } }
     use core::fmt::Write;
     let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: BOARD GICV{} GICD={:#x} GICR={:#x} ITS={:#x} UART={:#x} LINE {} TIMER PPI {} CPUS {}\r",
                      board::get(&board::GIC_VERSION), board::get(&board::GICD), board::get(&board::GICR), board::get(&board::GITS), board::get(&board::UART),
                      board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire));
+    report_pins();
     if CPU_COUNT.load(Ordering::Acquire) == 0 { serial_print("MIND CORE KERNEL: ACPI: NO GICC IN THE MADT, ONE CPU\n"); }
 }
 
@@ -121,4 +131,35 @@ pub unsafe fn power_off() -> ! {
     serial_print("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF\n");
     psci(PSCI_SYSTEM_OFF, 0, 0, 0);
     crate::cpu::halt_all()
+}
+
+// Pin controllers of a definition block: those with a window in the identity map. The BCM2711's GPIO, whose _CRS the
+// Raspberry Pi 4 firmware computes at run time, is taken at its fixed address only beside the BCM2711's GIC-400.
+unsafe fn pins(aml: &[u8]) {
+    use super::aml::Pins;
+    super::aml::pin_controllers(aml, |kind, window| {
+        let window = match (kind, window) {
+            (_, Some((base, size))) if base != 0 && size != 0 && base.checked_add(size).is_some_and(|end| end <= WINDOW) => Some((base, size)),
+            (Pins::Bcm2711, None) if board::get(&board::GICD) == BCM2711_GICD => Some((BCM2711_GPIO, 0x1000)),
+            _ => None,
+        };
+        let Some((base, size)) = window else { serial_print("MIND CORE KERNEL: ACPI: A PIN CONTROLLER WITHOUT A READABLE WINDOW, NOT USED\n"); return };
+        let first = if kind == Pins::Bcm2711 { board::PINS_BCM2711 } else { 0 };
+        let slots = &board::PINS[first..first + crate::abi::PLATFORM_PINS_MAX];
+        if slots.iter().any(|s| board::get(&s[0]) == base as usize) { return; } // named in two blocks
+        if let Some(slot) = slots.iter().find(|s| board::get(&s[0]) == 0) { board::set(&slot[0], base as usize); board::set(&slot[1], size as usize); }
+    });
+}
+const BCM2711_GICD: usize = 0xFF84_1000; const BCM2711_GPIO: u64 = 0xFE20_0000;
+
+fn report_pins() {
+    use core::fmt::Write;
+    let mut any = false;
+    for (slot, [base, size]) in board::PINS.iter().enumerate() {
+        if board::get(base) == 0 { continue; }
+        any = true;
+        let kind = if slot >= board::PINS_BCM2711 { "BCM2711" } else { "PL061" };
+        let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: PINS {} AT {:#x} ({} BYTES)\r", kind, board::get(base), board::get(size));
+    }
+    if !any { serial_print("MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES\n"); }
 }

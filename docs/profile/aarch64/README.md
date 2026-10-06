@@ -1,6 +1,6 @@
 # Platform profile `aarch64/QEMU-virt-0`
 
-**Version:** 1.2 (2026-10-06; 1.1 → 1.2: USB keyboards, mice and tablets through `usb_host` and `usb_hid` — issue 164; no console UART or RTC at `virt`'s addresses on other boards — issue 205; 1.0 → 1.1: the board's layout from ACPI, RAM and devices above 4 GiB, GICv2, NVMe — issue 205) · **Constitution:** [v1.6](../../../constitution/EN/MIND_CORE_Constitution_v1.6.md), stage 0 · **Roadmap:** track H (issues 201–205)
+**Version:** 1.3 (2026-10-06; 1.2 → 1.3: pin controllers from the DSDT and SSDTs — issue 206; 1.1 → 1.2: USB keyboards, mice and tablets through `usb_host` and `usb_hid` — issue 164; no console UART or RTC at `virt`'s addresses on other boards — issue 205; 1.0 → 1.1: the board's layout from ACPI, RAM and devices above 4 GiB, GICv2, NVMe — issue 205) · **Constitution:** [v1.6](../../../constitution/EN/MIND_CORE_Constitution_v1.6.md), stage 0 · **Roadmap:** track H (issues 201–205)
 
 This is the second platform of MIND Core. It shares the kernel's generic part, every service's source and the system-call interface with [`x86-64/QEMU-0`](../README.md); what differs is the architecture layer (`kernel/src/arch/aarch64/`, `libmind/src/arch/aarch64.rs`), the bootloader's few architecture lines and the devices. Like the x86 profile it states what the implementation is, guarantees and does not claim (MC-12.1, MC-12.3), for the code of the commit that contains it; a change that alters a statement here updates it in the same commit (MC-12.9). Where this profile says nothing, the x86 profile's statement holds unchanged: its [conformance table](../README.md#conformance), [kernel objects](../kernel-objects.md), [clocks](../clocks.md), [bootstrap](../bootstrap.md) and [memory transfers](../README.md#memory-transfers-appendix-b2).
 
@@ -63,6 +63,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | xHCI (PCI) with USB keyboards, mice, tablets, hubs, mass storage | `usb_host`, `usb_hid`, `usb_storage` (both architectures, issue 164) | devices behind USB 2 hubs, plugged in and out at run time; the keyboard service is `usb_hid`'s when there is no VirtIO keyboard; the boards' only keyboards |
 | virtio-keyboard, virtio-tablet (PCI) | `virtio_input` | up to two devices; keys go through the PS/2 decoder (layouts, Ctrl+Z, the keyboard service `idl/keyboard.wit`), the tablet gives absolute pointer events |
 | PL011 | `shell` | its console, as COM1 on x86 |
+| Pin controllers (PL061, BCM2711 GPIO) named in the DSDT or SSDTs | `gpio` (issue 207) | the kernel finds them (`MIND CORE KERNEL: PINS …`) and gives their registers to `init` by index; `gpio` serves `idl/gpio.wit`. QEMU `virt` with ACPI has none (its PL061 is replaced by the GED), so `gpio` is tested on the host only and has not run on hardware |
 | PL031 | `rtc` | seconds since 1970, UTC |
 | ramfb | `compositor` | the firmware's GOP framebuffer (800x600) |
 
