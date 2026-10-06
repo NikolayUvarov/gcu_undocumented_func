@@ -1222,7 +1222,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/65535")), screen
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}, endpoints ")), screen  # counts alone (171-APP-0006)
     largest = table_row(screen, r"Kernel arena 64\.0M: used .*, largest free block (\d+(?:\.\d)?)M")
     assert largest and table_row(screen, r"Free outside the largest block: "), screen  # issue 076
     vm.send("3")
@@ -1256,7 +1256,7 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
-    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 65535"]:
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks}  max "]:  # scaled to its own maximum (171-APP-0006)
         assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
     vm.send("c")
     vm.expect("TOTAL=1")

@@ -49,7 +49,7 @@ impl Source for Fake {
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> { Ok((0..4).map(|i| Cpu { apic: i, online: i < 2, ..Cpu::default() }).collect()) }
     fn memory(&mut self) -> Result<Memory, Problem> {
         Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
-                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 32, endpoints_limit: 127, ..Memory::default() })
+                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
     fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(self.endpoints.clone()) }
@@ -217,7 +217,7 @@ fn details_window_and_keys() {
     let lines = top::Top::details_lines(details, source.now);
     assert!(lines[0].contains("PID 5  loader  service"), "{:?}", lines);
     assert!(lines[1].contains("Parent 1 init"), "{:?}", lines);
-    assert!(lines.iter().any(|l| l == "Capabilities 3/95: endpoint 1, memory 1"), "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "Capabilities 3/4095: endpoint 1, memory 1"), "the table grows to 4095 slots (issue 171): {:?}", lines);
     assert!(lines.iter().any(|l| l.contains("4 regions, 76.0K mapped")), "the guard page is not mapped: {:?}", lines);
     assert!(lines.iter().any(|l| l == "Endpoints (slot→index): 2→6"), "{:?}", lines);
     assert!(lines.iter().any(|l| l.ends_with(", kernel 40.0K")), "{:?}", lines);
@@ -346,7 +346,7 @@ fn memmap_views() {
     assert!(screen.iter().any(|l| l.contains("Kernel arena 64.0M: used 16.0M (25.0%), free 48.0M, largest free block 40.0M")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("Free outside the largest block: 8.0M (fragmentation); shared memory mapped by tasks: 2.0M")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("page tables") && l.contains("1.0M")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("Tasks 5/32, endpoints 8/127")), "limits from the kernel: {:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("Tasks 5, endpoints 8")), "counts without the root quota (issue 171): {:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("screens") && l.contains("8.0M") && l.contains("12.5%")), "{:#?}", screen);
     map.key(code(KEY_TAB), &mut source);
     assert_eq!(map.view, memmap::View::Process);
@@ -388,6 +388,24 @@ fn graphs() {
     view.key(chr('2'), &mut source);
     assert_eq!(source.slow_requested.last(), Some(&(true, 600)));
     assert!(view.status().starts_with("WINDOW=10MIN TOTAL=1"));
+}
+
+#[test]
+fn task_graph_to_its_own_scale() {
+    // 171-APP-0006: the task graph is scaled to its own maximum, not to the root quota the kernel reports (65 535).
+    let mut source = system();
+    source.samples = (0..300).map(|i| Sample { busy: [500, 0, 0, 0, 0, 0, 0, 0], tasks: if i < 150 { 20 } else { 60 }, ..Sample::default() }).collect();
+    let mut view = load::LoadView::new();
+    view.refresh(&mut source).unwrap();
+    assert_eq!(view.title(load::Series::Tasks, &view.values(load::Series::Tasks)), "tasks  60  max 60");
+    let screen = draw(&mut view, 160, 50);
+    let title = screen.iter().position(|l| l.contains("tasks  60  max 60")).expect("the task graph");
+    assert!(screen[title].trim_end().ends_with(" 100"), "a round top above the maximum: {:?}", screen[title]);
+    // Rows of the plot with a dot at a column of the first half (20 tasks) and of the second (60 tasks).
+    let plot: Vec<Vec<char>> = screen[title + 1..].iter().take_while(|l| !l.contains("max")).map(|l| l.chars().collect()).collect();
+    let rows = |column: usize| plot.iter().filter(|l| l.get(column).is_some_and(|&c| ('\u{2801}'..='\u{28FF}').contains(&c))).count();
+    let (low, high) = (rows(20), rows(120));
+    assert!(low >= 1 && high >= 2 * low, "20 then 60 tasks: {} and {} rows of {}: {:#?}", low, high, plot.len(), screen);
 }
 
 #[test]

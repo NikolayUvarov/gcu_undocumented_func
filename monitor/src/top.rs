@@ -145,7 +145,7 @@ impl Top {
             match kinds.iter_mut().find(|k| k.0 == name) { Some(k) => k.1 += 1, None => kinds.push((name, 1)) }
         }
         let list: Vec<String> = kinds.iter().map(|(name, n)| format!("{} {}", name, n)).collect();
-        lines.push(format!("Capabilities {}/{}: {}", t.caps, CAP_SLOTS - 1, list.join(", ")));
+        lines.push(format!("Capabilities {}/{}: {}", t.caps, CAP_SLOTS_MAX - 1, list.join(", ")));
         // Endpoint indexes are labels (the `ipc` view and the shell's `endpoints` use the same ones), not authority.
         let endpoints: Vec<String> = details.caps.iter().filter(|c| c.kind as usize == CAP_KIND_ENDPOINT && c.endpoint != 0).map(|c| format!("{}→{}", c.slot, c.endpoint)).collect();
         if !endpoints.is_empty() { lines.push(format!("Endpoints (slot→index): {}", endpoints.join(" "))); }
@@ -184,8 +184,8 @@ impl Top {
         grid.put(6, y, '[', theme.dim);
         grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}/{}, endpoints {}/{}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
-                                         m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
+        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
+                                         m.tasks, m.endpoints), theme.panel);
         y + 2
     }
 

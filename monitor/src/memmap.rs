@@ -197,7 +197,7 @@ impl Memmap {
         grid.text(1, y, &format!("Free outside the largest block: {} (fragmentation); shared memory mapped by tasks: {}", text::size(m.free.saturating_sub(m.largest_free)),
                                  text::size(m.shared)), theme.panel);
         y += 1;
-        grid.text(1, y, &format!("Tasks {}/{}, endpoints {}/{}", m.tasks, m.tasks_limit, m.endpoints, m.endpoints_limit), theme.panel);
+        grid.text(1, y, &format!("Tasks {}, endpoints {}", m.tasks, m.endpoints), theme.panel); // no fixed count of either (issue 171)
     }
 
     fn process(&mut self, grid: &mut Grid, theme: &Theme) {
@@ -246,7 +246,7 @@ impl Memmap {
             let mut name = String::new();
             for _ in 0..depth { name.push_str("  "); }
             name.push_str(&t.name);
-            grid.text(1, y, &format!("{:>3}  {:<22} {:>3}/{:<3}  {:>3}/{:<3}    {:>2}/{}", t.pid, name, t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints, t.caps, CAP_SLOTS - 1), style);
+            grid.text(1, y, &format!("{:>3}  {:<22} {:>3}/{:<3}  {:>3}/{:<3}    {:>2}/{}", t.pid, name, t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints, t.caps, CAP_SLOTS_MAX - 1), style);
         }
     }
 }
