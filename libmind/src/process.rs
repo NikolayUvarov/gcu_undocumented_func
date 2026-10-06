@@ -28,7 +28,14 @@ pub fn log(bytes: &[u8]) {
     crate::output::send(bytes);
 }
 
-/// Sink for `print!`/`println!`.
+/// One line for `println!`: formatted, then written whole with its newline (issue 209).
+pub fn log_line(args: core::fmt::Arguments) {
+    let mut line = crate::line::Line::new(log);
+    let _ = core::fmt::Write::write_fmt(&mut line, args);
+    line.push(b"\n");
+}
+
+/// Sink for `print!`.
 pub struct Log;
 impl core::fmt::Write for Log {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { log(text.as_bytes()); Ok(()) }

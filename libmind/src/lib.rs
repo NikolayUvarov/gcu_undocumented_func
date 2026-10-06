@@ -25,6 +25,7 @@ pub mod input;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;
+pub mod line;
 pub mod log;
 pub mod mask;
 pub mod mem;
@@ -118,5 +119,5 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     () => { $crate::process::log(b"\n") };
-    ($($arg:tt)*) => {{ $crate::print!($($arg)*); $crate::process::log(b"\n"); }};
+    ($($arg:tt)*) => {{ $crate::process::log_line(format_args!($($arg)*)); }};
 }

@@ -25,7 +25,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 
-Requests from other tracks that wait for the porting track's numbers: [porting-track-reports.md](porting-track-reports.md) (boot lines split by interleaving in the aarch64 smoke).
 
 ## Finished tasks (`issues-done/`)
 
@@ -180,5 +179,6 @@ Requests from other tracks that wait for the porting track's numbers: [porting-t
 | [167](../issues-done/167-models-of-revoke-and-move.done) | TLA+ models of revoke and MOVE checked by TLC (stage II exit); a mapped memory capability no longer moves (the bug the model found) | done (2026-10-06) |
 | [168](../issues-done/168-task-memory-charged-to-spawner.done) | A task's image, stack and screen are charged to its spawner's memory quota (MC-1.7) | done (2026-10-06) |
 | [169](../issues-done/169-recovery-reserve.done) | A recovery reserve of the frame pool (32 MiB, set by init): applications cannot take the memory a service restart needs (MC-6.5) | done (2026-10-06) |
+| [209](../issues-done/209-aarch64-smoke-interleaved-lines.done) | aarch64 smoke: a line goes out in one write, so lines of services printing at once stay whole (reported by the tools track) | done (2026-10-06) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
