@@ -159,7 +159,9 @@ if [[ ${#REFS[@]} -gt 0 || $ALL == 1 ]]; then
             fi
         fi
         echo; echo "=== $what"
-        CI_LOCAL_LOGS="$LOGS/$name" "$SELF" --tree "$wt" "${opts[@]}"; status=$?
+        # A branch is tested with its own groups when it has this script.
+        runner="$SELF"; [[ -x "$wt/scripts/ci_local.sh" ]] && runner="$wt/scripts/ci_local.sh"
+        CI_LOCAL_LOGS="$LOGS/$name" "$runner" --tree "$wt" "${opts[@]}"; status=$?
         if [[ $status == 0 ]]; then SUMMARY+=("PASS  $what"); else SUMMARY+=("FAIL  $what (logs: $LOGS/$name)"); FAILED=1; fi
         [[ $KEEP == 1 ]] || git worktree remove --force "$wt"
     done
