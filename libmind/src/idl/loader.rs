@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed.
@@ -46,17 +46,17 @@ impl Wire for Needs {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { console: Wire::decode(r)?, sysinfo: Wire::decode(r)?, file: Wire::decode(r)?, lifecycle: Wire::decode(r)?, log: Wire::decode(r)?, files: Wire::decode(r)? }) }
 }
 
-/// The `*.elf` programs in the root of the boot disk (at most 64); services are marked.
-pub fn list(endpoint: Endpoint) -> Result<List<Program, 64>> {
+/// The `*.elf` programs in the root of the boot disk (at most 128, 1.4: 64 before); services are marked.
+pub fn list(endpoint: Endpoint) -> Result<List<Program, 128>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 1 | MAJOR << 8, &buffer, length)?;
-    let length = wire::buffer_reply(&reply, 1730, false, false)?;
+    let length = wire::buffer_reply(&reply, 3458, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Program, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Program, 128> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
 /// Starts program `name` (a name, or a path with `.` or `/`) with `args` in its info page; returns its PID.
@@ -181,7 +181,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
     match words[0] & 0xFF {
         1 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 1730, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 3458, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::List, call))
@@ -241,7 +241,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
 }
 
 pub fn reply_list(call: Call, value: &[Program]) -> Result<()> {
-    wire::reply_buffer(call, |w| codec::encode_slice::<Program, 64>(value, w))
+    wire::reply_buffer(call, |w| codec::encode_slice::<Program, 128>(value, w))
 }
 pub fn reply_run(call: Call, value: Result<u64>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };

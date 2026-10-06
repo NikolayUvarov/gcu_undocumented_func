@@ -190,7 +190,7 @@ fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
 }
 
 // The *.elf programs in the disk root, except the kernel; services are marked.
-fn programs() -> List<loader::Program, 64> {
+fn programs() -> List<loader::Program, 128> {
     let mut list = List::default();
     let _ = fs::list("", |entry| {
         if entry.is_dir || entry.name.len() < 5 || !entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf") { return; }
