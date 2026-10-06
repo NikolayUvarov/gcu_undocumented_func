@@ -21,7 +21,7 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
 ## Progress (2026-10-06)
 
 - **Done — `300-STO-0001`** ([record](../issues-done/300-STO-0001-content-identifiers.done)): CIDv1 identifiers (`raw`, SHA-256) and SHA-256 in `libmind` (`cid`, `sha256`); host tests against the FIPS examples and the reference `multiformats` library; [docs/storage](../docs/storage/README.md).
-- **Next — `300-STO-0002`**: the `blockstore` service over the RAM disk.
+- **In progress — [`300-STO-0002`](300-STO-0002-blockstore-service.md)**: the `blockstore` service and `idl/blockstore.wit` 1.0 are built and host-tested; starting it at boot with a RAM disk of its own is requested from the kernel track ([requests-KRN.md](requests-KRN.md)), and the QEMU suite waits for it.
 
 ## Acceptance criteria
 

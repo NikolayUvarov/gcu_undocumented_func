@@ -25,12 +25,13 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96); all RAM on x86 (now below 4 GiB) | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
-| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the identifier format is done (`300-STO-0001`), the `blockstore` service is next | main task, `STO` | P2 | — | track B |
+| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the identifier format is done (`300-STO-0001`), the service is built (`300-STO-0002`) | main task, `STO` | P2 | — | track B |
+| [300-STO-0002](300-STO-0002-blockstore-service.md) | The `blockstore` service: put and get by CID, append-only, every read checked; built and host-tested, waits to be started at boot | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively).
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively), [requests-KRN.md](requests-KRN.md) (start `blockstore` at boot with a RAM disk of its own).
 
 
 ## Finished tasks (`issues-done/`)

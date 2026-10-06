@@ -98,6 +98,7 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/tls.wit`](../../idl/tls.wit) | `tls` (a client lends its flow with a word call, `attach`, that carries the capability as a parameter; the handshake runs inside `connect`) | 1.0.0 |
 | [`idl/window.wit`](../../idl/window.wit) | `windows` (word calls `surface`, `waker` and `client` return capabilities: the program's and the manager's leases come from separate roots) | 1.0.0 |
 | [`idl/keystore.wit`](../../idl/keystore.wit) | `keystore` (no call returns the private key; `sign` only for the signer's badge, a purpose and a budget) | 1.0.0 |
+| [`idl/blockstore.wit`](../../idl/blockstore.wit) | `blockstore` (blocks by CID: `put`, `get` checked against the CID, `has`, `stat`; issue 300-STO-0002, not started at boot yet) | 1.0.0 |
 | [`idl/block.wit`](../../idl/block.wit) | `ata`, `ahci`, `usb_storage`, `virtio_blk`, `nvme`, `ramdisk` (client: `vfs_server`; 1.1 adds `writable`, `write` with the data as sealed read-only memory, and `flush`, served to the write badge only) | 1.1.0 |
 | [`idl/usb.wit`](../../idl/usb.wit) | `usb_host` (clients: the USB class drivers `usb_hid`, `usb_storage`, each badged for one device class; issue 164) | 1.0.0 |
 | [`idl/gpio.wit`](../../idl/gpio.wit) | `gpio` (clients: anyone reads; the control badge changes pins; issue 207) | 1.0.0 |

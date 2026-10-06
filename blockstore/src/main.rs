@@ -1,0 +1,107 @@
+#![no_std]
+#![no_main]
+// Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
+// log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
+// Serves idl/blockstore.wit. Holds: a block client with the write badge in slot 2, a RAM disk of its own
+// (issues/requests-KRN.md).
+mod store;
+
+// store.rs names these as crate::cid and crate::sha256, so the host tests can build it from the libmind files.
+use mind::{cid, sha256};
+
+use cid::Cid;
+use mind::abi::BootInfo;
+use mind::block::Device as Client;
+use mind::idl::blockstore::{self, Error, Request, Stats};
+use mind::idl::wire;
+use mind::ipc::Endpoint;
+use store::{Device, Entry, Store, BLOCK_MAX, BUFFER, SECTOR};
+
+const RECEIVED: usize = 9;
+/// The block client init grants.
+const BLOCK: usize = 2;
+/// Blocks the index holds (48 bytes each).
+const CAPACITY: usize = 4096;
+
+static mut INDEX: [Entry; CAPACITY] = [Entry::EMPTY; CAPACITY];
+static mut RECORD: [u8; BUFFER] = [0; BUFFER];
+static mut SCRATCH: [u8; blockstore::REQUEST_MAX] = [0; blockstore::REQUEST_MAX];
+static mut OUT: [u8; BLOCK_MAX] = [0; BLOCK_MAX];
+
+/// The block client as the store's medium.
+struct Medium(Client);
+impl Device for Medium {
+    fn sectors(&self) -> u64 { self.0.sectors() }
+    fn writable(&self) -> bool { !self.0.read_only() }
+    fn read(&mut self, lba: u64, out: &mut [u8]) -> bool {
+        match self.0.read(lba, out.len() / SECTOR) {
+            Ok(data) if data.len() == out.len() => { out.copy_from_slice(data); true }
+            _ => false,
+        }
+    }
+    fn write(&mut self, lba: u64, data: &[u8]) -> bool { self.0.write(lba, data) == Ok(data.len() / SECTOR) }
+    fn flush(&mut self) -> bool { self.0.flush().is_ok() }
+}
+
+fn error(e: store::Error) -> Error {
+    match e {
+        store::Error::NotFound => Error::NotFound,
+        store::Error::Corrupt => Error::Corrupt,
+        store::Error::Full => Error::Full,
+        store::Error::TooLarge => Error::TooLarge,
+        store::Error::ReadOnly => Error::ReadOnly,
+        store::Error::Device | store::Error::Foreign | store::Error::Layout => Error::Device,
+    }
+}
+
+fn parse(bytes: &[u8]) -> Result<Cid, Error> { Cid::from_bytes(bytes).map_err(|_| Error::Unsupported) }
+
+mind::entry!(main);
+fn main(_info: &'static BootInfo) {
+    let (index, record, scratch, out) = unsafe {
+        (&mut *core::ptr::addr_of_mut!(INDEX), &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(SCRATCH), &mut *core::ptr::addr_of_mut!(OUT))
+    };
+    let mounted = match Client::open(Endpoint(BLOCK)) {
+        Ok(client) => Store::mount(Medium(client), index, record),
+        Err(_) => Err(store::Error::Device),
+    };
+    // Without a medium every request is answered with the reason, so clients are not left waiting.
+    let mut store = match mounted {
+        Ok(store) => {
+            let s = store.stats();
+            mind::println!("[BLOCKSTORE] READY BLOCKS={} SECTORS={}/{} CORRUPT={} DAMAGED={}", s.blocks, s.used, s.sectors, s.corrupt, s.damaged);
+            Ok(store)
+        }
+        Err(e) => { mind::println!("[BLOCKSTORE] NOT MOUNTED: {:?}", e); Err(error(e)) }
+    };
+    loop {
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        if !request.is_call { continue; }
+        let _ = match blockstore::decode(&request, RECEIVED, scratch) {
+            Err(reason) => wire::reject(reason),
+            Ok((Request::Put { data }, call)) => {
+                let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(data).map_err(error)).map(|c| c.to_bytes());
+                blockstore::reply_put(call, cid.as_ref().map(|c| &c[..]).map_err(|e| *e))
+            }
+            Ok((Request::Get { cid }, call)) => {
+                let got = parse(cid).and_then(|cid| {
+                    let s = store.as_mut().map_err(|e| *e)?;
+                    s.get(&cid, out).map_err(|e| {
+                        if e == store::Error::Corrupt { mind::println!("[BLOCKSTORE] CORRUPT {}", cid); }
+                        error(e)
+                    })
+                });
+                blockstore::reply_get(call, got.map(|len| &out[..len]))
+            }
+            Ok((Request::Has { cid }, call)) => {
+                let held = parse(cid).and_then(|cid| store.as_ref().map_err(|e| *e).map(|s| s.has(&cid)));
+                blockstore::reply_has(call, held)
+            }
+            Ok((Request::Stat, call)) => {
+                let s = store.as_ref().map(|s| s.stats()).unwrap_or_default();
+                let stats = Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity };
+                blockstore::reply_stat(call, &stats)
+            }
+        };
+    }
+}

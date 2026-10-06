@@ -4,6 +4,7 @@ pub mod codec;
 pub mod wire;
 pub mod audio;
 pub mod block;
+pub mod blockstore;
 pub mod display;
 pub mod gpio;
 pub mod init;
