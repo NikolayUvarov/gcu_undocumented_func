@@ -2,6 +2,7 @@
 //! Block store (`blockstore`, issue 300-STO-0002, docs/storage): immutable blocks named by their content identifier
 //! (CIDv1, `raw`, SHA-256; 36 bytes in binary form). Nothing stored is overwritten, and a block is checked against its
 //! CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
+//! What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,7 +15,8 @@ pub const PACKAGE: &str = "mind:blockstore";
 pub const VERSION: (u8, u8, u8) = (1, 0, 0);
 const MAJOR: usize = 1;
 
-/// Why a request failed. `rights` is reserved for the badges of 300-STO-0004.
+/// Why a request failed. `rights`: the badge of the client's capability does not allow the request
+/// (`mind::blockstore`: put needs BADGE_PUT, get and has BADGE_GET, stat either).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7 }
@@ -85,16 +87,17 @@ pub fn has(endpoint: Endpoint, cid: &[u8]) -> Result<core::result::Result<bool, 
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
-pub fn stat(endpoint: Endpoint) -> Result<Stats> {
+pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 44, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Stats as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Stats as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
@@ -164,6 +167,7 @@ pub fn reply_has(call: Call, value: core::result::Result<bool, Error>) -> Result
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_stat(call: Call, value: &Stats) -> Result<()> {
+pub fn reply_stat(call: Call, value: core::result::Result<&Stats, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

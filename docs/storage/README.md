@@ -62,7 +62,6 @@ Until it exists, the store accepts only `sha2-256`.
   - deletion, retention and garbage collection (MC-4.5, 4.11);
   - copies on other media (MC-4.8, independence of copies);
   - names and roots (MC-4.3);
-  - rights by badge: every client may put and get until 300-STO-0004.
 
 Evidence: `tests/blockstore_host.rs`.
 - Put and get, and blocks found again after a remount.
@@ -73,6 +72,18 @@ Evidence: `tests/blockstore_host.rs`.
 
 These are host tests of the logic on a simulated medium, not of the service on the platform.
 
-## Authority — plan (300-STO-0004)
+## Authority — implemented, not exercised on the platform yet (300-STO-0004)
 
-Rights to put and to get will be told apart by badge (Appendix B.6). The right to read a block stays separate from the obligation to keep it (MC-4.11); retention is a later task.
+A client's rights come from the badge `init` mints into its capability (`mind::blockstore`), and the service decides every request by it:
+
+| Badge bit | Allows |
+|---|---|
+| `BADGE_GET` (1) | `get`, `has`, `stat` |
+| `BADGE_PUT` (2) | `put`, `stat` |
+
+- A client with neither bit may do nothing, and bits this version does not know grant nothing. A refusal is answered `rights` and logged with the caller's PID and badge.
+- **A CID grants nothing (MC-4.7).** A hash names a representation. It does not permit reading: a get needs `BADGE_GET`, whoever knows the CID.
+- **Storing is not reading (MC-4.11).** A put creates retention, because the store keeps every block and has no deletion yet. That is a separate right from reading. There is no per-client quota on it yet: the medium and the index are the only limits, and a full store refuses every put. Retention with an owner, a term and a quota is a later task of track B.
+- **Deduplication (MC-4.7).** Bytes already held are not written again. A client with `BADGE_PUT` can therefore learn whether some bytes are already stored: `stat` does not change and the put is faster. The store treats all its clients as one confidentiality domain. Clients that must not learn of each other's data need separate stores (or a store without deduplication), and none exists yet.
+
+The rule is host-tested (`rights_come_from_the_badge` in `tests/blockstore_host.rs`). The clients are minted with these badges only once the kernel track starts the service ([requests-KRN.md](../../issues/requests-KRN.md)).

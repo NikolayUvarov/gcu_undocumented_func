@@ -26,6 +26,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the identifier format is done (`300-STO-0001`), the service is built (`300-STO-0002`) | main task, `STO` | P2 | — | track B |
+| [300-STO-0004](300-STO-0004-rights-by-badge.md) | Rights to the block store by badge: `BADGE_GET` reads, `BADGE_PUT` stores, refusals logged; host-tested, waits for badged clients | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
 | [300-STO-0002](300-STO-0002-blockstore-service.md) | The `blockstore` service: put and get by CID, append-only, every read checked; built and host-tested, waits to be started at boot | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |

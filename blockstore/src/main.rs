@@ -2,8 +2,8 @@
 #![no_main]
 // Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
-// Serves idl/blockstore.wit. Holds: a block client with the write badge in slot 2, a RAM disk of its own
-// (issues/requests-KRN.md).
+// Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
+// logged. Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
 // store.rs names these as crate::cid and crate::sha256, so the host tests can build it from the libmind files.
@@ -12,6 +12,7 @@ use mind::{cid, sha256};
 use cid::Cid;
 use mind::abi::BootInfo;
 use mind::block::Device as Client;
+use mind::blockstore::{allowed, Operation};
 use mind::idl::blockstore::{self, Error, Request, Stats};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
@@ -77,8 +78,18 @@ fn main(_info: &'static BootInfo) {
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if !request.is_call { continue; }
+        let (badge, pid) = (request.badge, request.sender);
+        let refused = |operation| {
+            if allowed(badge, operation) { return false; }
+            mind::println!("[BLOCKSTORE] REFUSED {:?} FOR PID {} (BADGE {})", operation, pid, badge);
+            true
+        };
         let _ = match blockstore::decode(&request, RECEIVED, scratch) {
             Err(reason) => wire::reject(reason),
+            Ok((Request::Put { .. }, call)) if refused(Operation::Put) => blockstore::reply_put(call, Err(Error::Rights)),
+            Ok((Request::Get { .. }, call)) if refused(Operation::Get) => blockstore::reply_get(call, Err(Error::Rights)),
+            Ok((Request::Has { .. }, call)) if refused(Operation::Has) => blockstore::reply_has(call, Err(Error::Rights)),
+            Ok((Request::Stat, call)) if refused(Operation::Stat) => blockstore::reply_stat(call, Err(Error::Rights)),
             Ok((Request::Put { data }, call)) => {
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(data).map_err(error)).map(|c| c.to_bytes());
                 blockstore::reply_put(call, cid.as_ref().map(|c| &c[..]).map_err(|e| *e))
@@ -100,7 +111,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Stat, call)) => {
                 let s = store.as_ref().map(|s| s.stats()).unwrap_or_default();
                 let stats = Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity };
-                blockstore::reply_stat(call, &stats)
+                blockstore::reply_stat(call, Ok(&stats))
             }
         };
     }

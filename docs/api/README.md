@@ -164,6 +164,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |
 | `stat` | `STAT` records as typed slices (`read`, `one`) and their names |
 | `block`, `block_protocol` | block device client; the common driver loop with the write badge checks (`Driver`, `read`, `write`, `flush`) |
+| `blockstore` | rights of block store clients by badge: `BADGE_GET` (get, has), `BADGE_PUT` (put), `allowed(badge, Operation)` ([docs/storage](../storage/README.md)); the calls are in `idl::blockstore` |
 | `cid`, `sha256` | content identifiers ([docs/storage](../storage/README.md)): `Cid` (CIDv1, `raw` content, SHA-256) with `raw`, `matches`, binary (`to_bytes`, `from_bytes`, `read`) and text (`to_text`, `from_text`, `Display`) forms; unsupported versions, types, algorithms and non-canonical encodings are refused (`cid::Error`); SHA-256 (`digest`, `Sha256`) |
 | `control` | process control and statistics (`stat`, `records`, `sched_set`) |
 | `dev`, `platform` | ports, IRQ, MMIO, DMA, device state for drivers and init |

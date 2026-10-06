@@ -1,6 +1,7 @@
 //! Host tests of the block store's layout and logic (blockstore/src/store.rs, issue 300-STO-0002; MC-4.2, 4.8):
 //! put and get by CID, blocks found again after a remount, a flipped byte detected and never returned, no sector
-//! written twice, defined refusals for a full medium, a full index, a foreign or unknown medium and a read-only one.
+//! written twice, defined refusals for a full medium, a full index, a foreign or unknown medium and a read-only one;
+//! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -8,6 +9,8 @@ mod sha256;
 mod cid;
 #[path = "../blockstore/src/store.rs"]
 mod store;
+#[path = "../libmind/src/blockstore.rs"]
+mod rights;
 
 use cid::Cid;
 use std::collections::HashMap;
@@ -332,4 +335,22 @@ fn random_puts_gets_and_remounts_match_a_model() {
         assert_eq!(store.stats().bytes, model.values().map(|d| d.len() as u64).sum::<u64>());
     }
     assert!(medium.writes.iter().all(|&w| w <= 1), "no sector is written twice");
+}
+
+#[test]
+fn rights_come_from_the_badge() {
+    use rights::{allowed, Operation::*, BADGE_GET, BADGE_PUT};
+    // (badge, put, get, has, stat)
+    for (badge, put, get, has, stat) in [
+        (0, false, false, false, false),
+        (BADGE_GET, false, true, true, true),
+        (BADGE_PUT, true, false, false, true),
+        (BADGE_GET | BADGE_PUT, true, true, true, true),
+        // Bits of rights this version does not know grant nothing.
+        (4, false, false, false, false),
+        (0xfffc, false, false, false, false),
+        (0xffff, true, true, true, true),
+    ] {
+        assert_eq!([allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat)], [put, get, has, stat], "badge {badge:#x}");
+    }
 }
