@@ -17,6 +17,8 @@ Every Mind needs its first processor tick. We are providing exactly that.
 
 The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.2 ([Russian](ROADMAP_RU.md)); what the implementation guarantees and under which assumptions is in the platform profile [docs/profile](docs/profile/README.md); system calls, `libmind` and service interfaces are in [docs/api](docs/api/README.md); legacy hardware support, how `init` reports it at boot and how to drop it is in [docs/legacy.md](docs/legacy.md). Near-term work items are in [issues/](issues/README.md) (finished ones in [issues-done/](issues-done), ones that need a person in [issues-human/](issues-human/README.md)); background analyses are in [knowledge/](knowledge). The plan for system tools (file manager, editor, `top`, memory map, load monitor and others) is in [docs/tools](docs/tools/README.md) ([Russian](docs/tools/README_RU.md)). The plan for voice — speaking, listening and acting on what was heard — is in [docs/voice](docs/voice/README.md) ([Russian](docs/voice/README_RU.md)).
 
+The work runs in parallel **tracks** (kernel, porting, network, tools, drivers, storage, update, Marain, assurance, …). The registry of tracks — their codes, task numbers `NNN-TRK-MMMM`, ranges, owners and which are open to take, in parallel with the others — is [TRACKS.md](TRACKS.md).
+
 
 ---
 
@@ -181,7 +183,7 @@ You will need [rustup](https://rustup.rs) and a virtual machine capable of UEFI 
 rustup toolchain install   # reads rust-toolchain.toml
 ```
 
-CI (`.github/workflows/ci.yml`) builds with the same toolchain on Ubuntu 24.04 and runs the host tests and all QEMU suites. The same groups run on a local machine: `scripts/ci_local.sh` (the working tree; `--main`, `--ref BRANCH` merged with main, `--all` branches, each in a temporary worktree; a PASS/FAIL table), and `scripts/ci_watch.sh` fetches origin every 10 minutes and runs it on each new commit of main and of the other branches (history in `~/.cache/mind-ci-watch/history.log`). Contributors who work through coding agents, and the agents themselves, follow [AGENTS.md](AGENTS.md): tracks, issue ranges, branches, the gate to `main` and a brief to paste into a session.
+CI (`.github/workflows/ci.yml`) builds with the same toolchain on Ubuntu 24.04 and runs the host tests and all QEMU suites. The same groups run on a local machine: `scripts/ci_local.sh` (the working tree; `--main`, `--ref BRANCH` merged with main, `--all` branches, each in a temporary worktree; a PASS/FAIL table), and `scripts/ci_watch.sh` fetches origin every 10 minutes and runs it on each new commit of main and of the other branches (history in `~/.cache/mind-ci-watch/history.log`). Contributors who work through coding agents, and the agents themselves, follow [AGENTS.md](AGENTS.md): tracks ([registry](TRACKS.md)), task numbers, branches, the gate to `main` and a brief to paste into a session.
 
 *Note: Ensure QEMU and the OVMF firmware (UEFI for QEMU) are installed on your host system.*
 
@@ -775,6 +777,8 @@ source immutability, exact reconstruction of split bodies and stale cleanup.
 ---
 
 ## Contributing
+
+**Tracks.** The work is split into parallel tracks; open ones can be taken now, in parallel with the others. The registry of tracks — codes (`KRN`, `NET`, `STO`, …), task numbers `NNN-TRK-MMMM`, ranges, owners, branches and where each starts — is [TRACKS.md](TRACKS.md); how to work in a track is [AGENTS.md](AGENTS.md); the open tasks are in [issues/](issues/README.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md): where to start, how to build and test, and the project's rules. Security issues: [SECURITY.md](SECURITY.md). Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 

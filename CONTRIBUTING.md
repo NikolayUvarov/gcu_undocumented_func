@@ -9,6 +9,7 @@ MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64
 - [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md): normative requirements (`MC-<article>.<clause>`); [docs/profile](docs/profile/README.md) says which of them the code meets and with what evidence.
 - [docs/api](docs/api/README.md): system calls, `libmind`, service interfaces.
 - [AGENTS.md](AGENTS.md): working through a coding agent — tracks and their issue ranges, branches, the gate to `main`, coordination between tracks.
+- [TRACKS.md](TRACKS.md): the registry of tracks — codes, task numbers `NNN-TRK-MMMM`, ranges, owners; open tracks can be taken in parallel.
 
 ## Build and test
 

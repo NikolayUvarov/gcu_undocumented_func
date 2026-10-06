@@ -31,7 +31,7 @@ Issues 020 and 021 (K1), 032 (C6), 167 (models of the capability tree), 169 (rec
   - `libmind/src/stat.rs`, `shell/src/observe.rs`: the `escrow` kind name and `OF=<kind>`.
 - **Tests.** `escrow_check` in the `services` suite passed on x86, and the suite's lifecycle checks (stopping a service and an application through init) passed with init holding no process control.
 - **Docs.** `docs/profile` README (MC-3.12), `bootstrap.md`, `kernel-objects.md`, `evidence.md`; `docs/api/README.md`; ROADMAP 1.8 in both languages.
-- **Report.** The `caps` tool of the tools track does not know the new kind yet: [tools-track-reports.md](../issues/tools-track-reports.md).
+- **Report.** The `caps` tool of the tools track does not know the new kind yet: [requests-APP.md](../issues/requests-APP.md).
 - **Remaining.**
   - The device capabilities `init` keeps for restarts stay usable by it: ports, MMIO, IRQ lines and DMA regions. It stops devices through them.
   - The escrow is not in the TLA+ model of the capability tree.

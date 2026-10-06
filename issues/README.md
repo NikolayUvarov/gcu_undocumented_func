@@ -8,14 +8,14 @@
    - add a `## Resolution` (or `## Done`) section saying what was done and where (files, tests);
    - fix relative links (`../issues/…md` for open tasks, `….done` for finished ones).
 3. **A task that became irrelevant** (replaced by another design or by a different task) is moved the same way with status `superseded` and a resolution naming what replaced it. Unfinished remainders are split into a new issue rather than keeping the old one open.
-4. **One file per task**: `NNN-short-name.md` (the tools track: `uNNN-short-name.md`), numbers are never reused. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
+4. **One file per task**: `NNN-TRK-MMMM-short-name.md` — `NNN` the main task it belongs to (`000`: none), `TRK` the track's code, `MMMM` the track's own counter — or `NNN-short-name.md` for a main task (numbered from the track's range). Numbers are never reused; numbers given before this scheme (`158`, `u015`, …) stay. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
 5. Update the tables below in the same commit.
 
 Tasks that need a person (repository settings, legal decisions, coordination of agent sessions) are in [issues-human/](../issues-human/README.md).
 
 ## Open tasks
 
-Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`) — its range 077–099 is used up, and it numbers its issues u001, u002, … from now on (`u001-short-name.md`), a counter of its own that no other track uses; the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. The **porting track** (200–249) brings MIND Core to other architectures (track H, aarch64 first) and coordinates with the kernel track on `kernel/src/arch/`. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owners, branches and starting tasks are in the registry [TRACKS.md](../TRACKS.md). A task is numbered `NNN-TRK-MMMM` (main task, track code, the track's own counter); a request to another track goes to `requests-<TRK>.md`; ABI changes are made only in `KRN` tasks.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
@@ -24,8 +24,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u017](u017-pins-view.md) | `pins --view`: the board's header on a screen, changes by pointing; `pins` in `wm`'s menu with the gpio client | tools | P3 | — | track H |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
+| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step) | main task, `STO` (open) | P2 | — | track B |
+| [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
+| [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
+| [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests from other tracks that wait for the tools track's numbers: [tools-track-reports.md](tools-track-reports.md) (the escrow capability kind in `caps`).
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers).
 
 ## Finished tasks (`issues-done/`)
 
