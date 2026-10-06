@@ -15,7 +15,7 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
 - `300-STO-0003` — the on-disk layout, a corruption test (a flipped byte is detected) and exhaustion of the medium (a defined refusal).
 - `300-STO-0004` — authority: who may put and who may get, by badge (Appendix B.6). Rights to read a block and the obligation to keep it stay separate (MC-4.11): retention is a later task.
 - Requests to other tracks:
-  - `KRN`: `init` starts the service and grants its block client (`issues/requests-KRN.md`).
+  - `KRN`: `init` starts the service and grants its block client ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done), done).
   - `DRV`: a durable block path for after the RAM disk.
 
 ## Progress (2026-10-06)
@@ -23,7 +23,7 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
 - **Done — `300-STO-0001`** ([record](../issues-done/300-STO-0001-content-identifiers.done)): CIDv1 identifiers (`raw`, SHA-256) and SHA-256 in `libmind` (`cid`, `sha256`); host tests against the FIPS examples and the reference `multiformats` library; [docs/storage](../docs/storage/README.md).
 - **In progress — [`300-STO-0004`](300-STO-0004-rights-by-badge.md)**: put and get rights by badge; the rule, the service's checks and a host test are done, the clients' badges are requested from the kernel track.
 - **Changed split:** the on-disk layout, the corruption and exhaustion cases of `300-STO-0003` went into `300-STO-0002` as host tests. `300-STO-0003` is now the test tool and the QEMU suite of the acceptance criteria below, and it starts when the service runs.
-- **In progress — [`300-STO-0002`](300-STO-0002-blockstore-service.md)**: the `blockstore` service and `idl/blockstore.wit` 1.0 are built and host-tested; starting it at boot with a RAM disk of its own is requested from the kernel track ([requests-KRN.md](requests-KRN.md)), and the QEMU suite waits for it.
+- **In progress — [`300-STO-0002`](300-STO-0002-blockstore-service.md)**: the `blockstore` service and `idl/blockstore.wit` 1.0 are built and host-tested; starting it at boot with a RAM disk of its own is requested from the kernel track ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done)), and the QEMU suite waits for it.
 
 ## Acceptance criteria
 

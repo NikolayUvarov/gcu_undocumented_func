@@ -23,7 +23,8 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `usb_host` | server endpoint, BAR0 MMIO of the first xHCI controller, 512 KiB DMA (issue 164) |
 | `usb_storage` | server endpoint, a client of `usb_host` badged for mass storage interfaces (only when `usb_host` runs) |
 | `usb_hid` | server endpoint (the keyboard service), a client of `usb_host` badged for HID interfaces, input privilege (only when `usb_host` runs) |
-| `ramdisk` | server endpoint |
+| `ramdisk`, `ramdisk#1` | server endpoint (each instance its own 8 MiB disk; `ramdisk#1` is the block store's, 300-KRN-0001) |
+| `blockstore` | server endpoint; a write-badged client of `ramdisk#1` in slot 2 |
 | `vfs_server` | server endpoint, write-badged client endpoints of the running block drivers and of `ramdisk`, an `rtc` client (slot 6) |
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
@@ -35,7 +36,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `tls` | server endpoint, an `rtc` client (slot 2), a `vfs_server` client (slot 3, the root store), a `keystore` client with the signer's badge (slot 4); no network access of its own: clients lend their flows |
 | `windows` | server endpoint, its own unbadged client (slot 2, lent to window managers for the programs they start); no screen, no input, no files |
 | `sysmon` | server endpoint, observe privilege (read-only statistics; only `sysmon` and `logd` get it) |
-| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12), `sysmon` with the authority badge (slot 13), `ps2_kbd` (slot 14), `compositor` (slot 15), `virtio_net` (slot 16, the `net` diagnostics), `netstack` with the operator's badge (slot 17), `netpolicy` (slot 19), `tls` (slot 20), `windows` (slot 21, and with the manager badge slot 22); process-control and input privileges; ports 0x3F8–0x3FF |
+| `shell` | screen; client endpoints of `init`, `rtc`, `vfs_server` (with the user's badge: writes on `ram:` and in `data/`), `audio_gw`, `loader`, `tts`, `sysmon` (slot 10), `logd` with the read badge (slot 12), `sysmon` with the authority badge (slot 13), `ps2_kbd` (slot 14), `compositor` (slot 15), `virtio_net` (slot 16, the `net` diagnostics), `netstack` with the operator's badge (slot 17), `netpolicy` (slot 19), `tls` (slot 20), `windows` (slot 21, and with the manager badge slot 22); `blockstore` with the get, put and publish badges (slot 25, 300-KRN-0001); process-control and input privileges; ports 0x3F8–0x3FF |
 
 5. Applications are started by `loader`, which grants its client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts` and optionally an endpoint from the requesting program. In a launch session (`idl/loader.wit`) the launcher lends further capabilities for slots 7–12 — the shell lends its `sysmon` client (slot 10) to a program whose `.mind_request` section asks for it, a VFS client confined to the directory of the file it is started with (slot 7, made by `vfs_server`'s `scope` from the shell's own handle, never wider) to one that asks for a file (`REQUEST_FILE`, the editor), its own VFS client (slot 7, the user's badge) to one that asks for the user's files (`REQUEST_FILES`, the file manager), and its read-badged `logd` client (slot 12) to one that asks for the log (`REQUEST_LOG`, `dmesg`), and its client of `init` (slot 11) to one that asks for lifecycle control (`REQUEST_LIFECYCLE`: `svc`, `top`); a program that asks for the console starts without a screen.
 

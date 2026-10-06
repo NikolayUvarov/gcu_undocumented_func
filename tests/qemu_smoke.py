@@ -28,7 +28,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -2239,6 +2239,20 @@ def ahci_suite(vm):
     print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
+def blockstore_check(vm):
+    """300-KRN-0001 (requested by the storage track): init starts the block store over a RAM disk of its own (ramdisk#1)
+    and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
+    ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
+    require(vm.service_logs("blockstore", ready), ready)
+    real = vm.services()
+    assert "ramdisk#1" in real, real
+    caps = vm.command(f"stat caps {real['shell']}", raw=True)
+    found = re.search(r"^SLOT=25 GEN=0 KIND=1 RIGHTS=6 SIZE=0 BADGE=7 EP=(\d+)", caps, re.M)
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    assert found and servers.get(int(found[1])) == real["blockstore"], caps
+    print("PASS: the block store runs over ramdisk#1 (empty, 8 MiB); the shell holds its client with get, put and publish", flush=True)
+
+
 def escrow_check(vm):
     """Issue 170: init keeps the privileges it grants in escrow and holds no process control: it can pass them to a
     service it starts but not use them. Services restarted from escrow get the privilege itself."""
@@ -2290,7 +2304,7 @@ def services_suite(vm):
     (first, resolution, hz), (second, _, _) = [tuple(map(int, c.groups())) for c in clocks]
     assert second > first and 0 < resolution < 1_000_000 and hz > 1_000_000, (first, second, resolution, hz)
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
-    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    tasks = len(re.findall(r"^\d+ [\w#-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
     assert f"TASKS={tasks}/65535 " in free and re.search(r"ENDPOINTS=\d+/65535 ", free), (tasks, free)
     arena, used, free_bytes, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+) LARGEST=(\d+)", free).groups())
@@ -2327,7 +2341,7 @@ def services_suite(vm):
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
     # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
     tasks = vm.command("stat tasks", raw=True)
-    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w#-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
     # Issue 075: every task's kernel memory (context, mailbox, info and exit pages, page tables); the shell has the focus.
     assert all(int(k) >= 4 * 4096 for k in re.findall(r" KERNEL=(\d+)", tasks)) and re.search(r"^\d+ PARENT=\d+ shell .* FOCUS$", tasks, re.M), tasks
     stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])
@@ -2476,7 +2490,7 @@ def services_suite(vm):
     # client endpoint in a launch session and shows the output of the console program (sysmon's last sample, taken
     # every 100 ms, may already count it as a task).
     time.sleep(1.2)
-    tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
+    tasks = len(re.findall(r"^\d+ [\w#-]+ ", vm.command("ps", raw=True), re.M))
     uptime = vm.command("uptime")
     require(uptime, "NAME=uptime FOREGROUND")
     match = re.search(r"^up \d+:\d\d:\d\d, load \d+\.\d\d \d+\.\d\d \d+\.\d\d, cpu (\d+)%, (\d+) tasks$", uptime, re.M)
@@ -2510,6 +2524,7 @@ def services_suite(vm):
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
+    blockstore_check(vm)
     escrow_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)

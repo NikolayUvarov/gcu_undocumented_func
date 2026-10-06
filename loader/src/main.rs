@@ -149,7 +149,7 @@ impl Launcher {
         // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
         // surface of one window (issue u014), the pin controller's client (issue 207) or the video gateway's (issue 158).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();

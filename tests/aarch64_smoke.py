@@ -80,7 +80,9 @@ def main():
     output = boot(args, disk_with(), "[INIT] READY")
     log.write_text(output)
     for line in ("MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
-                 "[INIT] STARTED keystore", "[INIT] STARTED sysmon", "[INIT] READY", "[SYSMON] READY"):
+                 "[INIT] STARTED keystore", "[INIT] STARTED sysmon", "[INIT] READY", "[SYSMON] READY",
+                 # 300-KRN-0001: the block store over its own RAM disk.
+                 "[INIT] STARTED ramdisk#1", "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"):
         require(output, line)
     assert "KERNEL PANIC" not in output and "KERNEL EXCEPTION" not in output, output
     # A line goes out in one write (issue 209): no service's line lands inside init's.

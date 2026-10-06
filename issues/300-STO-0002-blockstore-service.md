@@ -1,6 +1,6 @@
 # 300-STO-0002 — The `blockstore` service: put and get by CID over a block client
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (start at boot, a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) (start at boot, a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
 
 Part of main task [300](300-checksummed-block-store.md).
 
@@ -21,7 +21,7 @@ Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-id
 - **Mounting:** a blank medium is formatted, and a store is scanned with every block verified. A foreign medium is refused and not touched, and so is a store of another layout version.
 - **Reading:** every block read is checked against its CID. A corrupt one is reported and never returned, and it leaves the index, so putting the same bytes stores them again.
 - **Refusals:** a full medium, a full index and a block larger than 16 KiB are refused with defined errors.
-- **The service:** `blockstore`, over a block client in slot 2. Starting it at boot with a RAM disk of its own is the kernel track's part ([requests-KRN.md](requests-KRN.md)).
+- **The service:** `blockstore`, over a block client in slot 2. Starting it at boot with a RAM disk of its own is the kernel track's part ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done)).
 
 ## Acceptance criteria
 

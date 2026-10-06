@@ -21,7 +21,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -225,7 +225,14 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, NVME_DMA_BYTES)?, 0);
             }
-            "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, "ramdisk")?, ALL),
+            // Each instance its own disk: ramdisk for vfs_server's ram:, ramdisk#1 for the block store (300-KRN-0001).
+            "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
+            // The block store over a RAM disk of its own: its only block client (block::serve has one buffer for all).
+            "blockstore" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL);
+                if !self.running(service_index("ramdisk#1")) { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, self.badged(&mut minted, "ramdisk#1", mind::block::BADGE_WRITE)?, CLIENT);
+            }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
@@ -338,6 +345,7 @@ impl Init {
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
+                if self.running(service_index("blockstore")) { grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT); }
                 if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
                 if self.running(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; } // lent on with the user's consent
             }
