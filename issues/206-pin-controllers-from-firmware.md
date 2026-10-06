@@ -22,4 +22,4 @@ On QEMU `virt` the kernel reports the PL061 (where the DSDT lists it; otherwise 
 
 ## Related
 
-[205](205-aarch64-boards.md), [207](207-gpio-service.md), the `pins` tool ([tools-track-reports.md](tools-track-reports.md)), [hwdocs/](../hwdocs/README.md), [docs/profile/aarch64](../docs/profile/aarch64/README.md).
+[205](205-aarch64-boards.md), [207](207-gpio-service.md), the `pins` tool ([u015](u015-pins.md)), [hwdocs/](../hwdocs/README.md), [docs/profile/aarch64](../docs/profile/aarch64/README.md).

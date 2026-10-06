@@ -103,7 +103,7 @@ The maintainer or the owning track reviews and merges it.
 ## 5. Working next to other tracks
 
 - **Stay in your track's directories.** If your task needs a change in another track's area, the agent:
-  1. writes an issue for that track in its range, or records a report in `issues/` the way [tools-track-reports.md](issues/tools-track-reports.md) does when the owner numbers its own issues;
+  1. writes an issue for that track in its range, or records a report in `issues/` the way `issues/tools-track-reports.md` does when the owner numbers its own issues (the owner numbers each request and removes the file when it is empty);
   2. marks its own issue `Blocked by` that issue;
   3. moves on to other work.
 - **ABI changes are made only in kernel-track issues.** A tools issue blocked by a kernel issue waits for it.

@@ -26,4 +26,4 @@ Host tests run the BCM2711 and PL061 drivers against register models (function s
 
 ## Related
 
-[206](206-pin-controllers-from-firmware.md), [205](205-aarch64-boards.md), the `pins` tool ([tools-track-reports.md](tools-track-reports.md)), [hwdocs/](../hwdocs/README.md).
+[206](206-pin-controllers-from-firmware.md), [205](205-aarch64-boards.md), the `pins` tool ([u015](u015-pins.md)), [hwdocs/](../hwdocs/README.md).
