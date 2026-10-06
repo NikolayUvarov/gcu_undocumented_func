@@ -5,10 +5,11 @@ use super::*;
 const HEADER: usize = core::mem::size_of::<StatHeader>();
 
 // Writes records into the caller's buffer after the header; counts the ones that did not fit.
-struct Out<'a> { space: &'a paging::Space, base: usize, capacity: usize, size: usize, count: usize, total: usize, fault: bool }
+struct Out<'a> { space: &'a paging::Space, base: usize, capacity: usize, size: usize, count: usize, total: usize, skip: usize, fault: bool }
 impl Out<'_> {
     fn push<T: Copy>(&mut self, record: T) {
         self.total += 1;
+        if self.total <= self.skip { return; } // before the first record asked for (a later page)
         let offset = HEADER + self.count * self.size;
         if offset + self.size > self.capacity || self.fault { return; }
         let bytes = unsafe { core::slice::from_raw_parts((&record as *const T).cast::<u8>(), self.size) };
@@ -59,7 +60,7 @@ impl Scheduler {
             _ => return Err(ERR_INVALID),
         };
         if request.msg[0] < HEADER { return Err(ERR_INVALID); }
-        let mut out = Out { space: &self.tasks[slot].as_ref().unwrap().space, base: request.arg2, capacity: request.msg[0], size, count: 0, total: 0, fault: false };
+        let mut out = Out { space: &self.tasks[slot].as_ref().unwrap().space, base: request.arg2, capacity: request.msg[0], size, count: 0, total: 0, skip: request.msg[2], fault: false };
         let pid_of = |index: usize| self.tasks[index].as_ref().map_or(0, |t| t.pid);
         // The task that uses a capability: the holder of its most recently derived copy (init keeps the copies it granted,
         // to restart a driver; the driver's copy derives from it), and how many live tasks hold a copy.

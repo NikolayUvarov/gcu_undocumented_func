@@ -1,0 +1,22 @@
+# 171-KRN-0007 — STAT pages: callers read any number of records — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md) · **Constitution:** MC-10.2, MC-1.7
+
+## Problem
+
+With no fixed count of tasks and endpoints (171-KRN-0002), a STAT class can have more records than a caller's buffer holds. A caller saw the first ones and the total, but could not read the rest.
+
+## Plan
+
+`STAT` takes `msg[2]`, the first record to write. Records before it count in the total but are not written. The value is 0 for every existing caller, which `libmind` already passed. `libmind::control::stat_from` reads a page, and the shell's `stat <class> [pid] [from N]` shows one, with `FROM=N` in its header line.
+
+## Acceptance criteria
+
+With more than 60 tasks, `stat tasks` writes every record, and `stat tasks from 40` writes the rest, exactly `TOTAL − 40` of them.
+
+## Resolution
+
+- **Code:** `common/abi.rs` (the STAT comment), `kernel/src/scheduler/stat.rs` (`Out.skip`), `libmind/src/control.rs` (`stat_from`), `shell/src/main.rs` (`stat … from N`).
+- **Test:** the `normal` suite checks the full read and the page from 40 while 40 applications run. The `services` suite's STAT check reads the new header line.
+- **Docs:** `docs/api` (the STAT row) and `kernel-objects.md` (STAT).
+- **Not done:** `sysmon` and `top` still read one buffer each. They page in 171-KRN-0006, with the tools track.

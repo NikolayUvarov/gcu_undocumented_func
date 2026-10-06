@@ -243,15 +243,19 @@ impl Shell {
     // Kernel statistics (STAT), one record per line.
     fn stat(&mut self, args: &[u8]) {
         let text = core::str::from_utf8(args).unwrap_or("");
-        let mut words = text.split_whitespace();
-        let (name, pid) = (words.next().unwrap_or(""), words.next().and_then(|w| w.parse::<usize>().ok()).unwrap_or(0));
+        // `stat <class> [pid] [from N]`: `from` pages through a class with more records than the buffer holds (issue 171).
+        let words: alloc::vec::Vec<&str> = text.split_whitespace().collect();
+        let name = words.first().copied().unwrap_or("");
+        let from = words.iter().position(|w| *w == "from");
+        let first = from.and_then(|i| words.get(i + 1)).and_then(|w| w.parse::<usize>().ok()).unwrap_or(0);
+        let pid = words.get(1).filter(|_| from != Some(1)).and_then(|w| w.parse::<usize>().ok()).unwrap_or(0);
         let class = match name { "tasks" => STAT_TASKS, "cpus" => STAT_CPUS, "memory" => STAT_MEMORY, "physmap" => STAT_PHYSMAP, "vmap" => STAT_VMAP, "caps" => STAT_CAPS, "endpoints" => STAT_ENDPOINTS, "irqs" => STAT_IRQS, "devices" => STAT_DEVICES, _ => { self.report("STAT <CLASS> [PID]: SEE HELP"); return; } };
         let Some(mut page) = Pages::new(4 * 4096) else { self.report("OUT OF MEMORY"); return };
         // `stat memory` also asks for the largest free block (argument 1).
         let pid = if class == STAT_MEMORY { 1 } else { pid };
-        let header = match control::stat(class, pid, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
+        let header = match control::stat_from(class, pid, first, page.as_mut_slice()) { Ok(h) => h, Err(error) => { self.report(if error == Error::NotFound { "NO SUCH PID" } else { "STAT FAILED" }); return; } };
         let buffer = page.as_slice(); let t = &mut self.term;
-        let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={}", Upper(name), header.version, header.count, header.total);
+        let _ = writeln!(t, "STAT {} VERSION={} COUNT={} TOTAL={} FROM={}", Upper(name), header.version, header.count, header.total, first);
         match class {
             STAT_TASKS => for r in control::records::<StatTask>(buffer, header) { let _ = writeln!(t, "{} PARENT={} {} WAIT={}:{} CPU={} RUN_MS={} SENDS={} RECEIVES={} HEAP={} SHARED={} CAPS={} KERNEL={}{}", r.pid, r.parent, label(&r.name), r.wait, r.wait_on, r.cpu, r.run_ns / 1_000_000, r.sends, r.receives, r.heap_bytes, r.shared_bytes, r.caps, r.kernel_bytes, if r.focus != 0 { " FOCUS" } else { "" }); },
             STAT_CPUS => for (i, r) in control::records::<StatCpu>(buffer, header).enumerate() { let _ = writeln!(t, "CPU {} APIC={} ONLINE={} BUSY_MS={} IDLE_MS={} INTERRUPTS={} SWITCHES={} PID={}", i, r.apic_id, r.online, r.busy_ns / 1_000_000, r.idle_ns / 1_000_000, r.interrupts, r.switches, r.current_pid); },

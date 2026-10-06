@@ -538,6 +538,11 @@ def normal_suite(vm):
     assert len(task_rows(vm)) == many
     tasks = int(re.search(r"TASKS=(\d+)/", vm.command("free"))[1])
     assert tasks > 32 + many // 2, tasks
+    # STAT pages (171-KRN-0007): every task's record, and from the 40th on only the rest.
+    whole = re.search(r"STAT TASKS VERSION=\d+ COUNT=(\d+) TOTAL=(\d+) FROM=0", vm.command("stat tasks", raw=True))
+    page = vm.command("stat tasks from 40", raw=True)
+    rest = re.search(r"STAT TASKS VERSION=\d+ COUNT=(\d+) TOTAL=(\d+) FROM=40", page)
+    assert whole and rest and int(whole[2]) == tasks and int(rest[1]) == tasks - 40 == len(re.findall(r"^\d+ PARENT=", page, re.M)), (whole, page)
     for pid in range(6, 6 + many):
         vm.command(f"kill {pid}")
     # And more than the former 127 endpoints: 40 programs that each create the 4 loader allows.
@@ -2341,7 +2346,7 @@ def services_suite(vm):
     require(vm.service_logs("init", "[INIT] READY"), "[INIT] PLATFORM PRIVILEGE DROPPED")
     # STAT: numbers agree with ps and heap; the shell's address space has its known layout; every CPU accounts time.
     tasks = vm.command("stat tasks", raw=True)
-    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+)", tasks)[1]) == len(re.findall(r"^\d+ [\w#-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
+    assert int(re.search(r"STAT TASKS VERSION=2 COUNT=(\d+) TOTAL=\d+ FROM=0", tasks)[1]) == len(re.findall(r"^\d+ [\w#-]+ [A-Z_]+ (?:BG|FG) ", vm.command("ps", raw=True), re.M)), tasks
     # Issue 075: every task's kernel memory (context, mailbox, info and exit pages, page tables); the shell has the focus.
     assert all(int(k) >= 4 * 4096 for k in re.findall(r" KERNEL=(\d+)", tasks)) and re.search(r"^\d+ PARENT=\d+ shell .* FOCUS$", tasks, re.M), tasks
     stat_used = int(re.search(r"ARENA=67108864 USED=(\d+)", vm.command("stat memory", raw=True))[1])

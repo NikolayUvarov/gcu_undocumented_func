@@ -411,8 +411,9 @@ pub const BLOCK_MAX_SECTORS: usize = 128;
 pub const AUDIO_RATE: usize = 48_000;
 
 // STAT (observe or control privilege): arg1 = class, arg2 = buffer, msg[0] = capacity in bytes, msg[1] = argument
-// (a PID for VMAP and CAPS). The buffer receives a StatHeader and then up to (capacity - header) / record_size
-// records; the result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
+// (a PID for VMAP and CAPS), msg[2] = the first record to write (0: from the start; issue 171: callers page through any
+// number). The buffer receives a StatHeader and then up to (capacity - header) / record_size records from that one on;
+// the result is the number written, `total` says how many exist. Copies are bounded by the kernel's tables.
 // Nothing returned is authority: endpoint indices are labels no system call accepts, and no task memory contents or
 // physical addresses of task memory are exported (MC-10.2).
 pub const SYSCALL_STAT: usize = 51;

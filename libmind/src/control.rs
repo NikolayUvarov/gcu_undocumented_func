@@ -37,8 +37,10 @@ pub fn power_off() -> Result<()> { check(call(SYSCALL_REBOOT, REBOOT_POWER_OFF, 
 
 /// STAT (observe or control privilege): fills `buffer` with a header and records of `class`; `argument` is a PID for
 /// VMAP and CAPS. Returns the header; read the records with `records`.
-pub fn stat(class: usize, argument: usize, buffer: &mut [u8]) -> Result<StatHeader> {
-    check(syscall(SYSCALL_STAT, class, buffer.as_mut_ptr() as usize, [buffer.len(), argument, 0, 0]).result)?;
+pub fn stat(class: usize, argument: usize, buffer: &mut [u8]) -> Result<StatHeader> { stat_from(class, argument, 0, buffer) }
+/// As `stat`, from record `first` on: a page of a class with more records than one buffer holds (issue 171).
+pub fn stat_from(class: usize, argument: usize, first: usize, buffer: &mut [u8]) -> Result<StatHeader> {
+    check(syscall(SYSCALL_STAT, class, buffer.as_mut_ptr() as usize, [buffer.len(), argument, first, 0]).result)?;
     Ok(unsafe { core::ptr::read_unaligned(buffer.as_ptr().cast::<StatHeader>()) })
 }
 /// The records a STAT call wrote into `buffer` (checked against the header's record size and the buffer length).
