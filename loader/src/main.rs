@@ -139,8 +139,8 @@ impl Launcher {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         // The fixed slots a launcher may fill: an endpoint for the program's INIT slot (a ping/pong pair), its file
         // client, its window broker client, where its output goes (issue 162), sysinfo, lifecycle control, the system log,
-        // a flow grant, the compositor's client (what is on the screen, issue 165). The standard grants (2..6) cannot be
-        // replaced.
+        // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
+        // surface of one window (issue u014). The standard grants (2..6) cannot be replaced.
         if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
@@ -149,6 +149,14 @@ impl Launcher {
         if session.count == session.grants.len() { let _ = ipc::drop_cap(handle); return Err(loader::Error::Limit); }
         session.grants[session.count] = (slot, handle); session.count += 1;
         Ok(())
+    }
+
+    // A read-only memory capability (1.3): only in SLOT_DISPLAY, where a window manager lends the surface of the window
+    // a program records (issue u014). A writable one would let the program change another's window.
+    fn grant_memory(&mut self, owner: u64, id: u32, slot: u8) -> Result<(), loader::Error> {
+        if slot as usize != SLOT_DISPLAY { return Err(loader::Error::Invalid); }
+        if mind::dev::cap_info(RECEIVED_CAP).1 & CAP_WRITE as usize != 0 { return Err(loader::Error::Rights); }
+        self.grant(owner, id, slot)
     }
 
     fn commit(&mut self, owner: u64, id: u32) -> Result<u64, loader::Error> {
@@ -208,6 +216,7 @@ fn main(_info: &'static BootInfo) {
             Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[])),
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
+            Ok((loader::Request::GrantMemory { session, slot, .. }, call)) => loader::reply_grant_memory(call, launcher.grant_memory(owner, session, slot)),
             Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session)),
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),

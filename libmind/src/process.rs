@@ -1,9 +1,23 @@
 use crate::abi::*;
 use crate::sys::{call, check, syscall, Result};
 
-pub fn exit() -> ! {
-    call(SYSCALL_EXIT, 0, 0);
+pub fn exit() -> ! { exit_with(0) }
+
+/// Ends the program with `code` (0: success; issue 166): its launcher reads it with `control::exit_status`.
+pub fn exit_with(code: u32) -> ! {
+    call(SYSCALL_EXIT, code as usize & 0xFF_FFFF, 0);
     loop { core::hint::spin_loop(); }
+}
+
+/// How a program ended (a watch's reason, `control::exit_status`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exit { Code(u32), Killed, Fault(u8) }
+
+impl Exit {
+    pub fn from_reason(reason: usize) -> Self {
+        match reason & 0xFF { EXIT_KILLED => Exit::Killed, EXIT_FAULT => Exit::Fault((reason >> 8) as u8), _ => Exit::Code((reason >> 8) as u32 & 0xFF_FFFF) }
+    }
+    pub fn success(self) -> bool { self == Exit::Code(0) }
 }
 
 /// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`;

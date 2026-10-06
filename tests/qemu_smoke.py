@@ -381,9 +381,10 @@ def heap_used(vm):
 
 def task_rows(vm):
     output = vm.command("ps")
-    # Apps only: services are visible in ps, but the suites check user tasks.
+    # Apps only: services are visible in ps, but the suites check user tasks (CONSOLE=n: the shell's console that
+    # started it, issue 155).
     return {int(m[0]) - BASE: m[1:] for m in re.findall(
-        r"^(-?\d+) ([\w-]+) (READY|RUNNING|SLEEPING|EXITED|IPC_WAIT|IRQ_WAIT) (BG|FG) (\d+) (\d+) (\d+) (\d+)$", output, re.M)
+        r"^(-?\d+) ([\w-]+) (READY|RUNNING|SLEEPING|EXITED|IPC_WAIT|IRQ_WAIT) (BG|FG) (\d+) (\d+) (\d+) (\d+)(?: CONSOLE=\d)?$", output, re.M)
         if m[1] not in SERVICES}
 
 
@@ -634,6 +635,78 @@ def keys_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     print("PASS: key events: VT100/xterm sequences and UTF-8 from the UART, E0 keys, F-keys and modifiers from PS/2, CRLF, Russian layout switch, Esc; "
           "keymap sets the layout and the switch key; a held Shift changes fm's key bar", flush=True)
+    consoles_check(vm)
+
+
+def consoles_check(vm):
+    """Virtual consoles (issue 155): Ctrl+Alt+F1…F4 reach the shell whatever program has the keyboard and never that
+    program; each console has its own text, history and programs; a program in a console not shown keeps running, and
+    what it printed is there when the console is shown again; ps names the console of each program."""
+    def typed(text):
+        for char in text:
+            vm.hmp(f"sendkey {dict(zip(' -', ('spc', 'minus'))).get(char, char)}")
+            time.sleep(.06)
+
+    def logged(text, start, timeout=8):
+        # `text` in the log since `start` (what came while the harness used the monitor counts too).
+        deadline = time.monotonic() + timeout
+        while text not in vm.log[start:].replace("\r", ""):
+            assert time.monotonic() < deadline, (text, vm.log[start:][-2000:])
+            time.sleep(.02)
+            vm.collect()
+        vm.serial(enter=False)
+
+    def switch(n, note):
+        start = len(vm.log)
+        vm.hmp(f"sendkey ctrl-alt-f{n}")
+        logged(f"[SHELL] {note}\n", start)
+
+    def last_prompt(screen):
+        return next(row.replace("▁", " ").rstrip() for row in reversed(screen) if row.startswith("MIND> "))  # without the cursor
+
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    start = len(vm.log)
+    switch(2, "CONSOLE 2 SHOWN")
+    typed("wintest show w 2")
+    vm.hmp("sendkey ret")
+    time.sleep(.5)
+    switch(1, "CONSOLE 1 SHOWN (ITS PROGRAM HAS THE KEYBOARD)")
+    at = len(vm.log)
+    vm.hmp("sendkey q")
+    logged("[KEYS] code=Char mods=- char=q", at)
+    got = re.findall(r"\[KEYS\] (code=[^\r\n]*)", vm.log[start:])
+    assert not any("code=F(" in line or "char=w" in line for line in got), ("keys saw the switch keys or console 2's typing", got)
+    vm.send_bytes(b"\x1b")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[KEYS] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    # ps: wintest runs in console 2 while console 1 is shown.
+    rows = vm.command("ps")
+    assert re.search(r"^\d+ wintest .* CONSOLE=2$", rows, re.M), rows
+    time.sleep(4)
+    switch(2, "CONSOLE 2 SHOWN")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    text = "\n".join(screen)
+    assert screen[0].rstrip().endswith("CONSOLE 2") and "CONSOLE 2. CTRL+ALT+F1" in text, screen[:3]
+    assert "[WINTEST] w DONE AFTER" in text and "NAME=keys" not in text, text
+    assert last_prompt(screen) == "MIND>", screen
+    # Each console its own history: Up recalls console 2's command here, console 1's on the serial line.
+    vm.hmp("sendkey up")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert last_prompt(screen) == "MIND> wintest show w 2", screen[-6:]
+    vm.hmp("sendkey esc")
+    switch(1, "CONSOLE 1 SHOWN")
+    vm.send_bytes(b"\x1b[A")
+    vm.expect("MIND> ps")
+    vm.send_bytes(b"\x1b")
+    time.sleep(.5); vm.collect(); vm.output = ""
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: virtual consoles: Ctrl+Alt+F2 opens console 2 while keys has the keyboard, keys never sees the switch keys; "
+          "wintest keeps running there while console 1 is shown and its output is there after; each console its own history; ps names the console", flush=True)
 
 
 def shell_suite(vm):
@@ -697,6 +770,104 @@ def shell_suite(vm):
     vm.hmp("sendkey shift-pgdn")
     vm.serial()
     print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
+    msh_check(vm)
+
+
+# msh scripts on the shell suite's disk (issue 094).
+MSH_SCRIPTS = {
+    "sum.msh": """#!msh
+requires: files
+# The files on ram:, their sizes summed into ram:summary.txt; a missing file handled.
+let total = 0
+let names = []
+for f in files("ram:")? {
+    if f.dir { continue }
+    total = total + f.size
+    names = push(names, f.name)
+}
+write ram:summary.txt "{len(names)} files, {total} bytes: {join(names, " ")}"
+cat ram:missing.txt or { print("handled: {error}") }
+print("sum done: {total}")
+""",
+    "services.msh": """#!msh
+# Is vfs_server running? From ps's text, and from ps() records.
+let out = capture("ps")?
+if !contains(out, " vfs_server ") { fail("vfs_server is not running") }
+let running = []
+for task in ps()? {
+    if task.service { running = push(running, task.name) }
+}
+if !contains(running, "logd") { fail("logd is not running") }
+print("vfs_server runs; {len(running)} services; ps printed {len(lines(out))} lines")
+""",
+    "net0.msh": """#!msh
+ping 10.0.2.2
+print("not reached")
+""",
+    "net1.msh": """#!msh
+requires: network
+ping 10.0.2.2 or { print("ping failed: {error}") }
+print("network allowed")
+""",
+    "check.msh": """#!msh
+fn twice(x) { return x * 2 }
+print(twice(nope(1)))
+""",
+    "broken.msh": """#!msh
+let x = 1
+let = 2
+""",
+}
+
+
+def msh_check(vm):
+    """msh (issue 094): a script that sums the files on ram: and handles a missing one; one that checks services from
+    ps's captured text and ps() records; requires: network refused and granted; statements at the prompt; msh --check;
+    a script outside the boot disk asks first; Ctrl+Z stops an endless loop."""
+    require(vm.command("write ram:a.txt hello"), "WROTE 6 BYTES")
+    require(vm.command("write ram:b.txt hi there"), "WROTE 9 BYTES")
+    out = vm.command("msh data/sum.msh")
+    require(out, "handled: CAT: NOT FOUND")
+    require(out, "sum done: 15")
+    require(vm.command("cat ram:summary.txt"), "2 files, 15 bytes: a.txt b.txt")
+    require(vm.command('print(glob("ram:*.TXT")?)'), '["ram:a.txt", "ram:b.txt", "ram:summary.txt"]')
+    require(vm.command("msh data/services.msh"), "vfs_server runs; ")
+    # The network: refused without requires:, granted with it (whatever ping then finds).
+    out = vm.command("msh data/net0.msh")
+    require(out, "SCRIPT FAILED: ping needs `requires: network` in the script (LINE 2)")
+    assert "not reached" not in out, out
+    out = vm.command("data/net1.msh")
+    require(out, "network allowed")
+    assert "requires: network" not in out, out
+    # A script's name runs it; statements typed at the prompt keep their variables and functions.
+    vm.command("let n = 2 + 3")
+    vm.command("fn sq(x) { return x * x }")
+    require(vm.command('print("n = {n}, n squared = {sq(n)}")'), "n = 5, n squared = 25")
+    require(vm.command('msh -c "let s = 0; for i in range(1, 5) { s = s + i }; print(s)"'), "10")
+    # How a program ended (issue 166): grep that finds nothing exits with 1, a failure the script handles.
+    require(vm.command('msh -c "grep zzz ram:a.txt or { print(error) }"'), "grep exited with 1")
+    out = vm.command('msh -c "grep hel ram:a.txt; print(40 + 2)"')
+    require(out, "hello")
+    require(out, "42")
+    require(vm.command("print(undefined_name)"), "SCRIPT FAILED: undefined_name is not defined (LINE 1)")
+    # msh --check: names that do not exist, parse errors with line and column.
+    require(vm.command("msh --check data/check.msh"), "MSH: data/check.msh: line 3, column 13: no function nope")
+    require(vm.command("msh --check data/sum.msh"), "MSH: data/sum.msh: OK, REQUIRES: files")
+    require(vm.command("msh data/broken.msh"), "MSH: data/broken.msh: line 3, column 5: expected a name")
+    # A script outside the boot disk asks before it uses what it declares.
+    require(vm.command("write ram:w.msh requires: files"), "WROTE 16 BYTES")
+    vm.send("msh ram:w.msh\n")
+    vm.expect("SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)")
+    vm.send_bytes(b"n")
+    require(vm.expect("MIND> "), "MSH: ram:w.msh: NOT RUN")
+    # Ctrl+Z (0x1A on the serial line) stops a script in an endless loop.
+    vm.send('msh -c "let i = 0; while true { i = i + 1 }"\n')
+    time.sleep(1)
+    vm.send_bytes(b"\x1a")
+    require(vm.expect("MIND> "), "SCRIPT STOPPED: stopped (LINE 1)")
+    require(vm.command("help msh"), "- msh <file> [args], msh -c")
+    print("PASS: msh: a script sums the files on ram: and handles a missing one, another checks services through ps; requires: network refused and granted; "
+          "statements at the prompt keep variables and functions; --check and parse errors with line and column; a script from ram: asks first; Ctrl+Z stops a loop", flush=True)
 
 
 NOTES = "".join(f"Строка {i}: съешь же ещё этих мягких французских булок, да выпей чаю. Line {i}.\n" for i in range(1, 301))
@@ -3596,6 +3767,39 @@ def wm_suite(vm):
     mode, focus, rects = mouse("mouse_button 1", *mouse_moves(30 * 8, 10 * 16), "mouse_button 0", lines=2)
     assert focus == clock and rects[clock] == (40, 11, 42, 13), (focus, rects)
     until(f"[WM] PIXELS {clock} 320X176")  # and its content the size it had
+    # Recording one window (issue u014): `record -w` typed in the run line gets a read-only lease of the window in front,
+    # the clock's; a console program, it runs in a console, which passes the lease on. wm marks the clock's frame while
+    # it records. The frames are the window's content at its size, 320 x 176, whatever else is on the screen.
+    names = [{" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}.get(c, c) for c in "record -w -t 2 ram:win.avi"]
+    keys("alt-r", *names, "ret", text="STARTED console")
+    lent = re.search(r"\[WM\] STARTED console PID (\d+) WITH [^\n]*a window to see[^\n]*\(WINDOW (\d+) TO SEE\)", "".join(seen))
+    assert lent and int(lent[2]) == clock, "".join(seen)[-1500:]
+    until(f"[WM] RECORDING {clock}")
+    while not any(m[1] == lent[1] for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    console = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == lent[1])
+    mode, focus, rects = front(clock)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    x, y, w, h = rects[clock]
+    assert "REC" in screen[y][x:x + 9], screen[y]
+    until(f"[WM] RECORDED {clock}")  # the mark goes 3 s after the recording's time
+    mode, focus, rects = front(console)
+    x, y, w, h = rects[console]
+    for _ in range(20):  # what record printed, in the console's window (console logs only to the system log)
+        time.sleep(.5)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        said = "".join(row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]).replace(" ", "")
+        if "(recordended)" in said:
+            break
+    assert "REC" not in screen[rects[clock][1]][rects[clock][0]:rects[clock][0] + 9]
+    summary = re.search(r"ram:win\.avi:(\d+)FRAMES\((\d+)ENCODED,\d+ROWSOFBLOCKSCODED,\d+MSEACH\),320X176AT10/S,(\d+)BYTES", said)
+    assert summary and int(summary[1]) == 20 and int(summary[2]) >= 2, said
+    keys("alt-w", text=f"CLOSE {console}")
+    until(f"GONE {console}")
+    while console in state()[2]:
+        wait()
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3648,7 +3852,8 @@ def wm_suite(vm):
     assert heap_used(vm) == baseline
     print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels, drawn again at its frame's size); keys to the window in front only; "
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
-          "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; programs get only what wm holds; "
+          "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; record -w records the clock's window "
+          f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
@@ -4034,6 +4239,10 @@ def main():
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
+            if suite == "shell":
+                (disk / "data").mkdir(exist_ok=True)
+                for name, text in MSH_SCRIPTS.items():
+                    (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")

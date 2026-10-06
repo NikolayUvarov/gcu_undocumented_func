@@ -57,6 +57,15 @@ fn waker(id: u32) -> Option<usize> {
     copy
 }
 
+// A read-only lease of window `id`'s surface, for a program the user starts to record it (issue u014). It goes with
+// the window: the broker revokes it when the window ends.
+fn lease(id: u32) -> Option<usize> {
+    if !matches!(api::surface(BROKER, id, RECEIVE), Ok(Ok(()))) { return None; }
+    let copy = ipc::mint(RECEIVE, CAP_READ | CAP_GRANT, 0, 0).ok();
+    let _ = ipc::drop_cap(RECEIVE);
+    copy
+}
+
 fn title(surface: &Surface) -> String {
     let mut bytes = [0u8; TITLE];
     let len = surface.title(&mut bytes);
@@ -84,15 +93,26 @@ impl Programs {
     }
 }
 
-// Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds.
-fn launch(command: &str) -> Result<String, String> {
+// A program wm started: what to tell the user, its process, the window lent to it to see (issue u014).
+struct Started { message: String, pid: u64, window: Option<u32> }
+
+// Starts `command` in a new window with a plain broker client and, of what it asks for, what wm holds. A program that
+// asks for the display (`record -w`) sees window `front`, the one in front when the user started it.
+fn launch(command: &str, front: Option<u32>) -> Result<Started, String> { start(command, front, false) }
+
+// `pass`: `console` is started for a console program that asks for the display; it gets the lease to pass on.
+fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, String> {
     let (name, args) = command.split_once(' ').map_or((command, ""), |(n, a)| (n, a.trim()));
     let failed = |error: loader::Error| format!("cannot start {}: {:?}", name, error);
     let lost = || format!("cannot start {}: the loader does not answer", name);
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
     // A console program runs in a window of `console`, which shows what it prints (issue u004).
-    if needs.console { return launch(&format!("console {}", command)).map_err(|_| format!("{} is a console program, and there is no console to run it in: run it in the shell", name)); }
+    let display = requests & mind::process::REQUEST_DISPLAY != 0;
+    if needs.console {
+        return start(&format!("console {}", command), front.filter(|_| display), true)
+            .map_err(|_| format!("{} is a console program, and there is no console to run it in: run it in the shell", name));
+    }
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{} is a window manager", name)); }
     if !matches!(api::client(BROKER, RECEIVE), Ok(Ok(()))) { return Err(String::from("the window broker gives no client")); }
     let session = match loader::begin(Endpoint::LOADER, name, args) {
@@ -121,13 +141,36 @@ fn launch(command: &str) -> Result<String, String> {
     if needs.lifecycle { missing.push("lifecycle"); }
     if needs.log { missing.push("log"); }
     if requests & mind::process::REQUEST_NETWORK != 0 { missing.push("network"); }
+    // Not the screen: a read-only lease of the window in front, nothing else of it.
+    let mut window = None;
+    if let Some(id) = front.filter(|_| pass || display) {
+        match lease(id) {
+            Some(handle) => {
+                if matches!(loader::grant_memory(Endpoint::LOADER, session, SLOT_DISPLAY as u8, handle), Ok(Ok(()))) { lent.push("a window to see"); window = Some(id); } else { missing.push("the display"); }
+                let _ = ipc::drop_cap(handle); // the loader holds its copy
+            }
+            None => missing.push("the display"),
+        }
+    } else if display { missing.push("the display (no window in front)"); }
     let pid = match loader::commit(Endpoint::LOADER, session) { Ok(Ok(pid)) => pid, Ok(Err(error)) => return Err(failed(error)), Err(_) => return Err(lost()) };
-    mind::println!("[WM] STARTED {} PID {} WITH {}{}{}", name, pid, lent.join(","), if missing.is_empty() { "" } else { " WITHOUT " }, missing.join(","));
-    Ok(format!("Started {} (PID {}) with {}{}", name, pid, lent.join(", "),
-               if missing.is_empty() { String::new() } else { format!("; without {}: wm does not hold it", missing.join(", ")) }))
+    mind::println!("[WM] STARTED {} PID {} WITH {}{}{}{}", name, pid, lent.join(","), if missing.is_empty() { "" } else { " WITHOUT " }, missing.join(","),
+                   window.map_or(String::new(), |id| format!(" (WINDOW {} TO SEE)", id)));
+    let message = format!("Started {} (PID {}) with {}{}", name, pid, lent.join(", "),
+                          if missing.is_empty() { String::new() } else { format!("; without {}: wm does not hold it", missing.join(", ")) });
+    Ok(Started { message, pid, window })
 }
 
-struct Manager { wm: Wm, lives: Vec<Live>, generation: u64, saved: Vec<(u32, Rect, usize)> }
+// How long `wm` shows that a window is recorded: the recording's -t (10 s by default) and 3 s more; less if the
+// recorder ends first.
+fn recording_ms(command: &str) -> usize {
+    let mut words = command.split_whitespace();
+    let mut seconds = 10;
+    while let Some(word) = words.next() { if word == "-t" { seconds = words.next().and_then(|v| v.parse().ok()).unwrap_or(seconds); } }
+    (seconds + 3) * 1000
+}
+
+// `recordings`: windows lent to a recorder — window, the recorder's process, until when (uptime ms).
+struct Manager { wm: Wm, lives: Vec<Live>, generation: u64, saved: Vec<(u32, Rect, usize)>, recordings: Vec<(u32, u64, usize)> }
 
 impl Manager {
     fn live(&self, id: u32) -> Option<&Live> { self.lives.iter().find(|l| l.id == id) }
@@ -171,9 +214,18 @@ impl Manager {
     }
 
     // Titles, sizes and changes of the programs' surfaces; the sizes wm wants of the windows; places saved in the
-    // broker. Returns (something to draw, pixel windows to draw again).
+    // broker; the windows being recorded. Returns (something to draw, pixel windows to draw again).
     fn follow(&mut self) -> (bool, Vec<u32>) {
         let mut dirty = false;
+        let now = mind::time::uptime_ms();
+        self.recordings.retain(|&(_, pid, until)| now < until && mind::process::alive(pid));
+        for win in self.wm.desk.windows.iter_mut() {
+            let recording = self.recordings.iter().any(|&(id, ..)| id == win.id);
+            if win.recording != recording {
+                mind::println!("[WM] {} {}", if recording { "RECORDING" } else { "RECORDED" }, win.id);
+                win.recording = recording; dirty = true;
+            }
+        }
         let mut pixels = Vec::new();
         for live in self.lives.iter_mut() {
             let changes = live.surface.changes();
@@ -304,16 +356,16 @@ fn main(info: &'static BootInfo) {
     let Some(screen) = Screen::new(info) else { return };
     let Some(mut term) = Terminal::new(screen) else { return };
     let (_, x0, y0) = term.screen().unwrap();
-    let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new() };
+    let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
     let args = mind::process::args_str().trim();
     let commands: Vec<&str> = if args.contains(',') { args.split(',').map(str::trim).filter(|c| !c.is_empty()).collect() } else { args.split_whitespace().collect() };
     for command in commands {
-        let result = launch(command);
+        let result = launch(command, None);
         if let Err(error) = &result { mind::println!("[WM] {}", error); }
-        manager.wm.notice = Some(result.unwrap_or_else(|e| e));
+        manager.wm.notice = Some(result.map_or_else(|e| e, |s| s.message));
     }
     let mut programs = Some(Programs::new());
     manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
@@ -355,9 +407,10 @@ fn main(info: &'static BootInfo) {
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
                 Action::Run(command) => {
-                    let result = launch(&command);
+                    let result = launch(&command, manager.wm.desk.focus());
                     if let Err(error) = &result { mind::println!("[WM] {}", error); }
-                    manager.wm.notice = Some(result.unwrap_or_else(|e| e));
+                    if let Ok(Started { pid, window: Some(id), .. }) = &result { manager.recordings.push((*id, *pid, mind::time::uptime_ms() + recording_ms(&command))); }
+                    manager.wm.notice = Some(result.map_or_else(|e| e, |s| s.message));
                     last_sync = 0;
                 }
                 Action::Detach => {

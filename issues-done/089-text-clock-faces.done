@@ -30,7 +30,7 @@ For compatibility each needs a text face too.
 
 ## Related
 
-[088](088-text-window-manager.done), [155](../issues/155-virtual-consoles.md), [157](157-window-broker.done).
+[088](088-text-window-manager.done), [155](155-virtual-consoles.done), [157](157-window-broker.done).
 
 ## Resolution
 
@@ -39,4 +39,4 @@ For compatibility each needs a text face too.
 - **`dzen-clock --text`** (`dzen-clock/src/text.rs`): the five indicators as discs of colored cells with their rims (cells are one unit wide and two tall, so the discs stay round), the orbit as a ring of `·`, its start tick `■`, the 10-second ticks `•` and the moving dot `●`, the digital time and the hints; D, C, P and H as on the pixel face, with the same log lines. `face.rs` and `cycle.rs` decide what is shown, as for the pixels.
 - Both run on their own screen or in a `wm` text window (`mind::tui::Terminal::open`); the pixel faces stay the default. `--help` names `--text`.
 - **Tests:** host `tests/tui_host.rs` (`large_digits_fit_and_draw`) and `tests/clock_host.rs` (the clock on screen, window and small grids with the date and centring; dzen's corner and center colors at 19:35:05, round discs, the orbit, its dot and ticks, D/H, small grids); QEMU `dzen` suite: `dzen-clock --text` shows the title, keys and time and the yellow, cyan and white indicators, C draws the orbit with one dot, D and H clear the text; `clock --text` shows its digits and the date and changes every second.
-- **Not done here:** console faces (a line updated in place over COM1). No launcher starts a program with a screen as a console program, so there is nothing to show them in yet; they belong to the line-oriented view of virtual consoles, [155](../issues/155-virtual-consoles.md), which now lists them.
+- **Not done here:** console faces (a line updated in place over COM1). No launcher starts a program with a screen as a console program, so there is nothing to show them in yet; they belong to the line-oriented view of virtual consoles, [155](155-virtual-consoles.done), which now lists them.

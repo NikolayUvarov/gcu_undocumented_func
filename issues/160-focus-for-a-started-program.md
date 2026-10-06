@@ -27,4 +27,4 @@ Under `wm` this no longer happens: `fm` in a window lends its broker client and 
 
 ## Related
 
-[099](../issues-done/099-fm-starts-programs-in-windows.done), [088](../issues-done/088-text-window-manager.done), [155](155-virtual-consoles.md), [154](../issues-done/154-push-to-talk-routing.done).
+[099](../issues-done/099-fm-starts-programs-in-windows.done), [088](../issues-done/088-text-window-manager.done), [155](../issues-done/155-virtual-consoles.done), [154](../issues-done/154-push-to-talk-routing.done).

@@ -121,9 +121,14 @@ pub const SYSCALL_TASK_WATCH: usize = 48;
 pub const SYSCALL_DEVICE_STATE: usize = 49;
 pub const DEVICE_STOP: usize = 0;
 pub const DEVICE_START: usize = 1;
+// Why a task ended (a watch's notice, EXIT_STATUS): EXIT_NORMAL | code << 8 (EXIT's code, 0: success, issue 166),
+// EXIT_KILLED, or EXIT_FAULT | vector << 8.
 pub const EXIT_NORMAL: usize = 0;
 pub const EXIT_KILLED: usize = 1;
 pub const EXIT_FAULT: usize = 2; // | vector << 8
+// EXIT_STATUS (process control): arg1 = PID of one of the last EXIT_STATUSES tasks that ended → its reason.
+pub const SYSCALL_EXIT_STATUS: usize = 58;
+pub const EXIT_STATUSES: usize = 16;
 pub const EXIT_NOTICES_MAX: usize = 16; // undelivered exit notices kept by the kernel; further ones are counted as lost
 pub const DETACHED_MAX_BYTES: usize = 256 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 

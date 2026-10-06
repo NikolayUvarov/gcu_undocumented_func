@@ -40,7 +40,7 @@ QEMU suite with a test manager and two test programs (or `wm` from 088 once it e
 
 ## Related
 
-[088](088-text-window-manager.done), [155](../issues/155-virtual-consoles.md), [156](156-ps2-mouse.done).
+[088](088-text-window-manager.done), [155](155-virtual-consoles.done), [156](156-ps2-mouse.done).
 
 ## Resolution
 

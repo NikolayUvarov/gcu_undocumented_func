@@ -11,6 +11,8 @@ pub fn focus(pid: u64, keep_output: bool) -> Result<u64> { check(call(SYSCALL_FO
 pub fn logs(pid: u64, out: &mut [u8]) -> Result<usize> { check(syscall(SYSCALL_TASK_LOGS, pid as usize, 0, [out.as_mut_ptr() as usize, out.len(), 0, 0]).result) }
 /// Drains the task's console output (mirrored while it is focused).
 pub fn console(pid: u64, out: &mut [u8]) -> Result<usize> { check(syscall(SYSCALL_CONSOLE_READ, pid as usize, 0, [out.as_mut_ptr() as usize, out.len(), 0, 0]).result) }
+/// How a task that ended lately (one of the last 16) ended (issue 166).
+pub fn exit_status(pid: u64) -> Option<crate::process::Exit> { check(call(SYSCALL_EXIT_STATUS, pid as usize, 0)).ok().map(crate::process::Exit::from_reason) }
 
 /// What happened to the focused task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

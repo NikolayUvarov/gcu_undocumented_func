@@ -49,6 +49,8 @@ pub mod avi;
 #[cfg(feature = "alloc")]
 pub mod jpeg;
 #[cfg(feature = "alloc")]
+pub mod script;
+#[cfg(feature = "alloc")]
 pub mod pattern;
 #[cfg(feature = "alloc")]
 pub mod voice;

@@ -2,10 +2,15 @@
 #![no_main]
 // Command shell in ring 3: text console on its own screen and the serial line, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
+// Four consoles (issue 155), switched with Ctrl+Alt+F1…F4 whatever program has the focus: each its own text, line,
+// history and programs; the serial line belongs to the first.
+extern crate alloc;
+
 mod bmp;
 mod console;
 mod files;
 mod keymap;
+mod msh;
 mod net;
 mod observe;
 mod power;
@@ -24,23 +29,53 @@ use mind::tui::widgets::{Edit, History, InputLine};
 use mind::ipc::Endpoint;
 use mind::keys::{Event, Vt};
 use mind::mem::Pages;
+use mind::script::Interpreter;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
-const COMMANDS: [&str; 46] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
+const COMMANDS: [&str; 47] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
 const NAMES: usize = 64;
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
 const SCOPE_RECEIVE: usize = 11;
 
+const CONSOLES: usize = 4;
+const LABELS: [&str; CONSOLES] = [" CONSOLE 1 ", " CONSOLE 2 ", " CONSOLE 3 ", " CONSOLE 4 "];
+const OWNERS: usize = 32;
+
+// A console the shell keeps aside while another is active (issue 155): its text, input line, history and programs.
+struct Session { term: Console, line: InputLine, history: History<32>, prompt_at: Position, focused: Option<u64>, line_start: bool, console: Option<u64>, msh: Interpreter }
+
+// A session in memory of its own: one is 9 KB (mostly its history), and the shell's stack is 64 KB.
+struct Parked { _pages: Pages, session: *mut Session }
+
+impl Parked {
+    fn new(session: Session) -> Option<Self> {
+        let mut pages = Pages::new(core::mem::size_of::<Session>())?;
+        let at = pages.as_mut_slice().as_mut_ptr() as *mut Session; // page-aligned
+        unsafe { at.write(session); }
+        Some(Self { _pages: pages, session: at })
+    }
+    fn get(&mut self) -> &mut Session { unsafe { &mut *self.session } }
+}
+
+impl Drop for Parked { fn drop(&mut self) { unsafe { core::ptr::drop_in_place(self.session); } } }
+
+// The fields up to `console` are the active console's; `activate` swaps another one in.
 struct Shell {
     term: Console, line: InputLine, history: History<32>, prompt_at: Position, own: u64, focused: Option<u64>, line_start: bool,
     console: Option<u64>, // console program running in the shell
     names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
     voice: voicectl::Voice,
+    parked: [Option<Parked>; CONSOLES], // the other consoles (None: the active one, or not opened yet)
+    active: usize, shown: usize, // the console the shell works in now, and the one on the screen
+    owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
+    serial: Option<Uart>, // the serial line, for notes that are not a console's
+    msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
+    script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -77,21 +112,101 @@ fn tasks() -> ([TaskInfo; 40], usize) {
 }
 
 impl Shell {
+    // Makes console `index` the active one: its fields swap places with those of the console that was. False when it
+    // is not open.
+    fn activate(&mut self, index: usize) -> bool {
+        if index == self.active { return true; }
+        let Some(parked) = self.parked[index].as_mut() else { return false };
+        let session = parked.get();
+        core::mem::swap(&mut self.term, &mut session.term);
+        core::mem::swap(&mut self.line, &mut session.line);
+        core::mem::swap(&mut self.history, &mut session.history);
+        core::mem::swap(&mut self.prompt_at, &mut session.prompt_at);
+        core::mem::swap(&mut self.focused, &mut session.focused);
+        core::mem::swap(&mut self.line_start, &mut session.line_start);
+        core::mem::swap(&mut self.console, &mut session.console);
+        core::mem::swap(&mut self.msh, &mut session.msh);
+        // The memory now holds the console that was active.
+        self.parked[self.active] = self.parked[index].take();
+        self.active = index;
+        true
+    }
+    fn is_open(&self, index: usize) -> bool { index == self.active || self.parked[index].is_some() }
+
+    // Ctrl+Alt+F1…F4: console `index` on the screen — its text and prompt, or its foreground program, which gets the
+    // keyboard. A console is opened the first time it is shown.
+    fn show(&mut self, index: usize) {
+        if index == self.shown || index >= CONSOLES { return; }
+        if !self.is_open(index) {
+            let session = self.term.sibling().and_then(|term| Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default() }));
+            let Some(session) = session else { let _ = writeln!(self.term, "\nERROR: NO MEMORY FOR CONSOLE {}", index + 1); return self.prompt(); };
+            self.parked[index] = Some(session);
+            for i in 0..CONSOLES { if self.activate(i) { self.term.label = LABELS[i]; } }
+            self.activate(index);
+            let _ = writeln!(self.term, "CONSOLE {}. CTRL+ALT+F1…F4: CONSOLES. HELP: COMMANDS.", index + 1);
+            self.prompt();
+        }
+        self.activate(self.shown);
+        let screen = self.term.take_screen();
+        self.activate(index);
+        self.term.give_screen(screen);
+        self.shown = index;
+        let program = self.focused.filter(|&pid| mind::process::alive(pid));
+        let _ = control::focus(program.unwrap_or(self.own), true);
+        self.note(format_args!("CONSOLE {} SHOWN{}", index + 1, if program.is_some() { " (ITS PROGRAM HAS THE KEYBOARD)" } else { "" }));
+    }
+
+    // A line on the serial line that belongs to no console (which console is shown).
+    fn note(&mut self, text: core::fmt::Arguments) {
+        let Some(uart) = &self.serial else { return };
+        let mut line = mind::util::FixedBuf::<96>::new();
+        let _ = write!(line, "\r\n[SHELL] {}\r\n", text);
+        for &byte in line.as_bytes() { uart.write(byte); }
+    }
+
+    // The active console's programs between keys: the foreground one's output; a console program's output and end;
+    // a foreground program that ended while its console was not shown (no notice comes for it).
+    fn tend(&mut self) {
+        if let Some(pid) = self.focused {
+            self.mirror(pid);
+            if self.active != self.shown && !mind::process::alive(pid) {
+                self.focused = None;
+                let _ = writeln!(self.term, "\nPID={} EXITED.", pid);
+                self.prompt();
+            }
+        }
+        if let Some(pid) = self.console { self.pump_console(pid); }
+    }
+
+    // The console whose foreground program `pid` is (the one shown when none).
+    fn console_of(&self, pid: u64) -> usize {
+        if self.focused == Some(pid) { return self.active; }
+        (0..CONSOLES).find(|&i| self.parked[i].as_ref().is_some_and(|p| unsafe { (*p.session).focused } == Some(pid))).unwrap_or(self.shown)
+    }
+
+    fn owner(&self, pid: u64) -> Option<usize> { self.owners.iter().find(|o| o.0 == pid).map(|o| o.1 as usize) }
+
     fn report(&mut self, error: &str) { let _ = writeln!(self.term, "ERROR: {}", error); }
     // The prompt and whatever was typed so far (output may have interrupted the line).
     fn prompt(&mut self) {
+        if self.script.is_some() { return; } // a script's commands do not prompt
         let _ = write!(self.term, "MIND> ");
         self.prompt_at = self.term.position();
         if !self.line.is_empty() { self.redraw_input(true); }
     }
 
-    // Output of the focused program goes to the serial line only, each line prefixed with its PID.
+    // Output of the focused program goes to the serial line only, each line prefixed with its PID; in the consoles
+    // without it, to their text, which shows it when the program has ended.
     fn mirror(&mut self, pid: u64) {
         let mut buffer = [0u8; 1024];
+        let serial = self.term.serial.is_some();
         while let Ok(len @ 1..) = control::console(pid, &mut buffer) {
             for &byte in &buffer[..len] {
-                if self.line_start && byte != b'\r' && byte != b'\n' { let mut prefix = mind::util::FixedBuf::<32>::new(); let _ = write!(prefix, "[PID {}] ", pid); for &b in prefix.as_bytes() { self.term.serial(b); } }
-                self.term.serial(byte);
+                if self.line_start && byte != b'\r' && byte != b'\n' {
+                    let mut prefix = mind::util::FixedBuf::<32>::new(); let _ = write!(prefix, "[PID {}] ", pid);
+                    for &b in prefix.as_bytes() { if serial { self.term.serial(b) } else { self.term.print_char(b) } }
+                }
+                if serial { self.term.serial(byte) } else { self.term.print_char(byte) }
                 self.line_start = byte == b'\n';
             }
         }
@@ -125,8 +240,12 @@ impl Shell {
         }
     }
 
+    // A program to the foreground of the active console; it gets the keyboard if that console is shown. A program in
+    // the foreground of another console leaves it.
     fn focus(&mut self, pid: u64, keep_output: bool) -> Result<(), Error> {
-        control::focus(pid, keep_output)?;
+        if self.active == self.shown { control::focus(pid, keep_output)?; }
+        else if !tasks().0.iter().any(|t| t.pid == pid && t.screen != 0) { return Err(if tasks().0.iter().any(|t| t.pid == pid) { Error::Invalid } else { Error::NotFound }); }
+        for parked in self.parked.iter_mut().flatten() { let session = parked.get(); if session.focused == Some(pid) { session.focused = None; } }
         self.focused = Some(pid); self.line_start = true;
         Ok(())
     }
@@ -162,6 +281,11 @@ impl Shell {
         let window_manager = requests & mind::process::REQUEST_WINDOW_MANAGER != 0;
         let window = requests & mind::process::REQUEST_WINDOW != 0 && !window_manager;
         let display = requests & mind::process::REQUEST_DISPLAY != 0;
+        // A program a script starts gets only what the script declared (issue 094); it runs without the rest.
+        let granted = |word: &str| self.script.as_ref().is_none_or(|words| words.iter().any(|w| w == word));
+        let (needs, authority, window_manager, display) = (loader::Needs { sysinfo: needs.sysinfo && granted("sysinfo"), file: needs.file && (granted("file") || granted("files")),
+            lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
+            authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -183,7 +307,7 @@ impl Shell {
         if let Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         // A program that asks for the network gets what the policy broker grants it, or runs without (issue 102).
         let mut network = None;
-        if requests & mind::process::REQUEST_NETWORK != 0 {
+        if requests & mind::process::REQUEST_NETWORK != 0 && granted("network") {
             match net::grant(&mut self.term, name, SCOPE_RECEIVE, |cap| match lend(SLOT_NETWORK, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) }) {
                 Ok(badge) => network = badge,
                 Err(error) => { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
@@ -205,6 +329,8 @@ impl Shell {
         let _ = write!(self.term, "STARTED PID={} NAME=", pid);
         match task { Some(t) => { let _ = write!(self.term, "{}", label(&t.name)); } None => for &b in stem { self.term.print_char(b.to_ascii_lowercase()); } }
         let _ = writeln!(self.term, " {}", if background { "BACKGROUND" } else { "FOREGROUND" });
+        self.owners[self.next_owner] = (pid, self.active as u8);
+        self.next_owner = (self.next_owner + 1) % OWNERS;
         if background { return; }
         match task {
             Some(t) if t.screen != 0 => { let _ = self.focus(pid, true); }
@@ -248,6 +374,10 @@ impl Shell {
         let (cmd, args) = (&line[..split], line[split..].trim_ascii());
         let is = |name: &[u8]| cmd.eq_ignore_ascii_case(name);
         if cmd.is_empty() { return; }
+        // msh (issue 094): its statements at the prompt, `msh` and script files.
+        if msh::is_statement(line) { return msh::statement(self, line); }
+        if is(b"msh") { return msh::command(self, args); }
+        if msh::is_script(cmd) { return msh::command(self, line); }
         if is(b"run") || is(b"boot") {
             let (words, background) = if is(b"boot") {
                 if !args.is_empty() { return self.report("BOOT TAKES NO ARGUMENTS"); }
@@ -340,7 +470,8 @@ impl Shell {
             let _ = writeln!(self.term, "PID NAME STATE FOCUS CPU RUNS CPU_TICKS SYSCALLS");
             let (list, count) = tasks();
             for t in &list[..count] {
-                let _ = writeln!(self.term, "{} {} {} {} {} {} {} {}", t.pid, label(&t.name), label(&t.state), if t.focus != 0 { "FG" } else { "BG" }, t.cpu, t.runs, t.ticks, t.calls);
+                let _ = write!(self.term, "{} {} {} {} {} {} {} {}", t.pid, label(&t.name), label(&t.state), if t.focus != 0 { "FG" } else { "BG" }, t.cpu, t.runs, t.ticks, t.calls);
+                let _ = match self.owner(t.pid) { Some(console) => writeln!(self.term, " CONSOLE={}", console + 1), None => writeln!(self.term) };
             }
             let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; LIMIT={} APPS + SERVICES", count, self.own, MAX_APPS);
         } else if is(b"clear") {
@@ -532,11 +663,14 @@ impl Shell {
         }
     }
     // A decoded UART event: the shell's own input, or forwarded to the focused program (Ctrl+Z is the attention key).
+    // The serial line is the first console's: keys for its foreground program go to the program with the keyboard
+    // only while that console is shown.
     fn uart(&mut self, event: Event) {
+        let shown = self.shown == self.active;
         match event {
-            Event::Key(word) if self.focused.is_some() => { let _ = input_key(word, word, false); }
+            Event::Key(word) if self.focused.is_some() => { if shown { let _ = input_key(word, word, false); } }
             Event::Key(word) => self.key(Key(word)),
-            Event::Attention if self.focused.is_some() => { let _ = input_key(0, 0, true); }
+            Event::Attention if self.focused.is_some() && shown => { let _ = input_key(0, 0, true); }
             _ => {}
         }
     }
@@ -551,13 +685,23 @@ impl Events {
     fn clear(&mut self) { self.len = 0; }
 }
 
+// The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
+#[inline(never)]
+fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
+    alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
+                            console: None,
+                            names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
+                            parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, serial: Uart::open(SLOT_SERIAL),
+                            msh: Interpreter::default(), script: None })
+}
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
-    let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
-                            console: None,
-                            names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default() };
+    let mut shell = new_shell(term, own);
+    // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN).
+    for index in 0..CONSOLES { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
@@ -566,15 +710,19 @@ fn main(info: &'static BootInfo) {
     let mut vt = Vt::new();
     let mut events = Events::new();
     loop {
-        if let Some(pid) = shell.focused { shell.mirror(pid); }
-        if let Some(pid) = shell.console { shell.pump_console(pid); }
+        for index in 0..CONSOLES { if shell.activate(index) { shell.tend(); } }
+        // What happened to the program with the keyboard: it is the foreground program of the console shown.
         while let Some(notice) = control::notice() {
-            let (pid, what) = match notice { Notice::Exited(pid) => { shell.mirror(pid); (pid, "EXITED") } Notice::Background(pid) => (pid, "BACKGROUND") };
+            let pid = match notice { Notice::Exited(pid) | Notice::Background(pid) => pid };
+            shell.activate(shell.console_of(pid));
+            let what = match notice { Notice::Exited(pid) => { shell.mirror(pid); "EXITED" } Notice::Background(_) => "BACKGROUND" };
             shell.focused = None;
             let _ = writeln!(shell.term, "\nPID={} {}. SHELL RESUMED.", pid, what);
             shell.prompt();
         }
-        // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout).
+        // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout), for
+        // the first console.
+        shell.activate(0);
         let now = mind::time::uptime_ms() as u64;
         while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
@@ -582,9 +730,18 @@ fn main(info: &'static BootInfo) {
         vt.poll(now, &mut |event| events.push(event));
         for &event in events.as_slice() { shell.uart(event); }
         events.clear();
-        // PS/2 keys arrive in the shell's queue while it has the focus.
-        // While a program has the focus only the keys the shell listens for come here (F12: push-to-talk, issue 154).
-        while let Some(key) = mind::input::read_key() { if shell.focused.is_none() { shell.key(key); } else if key.code() == Code::F(12) { shell.voice_key(key); } }
+        // PS/2 keys arrive in the shell's queue while it has the focus, for the console shown.
+        // While a program has the focus only the keys the shell listens for come here (F12: push-to-talk, issue 154;
+        // Ctrl+Alt+F1…F4: the consoles, issue 155).
+        shell.activate(shell.shown);
+        while let Some(key) = mind::input::read_key() {
+            match key.code() {
+                Code::F(n @ 1..=4) if key.ctrl() && key.alt() => shell.show(n as usize - 1),
+                _ if shell.focused.is_none() => shell.key(key),
+                Code::F(12) => { shell.voice_key(key); }
+                _ => {}
+            }
+        }
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         shell.term.render(cursor);
         // Wait for the next tick, or for the voice program's call.

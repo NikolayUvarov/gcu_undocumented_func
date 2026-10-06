@@ -28,11 +28,13 @@ pub struct Win {
     pub restore: Option<Rect>,
     /// The frame Alt+Enter maximized it from (a snapped one too): Alt+Enter again goes back there.
     pub before_max: Option<Rect>,
+    /// A program wm lent a lease of it to is recording it (issue u014): "● REC" on its frame.
+    pub recording: bool,
 }
 
 impl Win {
     pub fn new(id: u32, owner: u64, content: Content, size: (usize, usize), title: &str) -> Self {
-        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None }
+        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None, recording: false }
     }
     /// The frame that shows all of the content.
     pub fn natural(&self) -> (usize, usize) {
@@ -252,6 +254,7 @@ impl Desk {
             if r.w >= 8 { grid.text(r.right() - 5, r.y, "[×]", if focused { Style::new(0xFFFFFF, 0xA03030) } else { frame }); }
             if r.w >= 11 { grid.text(r.right() - 8, r.y, if w.restore.is_some() { "[⇕]" } else { "[▲]" }, frame); }
             grid.put(r.right() - 1, r.bottom() - 1, '◆', if focused { theme.accent } else { frame });
+            if w.recording && r.w >= 24 { grid.text(r.x + 1, r.y, " ● REC ", Style::new(0xFFFFFF, 0xC02020)); }
             let inner = r.inner();
             for y in inner.y..inner.bottom().min(rows) {
                 for x in inner.x..inner.right().min(cols) {

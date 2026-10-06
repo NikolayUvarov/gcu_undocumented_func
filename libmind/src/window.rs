@@ -185,6 +185,35 @@ impl Surface {
         let word = |i: usize| unsafe { core::ptr::read_volatile(self.base.add(at + 4 * i).cast::<u32>()) };
         Some((char::from_u32(word(0)).unwrap_or('?'), word(1), word(2)))
     }
+    /// The content as a `width` × `height` frame of pixels (0x00RRGGBB), for a recorder (issue u014): a pixel surface
+    /// as it is, a text surface's cells in the 8×16 font as a window manager draws them. Content beyond the frame is
+    /// cut; the frame beyond the content is black. False without a valid header.
+    pub fn draw(&self, out: &mut [u32], width: usize, height: usize) -> bool {
+        out[..width * height].fill(0);
+        let Some((kind, w, h)) = self.check() else { return false };
+        match kind {
+            Kind::Pixels => {
+                // Inside the size the header had when it was checked: within the surface's memory.
+                let content = self.content() as *const u32;
+                for y in 0..h.min(height) {
+                    for x in 0..w.min(width) { out[y * width + x] = unsafe { core::ptr::read_volatile(content.add(y * w + x)) }; }
+                }
+            }
+            Kind::Text => {
+                for cy in 0..h.min(height.div_ceil(16)) {
+                    for cx in 0..w.min(width.div_ceil(8)) {
+                        let Some((ch, fg, bg)) = self.cell(cx, cy) else { continue };
+                        for (row, &bits) in crate::font16::glyph(ch).iter().enumerate().take(height - cy * 16) {
+                            for col in 0..8.min(width - cx * 8) {
+                                out[(cy * 16 + row) * width + cx * 8 + col] = if bits & (0x80 >> col) != 0 { fg } else { bg };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        true
+    }
     /// Writes cell (x, y) of a text surface (program side).
     pub fn set_cell(&self, x: usize, y: usize, ch: char, fg: u32, bg: u32) {
         let (width, height) = self.pair(O_SIZE);

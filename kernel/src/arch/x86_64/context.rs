@@ -191,12 +191,14 @@ pub unsafe fn event(sp: usize) -> Event {
     }
 }
 
-// The code a task returns into when its entry function returns: EXIT through the mailbox at `mailbox`.
-pub fn exit_stub(mailbox: u64) -> [u8; 21] {
-    let mut code = [0u8; 21];
+// The code a task returns into when its entry function returns: EXIT with code 0 through the mailbox at `mailbox`.
+pub fn exit_stub(mailbox: u64) -> [u8; 29] {
+    let mut code = [0u8; 29];
     code[0..2].copy_from_slice(&[0x48, 0xb8]); // mov rax, mailbox
     code[2..10].copy_from_slice(&mailbox.to_le_bytes());
-    code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); // mov qword [rax], 7; int 0x80; ud2
+    code[10..17].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0]); // mov qword [rax], 7 (EXIT)
+    code[17..25].copy_from_slice(&[0x48, 0xc7, 0x40, 8, 0, 0, 0, 0]); // mov qword [rax + 8], 0 (arg1: the code, issue 166)
+    code[25..29].copy_from_slice(&[0xcd, 0x80, 0x0f, 0x0b]); // int 0x80; ud2
     code
 }
 

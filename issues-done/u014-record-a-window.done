@@ -1,0 +1,49 @@
+# u014 — `record -w`: recording one window of `wm` — done
+
+**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — (093 done) · **Roadmap:** track G · **Constitution:** MC-3.3, MC-10.2
+
+## Problem
+
+`record` (issue 093) records the whole screen in front. A demo or a bug report of one program in `wm` would rather have just its window, at the window's size, whatever else is on the screen.
+
+The window's pixels are in its surface, the window broker's memory (157). The program that drew it and `wm` hold leases of it; the shell does not. Text windows hold cells, which need to be drawn (the 8×16 font) to become pixels.
+
+## Plan
+
+- `wm` starts `record` for a window: from its run line (`record -w`, the window in front) or from a key of its own.
+  - `wm` lends `record` a read-only lease of that window's surface, minted from its own, and nothing else of the window.
+  - No program records another's window unless the user starts it.
+- `record` draws the frames itself:
+  - a pixel window's content as it is;
+  - a text window's cells with `mind::font16`, as `wm` draws them.
+  
+  The frame has the surface's size when the recording starts. (Decided: a window resized while it records keeps that size in the file, its content cut at the right and bottom or black around it; scaling would blur a text window's cells.)
+- The compositor's dot shows the recording as for the screen. `record` captures through the surface, not the compositor, so `wm` draws a red dot in the window's title while it lends a lease to a recorder.
+
+## Acceptance criteria
+
+QEMU `wm` suite: `record -w -t 2 ram:win.avi` typed in the run line with the clock's window in front. The recording has 20 frames of the window's content size (320 × 176), more than one of them coded (the clock's seconds), and the mark is on the clock window's frame while it records, gone after. Host tests: a text surface drawn as a frame holds its cells in the 8×16 font in their colours (the QEMU `wm` suite's disk cannot be read back, so the decoded-frame check of a text window moved to the host); the mark on the frame.
+
+## Related
+
+[093](093-screen-recording.done), [088](088-text-window-manager.done), [157](157-window-broker.done), [165](165-display-client-for-programs.done).
+
+## Resolution
+
+- **`wm`** (`wm/src/main.rs`): a program started from the run line (or the menu) that asks for `REQUEST_DISPLAY` gets, in `SLOT_DISPLAY`, a read-only lease of the window in front: `lease` mints `CAP_READ | CAP_GRANT` from the surface the broker gives `wm`. Nothing else of the window, and not the screen (`wm` holds no compositor client). A console program runs in a `console` started for it, and the lease goes to that console. The log says `(WINDOW id TO SEE)`.
+- **Loader** (`idl/loader.wit` 1.3): `grant-memory` lends a memory capability. It takes `SLOT_DISPLAY` only, and refuses a writable capability (`rights`). `grant` stays for endpoints: its wire check refused the lease.
+- **The mark** (`wm/src/desk.rs`): `Win::recording` draws " ● REC " (white on red) at the left of the window's frame. It stays for the recording's `-t` and 3 s more, or until the program `wm` started ends. `[WM] RECORDING id` and `[WM] RECORDED id` are logged.
+- **`console`**: passes the memory capability it holds in `SLOT_DISPLAY` (`grant-memory`) to the first program that asks for `REQUEST_DISPLAY`, then drops it.
+- **`record`**:
+  - With a memory capability in `SLOT_DISPLAY` it records that window. It maps the lease and keeps the capability, which the broker revokes when the window ends.
+  - Before each frame it checks that the capability is still there and that the window is not being closed.
+  - A frame whose program has not drawn since the last (the surface's change counter) repeats the last one.
+  - `-w` without a window says to start it from `wm`'s run line.
+  - When `wm` leaves (Alt+Q), the broker revokes its leases and the recording stops ("the window closed").
+  - Left open: a lease revoked in the millisecond `record` copies the window ends `record` with a fault. The revocation unmaps the window; the file keeps the header written within the last second. This happens when `wm` leaves, or when the program ends by itself (the broker revokes once `wm` has listed the windows without it, up to 250 ms later).
+- **`mind::window::Surface::draw`**: the content as a frame of pixels. A pixel surface as it is; a text surface's cells in the 8×16 font, as `wm` draws them.
+- Tests:
+  - QEMU `wm` suite (Alt+R, `record -w -t 2 ram:win.avi` for the clock; the summary read from the console's window; the mark on and off);
+  - `tests/window_host.rs` (`a_surface_drawn_as_a_frame`);
+  - `tests/wm_host.rs` (`a_recorded_window_is_marked`).
+- Docs: README (`record`), docs/tools §4.9 and its Russian copy, docs/api (slot 15, `grant-memory`).

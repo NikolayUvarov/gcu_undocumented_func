@@ -239,11 +239,20 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 - **`dmesg`:** filter by source and level, follow mode.
 - **`svc`:** services from `init`: PID, state, restarts, devices held; start, stop, restart; restart budgets and generations once C6 exists. Done in issue 070: `init` serves `idl/lifecycle.wit` on its endpoint (since the merge of `main` these requests are part of `idl/init.wit` 1.1) (it replaced the numeric "start by name" request) with the process-control privilege it mints for itself; the shell lends its client of `init` for `REQUEST_LIFECYCLE`; `svc` is a console program, `top` stops a task (k) and restarts a service (r) after a confirmation. "Devices held" is what `init` granted, in short.
 - **`df` / `fsck`:** volume type, cluster size, size, free space (from FSInfo or by counting the FAT); `fsck` checks lost clusters, cross-linked chains and size mismatches without writing. Done in issue 068: `df` from `volume` (free space counted in the FAT once, then kept); `fsck` is `vfs.wit` 2.1 `check`, run by `vfs_server` (it alone reads the sectors), which also reports chains that run into a free or bad cluster, invalid entries and the dirty flag.
-- **`format`, `screenshot`, `keymap`, `reboot`:** as in §2. Done in issues 083 (`format`), 086 (`screenshot`: `idl/display.wit` 1.0 served by `compositor`, a sealed read-only copy of the screen written by the shell as a 24-bit BMP), 085 (`keymap`: `idl/keyboard.wit` 1.0 served by `ps2_kbd`, which now takes IRQ 1 as a message on its service endpoint) and 084 (`reboot [-f]`: flush, the services stopped in reverse start order through `init`, then `REBOOT`). `screenshot` captures the screen in front — the shell's when typed there. `record` (issue 093) records the screen in front as AVI with Motion JPEG frames: `mind::jpeg` (baseline, 4:2:0, a restart marker after every row of 16×16 blocks, so only the rows that changed are coded again) and `mind::avi`; the shell lends it its compositor client for `REQUEST_DISPLAY` (kernel issue 165), and while the screen is being captured the compositor shows a red dot in its corner, on the display only. Recording one window of `wm` is issue u014.
+- **`format`, `screenshot`, `keymap`, `reboot`:** as in §2. Done in issues 083 (`format`), 086 (`screenshot`: `idl/display.wit` 1.0 served by `compositor`, a sealed read-only copy of the screen written by the shell as a 24-bit BMP), 085 (`keymap`: `idl/keyboard.wit` 1.0 served by `ps2_kbd`, which now takes IRQ 1 as a message on its service endpoint) and 084 (`reboot [-f]`: flush, the services stopped in reverse start order through `init`, then `REBOOT`). `screenshot` captures the screen in front — the shell's when typed there. `record` (issue 093) records the screen in front as AVI with Motion JPEG frames: `mind::jpeg` (baseline, 4:2:0, a restart marker after every row of 16×16 blocks, so only the rows that changed are coded again) and `mind::avi`; the shell lends it its compositor client for `REQUEST_DISPLAY` (kernel issue 165), and while the screen is being captured the compositor shows a red dot in its corner, on the display only. `record -w` typed in `wm`'s run line (issue u014) records the window in front alone: `wm` lends it a read-only lease of that window's surface (through the `console` it runs in), and shows " ● REC " on the window's frame meanwhile.
 
 ### 4.8 Shell
 
 Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab completion of program names (loader `LIST`) and paths; lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
+
+**Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
+- Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
+- Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.
+- The serial line belongs to console 1. The shell notes each switch on it (`[SHELL] CONSOLE n SHOWN`).
+- The console shown is named at the top right of the screen; `ps` ends the row of each program the shell started with `CONSOLE=n`.
+- Not Alt+F1…F4: `fm` keeps Alt+F1/F2 for its volume dialogs, as Midnight Commander does.
+
+**Scripts** (issue 094): `msh` is the shell's script language ([docs/msh.md](../msh.md)). Scripts are files run with `msh file` or by a name ending in `.msh`; statements (`let`, `if`, `for`, …) also work at the prompt. Results follow Marain: `ok`/`err`, `?`, `or`, `try`. A script gets no more authority than its `requires:` line declares.
 
 ### 4.9 `wm` — window manager (issue 088, on the window broker of issue 157)
 
@@ -259,7 +268,8 @@ An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit
 - `clock --text` and `dzen-clock --text` (issue 089) draw text faces sized to their window: large block digits with the date, the indicators as colored cells.
 - A program started from `fm` in a window opens a window of its own (issue 099).
 - Console programs (`uptime`, `df`, `grep`, …) started from `wm` (Alt+R, the menu) or from `fm` in a window run in a window of `console` (§4.10).
-- Full-screen consoles switched with Alt+F1…F4 are issue 155.
+- **Recording a window** (issue u014): `record -w [-t seconds] [file]` in the run line (Alt+R) records the window in front alone, at its content's size: a program that asks for `REQUEST_DISPLAY` gets from `wm` a read-only lease of that window's surface in `SLOT_DISPLAY` (minted from `wm`'s own, revoked with the window), not the screen; `record` draws a text window's cells in the 8×16 font. While it records, " ● REC " is on the window's frame (the recording's time and 3 s more). A window resized meanwhile keeps the first size in the file.
+- Full-screen consoles of the shell, switched with Ctrl+Alt+F1…F4, are in §4.8 (issue 155).
 
 ### 4.10 `console` — a terminal for programs (issue u004)
 
