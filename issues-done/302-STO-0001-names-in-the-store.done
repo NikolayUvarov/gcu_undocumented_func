@@ -1,0 +1,59 @@
+# 302-STO-0001 — Names in the block store: publish by compare-and-swap, only complete roots — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10
+
+Part of main task [302](../issues/302-names-and-current-roots.md).
+
+## Problem
+
+See [302](../issues/302-names-and-current-roots.md). Names need a record that survives a restart, a protocol for concurrent publishers, and a check that a root's data is all stored before the root is published.
+
+## Plan
+
+- **Name records.** A record of one sector in the store's log (layout version 1, magic `MIND-REF`): the name, its version and its root CID, under a digest. When mounting, the latest valid version of each name is current.
+- **Publish.** `publish(name, expected, root)` refuses unless `expected` is the current version (0 for a new name). It then checks with `mind::dag::complete` that every block of the root's object is stored, writes and flushes the record, and only then replies.
+- **Bounds.** A name is 1 to 64 bytes of `A-Z a-z 0-9 . _ / -`. The service holds 256 names.
+- **Rights.** `BADGE_PUBLISH` publishes; resolving is reading (`BADGE_GET`).
+
+## Acceptance criteria
+
+Host tests:
+- the compare-and-swap rule;
+- incomplete and out-of-shape roots refused;
+- names after a remount;
+- a damaged latest record reported;
+- bounds;
+- the rights table.
+
+## Related
+
+[302](../issues/302-names-and-current-roots.md), [301-STO-0001](301-STO-0001-object-format.done), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+- **`libmind/src/dag.rs`:** `complete` reads every node, checks it against its CID and the shape, and asks `has` for every chunk. It descends from the root again for each node of height 1, so it keeps no stack of nodes. `Blocks` gets `has`.
+- **`blockstore/src/store.rs`:**
+  - name records (`MIND-REF`), the `Head` table, `publish`, `resolve` and `valid_name`;
+  - the scan takes the latest valid version of each name;
+  - errors `Conflict` and `Incomplete`; `Stats::names`;
+  - `Store` is `dag::Blocks`, so objects are written into it and read from it with the checks of `dag`.
+- **`blockstore/src/main.rs`:**
+  - a static table of 256 names;
+  - `publish` and `resolve` behind their rights;
+  - each publication logged (`[BLOCKSTORE] PUBLISHED <name> VERSION <n> ROOT <cid> BY PID <pid>`);
+  - `READY` reports the names.
+- **`libmind/src/blockstore.rs`:** `BADGE_PUBLISH`, `Operation::Publish` and `Resolve`.
+- **`idl/blockstore.wit` 1.0** (not run anywhere yet): `publish`, `resolve`, `record head`, `stats.names`, errors `conflict` and `incomplete`.
+- **Tests:**
+  - `tests/blockstore_host.rs` (21 tests):
+    - `a_name_changes_only_from_the_version_expected`;
+    - `a_root_is_published_only_with_every_block_stored`: a 40 KiB object written into the store with `dag::Builder`, published, resolved and read back; a missing chunk, a root never stored and a node out of shape refused, with nothing published;
+    - `names_are_found_again_after_a_remount`;
+    - `a_damaged_name_record_is_reported_and_the_version_before_stands`;
+    - `names_are_checked_and_bounded`;
+    - the rights table with the new right.
+  - `tests/dag_host.rs`: `an_object_is_complete_only_with_every_block`.
+- **The declared semantics (docs/storage):**
+  - one name per publication, with no transaction across names;
+  - a publication is durable when the device's flush returns;
+  - a damaged latest record is counted as damaged, and the version before it is current: reported, not silent.

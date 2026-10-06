@@ -1,0 +1,51 @@
+# 300-STO-0002 — The `blockstore` service: put and get by CID over a block client
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (start at boot, a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
+
+Part of main task [300](300-checksummed-block-store.md).
+
+## Problem
+
+Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done)), but nothing stores blocks by them. MC-4.2 asks that a published object is immutable and verifiable by content. MC-4.8 asks for corruption detection and a defined outcome when the medium is exhausted.
+
+## Plan
+
+- **The interface:** `idl/blockstore.wit` 1.0, a buffer call per request:
+  - `put` takes bytes and returns their CID;
+  - `get` takes a CID and returns the bytes, checked against it;
+  - `has` and `stat`.
+- **The layout:** an append-only log of records on the block device.
+  - Sector 0 holds a superblock with its layout version.
+  - Each record is a header (magic, layout version, length, CID, the header's digest) followed by the block's bytes.
+  - A put writes only after the last non-blank sector and returns after a flush. Nothing stored is ever overwritten.
+- **Mounting:** a blank medium is formatted, and a store is scanned with every block verified. A foreign medium is refused and not touched, and so is a store of another layout version.
+- **Reading:** every block read is checked against its CID. A corrupt one is reported and never returned, and it leaves the index, so putting the same bytes stores them again.
+- **Refusals:** a full medium, a full index and a block larger than 16 KiB are refused with defined errors.
+- **The service:** `blockstore`, over a block client in slot 2. Starting it at boot with a RAM disk of its own is the kernel track's part ([requests-KRN.md](requests-KRN.md)).
+
+## Acceptance criteria
+
+- Host tests of the layout and logic:
+  - put and get;
+  - blocks found again after a remount;
+  - a flipped byte refused at mount and at read;
+  - a damaged header or a torn write loses only its own record;
+  - no sector written twice;
+  - full, foreign, layout and read-only refusals;
+  - a random sequence checked against a model.
+- The service builds for x86-64 and aarch64 in CI.
+- **Blocked:** a QEMU suite on the RAM disk covering put and get, a corrupt block refused and a full store refused. It needs the service started at boot and a client for a test program.
+
+## Progress (2026-10-06)
+
+- **Done:**
+  - `idl/blockstore.wit` 1.0 and its generated bindings.
+  - `blockstore/src/store.rs`, the layout and logic.
+  - `blockstore/src/main.rs`, the service: static index of 4096 blocks, blocks up to 16 KiB; it logs `READY` with its statistics and each corrupt block.
+  - `tests/blockstore_host.rs`: 13 tests, in both host test lists.
+  - The CI step "Block store, both architectures" and its `ci_local.sh` group.
+- **Waiting:** the kernel track's start at boot. Then the STO track adds a test tool and the QEMU suite.
+
+## Related
+
+[docs/storage](../docs/storage/README.md); `idl/block.wit`, `libmind/src/block.rs`; Constitution Article 4.

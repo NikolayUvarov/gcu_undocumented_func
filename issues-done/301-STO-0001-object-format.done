@@ -1,0 +1,44 @@
+# 301-STO-0001 — The object format: chunks and DAG-CBOR nodes with a shape fixed by the size — done
+
+**Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.13, MC-12.2, Appendix B.3
+
+Part of main task [301](../issues/301-objects-as-merkle-dags.md).
+
+## Problem
+
+An object larger than a block needs a structural manifest that is itself immutable and verifiable (MC-4.2), with unambiguous encoding. A reader must be able to check any part of the object starting from its root CID alone. Two writers of the same bytes should get the same root.
+
+## Plan
+
+- **Chunks and nodes:** chunks of 16 KiB as `raw` blocks; nodes as DAG-CBOR (multicodec 0x71, an encoding with one canonical form) with a schema version.
+- **Shape fixed by the size:** a single chunk up to 16 KiB; above that, the least height with all children full but the last and every child one level lower.
+- **Canonical decoding:** a node is accepted only if re-encoding it gives the same bytes.
+- **Untrusted store:** the reader checks every block against its CID and its place in the shape.
+
+## Acceptance criteria
+
+- Roots and node bytes equal those of an independent reference for sizes at every boundary of the shape.
+- Every non-canonical node, every node or chunk out of shape, and every block that does not match its CID is refused, each in a test.
+
+## Related
+
+[docs/storage](../docs/storage/README.md); [300-STO-0001](300-STO-0001-content-identifiers.done).
+
+## Resolution
+
+- **`libmind/src/cid.rs`:** supports the content type `dag-cbor` (0x71) besides `raw`; dag-pb and dag-json are still refused.
+- **`libmind/src/dag.rs`** (`mind::dag`, no heap, no system calls):
+  - `CHUNK` = 16384, `FANOUT` = 256, nodes `{"v": 1, "size": n, "links": [CID, ...]}` of at most `NODE_MAX` = 10523 bytes;
+  - `height`, `encode` and `decode`; `decode` refuses another version first, then anything that is not this schema's canonical encoding;
+  - `Builder` writes chunks and nodes as the bytes come and returns the root and size;
+  - `size` and `read_at` check every node and chunk against its CID and against the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, the chunk lengths.
+  - `Blocks` is the store's interface.
+- **Tests:** `tests/dag_host.rs`, 8 tests, added to both host test lists.
+  - Roots for 0, 1, 16 KiB, 16 KiB + 1, three chunks, 256 chunks, 256 chunks + 1 byte and 259 chunks + 100 bytes equal those a reference built in Python. That reference builds the tree recursively by the shape rule with the `dag-cbor` and `multiformats` libraries, independently of the streaming builder.
+  - A node's bytes equal the reference's.
+  - The same root however the bytes are written.
+  - Reads at any offset.
+  - 12 non-canonical nodes refused.
+  - Five trees out of shape refused.
+  - A forged chunk and a forged root refused as corrupt.
+  - `tests/cid_host.rs` adds a `dag-cbor` identifier from `multiformats`.

@@ -53,6 +53,7 @@ A64="python3 tests/qemu_smoke.py --arch aarch64"
 HOST_GROUPS=(
     "build (x86)|./02_build.sh"
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only)"
+    "block store, both architectures|(cd blockstore && for t in x86_64-unknown-none aarch64-unknown-none-softfloat; do cargo build --release --target \$t --target-dir /tmp/blockstore-target || exit 1; done)"
     "host tests|host_tests"
     "models (TLC)|scripts/model_check.sh"
 )
@@ -87,7 +88,7 @@ host_tests() {
     local t
     rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
     rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script; do
+    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag; do
         rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
     done
     rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1

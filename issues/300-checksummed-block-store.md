@@ -1,6 +1,6 @@
 # 300 — A checksummed block store with content addresses (track B, first step)
 
-**Type:** main task · **Owner:** `STO` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.1, MC-4.2, MC-4.7, MC-4.8, MC-4.13
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.1, MC-4.2, MC-4.7, MC-4.8, MC-4.13
 
 ## Problem
 
@@ -17,6 +17,13 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
 - Requests to other tracks:
   - `KRN`: `init` starts the service and grants its block client (`issues/requests-KRN.md`).
   - `DRV`: a durable block path for after the RAM disk.
+
+## Progress (2026-10-06)
+
+- **Done — `300-STO-0001`** ([record](../issues-done/300-STO-0001-content-identifiers.done)): CIDv1 identifiers (`raw`, SHA-256) and SHA-256 in `libmind` (`cid`, `sha256`); host tests against the FIPS examples and the reference `multiformats` library; [docs/storage](../docs/storage/README.md).
+- **In progress — [`300-STO-0004`](300-STO-0004-rights-by-badge.md)**: put and get rights by badge; the rule, the service's checks and a host test are done, the clients' badges are requested from the kernel track.
+- **Changed split:** the on-disk layout, the corruption and exhaustion cases of `300-STO-0003` went into `300-STO-0002` as host tests. `300-STO-0003` is now the test tool and the QEMU suite of the acceptance criteria below, and it starts when the service runs.
+- **In progress — [`300-STO-0002`](300-STO-0002-blockstore-service.md)**: the `blockstore` service and `idl/blockstore.wit` 1.0 are built and host-tested; starting it at boot with a RAM disk of its own is requested from the kernel track ([requests-KRN.md](requests-KRN.md)), and the QEMU suite waits for it.
 
 ## Acceptance criteria
 
