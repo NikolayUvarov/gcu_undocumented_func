@@ -1,6 +1,6 @@
 # 300 — A checksummed block store with content addresses (track B, first step)
 
-**Type:** main task · **Owner:** `STO` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.1, MC-4.2, MC-4.7, MC-4.8, MC-4.13
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.1, MC-4.2, MC-4.7, MC-4.8, MC-4.13
 
 ## Problem
 
@@ -17,6 +17,11 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
 - Requests to other tracks:
   - `KRN`: `init` starts the service and grants its block client (`issues/requests-KRN.md`).
   - `DRV`: a durable block path for after the RAM disk.
+
+## Progress (2026-10-06)
+
+- **Done — `300-STO-0001`** ([record](../issues-done/300-STO-0001-content-identifiers.done)): CIDv1 identifiers (`raw`, SHA-256) and SHA-256 in `libmind` (`cid`, `sha256`); host tests against the FIPS examples and the reference `multiformats` library; [docs/storage](../docs/storage/README.md).
+- **Next — `300-STO-0002`**: the `blockstore` service over the RAM disk.
 
 ## Acceptance criteria
 

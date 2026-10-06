@@ -30,7 +30,7 @@ jobs:
         run: |
           rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests
           rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests
-          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script; do
+          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid; do
             rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests"
           done
           # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
