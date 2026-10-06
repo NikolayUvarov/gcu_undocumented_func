@@ -1,0 +1,31 @@
+# 000-APP-0004 — The `pinmap` check waits for the whole line — done
+
+**Type:** tools (test) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** G · **Constitution:** MC-12.2
+
+## Problem
+
+Requested by the storage track (`requests-APP.md`). `shell_suite` checked u017 with
+
+```python
+require(vm.expect("[PINMAP] READY"), "NO PIN CONTROLLER")
+```
+
+`expect` returns as soon as `[PINMAP] READY` is in the output, but the rest of the line (`100x37 NO PIN CONTROLLER`) can arrive later on the serial line. One local run of the group "x86: keys, shell, tools" under TCG failed with `('NO PIN CONTROLLER', '… [PINMAP] READY 1')`. pinmap printed the whole line (issue 209); the check read it too early.
+
+## Plan
+
+Wait for the end of the line: `vm.expect("NO PIN CONTROLLER", after="[PINMAP] READY")`.
+
+## Acceptance criteria
+
+The check passes however the line is split on the serial line.
+
+## Resolution
+
+- `tests/qemu_smoke.py` (`shell_suite`): the check waits for `NO PIN CONTROLLER` after `[PINMAP] READY`.
+- The other `require(vm.expect(a), b)` checks of the suites were read for the same mistake. In each, `b` is printed before `a` (keys, view, console, dzen-clock, the heap fixture, the programs' `DONE` before the shell's `EXITED`).
+- Tested: the `shell` suite on x86-64 and aarch64.
+
+## Related
+
+[u017](../issues/u017-pins-view.md) (`pinmap`), [209](209-aarch64-smoke-interleaved-lines.done).

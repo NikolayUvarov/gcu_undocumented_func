@@ -880,7 +880,7 @@ def shell_suite(vm):
     require(vm.command("pins 3"), "pins: no client of the gpio service")
     # pinmap (issue u017) says it on its screen; Esc ends it.
     vm.send("pinmap\n")
-    require(vm.expect("[PINMAP] READY"), "NO PIN CONTROLLER")
+    vm.expect("NO PIN CONTROLLER", after="[PINMAP] READY")  # the whole line: it may arrive in pieces (000-APP-0004)
     time.sleep(.3)
     screen = screen_text(vm)
     vm.serial(enter=False)

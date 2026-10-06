@@ -35,7 +35,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the `pinmap` check's race), [requests-KRN.md](requests-KRN.md) (start `blockstore` at boot with a RAM disk of its own; the rest of 171; the busy suite's share check and a busy host).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (start `blockstore` at boot with a RAM disk of its own; the rest of 171; the busy suite's share check and a busy host).
 
 
 ## Finished tasks (`issues-done/`)
@@ -157,6 +157,7 @@ Requests that wait for a track to number them: [requests-APP.md](requests-APP.md
 | [u014](../issues-done/u014-record-a-window.done) | `record -w` in wm's run line records the window in front alone: wm lends a read-only lease of its surface and marks its frame " ● REC " | done (2026-10-06) |
 | [u016](../issues-done/u016-clock-console-faces.done) | `clock --line`, `dzen-clock --line`: console programs whose line is written again with `\r`; `REQUEST_LINE` and `mind::process::console_run` | done (2026-10-06) |
 | [170-APP-0001](../issues-done/170-APP-0001-escrow-in-caps.done) | `caps` and `top` name the escrow capability kind (issue 170): `escrow ----  of control` | done (2026-10-06) |
+| [000-APP-0004](../issues-done/000-APP-0004-pinmap-check-whole-line.done) | The `pinmap` check waits for the whole `[PINMAP] READY` line (the storage track's request) | done (2026-10-06) |
 | [000-APP-0003](../issues-done/000-APP-0003-svc-restart-loader-race.done) | `svc restart loader` could lose its own start: svc first makes one call to the loader, which then has answered the shell | done (2026-10-06) |
 | [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) | `sysinfo.wit` 4.0: tasks and endpoints page by page; `sysmon`, `top`, the console's `ps`, `logd` see every task (171 step 2) | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
