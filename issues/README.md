@@ -30,9 +30,8 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers).
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively).
 
-Requests from other tracks that wait for the porting track's numbers: [porting-track-reports.md](porting-track-reports.md) (Apple Silicon Macs natively).
 
 ## Finished tasks (`issues-done/`)
 
