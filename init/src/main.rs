@@ -20,18 +20,20 @@ const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
 const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
-    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BAR and MSI-X vector (or IRQ); 12 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 256 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
+    "xHCI registers; 256 KiB DMA", "VirtIO block BAR; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; COM1"];
+    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const APP_ENDPOINTS: usize = 4; // endpoints each application may create (loader passes them on)
 const AHCI_DMA_BYTES: usize = 128 * 1024; // commands, FIS and a 64 KiB data buffer
+const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 256 * 1024; // rings, contexts, scratchpad and a 64 KiB data buffer
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
-const INPUT_DMA_BYTES: usize = 12 * 1024; // the event queue (two pages), then up to 64 events of 8 bytes
+const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
+const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
@@ -50,6 +52,10 @@ impl Minted {
         Ok(slot)
     }
     fn ports(&mut self, base: usize, count: usize) -> Result<usize> { self.mint(PLATFORM_PORTS, base, count) }
+    // The real-time clock: CMOS ports (LEGACY) on x86, the board's PL031 on aarch64.
+    fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_RTC, 0) } else { self.ports(0x70, 2) } }
+    // The platform's serial line: COM1 (LEGACY) on x86, the board's UART on aarch64.
+    fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_UART, 0) } else { self.ports(0x3F8, 8) } }
     fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
 }
 impl Drop for Minted { fn drop(&mut self) { for &slot in &self.slots[..self.count] { let _ = ipc::drop_cap(slot); } } }
@@ -142,24 +148,29 @@ impl Init {
         let mut flags = SPAWN_SERVICE;
         match BOOT_SERVICES[image] {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
-            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.ports(0x70, 2)?, 0); }
+            "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.clock()?, 0); }
             "ps2_kbd" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "ps2_kbd")?, ALL); // requests from the shell's keyboard client (151)
                 grants.add(SLOT_DEV0, minted.ports(0x60, 1)?, 0); grants.add(SLOT_DEV1, minted.ports(0x64, 1)?, 0);
                 grants.add(SLOT_IRQ, minted.mint(PLATFORM_IRQ, 1, 0)?, 0); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
                 grants.add(SLOT_MEM, minted.mint(PLATFORM_IRQ, 12, 0)?, 0); // the mouse on the auxiliary port (issue 156)
             }
+            // VirtIO input devices (issues 161, 202): the first two (a tablet, a keyboard), each its MMIO BAR and MSI-X
+            // vector or line; the input privilege; one DMA region the driver halves.
             "virtio_input" => {
-                // The first VirtIO input device (vendor 1AF4, modern-only 1052): QEMU's tablet gives the host's pointer
-                // as a position (issue 161). Its memory BAR, an MSI-X vector (else the legacy line), a small DMA region
-                // for the event queue, and the input privilege, as the PS/2 driver has.
-                let device = platform::find_device_id(0, 0, 0x1052_1AF4, 0)?; self.devices[index] = Some(device);
-                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
-                let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
-                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
-                grants.add(SLOT_IRQ, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
-                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, INPUT_DMA_BYTES)?, 0);
+                let mut found = 0;
+                for (nth, (bar_slot, irq_slot)) in [(SLOT_DEV0, SLOT_IRQ), (SLOT_DEV1, SLOT_INPUT_IRQ1)].into_iter().enumerate() {
+                    let Ok(device) = platform::find_device_id(0, 0, 0x1052_1AF4, nth) else { break };
+                    if nth == 0 { self.devices[index] = Some(device); }
+                    let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                    let Some(bar) = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()) else { continue };
+                    grants.add(bar_slot, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                    grants.add(irq_slot, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                    found += 1;
+                }
+                if found == 0 { return Err(Error::NotFound); }
                 grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, INPUT_DMA_BYTES)?, 0);
             }
             "compositor" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "compositor")?, ALL); // requests from the shell's display client (151)
@@ -181,13 +192,23 @@ impl Init {
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "usb_storage")?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
             }
+            "virtio_blk" => {
+                // The first VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001): its BAR with the
+                // modern structures and a DMA region; requests are polled, so no interrupt line.
+                let device = [0x1042_1AF4, 0x1001_1AF4].iter().find_map(|&id| platform::find_device_id(0, 0, id, 0).ok()).ok_or(Error::NotFound)?;
+                self.devices[index] = Some(device);
+                let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
+                let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
+                grants.add(SLOT_DEV0, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, VIRTIO_BLK_DMA_BYTES)?, 0);
+            }
             "ramdisk" => grants.add(SLOT_SERVICE, self.server(&mut minted, "ramdisk")?, ALL),
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
-                for driver in ["ata", "ahci", "usb_storage"] {
-                    if self.running(service_index(driver)) { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
+                for driver in ["ata", "ahci", "usb_storage", "virtio_blk"] {
+                    if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
                 self.lend(&mut grants, SLOT_VFS_RTC, "rtc")?;
@@ -262,17 +283,17 @@ impl Init {
             "logd" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "logd")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "sysmon" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "sysmon")?, ALL); grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_OBSERVE)?, 0); }
             "shell" => {
-                // Application slots plus process control, input injection (UART) and the COM1 ports.
+                // Application slots plus process control, input injection (UART) and the serial line.
                 flags |= SPAWN_SCREEN;
                 grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
                 for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
-                grants.add(SLOT_SERIAL, minted.ports(0x3F8, 8)?, 0); // LEGACY: COM1 UART
+                grants.add(SLOT_SERIAL, minted.serial()?, 0);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
-                self.lend(&mut grants, SLOT_KEYBOARD, "ps2_kbd")?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
+                self.lend(&mut grants, SLOT_KEYBOARD, if self.running(service_index("ps2_kbd")) { "ps2_kbd" } else { "virtio_input" })?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
                 grants.add(SLOT_SOCKET, self.badged(&mut minted, "netstack", mind::network::BADGE_OPERATOR)?, CLIENT); // every destination
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
@@ -429,12 +450,14 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+fn main(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS] };
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
     for index in order {
+        // An image the bootloader did not find (a service of the other architecture) is not started.
+        if info.programs[unit_image(index).0].len == 0 { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
         match init.start(index) {
             // From now on init's own lines (and those printed so far) go to the system log too.
             Ok(_) if unit_name(index) == "logd" => {
@@ -446,7 +469,7 @@ fn main(_info: &'static BootInfo) {
             Err(error) => mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error),
         }
     }
-    legacy::report();
+    if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Process control, to stop services and applications on request (init is their lifecycle owner).
     if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.

@@ -1,0 +1,41 @@
+# 201 — aarch64 on QEMU `virt`: boot to init — done
+
+**Type:** kernel + bootloader · **Owner:** porting track · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — (200 done) · **Roadmap:** track H · **Constitution:** MC-1.x (isolation on the new platform), MC-12.1
+
+## Problem
+
+MIND Core runs only on x86-64.
+
+## Plan
+
+- **Bootloader:** `aarch64-unknown-uefi` with the same `uefi` crate. It loads the kernel and the boot images, takes the GOP framebuffer (ramfb or virtio-gpu under EDK2) and the ACPI RSDP or device tree, and exits boot services.
+- **Kernel** (`arch/aarch64`, target `aarch64-unknown-none-softfloat` like the soft-float x86 kernel):
+  - EL1 exception vectors; the ARMv8 MMU (4 KiB granule, 4 levels, PAN/PXN for user pages, NX like on x86); context switch;
+  - `svc` system calls with the same mailbox ABI;
+  - the generic timer for ticks and the monotonic clock;
+  - GICv3 for interrupts, routed as the existing IRQ capabilities;
+  - the PL011 UART for the kernel's boot and panic lines.
+- **libmind:** `svc` stub, `CNTVCT_EL0` as the cycle counter, `RNDR` when present (else no entropy: TLS fails closed as on x86 without RDRAND).
+- **Programs:** built for the aarch64 target with their unchanged sources. ELF loader and relocations for `R_AARCH64_*`.
+
+## Acceptance criteria
+
+- `qemu-system-aarch64 -machine virt -cpu max` with AAVMF/EDK2 boots to `[INIT] READY` on the PL011 console.
+- init starts the services that need no devices (`logd`, `loader`, `sysmon`, `keystore`).
+- An application fault is contained (`isolation` cases that need no devices).
+
+## Related
+
+[200](200-architecture-layer.done), [202](202-aarch64-devices.done), [203](203-aarch64-smp-and-power.done).
+
+## Resolution
+
+- **Generic kernel, made architecture-neutral first:** the architecture layer decodes each entry into an event (stop, kernel fault, tick, device line, wake, task fault, system call) and acknowledges it (`context::event`); it provides the exit stub, the first stack (`context::exit_stub`, `prepare_stack`) and the reported FP state. The page-table walk is generic (`kernel/src/paging.rs`); each architecture gives the descriptor format, the identity map and the switch (`arch/*/mmu.rs`). `cpu::code_written` keeps instruction caches coherent after program images and the exit page are written.
+- **`kernel/src/arch/aarch64`:** EL1 vectors with a per-CPU exception stack (`TPIDR_EL1`) for entries from tasks; the frame (x0–x30, SP_EL0, ELR, SPSR, ESR, FAR) is the task's context; `svc #0` system calls with the same mailbox ABI; the MMU (4 KiB, 4 levels, 48-bit TTBR0; kernel identity map of 4 GiB in 1 GiB blocks, EL1 only; user pages PXN, data UXN, code read-only); GICv3 (distributor, redistributor, ICC system registers; SPI 32 + n is line n); the EL1 virtual timer at 100 Hz and `CNTVCT_EL0` as the clock; the PL011 console; PSCI reset; no FP/SIMD (soft-float, `CPACR_EL1`); `RNDR` reported to tasks in `BootInfo.cpu_features`.
+- **libmind** (`arch/aarch64.rs`): `svc #0`, RNDR. Programs build unchanged as static PIEs (a `[target.aarch64-unknown-none-softfloat]` section in each `.cargo/config.toml`); the ELF loaders take `R_AARCH64_RELATIVE` and machine 183.
+- **Bootloader** (`aarch64-unknown-uefi`): PL011, `wfi`, the `x0` handoff, one CPU; boot images it does not find are left out.
+- **Kernel fix found on the way:** `TASK_WATCH` on a child that already ended (not yet reclaimed) now delivers its exit notice at once; before, a service that faulted before init watched it was never restarted. Both architectures.
+- **Console:** with no shell yet, the kernel also writes every task's log to the PL011 on aarch64 (`MIRROR_LOGS`); x86 is unchanged.
+- **Build and run:** `scripts/build_aarch64.sh [--fixtures]`, `03_run_qemu_aarch64.sh`; Rust targets added to `rust-toolchain.toml`.
+- **Tests:** `tests/aarch64_smoke.py` (CI job `aarch64`): `[INIT] READY` with `logd`, `loader`, `keystore` (device key from RNDR) and `sysmon`; `tests/aarch64_fault.rs` in place of `rtc` reads kernel memory, writes its code, executes its stack or runs an undefined instruction: each ends the task with its exception class (36, 36, 32, 0), init restarts it and quarantines it after three restarts, the others keep running. Every x86 suite passes unchanged.
+- **Profile:** [docs/profile/aarch64/](../docs/profile/aarch64/README.md).

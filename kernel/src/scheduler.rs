@@ -2,7 +2,7 @@ use crate::abi::*;
 use crate::input::{Events, Queue};
 use crate::memory::Region;
 use crate::task_state::{self, State};
-use crate::{context, cpu, elf, interrupts, paging, pci, port, serial_write_byte};
+use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,12 +18,10 @@ const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
-const MSI_FIRST: usize = 16; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
+// Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
+static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
+use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
-// Legacy I/O ranges of the platform profile that may be handed to drivers: PS/2, CMOS, primary ATA, COM1.
-// The PIC, PIT and PCI configuration ports stay with the kernel.
-// LEGACY: ISA devices of the platform profile (docs/legacy.md).
-const LEGACY_PORTS: [(u16, u16); 6] = [(0x60, 1), (0x64, 1), (0x70, 2), (0x1F0, 8), (0x3F6, 1), (0x3F8, 8)];
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -80,6 +78,7 @@ struct Task {
     // Private memory (heap blocks and memory objects): the task's quota, what it and its live descendants hold, and
     // the task that pays above it (its spawner, or the spawner's payer once the spawner ended; MC-3.13, issue 150).
     memory_quota: usize, memory_tree: usize, payer: Option<(usize, u64)>,
+    exit_reason: usize, // why it ended (EXIT_*), for a watch that comes after the exit
 }
 // A driver bound to an interrupt line (IRQ_BIND): its endpoint, the binder, an interrupt it has not received yet, and
 // one it has not acknowledged. A shared line stays masked until every binder acknowledged (issue 159).
@@ -251,7 +250,7 @@ impl Scheduler {
 
     // Common exit path (exit, kill, exception): wakes clients waiting for a reply from the task.
     fn terminate(&mut self, slot: usize, notify: bool, reason: usize) {
-        let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None;
+        let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None; task.exit_reason = reason;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
         if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
@@ -411,10 +410,15 @@ impl Scheduler {
         match kind {
             PLATFORM_PORTS => {
                 let end = a.checked_add(b).ok_or(ERR_INVALID)?;
-                if b == 0 || !LEGACY_PORTS.iter().any(|&(base, count)| a >= base as usize && end <= base as usize + count as usize) { return Err(ERR_RIGHTS); }
+                if b == 0 || !platform::PORTS.iter().any(|&(base, count)| a >= base as usize && end <= base as usize + count as usize) { return Err(ERR_RIGHTS); }
                 Ok(Capability::IoPorts(a as u16, b as u16))
             }
-            PLATFORM_IRQ if (1..16).contains(&a) && a != 2 => Ok(Capability::Interrupt(a as u8)),
+            PLATFORM_IRQ if platform::irq(a) => Ok(Capability::Interrupt(a as u8)),
+            PLATFORM_MMIO => {
+                let (base, bytes) = platform::mmio(a).ok_or(ERR_NOT_FOUND)?;
+                if base == platform::console() { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
+                Ok(Capability::Mmio(base, bytes))
+            }
             PLATFORM_DEVICE_BAR => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
@@ -434,7 +438,7 @@ impl Scheduler {
                     .any(|r| !matches!(r.kind, 11 | 12) && (r.start as usize) < at + 0x20_0000 && at < r.start as usize + r.pages as usize * 4096);
                 if ram { return Err(ERR_RIGHTS); }
                 unsafe { paging::uncached(at); }
-                unsafe { pci::msix(&device, entry, cpu::apic_id(0), 0x40 + index as u8) }.ok_or(ERR_NOT_FOUND)?;
+                unsafe { pci::msix(&device, entry, index) }.ok_or(ERR_NOT_FOUND)?;
                 self.msi[index] = Some((a, entry));
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
@@ -463,18 +467,18 @@ impl Scheduler {
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if has_screen { Some(Region::task(frame_bytes(&self.boot), 4096)?) } else { None };
-        let mut info = self.boot; info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES]; info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); // which images exist, not where info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
-        let exit = Region::new(4096, 4096)?; let code = unsafe { core::slice::from_raw_parts_mut(exit.ptr(), 21) }; code[0..2].copy_from_slice(&[0x48, 0xb8]); code[2..10].copy_from_slice(&(paging::USER_MAILBOX as u64).to_le_bytes()); code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); let user_sp = paging::USER_STACK + STACK_SIZE - 8; unsafe { ((stack.ptr() as usize + STACK_SIZE - 8) as *mut usize).write(paging::USER_EXIT); }
+        let exit = Region::new(4096, 4096)?; let stub = context::exit_stub(paging::USER_MAILBOX as u64); unsafe { core::ptr::copy_nonoverlapping(stub.as_ptr(), exit.ptr(), stub.len()); } cpu::code_written(); let user_sp = unsafe { context::prepare_stack(stack.ptr() as usize, STACK_SIZE) };
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
         let context = Region::new(context::SIZE, 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0 });
         self.next_pid = next_pid; Ok(pid)
     }
 
@@ -808,6 +812,7 @@ impl Scheduler {
                 Ok(used)
             }
             SYSCALL_HALT => cpu::halt_all(),
+            SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => crate::acpi::power_off(),
             SYSCALL_REBOOT => crate::acpi::reboot(),
             _ => Err(ERR_INVALID),
         }
@@ -830,6 +835,7 @@ impl Scheduler {
                     for i in 0..length {
                         let physical = task.space.readable(request.arg1 + i).unwrap(); let byte = core::ptr::read_volatile(physical as *const u8);
                         task.log.push(byte); task.console.push(byte);
+                        if MIRROR_LOGS.load(Ordering::Relaxed) { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); }
                     }
                     Ok(length)
                 }
@@ -939,6 +945,15 @@ impl Scheduler {
                     }
                 }
             },
+            // A child that already ended (and is not reclaimed yet) gets its exit notice at once: a service that dies
+            // before its owner watches it is not lost (issue 201).
+            SYSCALL_TASK_WATCH if (1..SLOTS).any(|i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited && t.parent == Some((slot, task.pid)))) => {
+                let target = (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited)).unwrap();
+                match self.cap(slot, request.arg2) {
+                    Some(Capability::Endpoint(ep, rights, _)) if rights & CAP_READ != 0 => { let reason = self.tasks[target].as_ref().unwrap().exit_reason; self.post_exit(ep, request.arg1 as u64, reason); Ok(0) }
+                    _ => Err(ERR_RIGHTS),
+                }
+            }
             SYSCALL_TASK_WATCH => match (self.find(request.arg1 as u64), self.cap(slot, request.arg2)) {
                 // Only the lifecycle owner (the spawner) chooses where the exit notice goes.
                 (Some(target), Some(Capability::Endpoint(ep, rights, _))) if rights & CAP_READ != 0 && self.tasks[target].as_ref().unwrap().parent == Some((slot, task.pid)) => { self.tasks[target].as_mut().unwrap().watch = Some(ep); Ok(0) }
@@ -1127,35 +1142,34 @@ pub fn spawn_init() -> Result<u64, &'static str> {
 
 pub extern "C" fn interrupt(sp: usize) -> usize {
     unsafe {
-        let registers = context::registers(sp); let vector = registers[15]; let cpu = cpu::id();
-        if vector == 0x31 { cpu::halt_here(); }
-        if vector < 32 && registers[18] & 3 == 0 { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(vector); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(registers[17]); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(registers[16]); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
-        let irq = if (33..48).contains(&vector) { Some(vector as usize - 32) } else if (0x40..0x50).contains(&vector) { Some(MSI_FIRST + vector as usize - 0x40) } else { None };
-        if vector == 32 { interrupts::advance(); interrupts::pic_eoi(0); cpu::eoi(); cpu::tick_others(); }
-        else if let Some(irq) = irq.filter(|&irq| irq < MSI_FIRST) { interrupts::set_irq_masked(irq as u8, true); interrupts::pic_eoi(irq as u8); cpu::eoi(); } // the driver will unmask the line
-        else if irq.is_some() { cpu::eoi(); } // MSI-X: an edge message, nothing to mask
-        else if vector == 48 || vector == 50 { cpu::eoi(); }
-
+        let cpu = cpu::id();
+        let event = context::event(sp);
+        match event {
+            Event::Stop => cpu::halt_here(),
+            Event::KernelFault { code, pc, error } => { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(code); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(pc); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(error); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
+            _ => {}
+        }
         locked(|| {
             let s = scheduler(); let slot = s.current[cpu]; s.accounting.interrupts[cpu] += 1;
-            let next = (|| {
-            if let Some(irq) = irq { s.raise_irq(irq); return s.select(sp, cpu); }
-            if vector == 32 || vector == 48 {
-                cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
-                if s.expire(now) { s.wake_idle(cpu); }
-                if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
-                return s.select(sp, cpu);
-            }
-            if vector == 50 { return if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp }; }
-            if vector < 32 {
-                let address = if vector == 14 { cpu::fault_address() } else { 0 };
-                let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
-                s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector, error: registers[16], rip: registers[17], address });
-                s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (vector as usize) << 8); return s.select(sp, cpu);
-            }
-            if slot == 0 { return s.select(sp, cpu); }
-            if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
-            s.syscall(slot, sp, cpu)
+            let next = (|| match event {
+                Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
+                Event::Tick => {
+                    cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
+                    if s.expire(now) { s.wake_idle(cpu); }
+                    if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
+                    s.select(sp, cpu)
+                }
+                Event::Wake => if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp },
+                Event::Fault { code, error, pc, address } => {
+                    let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
+                    s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector: code, error, rip: pc, address });
+                    s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (code as usize) << 8); s.select(sp, cpu)
+                }
+                _ => {
+                    if slot == 0 { return s.select(sp, cpu); }
+                    if s.tasks[slot].as_ref().unwrap().state == State::Exited { return s.select(sp, cpu); }
+                    s.syscall(slot, sp, cpu)
+                }
             })();
             s.wake_idle(cpu);
             next

@@ -6,6 +6,7 @@ use core::arch::asm;
 #[path = "../common/abi.rs"]
 mod abi;
 
+#[cfg(target_arch = "x86_64")]
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "sysv64" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailbox) -> ! {
@@ -65,6 +66,37 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailb
             "jmp 2b",
             "3:",
             "ud2",
+            options(noreturn)
+        );
+    }
+}
+
+// aarch64 (issue 203): no FP/SIMD state yet (soft-float), so the values kept across preemptions are in callee-saved
+// general registers; another task that ran in between would have changed them.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[link_section = ".text._start"]
+pub extern "C" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailbox) -> ! {
+    unsafe {
+        let message: &[u8] = b"BUSY FIXTURE: NO WAIT/YIELD CALLS\r\n";
+        (*mailbox).syscall_num = abi::SYSCALL_LOG;
+        (*mailbox).arg1 = message.as_ptr() as usize;
+        (*mailbox).arg2 = message.len();
+        asm!("svc #0");
+        asm!(
+            "mrs x19, cntvct_el0",
+            "mvn x20, x19",
+            "mov x21, x19",
+            "mov x22, x20",
+            "2:",
+            "cmp x19, x21",
+            "b.ne 3f",
+            "cmp x20, x22",
+            "b.ne 3f",
+            "add x23, x23, #1",
+            "b 2b",
+            "3:",
+            "udf #0",
             options(noreturn)
         );
     }

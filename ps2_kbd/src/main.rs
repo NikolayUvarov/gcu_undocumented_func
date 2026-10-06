@@ -10,11 +10,9 @@ mod mouse;
 
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1, SLOT_IRQ};
 use mind::dev::{input_key, Irq, Ports};
-use mind::idl::codec::Text;
-use mind::idl::keyboard::{self, Request, State, SwitchKey};
-use mind::idl::wire;
+use mind::idl::{keyboard, wire};
 use mind::ipc::Endpoint;
-use mind::keys::{Event, Layout, Ps2, Switch};
+use mind::keys::Ps2;
 
 const RECEIVED_CAP: usize = 9;
 const SLOT_IRQ_AUX: usize = 5; // IRQ 12 of the auxiliary port (the mouse)
@@ -29,48 +27,8 @@ fn drain(data: &Ports, status: &Ports, decoder: &mut Ps2, mouse: &mut Option<mou
             if let Some(event) = mouse.as_mut().and_then(|m| m.feed(scancode)) { let _ = input_key(event, event, false); }
             continue;
         }
-        match decoder.feed(scancode) {
-            Some(Event::Key(event)) => { let _ = input_key(event, event, false); }
-            Some(Event::Attention) => { let _ = input_key(0, 0, true); }
-            Some(Event::Layout(layout)) => {
-                mind::println!("[KBD] LAYOUT {}", name(layout));
-                // The switch took a modifier's release: programs still learn which modifiers are held.
-                if let Event::Key(event) = decoder.modifiers() { let _ = input_key(event, event, false); }
-            }
-            None => {}
-        }
+        if let Some(event) = decoder.feed(scancode) { mind::keyboard::deliver("KBD", decoder, event); }
     }
-}
-
-fn name(layout: Layout) -> &'static str { if layout == Layout::Ru { "RU" } else { "EN" } }
-
-fn state(decoder: &Ps2) -> State {
-    let layout = if decoder.layout() == Layout::Ru { keyboard::Layout::Ru } else { keyboard::Layout::Us };
-    let switch_key = match decoder.switch() {
-        Switch::CtrlOrAltShift => SwitchKey::CtrlOrAltShift, Switch::CtrlShift => SwitchKey::CtrlShift, Switch::AltShift => SwitchKey::AltShift,
-        Switch::CapsLock => SwitchKey::CapsLock, Switch::None => SwitchKey::None,
-    };
-    State { layout, switch_key }
-}
-
-fn serve(decoder: &mut Ps2, request: Request, call: wire::Call) {
-    let _ = match request {
-        Request::State => keyboard::reply_state(call, &state(decoder)),
-        Request::SetLayout { layout } => {
-            decoder.set_layout(if layout == keyboard::Layout::Ru { Layout::Ru } else { Layout::Us });
-            mind::println!("[KBD] LAYOUT {} (SET)", name(decoder.layout()));
-            keyboard::reply_set_layout(call, Ok(()))
-        }
-        Request::SetSwitch { key } => {
-            decoder.set_switch(match key {
-                SwitchKey::CtrlOrAltShift => Switch::CtrlOrAltShift, SwitchKey::CtrlShift => Switch::CtrlShift, SwitchKey::AltShift => Switch::AltShift,
-                SwitchKey::CapsLock => Switch::CapsLock, SwitchKey::None => Switch::None,
-            });
-            mind::println!("[KBD] SWITCH {:?}", decoder.switch());
-            keyboard::reply_set_switch(call, Ok(()))
-        }
-        Request::Layouts => keyboard::reply_layouts(call, &[Text::new("us").unwrap_or_default(), Text::new("ru").unwrap_or_default()]),
-    };
 }
 
 mind::entry!(main);
@@ -99,7 +57,7 @@ fn main(_info: &'static BootInfo) {
             continue;
         }
         match keyboard::decode(&request, RECEIVED_CAP) {
-            Ok((request, call)) => serve(&mut decoder, request, call),
+            Ok((request, call)) => mind::keyboard::serve("KBD", &mut decoder, request, call),
             Err(reason) => if request.is_call { let _ = wire::reject(reason); },
         }
     }

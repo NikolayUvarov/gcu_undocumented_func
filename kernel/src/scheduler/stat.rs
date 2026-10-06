@@ -100,7 +100,7 @@ impl Scheduler {
                 let a = &self.accounting;
                 out.push(StatCpu { apic_id: cpu::apic_id(index), online: cpu::ONLINE[index].load(Ordering::Acquire) as u32, ticks: cpu::TICKS[index].load(Ordering::Relaxed),
                     busy_ns: a.busy_ns[index], idle_ns: a.idle_ns[index], interrupts: a.interrupts[index], switches: a.switches[index], current_pid: pid_of(self.current[index]),
-                    xsave: if crate::context::XSAVE.load(Ordering::Acquire) { crate::paging::XCR0 } else { 0 } });
+                    xsave: crate::context::saved_state() });
             },
             STAT_MEMORY => {
                 let (used, free) = { let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free()) };

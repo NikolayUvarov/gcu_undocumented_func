@@ -160,3 +160,52 @@ pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
     *((saved + 24) as *mut u32) = 0x1f80;
     *((saved + AREA) as *mut usize) = saved + AREA + 16;
 }
+
+// What an entry into the kernel was, decoded from the saved state (the generic kernel knows no vector numbers).
+pub enum Event {
+    Stop, // another CPU stops this one
+    KernelFault { code: u64, pc: u64, error: u64 },
+    Tick, // the timer, on the BSP or forwarded to this CPU
+    Irq(usize), // a device line 1-15 or an MSI-X vector (MSI_FIRST + n), already acknowledged at the controller
+    Wake, // a CPU woke this one to reschedule
+    Fault { code: u64, error: u64, pc: u64, address: u64 }, // the task faulted; `code` is the exception vector
+    Syscall,
+}
+pub const MSI_FIRST: usize = 16;
+
+// Decodes the entry at `sp` and acknowledges it at the interrupt controllers (a device line stays masked until its
+// driver acknowledges it).
+pub unsafe fn event(sp: usize) -> Event {
+    use super::{cpu, interrupts};
+    let r = registers(sp); let vector = r[15];
+    match vector {
+        0x31 => Event::Stop,
+        0..=31 if r[18] & 3 == 0 => Event::KernelFault { code: vector, pc: r[17], error: r[16] },
+        0..=31 => Event::Fault { code: vector, error: r[16], pc: r[17], address: if vector == 14 { cpu::fault_address() } else { 0 } },
+        32 => { interrupts::advance(); interrupts::pic_eoi(0); cpu::eoi(); cpu::tick_others(); Event::Tick }
+        33..=47 => { let line = vector as u8 - 32; interrupts::set_irq_masked(line, true); interrupts::pic_eoi(line); cpu::eoi(); Event::Irq(line as usize) }
+        0x40..=0x4F => { cpu::eoi(); Event::Irq(MSI_FIRST + vector as usize - 0x40) }
+        48 => { cpu::eoi(); Event::Tick }
+        50 => { cpu::eoi(); Event::Wake }
+        _ => Event::Syscall,
+    }
+}
+
+// The code a task returns into when its entry function returns: EXIT through the mailbox at `mailbox`.
+pub fn exit_stub(mailbox: u64) -> [u8; 21] {
+    let mut code = [0u8; 21];
+    code[0..2].copy_from_slice(&[0x48, 0xb8]); // mov rax, mailbox
+    code[2..10].copy_from_slice(&mailbox.to_le_bytes());
+    code[10..21].copy_from_slice(&[0x48, 0xc7, 0x00, 7, 0, 0, 0, 0xcd, 0x80, 0x0f, 0x0b]); // mov qword [rax], 7; int 0x80; ud2
+    code
+}
+
+// The task's first stack: the return address of its entry function is the exit stub. `stack` is the kernel's view of
+// the stack memory; returns the task's stack pointer.
+pub unsafe fn prepare_stack(stack: usize, size: usize) -> usize {
+    ((stack + size - 8) as *mut usize).write(crate::paging::USER_EXIT);
+    crate::paging::USER_STACK + size - 8
+}
+
+// The state components saved per task with XSAVE (XCR0), 0 with FXSAVE (STAT_CPUS).
+pub fn saved_state() -> u64 { if XSAVE.load(core::sync::atomic::Ordering::Acquire) { crate::mmu::XCR0 } else { 0 } }

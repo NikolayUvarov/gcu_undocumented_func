@@ -5,3 +5,14 @@ rustflags = [
     "-Z", "relax-elf-relocations=yes",
     "-C", "link-arg=-Tlinker.ld"
 ]
+
+# aarch64 (issue 201): a static PIE like on x86, relocated by the bootloader.
+[target.aarch64-unknown-none-softfloat]
+rustflags = [
+    "-C", "relocation-model=pic",
+    "-C", "link-arg=-Tlinker.ld",
+    "-C", "link-arg=-pie",
+    "-C", "link-arg=-zmax-page-size=4096",
+    "-C", "link-arg=--no-dynamic-linker",
+    "-C", "link-arg=-znotext"
+]

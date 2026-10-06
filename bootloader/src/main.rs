@@ -6,6 +6,7 @@ use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 use uefi::proto::media::fs::SimpleFileSystem;
+#[cfg(target_arch = "x86_64")]
 use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 #[path = "../../common/abi.rs"] mod abi;
@@ -15,14 +16,22 @@ const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel
 
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
 
-// Boot errors go to COM1 and the UEFI console, then the machine stops: never a silent hang.
+// Boot errors go to the serial line (COM1, or the PL011 of QEMU's aarch64 `virt`) and the UEFI console, then the
+// machine stops: never a silent hang.
 struct Serial;
 impl Write for Serial {
     fn write_str(&mut self, text: &str) -> core::fmt::Result {
         for byte in text.bytes() {
             unsafe {
-                for _ in 0..100_000 { let status: u8; core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3FDu16); if status & 0x20 != 0 { break; } }
-                core::arch::asm!("out dx, al", in("al") byte, in("dx") 0x3F8u16);
+                #[cfg(target_arch = "x86_64")] {
+                    for _ in 0..100_000 { let status: u8; core::arch::asm!("in al, dx", out("al") status, in("dx") 0x3FDu16); if status & 0x20 != 0 { break; } }
+                    core::arch::asm!("out dx, al", in("al") byte, in("dx") 0x3F8u16);
+                }
+                #[cfg(target_arch = "aarch64")] {
+                    const PL011: usize = 0x0900_0000;
+                    for _ in 0..100_000 { if core::ptr::read_volatile((PL011 + 0x18) as *const u32) & 0x20 == 0 { break; } }
+                    core::ptr::write_volatile(PL011 as *mut u32, byte as u32);
+                }
             }
         }
         Ok(())
@@ -50,7 +59,12 @@ fn select_display(services: &BootServices) -> Result<(*mut u32, ModeInfo), &'sta
     Ok((fb_ptr, gop.current_mode_info()))
 }
 
-fn halt() -> ! { loop { unsafe { core::arch::asm!("cli; hlt"); } } }
+fn halt() -> ! {
+    #[cfg(target_arch = "x86_64")] loop { unsafe { core::arch::asm!("cli; hlt"); } }
+    #[cfg(target_arch = "aarch64")] loop { unsafe { core::arch::asm!("msr daifset, #0xf", "wfi"); } }
+}
+#[cfg(target_arch = "x86_64")] const MACHINE: u16 = 0x3E;
+#[cfg(target_arch = "aarch64")] const MACHINE: u16 = 0xB7;
 fn fail(system_table: &mut SystemTable<Boot>, file: &str, reason: &str) -> ! {
     let _ = writeln!(Serial, "\r\nBOOT ERROR: {}: {}\r", file, reason);
     let _ = writeln!(system_table.stdout(), "BOOT ERROR: {}: {}", file, reason);
@@ -66,7 +80,7 @@ fn check_elf(data: &[u8]) -> Result<(&Elf64_Ehdr, &[Elf64_Phdr], u64, u64), &'st
     if data.len() < core::mem::size_of::<Elf64_Ehdr>() { return Err("file too short for an ELF header"); }
     let ehdr = unsafe { &*(data.as_ptr() as *const Elf64_Ehdr) };
     if ehdr.e_ident[0..4] != [0x7f, b'E', b'L', b'F'] { return Err("bad ELF magic"); }
-    if ehdr.e_ident[4] != 2 || ehdr.e_ident[5] != 1 || ehdr.e_machine != 0x3E || !matches!(ehdr.e_type, 2 | 3) { return Err("not a little-endian x86-64 executable"); }
+    if ehdr.e_ident[4] != 2 || ehdr.e_ident[5] != 1 || ehdr.e_machine != MACHINE || !matches!(ehdr.e_type, 2 | 3) { return Err("not a little-endian executable for this processor"); }
     if ehdr.e_phentsize as usize != core::mem::size_of::<Elf64_Phdr>() || ehdr.e_phoff % 8 != 0 { return Err("bad program header table"); }
     let table_end = (ehdr.e_phnum as u64).checked_mul(ehdr.e_phentsize as u64).and_then(|size| size.checked_add(ehdr.e_phoff));
     if table_end.is_none_or(|end| end > data.len() as u64) { return Err("program headers outside the file"); }
@@ -99,6 +113,25 @@ fn load_elf(boot_services: &BootServices, file_data: &[u8]) -> Result<u64, &'sta
     Ok(base_addr + ehdr.e_entry - min_vaddr)
 }
 
+// The x86 AP start page below 1 MiB and the APIC IDs of the enabled CPUs (BSP first, from MP services).
+#[cfg(target_arch = "x86_64")]
+fn processors(boot_services: &BootServices) -> (usize, [u32; 8], usize) {
+    let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize;
+    let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24;
+    if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() {
+        let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap();
+        for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } }
+    }
+    (ap_trampoline, apic_ids, cpu_count)
+}
+// aarch64: one CPU so far (the others start through PSCI, issue 203); its MPIDR affinity as the ID.
+#[cfg(target_arch = "aarch64")]
+fn processors(_boot_services: &BootServices) -> (usize, [u32; 8], usize) {
+    let mpidr: u64; unsafe { core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr); }
+    let mut ids = [0u32; 8]; ids[0] = (mpidr & 0xFF_FFFF) as u32;
+    (0, ids, 1)
+}
+
 // Reads a whole file of the boot volume into `buffer`.
 fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buffer: &'a mut [u8]) -> Result<&'a [u8], &'static str> {
     let mut name_buf = [0u16; 32];
@@ -124,7 +157,14 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             let kernel_entry = load_elf(boot_services, kernel).map_err(|e| ("kernel.elf", e))?;
             // Only system services are loaded into memory; loader reads applications from disk later.
             let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES];
-            for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) { *image = keep_program(boot_services, read_file(&mut root, name, file_buf).map_err(|e| (name, e))?); }
+            for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) {
+                match read_file(&mut root, name, file_buf) {
+                    Ok(data) => *image = keep_program(boot_services, data),
+                    // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
+                    Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
+                    Err(e) => return Err((name, e)),
+                }
+            }
             Ok((kernel_entry, programs))
         })()
     };
@@ -140,9 +180,9 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let acpi_rsdp = system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI2_GUID).or_else(|| system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI_GUID)).map_or(0, |e| e.address as u64);
     let (boot_info, kernel_stack) = {
         let boot_services = system_table.boot_services();
-        let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let ap_trampoline = boot_services.allocate_pages(AllocateType::MaxAddress(0xFFFFF), MemoryType::LOADER_DATA, 1).expect("AP bootstrap") as usize; let mut apic_ids = [0u32; 8]; let mut cpu_count = 1; apic_ids[0] = core::arch::x86_64::__cpuid(1).ebx >> 24; if let Ok(handle) = boot_services.get_handle_for_protocol::<MpServices>() { let mp = boot_services.open_protocol_exclusive::<MpServices>(handle).unwrap(); let bsp = mp.who_am_i().unwrap(); let count = mp.get_number_of_processors().unwrap(); for i in 0..count.total { let processor = mp.get_processor_info(i).unwrap(); if i != bsp && processor.is_enabled() && cpu_count < apic_ids.len() { apic_ids[cpu_count] = processor.processor_id as u32; cpu_count += 1; } } }
+        let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0 }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
     };
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.
@@ -152,7 +192,11 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             (*info).memory_map.cast_mut().add(index).write(StatPhys { kind: entry.ty.0, index: index as u32, start: entry.phys_start, pages: entry.page_count });
             (*info).memory_map_len = index + 1;
         }
-    } unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe { core::arch::asm!("cli", "mov rsp, rcx", "xor ebp, ebp", "call rax", in("rax") kernel_entry, in("rcx") kernel_stack, in("rdi") boot_info, options(noreturn)); }
+    #[cfg(target_arch = "aarch64")]
+    unsafe { core::arch::asm!("msr daifset, #0xf", "mov sp, x1", "mov x29, xzr", "mov x30, xzr", "br x2", in("x0") boot_info, in("x1") kernel_stack, in("x2") kernel_entry, options(noreturn)); }
 }
 #[panic_handler] fn panic(info: &PanicInfo) -> ! { let _ = writeln!(Serial, "\r\nBOOT PANIC: {}\r", info); halt() }
 #[no_mangle] pub extern "C" fn wcslen(mut s: *const u16) -> usize { let mut len = 0; unsafe { while *s != 0 { len += 1; s = s.add(1); } } len }

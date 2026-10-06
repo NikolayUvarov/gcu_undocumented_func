@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 22;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 23;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_storage.elf", "virtio_blk.elf", "ramdisk.elf", "vfs_server.elf", "loader.elf", "audio_gw.elf", "tts.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
@@ -31,7 +31,9 @@ const fn channel(value: u32, mask: u32) -> u32 {
     let scaled = if width >= 8 { value << (width - 8) } else { value >> (8 - width) };
     (scaled << shift) & mask
 }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, }
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, }
+// BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
+pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -177,8 +179,8 @@ pub const SLOT_DEV1: usize = 3;
 pub const SLOT_IRQ: usize = 4;
 pub const SLOT_MEM: usize = 5;
 pub const SLOT_PRIV: usize = 6;
-// For vfs_server, slots 2..5 are block driver endpoints (ata, ahci, usb_storage), if started; then the RAM disk and an
-// rtc client (calendar time for directory entries).
+// For vfs_server, slots 2..5 are block driver endpoints (the first three of ata, ahci, usb_storage, virtio_blk that
+// run); then the RAM disk and an rtc client (calendar time for directory entries).
 pub const SLOT_BLOCK_FIRST: usize = 2;
 pub const BLOCK_DEVICES: usize = 3;
 pub const SLOT_RAMDISK: usize = 5;
@@ -233,6 +235,7 @@ pub const HANDLE_GENERATION_SHIFT: usize = 8;
 pub const BLOCK_KIND_ATA: usize = 1;
 pub const BLOCK_KIND_AHCI: usize = 2;
 pub const BLOCK_KIND_USB: usize = 3;
+pub const BLOCK_KIND_VIRTIO: usize = 5; // after mind::block::KIND_RAM (4)
 
 // Message: msg[0]=handle of the capability to transfer, msg[1]=rights mask | CAP_TRANSFER_MOVE, msg[2..4]=data.
 // The mask narrows endpoint rights only; other capabilities keep their rights (narrow memory with CAP_MINT first).
@@ -282,13 +285,16 @@ pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of 
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.
 pub const PLATFORM_PORTS: usize = 2; // base, count: only legacy ranges from the platform profile
-pub const PLATFORM_IRQ: usize = 3; // line 1..15 except the cascade (2)
+pub const PLATFORM_IRQ: usize = 3; // line of a platform device: ISA 1..15 except the cascade (2); aarch64 virt: 1 UART, 2 RTC
 pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port range or MMIO
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
+pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
+pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
+pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
 // vendor | device << 16 to match as well (0: any); result = device index.
 
@@ -381,8 +387,11 @@ pub const SYSCALL_SCHED_SET: usize = 52;
 // With the platform privilege as arg1, msg[0] = device index: any device, without enabling it (init's inventory).
 pub const SYSCALL_DEVICE_CONFIG: usize = 54;
 // REBOOT (process control): stops all CPUs and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
-// else the 8042 controller, else a triple fault. No arguments; it does not return.
+// else the 8042 controller, else a triple fault; on aarch64 PSCI SYSTEM_RESET. arg1 = REBOOT_POWER_OFF turns the
+// machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
+// return when it works.
 pub const SYSCALL_REBOOT: usize = 55;
+pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
 pub const BAND_KEEP: usize = 0xFF;

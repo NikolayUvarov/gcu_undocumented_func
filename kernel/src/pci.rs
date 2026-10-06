@@ -1,15 +1,6 @@
-use super::port::{inl, outl};
-
-// Minimal PCI configuration access (mechanism #1) for handing devices to ring 3 drivers.
-// LEGACY: ports 0xCF8/0xCFC; ECAM (ACPI MCFG) replaces them (docs/legacy.md).
-unsafe fn read(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
-    outl(0xCF8, 0x8000_0000 | (bus as u32) << 16 | (device as u32) << 11 | (function as u32) << 8 | (offset as u32 & 0xFC));
-    inl(0xCFC)
-}
-unsafe fn write(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
-    outl(0xCF8, 0x8000_0000 | (bus as u32) << 16 | (device as u32) << 11 | (function as u32) << 8 | (offset as u32 & 0xFC));
-    outl(0xCFC, value);
-}
+// PCI devices for ring 3 drivers: enumeration, BARs, decoding, MSI-X. Configuration access, the legacy interrupt
+// line and the MSI address are the architecture's (arch/*/pcicfg.rs, issue 202).
+use crate::pcicfg::{read, write};
 
 #[derive(Clone, Copy, Default)]
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
@@ -59,7 +50,8 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
 pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     let mut devices = alloc::vec::Vec::new();
-    for bus in 0..=255u8 {
+    let Some(last) = crate::pcicfg::last_bus() else { return devices };
+    for bus in 0..=last {
         for device in 0..32u8 {
             if read(bus, device, 0, 0) & 0xFFFF == 0xFFFF { continue; }
             let functions = if read(bus, device, 0, 0x0C) & 0x0080_0000 != 0 { 8 } else { 1 };
@@ -67,8 +59,8 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if read(bus, device, function, 0) & 0xFFFF == 0xFFFF { continue; }
                 let class = read(bus, device, function, 0x08) >> 8;
                 let id = read(bus, device, function, 0); // vendor | device << 16
-                let irq = read(bus, device, function, 0x3C) as u8;
-                devices.push(Device { class, id, bars: bars(bus, device, function), irq: if irq < 16 { irq } else { 0 }, bus, device, function });
+                let irq = crate::pcicfg::line(bus, device, function);
+                devices.push(Device { class, id, bars: bars(bus, device, function), irq, bus, device, function });
             }
         }
     }
@@ -111,12 +103,13 @@ pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
     let table = config(device, cap + 4);
     let bar = *device.bars.get((table & 7) as usize)?;
     let at = bar.base.checked_add((table & !7) as u64 + 16 * entry as u64)?;
-    (!bar.io && bar.size != 0 && at + 16 <= 0x1_0000_0000 && at + 16 <= bar.base + bar.size).then_some(at)
+    (!bar.io && bar.size != 0 && at + 16 <= crate::mmu::IDENTITY_END && at + 16 <= bar.base + bar.size).then_some(at)
 }
 
-/// Points MSI-X table entry `entry` (mapped uncached by the caller) at `vector` on the local APIC `apic`, unmasks it
-/// and enables MSI-X, which turns the legacy line off.
-pub unsafe fn msix(device: &Device, entry: u16, apic: u32, vector: u8) -> Option<()> {
+/// Points MSI-X table entry `entry` (mapped uncached by the caller) at MSI line `index` (the arch's message), unmasks
+/// it and enables MSI-X, which turns the legacy line off. None where the platform has no MSI target.
+pub unsafe fn msix(device: &Device, entry: u16, index: usize) -> Option<()> {
+    let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
     let cap = capability(device, 0x11)?;
     let header = config(device, cap);
     let control = header >> 16;
@@ -124,7 +117,7 @@ pub unsafe fn msix(device: &Device, entry: u16, apic: u32, vector: u8) -> Option
     let at = msix_entry(device, entry)?;
     enable(device);
     let entry = at as *mut u32;
-    entry.write_volatile(0xFEE0_0000 | apic << 12); entry.add(1).write_volatile(0); entry.add(2).write_volatile(vector as u32); entry.add(3).write_volatile(0);
+    entry.write_volatile(target as u32); entry.add(1).write_volatile((target >> 32) as u32); entry.add(2).write_volatile(data); entry.add(3).write_volatile(0);
     write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control | 0x8000) & !0x4000) << 16);
     Some(())
 }

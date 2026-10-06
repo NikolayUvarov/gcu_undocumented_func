@@ -1,0 +1,35 @@
+# 202 — aarch64 devices: PCIe ECAM, VirtIO, PL011, PL031, display — done
+
+**Type:** drivers · **Owner:** porting track (VirtIO block and input with track A) · **Priority:** P2 · **Status:** done (2026-10-05) · **Blocked by:** — (201 done) · **Roadmap:** tracks H and A · **Constitution:** Appendix B.6, MC-6.3
+
+## Plan
+
+- **PCI:** configuration through ECAM, from ACPI MCFG or the device tree. Device, BAR, MSI-X capabilities as on x86; MSI-X goes through the GICv3 ITS.
+- **VirtIO over PCI, written once and used on both architectures:**
+  - `virtio_net` (exists, MMIO BARs);
+  - `virtio_blk` (new, track A), replacing ATA/AHCI on `virt`;
+  - `virtio_input`, the keyboard and the pointer, replacing PS/2;
+  - `virtio_rng`, entropy without `RNDR`.
+- **Console and clock:** the shell's console on the PL011 (in place of COM1); `rtc` on the PL031.
+- **Display:** the GOP framebuffer from 201, so the compositor works unchanged.
+- **Sound:** later (virtio-snd).
+
+## Acceptance criteria
+
+The `normal`, `shell`, `vfs`, `net` and `tls` suites pass on `qemu-system-aarch64 -machine virt` with virtio-blk, virtio-net, virtio-keyboard and ramfb.
+
+## Related
+
+[201](../issues-done/201-aarch64-boot.done), [204](204-aarch64-profile-and-ci.done), [ROADMAP](../ROADMAP.md) track A.
+
+## Resolution
+
+- **PCI:** generic in `kernel/src/pci.rs`; the architecture gives configuration access, the legacy line and the MSI message (`arch/*/pcicfg.rs`). On aarch64 the ECAM comes from the ACPI MCFG and is used when it lies below 4 GiB (`virt,highmem=off`); INTA–D are SPIs 3–6. MSI-X goes through the GICv3 ITS (`arch/aarch64/interrupts.rs`): MSI line 16 + n is LPI 8192 + n, event n of the device's requester ID; its tables come from the frame pool at the first MSI. Fixed on the way: the CPU interface's spurious check took every LPI for spurious and never ended it.
+- **Platform devices outside PCI:** `PLATFORM_MMIO` hands out only what `arch/*/platform.rs` lists (the PL011 and PL031 on `virt`), with the port ranges and lines that used to be the kernel's `LEGACY_PORTS`.
+- **VirtIO, written once for both architectures:** `virtio_blk` (new boot image, the boot disk on `virt`, requests polled); `virtio_net` unchanged (built without its legacy interface on aarch64); `virtio_input` drives up to two devices, the tablet and now a keyboard whose keys go through the PS/2 decoder, so layouts, Ctrl+Z and `keymap` work (`mind::keyboard`, shared with `ps2_kbd`).
+- **Console and clock:** `mind::dev::Uart` is a 16550 or a PL011 by the capability in the slot; init gives the shell COM1 on x86 and the PL011 on aarch64, and the kernel stops mirroring task logs once the PL011 is handed out. `rtc` reads the PL031.
+- **Display:** the GOP framebuffer from `ramfb` (800x600); the compositor, the shell's console and the applications work unchanged.
+- **Programs:** `app`'s green threads switch on aarch64 too; `scripts/build_aarch64.sh` builds every crate of `02_build.sh` but the ISA drivers. Tasks see which boot images exist, and init reports the missing ones as `NOT STARTED: NO IMAGE`.
+- **Tests:** `tests/qemu_smoke.py --arch aarch64` runs the `normal`, `shell`, `vfs`, `net` and `tls` suites on `qemu-system-aarch64 -machine virt` with virtio-blk, virtio-net, virtio-keyboard (and tablet) and ramfb; all pass, in CI job `aarch64` too. Arch-specific parts: the idle check measures QEMU's processor time (the monitor shows no WFI state), the legacy-only card and the x86 legacy report are skipped, the TLS entropy cases use `-cpu max` and a Cortex-A72 without RNDR. Every x86 suite passes.
+- **Not done here:** `virtio_rng` (entropy without RNDR), sound (virtio-snd), the ECAM above 4 GiB; QEMU gives a `-nic` card on `virt` no MSI-X, so the launcher creates it with `-device`.
+- **Profile:** [docs/profile/aarch64/](../docs/profile/aarch64/README.md) 0.2.

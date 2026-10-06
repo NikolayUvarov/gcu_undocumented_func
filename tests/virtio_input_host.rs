@@ -1,5 +1,6 @@
 //! Host tests of the VirtIO input driver's decoding (virtio_input/src/events.rs, issue 161): a tablet's reports become
-//! absolute pointer events with the position as a share of the screen, a mouse's relative ones.
+//! absolute pointer events with the position as a share of the screen, a mouse's relative ones; a keyboard's keys PS/2
+//! set 1 scan codes (issue 202).
 #![allow(dead_code)]
 #[path = "../common/abi.rs"]
 mod abi;
@@ -43,4 +44,16 @@ fn a_mouse_gives_movements() {
     // A large movement takes several events.
     let out = feed(&mut mouse, &[(EV_REL, REL_X, 600), (EV_KEY, BTN_LEFT, 1), (EV_SYN, SYN_REPORT, 0)]);
     assert_eq!(out.iter().map(|&e| pointer_fields(e)).collect::<Vec<_>>(), [(POINTER_LEFT, 255, 0, 0), (POINTER_LEFT, 255, 0, 0), (POINTER_LEFT, 90, 0, 0)]);
+}
+
+#[test]
+fn keys_become_set_1_scan_codes() {
+    assert_eq!(scancode(1), Some((false, 0x01))); // Esc
+    assert_eq!(scancode(30), Some((false, 0x1E))); // A
+    assert_eq!(scancode(88), Some((false, 0x58))); // F12
+    assert_eq!(scancode(103), Some((true, 0x48))); // Up
+    assert_eq!(scancode(111), Some((true, 0x53))); // Delete
+    assert_eq!(scancode(97), Some((true, 0x1D))); // right Ctrl
+    assert_eq!(scancode(0), None);
+    assert_eq!(scancode(BTN_LEFT), None);
 }

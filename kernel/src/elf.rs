@@ -2,6 +2,10 @@
 // writable globals, .bss, GOT pointers or application-local stacks are shared.
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+#[cfg(not(target_arch = "aarch64"))]
+const MACHINE: u16 = 62; // x86-64
+#[cfg(target_arch = "aarch64")]
+const MACHINE: u16 = 183; // AArch64
 
 fn u16_at(data: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(data[at..at + 2].try_into().unwrap())
@@ -39,7 +43,7 @@ impl<'a> Image<'a> {
         if data.len() < 64
             || &data[..7] != b"\x7fELF\x02\x01\x01"
             || u16_at(data, 16) != 3
-            || u16_at(data, 18) != 62
+            || u16_at(data, 18) != MACHINE
             || u32_at(data, 20) != 1
             || u16_at(data, 52) != 64
             || u16_at(data, 54) != 56

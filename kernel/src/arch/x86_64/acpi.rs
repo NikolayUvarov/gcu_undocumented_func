@@ -37,6 +37,9 @@ pub unsafe fn init(rsdp: u64) {
 fn pause() { for _ in 0..1_000_000 { core::hint::spin_loop(); } }
 
 /// Resets the machine; the other CPUs are stopped first.
+/// Power off needs the ACPI sleep state S5 from the DSDT's AML: not read yet.
+pub unsafe fn power_off() -> Result<usize, usize> { Err(crate::abi::ERR_INVALID) }
+
 pub unsafe fn reboot() -> ! {
     core::arch::asm!("cli");
     crate::cpu::stop_others();

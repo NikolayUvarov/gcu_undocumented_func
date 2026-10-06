@@ -8,7 +8,7 @@ use linked_list_allocator::Heap;
 
 const RANGES: usize = 16;
 const CONVENTIONAL: u32 = 7; // EfiConventionalMemory: free after ExitBootServices
-const IDENTITY_END: u64 = 1 << 32; // the kernel maps the first 4 GiB; RAM above it is not used yet
+const IDENTITY_END: u64 = crate::mmu::IDENTITY_END; // RAM the kernel's identity map covers (x86: 4 GiB, aarch64: 1 TiB)
 const MIN_RANGE: u64 = 2 * 1024 * 1024;
 
 struct Pool { heaps: [Heap; RANGES], count: usize }
@@ -25,7 +25,7 @@ fn locked<T>(f: impl FnOnce(&mut Pool) -> T) -> T {
     })
 }
 
-/// Takes the largest free conventional ranges below 4 GiB. The bootloader allocated everything it hands over (arena,
+/// Takes the largest free conventional ranges the identity map covers. The bootloader allocated everything it hands over (arena,
 /// boot images, kernel, memory map) as loader data, so conventional memory is unused.
 pub unsafe fn init(map: &[StatPhys]) {
     let mut ranges = [(0u64, 0u64); RANGES];

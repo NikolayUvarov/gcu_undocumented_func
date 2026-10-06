@@ -21,13 +21,11 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
+| [—](tools-track-reports.md) | Three user reports for the tools track to number: beep from wm's menu, load's right edge, Quit in a program's menu | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
-| [201](201-aarch64-boot.md) | aarch64 on QEMU `virt`: boot to init | porting | P2 | — (200 done) | track H |
-| [202](202-aarch64-devices.md) | aarch64 devices: PCIe ECAM, VirtIO block/input/rng, PL011, PL031, display | porting | P2 | 201 | tracks H, A |
-| [203](203-aarch64-smp-and-power.md) | aarch64 SMP, reset and power off through PSCI | porting | P2 | 201 | track H |
-| [204](204-aarch64-profile-and-ci.md) | aarch64 profile and CI | porting | P2 | 202, 203 | track H |
+| [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 
 ## Finished tasks (`issues-done/`)
 
@@ -154,7 +152,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [156](../issues-done/156-ps2-mouse.done) | PS/2 mouse: pointer events for the focused program | done (2026-10-04) |
 | [157](../issues-done/157-window-broker.done) | `windows`: window broker, windows that outlive the window manager | done (2026-10-04) |
 | [159](../issues-done/159-shared-interrupt-lines.done) | Shared interrupt lines reach every driver on them | done (2026-10-05) |
+| [160](../issues-done/160-absolute-pointer-tablet.done) | Absolute pointer: a VirtIO tablet, no pointer grab in the emulator (the porting stream's; the same work as 161, merged into it; the open 160 above is another issue) | merged into 161 (2026-10-05) |
 | [200](../issues-done/200-architecture-layer.done) | Architecture layer in the kernel and libmind (x86-64 first) | done (2026-10-05) |
+| [201](../issues-done/201-aarch64-boot.done) | aarch64 on QEMU `virt`: boot to init | done (2026-10-05) |
+| [202](../issues-done/202-aarch64-devices.done) | aarch64 devices: PCIe ECAM and the ITS, VirtIO block/net/input, PL011, PL031, display | done (2026-10-05) |
+| [203](../issues-done/203-aarch64-smp-and-power.done) | aarch64 SMP: CPUs from the MADT started through PSCI, SGIs, reset and power off | done (2026-10-05) |
+| [204](../issues-done/204-aarch64-profile-and-ci.done) | aarch64 profile `aarch64/QEMU-virt-0` and CI: `ARCH=aarch64 ./02_build.sh`, three CI groups | done (2026-10-05) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |

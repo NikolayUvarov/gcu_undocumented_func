@@ -311,7 +311,7 @@ pub unsafe fn start(info: &BootInfo) {
 
 extern "C" fn ap_entry(index: usize) -> ! {
     unsafe {
-        paging::enable_protection(false);
+        crate::mmu::enable_protection(false);
         load(index);
         crate::interrupts::load();
         lapic_init(false);
@@ -336,3 +336,8 @@ pub unsafe fn wait_for_interrupt() { asm!("sti", "hlt", "cli"); }
 pub unsafe fn disable_interrupts() { asm!("cli"); }
 /// Stops this CPU for good.
 pub unsafe fn halt_here() -> ! { asm!("cli"); loop { asm!("hlt"); } }
+
+/// What the processor offers programs (BootInfo.cpu_features).
+pub fn features() -> u64 { if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) != 0 { crate::abi::FEATURE_ENTROPY } else { 0 } }
+/// Code was written to memory a task will execute: x86 keeps instruction fetches coherent.
+pub fn code_written() {}

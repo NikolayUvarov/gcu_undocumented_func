@@ -1,6 +1,7 @@
 //! What a VirtIO input device reports, turned into pointer events (issue 161): Linux input events (`type`, `code`,
 //! `value`) gathered until each `SYN_REPORT`, then one event word — absolute for a tablet (the position as a share of
-//! the screen, `POINTER_SCALE` steps), relative for a mouse. No system calls: tests/virtio_input_host.rs.
+//! the screen, `POINTER_SCALE` steps), relative for a mouse. A keyboard's keys become PS/2 set 1 scan codes for the
+//! shared decoder (issue 202). No system calls: tests/virtio_input_host.rs.
 use crate::abi::{pointer_absolute, pointer_event, POINTER_LEFT, POINTER_MIDDLE, POINTER_RIGHT, POINTER_SCALE};
 
 pub const EV_SYN: u16 = 0; pub const EV_KEY: u16 = 1; pub const EV_REL: u16 = 2; pub const EV_ABS: u16 = 3;
@@ -67,4 +68,17 @@ impl Pointer {
             if dx == 0 && dy == 0 && wheel == 0 { break; }
         }
     }
+}
+
+/// PS/2 set 1 bytes of a Linux key code (press; a release adds 0x80 to the last byte): codes 1-88 are the set 1 make
+/// codes; the others the keyboard driver knows take the E0 prefix. None for keys without one.
+pub fn scancode(code: u16) -> Option<(bool, u8)> {
+    Some(match code {
+        1..=88 => (false, code as u8),
+        96 => (true, 0x1C), 97 => (true, 0x1D), 98 => (true, 0x35), 100 => (true, 0x38), // KP Enter, right Ctrl, KP /, right Alt
+        102 => (true, 0x47), 103 => (true, 0x48), 104 => (true, 0x49), 105 => (true, 0x4B), 106 => (true, 0x4D),
+        107 => (true, 0x4F), 108 => (true, 0x50), 109 => (true, 0x51), 110 => (true, 0x52), 111 => (true, 0x53),
+        125 => (true, 0x5B), 126 => (true, 0x5C), 127 => (true, 0x5D), // the Windows keys and Menu
+        _ => return None,
+    })
 }

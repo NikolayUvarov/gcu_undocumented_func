@@ -30,6 +30,8 @@ pub fn kernel_heap() -> (usize, usize, bool) { let raw = syscall(SYSCALL_KERNEL_
 pub fn halt() -> ! { call(SYSCALL_HALT, 0, 0); loop { core::hint::spin_loop(); } }
 /// Resets the machine (process control); returns only without the privilege.
 pub fn reboot() -> Result<()> { check(call(SYSCALL_REBOOT, 0, 0)).map(drop) }
+/// Turns the machine off (aarch64: PSCI SYSTEM_OFF); an error where the platform cannot.
+pub fn power_off() -> Result<()> { check(call(SYSCALL_REBOOT, REBOOT_POWER_OFF, 0)).map(drop) }
 
 /// STAT (observe or control privilege): fills `buffer` with a header and records of `class`; `argument` is a PID for
 /// VMAP and CAPS. Returns the header; read the records with `records`.

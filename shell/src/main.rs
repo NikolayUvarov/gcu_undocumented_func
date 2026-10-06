@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// Command shell in ring 3: text console on its own screen and COM1, commands over process control, loader and init.
+// Command shell in ring 3: text console on its own screen and the serial line, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
 mod bmp;
 mod console;
@@ -13,11 +13,11 @@ mod programs;
 mod screenshot;
 mod voicectl;
 
-use console::{Console, Position, COM1};
+use console::{Console, Position};
 use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
-use mind::dev::{input_key, Ports};
+use mind::dev::{input_key, Uart};
 use mind::idl::{init as idl_init, loader};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
@@ -27,7 +27,7 @@ use mind::mem::Pages;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP.\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const COMMANDS: [&str; 46] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
@@ -85,7 +85,7 @@ impl Shell {
         if !self.line.is_empty() { self.redraw_input(true); }
     }
 
-    // Output of the focused program goes to COM1 only, each line prefixed with its PID.
+    // Output of the focused program goes to the serial line only, each line prefixed with its PID.
     fn mirror(&mut self, pid: u64) {
         let mut buffer = [0u8; 1024];
         while let Ok(len @ 1..) = control::console(pid, &mut buffer) {
@@ -550,7 +550,7 @@ impl Events {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let term = Console::new(mind::gfx::Screen::new(info), Ports(SLOT_SERIAL));
+    let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
     let mut shell = Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
@@ -560,7 +560,6 @@ fn main(info: &'static BootInfo) {
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
     shell.prompt();
-    let serial = Ports(SLOT_SERIAL);
     let mut vt = Vt::new();
     let mut events = Events::new();
     loop {
@@ -574,8 +573,7 @@ fn main(info: &'static BootInfo) {
         }
         // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout).
         let now = mind::time::uptime_ms() as u64;
-        while serial.in8(COM1 + 5) & 1 != 0 {
-            let byte = serial.in8(COM1);
+        while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
         }
         vt.poll(now, &mut |event| events.push(event));

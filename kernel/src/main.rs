@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt)]
+#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
 extern crate alloc;
 
@@ -29,7 +29,7 @@ mod abi;
 use abi::BootInfo;
 // The processor and platform: only through these names (issue 200).
 mod arch;
-use arch::{acpi, clock, context, cpu, interrupts, paging, pci, port};
+use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
 mod frames;
@@ -37,6 +37,8 @@ mod frames;
 mod elf_reloc;
 mod input;
 mod memory;
+mod paging;
+mod pci;
 mod scheduler;
 mod task_state;
 mod user_heap;
@@ -77,14 +79,14 @@ fn serial_print(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\
 
 #[no_mangle]
 #[link_section = ".text._start"]
-pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
+pub extern "C" fn _start(info: &BootInfo) -> ! {
     unsafe {
         cpu::disable_interrupts();
         init_serial();
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
-        paging::init().expect("Kernel page tables");
+        paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
         scheduler::spawn_init().expect("init spawn");
@@ -102,7 +104,7 @@ pub extern "sysv64" fn _start(info: &BootInfo) -> ! {
 }
 
 // Serial output without locks or allocation: the panic may come from the allocator or inside the scheduler lock.
-struct PanicSerial;
+pub struct PanicSerial;
 impl core::fmt::Write for PanicSerial {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_print(text); Ok(()) }
 }

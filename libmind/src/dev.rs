@@ -70,6 +70,32 @@ pub fn device_config(slot: usize, offset: usize) -> Result<u32> { check(call(SYS
 /// The same for device `index`, through the platform privilege in `slot` (init).
 pub fn device_config_at(slot: usize, index: usize, offset: usize) -> Result<u32> { check(syscall(SYSCALL_DEVICE_CONFIG, slot, offset, [index, 0, 0, 0]).result).map(|v| v as u32) }
 
+/// A serial line in a capability slot, by what the slot holds: a 16550 (port range) or a PL011 (registers). The
+/// firmware or the kernel has set its rate; bytes are sent and taken by polling.
+pub enum Uart { Ns16550(Ports, u16), Pl011(Mmio) }
+
+impl Uart {
+    pub fn open(slot: usize) -> Option<Self> {
+        match cap_info(slot) {
+            (CAP_KIND_PORTS, base, count) if count >= 8 => Some(Self::Ns16550(Ports(slot), base as u16)),
+            (CAP_KIND_MMIO, _, _) => Mmio::map(slot).ok().map(Self::Pl011),
+            _ => None,
+        }
+    }
+    pub fn write(&self, byte: u8) {
+        match self {
+            Self::Ns16550(ports, base) => { while ports.in8(base + 5) & 0x20 == 0 {} ports.out8(*base, byte); }
+            Self::Pl011(registers) => { while registers.read32(0x18) & 1 << 5 != 0 {} registers.write32(0, byte as u32); } // FR.TXFF, DR
+        }
+    }
+    pub fn read(&self) -> Option<u8> {
+        match self {
+            Self::Ns16550(ports, base) => (ports.in8(base + 5) & 1 != 0).then(|| ports.in8(*base)),
+            Self::Pl011(registers) => (registers.read32(0x18) & 1 << 4 == 0).then(|| registers.read32(0) as u8), // FR.RXFE
+        }
+    }
+}
+
 /// Device registers (MMIO), mapped uncached; accessed by offset.
 pub struct Mmio { map: crate::mem::Mapping }
 

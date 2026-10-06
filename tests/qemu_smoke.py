@@ -10,6 +10,7 @@ import codecs
 import json
 import http.server
 import math
+import json
 import os
 from pathlib import Path
 import queue
@@ -26,8 +27,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
-# System services (PID 1..N, started by init); ahci/usb_storage/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+# System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+# The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
+IMAGE = "usb_root"
+BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
+# The boot disk's driver, as vfs names it and as a service.
+BOOT_DRIVE, BOOT_DRIVER = "ATA", "ata"
 # Test suites number apps from 1; the harness maps their numbers to real PIDs (BASE is computed at boot).
 BASE = 0
 PID_IN = re.compile(r"\b(fg|kill|logs|pmap|stat|caps|budget)(\s+)(\d{1,18})\b", re.I)
@@ -63,9 +69,20 @@ class VM:
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", source])
+        self.arch = getattr(args, "arch", "x86_64")  # usb_image_smoke.py passes no architecture
+        if self.arch == "aarch64":
+            # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
+            # GOP framebuffer, a VirtIO keyboard (sendkey) and tablet; the boot disk is a VirtIO block device.
+            variables = Path(tempfile.mkdtemp()) / "vars.fd"
+            shutil.copyfile(args.aavmf_vars, variables)
+            machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
+                       "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
+                       "-device", "ramfb", "-device", "virtio-keyboard-pci", *([] if "virtio-tablet-pci" in extra else ["-device", "virtio-tablet-pci"])]
+        else:
+            machine = ["-bios", args.firmware]
         self.process = subprocess.Popen(
-            [args.qemu, "-bios", args.firmware, *storage,
-             *(["-snapshot"] if snapshot else []), "-m", "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
+            [args.qemu, *machine, *storage,
+             *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
              *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
@@ -279,11 +296,13 @@ def screen_text(vm):
     lookup = glyph_lookup()
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     width, height = map(int, size.split())
+    # mind::tui centers the text grid: a screen not a multiple of the cell (800x600 on aarch64) has margins.
+    x0, y0 = width % 8 // 2, height % 16 // 2
     lines = []
     for cy in range(height // 16):
         line = []
         for cx in range(width // 8):
-            rows = [[pixels[((cy * 16 + r) * width + cx * 8 + c) * 3:((cy * 16 + r) * width + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+            rows = [[pixels[((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3:((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
             colours = {p for row in rows for p in row}
             found = " " if len(colours) == 1 else "?"
             for fg in colours if len(colours) == 2 else ():
@@ -368,6 +387,15 @@ def center_pixel(vm):
     width, height = map(int, size.split())
     at = ((height // 2) * width + width // 2) * 3
     return pixels[at:at + 3]
+
+
+def qemu_cpu_seconds(vm, seconds):
+    """Processor time QEMU used in `seconds` of wall time (user and system, all its threads)."""
+    def total():
+        fields = Path(f"/proc/{vm.process.pid}/stat").read_text().rpartition(")")[2].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    start = total(); time.sleep(seconds)
+    return total() - start
 
 
 def normal_suite(vm):
@@ -470,18 +498,23 @@ def normal_suite(vm):
     vm.keys("kill 25\n")
     vm.serial()
     assert task_rows(vm) == {}
-    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken).
-    for _ in range(10):
-        registers = vm.hmp("info registers")
-        if "HLT=1" in registers:
-            break
-        time.sleep(.02)
-    require(registers, "HLT=1")
+    # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
+    # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
+    if vm.arch == "aarch64":
+        used = qemu_cpu_seconds(vm, 1)
+        assert used < .6, f"idle QEMU used {used:.2f} s of processor time in 1 s: the CPU does not wait in WFI"
+    else:
+        for _ in range(10):
+            registers = vm.hmp("info registers")
+            if "HLT=1" in registers:
+                break
+            time.sleep(.02)
+        require(registers, "HLT=1")
     cpus = vm.hmp("info cpus")
     assert len(re.findall(r"CPU #\d", cpus)) == vm.cpus, cpus
     vm.serial()
     assert heap_used(vm) == baseline
-    print("PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, 4 CPUs", flush=True)
+    print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
 
 
 def keys_suite(vm):
@@ -1236,14 +1269,16 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print("PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
+    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
 
 
 def avx_expected(vm, fixture=None):
     """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
     cpus = vm.command("cpus")
     model = getattr(vm.args, "cpu_model", None)
-    if model == "max":
+    if vm.arch == "aarch64":  # soft-float: no FP state is saved
+        assert len(re.findall(r"FPU=NONE", cpus)) == vm.cpus, cpus
+    elif model == "max":
         assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
         assert fixture is None or "CALLS, AVX" in fixture, fixture
     elif model is None:
@@ -1275,17 +1310,24 @@ def smp_suite(vm):
     for pid in range(1, count + 1):
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     assert heap_used(vm) == baseline
-    for cpu in range(vm.cpus):
-        vm.hmp(f"cpu {cpu}")
-        for _ in range(10):
-            regs = vm.hmp("info registers")
-            if "HLT=1" in regs:
-                break
-            time.sleep(.02)
-        else:
-            raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
-    vm.serial()
-    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, SIMD preservation, supervisor reserve under load, remote kill, all CPUs HLT", flush=True)
+    if vm.arch == "aarch64":
+        # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
+        vm.serial()
+        used = qemu_cpu_seconds(vm, 1)
+        assert used < .6, f"idle QEMU used {used:.2f} s of processor time in 1 s: a CPU does not wait in WFI"
+    else:
+        for cpu in range(vm.cpus):
+            vm.hmp(f"cpu {cpu}")
+            for _ in range(10):
+                regs = vm.hmp("info registers")
+                if "HLT=1" in regs:
+                    break
+                time.sleep(.02)
+            else:
+                raise AssertionError(f"CPU {cpu} did not halt when idle: {regs}")
+        vm.serial()
+    kept, idle = ("register", "WFI") if vm.arch == "aarch64" else ("SIMD", "HLT")
+    print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
 
 
 def isolation_suite(vm):
@@ -1729,10 +1771,10 @@ def files_check(vm, pid):
     require(output, "(SORTED, HEAP ARENAS=1)")  # Vec/String on the program heap (mind::alloc)
     names = re.findall(r"^\[FILES\] (\S+) \d+$", output, re.M)
     assert names == sorted(names), names
-    size = (ROOT / "usb_root/kernel.elf").stat().st_size
+    size = (ROOT / IMAGE / "kernel.elf").stat().st_size
     require(output, f"READ kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
-    efi = (ROOT / "usb_root/EFI/BOOT/BOOTX64.EFI").stat().st_size
-    require(output, f"READ EFI/BOOT/BOOTX64.EFI {efi}/{efi} BYTES MAGIC=4D5A")
+    efi = (ROOT / IMAGE / BOOT_EFI).stat().st_size
+    require(output, f"READ {BOOT_EFI} {efi}/{efi} BYTES MAGIC=4D5A")
     return output
 
 
@@ -2121,8 +2163,8 @@ def raw_fat_image(temp, replace=None):
     subprocess.run(["mkfs.fat", "-F", "16", "-n", "MINDTEST", "--offset", str(start), "-h", str(start), str(image), str(BLOCK_FS_MB << 10)], check=True, capture_output=True)
     files = temp / "files"
     (files / "EFI/BOOT").mkdir(parents=True)
-    for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
-        shutil.copyfile(ROOT / "usb_root" / name, files / name)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, files / name)
     for name, source in (replace or {}).items():
         shutil.copyfile(source, files / name)
     subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
@@ -2149,19 +2191,19 @@ def vfs_suite(args):
     if not raw_tools():
         print("SKIP: vfs suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / IMAGE) as temp:
         image, start, fs_sectors = raw_fat_image(Path(temp))
         part = f"{image}@@{start * 512}"
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
             mounted = vm.service_logs("vfs_server", "AS RAM:")  # reading drains the log: both lines at once
-            require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048 (DEVICE WRITABLE)")
+            require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048 (DEVICE WRITABLE)")
             require(mounted, "[VFS] MOUNTED FAT16 FROM RAM AS RAM: (")
             for command, answer in [("mkdir data/sub", "OK"), ("write data/notes.txt line one", "WROTE 9 BYTES"), ("write data/sub/a.txt alpha", "WROTE 6 BYTES"),
                                     ("mv data/sub/a.txt data/b.txt", "OK"), ("rm data/sub", "OK"), ("write ram:temp.txt scratch", "WROTE 8 BYTES"), ("sync", "OK")]:
                 require(vm.command(command), answer)
             # screenshot (issue 086): the screen in front (the shell's) as a BMP in data/, and under a free name on ram:.
-            def slow(command):  # 3 MB written through the ATA driver take a while under emulation
+            def slow(command):  # 3 MB written through the block driver take a while under emulation
                 vm.send(command + "\n")
                 return vm.expect("MIND> ", timeout=180, after=command + "\n")
             vm.command("clear")  # a screen with room: the output after the capture must not scroll it
@@ -2211,7 +2253,7 @@ def vfs_suite(args):
             output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=90)
             stopped = re.findall(r"^STOPPED (\w+)$", output, re.M)
             assert "REBOOTING..." in output and stopped[-1] == "logd" and "init" not in stopped and "shell" not in stopped, output
-            assert stopped.index("vfs_server") < stopped.index("ata") < stopped.index("compositor"), stopped
+            assert stopped.index("vfs_server") < stopped.index(BOOT_DRIVER) < stopped.index("compositor"), stopped
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("cat data/reboot.txt"), "kept")
@@ -2221,12 +2263,20 @@ def vfs_suite(args):
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
+            # Power off (issue 203): PSCI SYSTEM_OFF ends QEMU on aarch64; x86 has no ACPI sleep states yet.
+            if vm.arch == "aarch64":
+                vm.send("reboot -f --off\n")
+                vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF", timeout=30)
+                vm.process.wait(timeout=30)
+            else:
+                require(vm.command("reboot -f --off"), "ERROR: POWER OFF REFUSED")
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
-          f"screenshot writes the screen as a BMP ({width}x{height}); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f", flush=True)
+          f"screenshot writes the screen as a BMP ({width}x{height}); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
+          f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
 
 
 def edit_check(vm):
@@ -2321,7 +2371,7 @@ def edit_suite(args):
     if not raw_tools():
         print("SKIP: edit suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-edit-", dir=ROOT / IMAGE) as temp:
         readme, crlf = Path(temp) / "readme.txt", Path(temp) / "crlf.txt"
         readme.write_bytes("Только для чтения\n".encode())
         crlf.write_bytes("один\r\ntwo\r\n".encode())
@@ -2470,7 +2520,7 @@ def disk_suite(args):
     if not raw_tools():
         print("SKIP: disk suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-disk-", dir=ROOT / IMAGE) as temp:
         temp = Path(temp)
         (temp / "a.txt").write_text("alpha\n")
         (temp / "b.txt").write_bytes("бета\n".encode())
@@ -2513,7 +2563,7 @@ def block_suite(args, block_elf):
     if not raw_tools():
         print("SKIP: block suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
-    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / "usb_root") as temp:
+    with tempfile.TemporaryDirectory(prefix="smoke-block-", dir=ROOT / IMAGE) as temp:
         image, start, fs_sectors = raw_fat_image(Path(temp), {"vfs_server.elf": block_elf})
         env = MTOOLS_ENV
         sectors = (BLOCK_IMAGE_MB << 20) // 512
@@ -2927,11 +2977,12 @@ def net_suite(args, disk):
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
         require(log, "[VIRTIO_NET] MAC=52:54:00:12:34:56 LINK=UP QUEUES=256/256 MODERN MSI-X")
-        # The boot report of legacy hardware: the transitional card needs no legacy code; the PIIX IDE controller does.
-        report = vm.service_logs("init", "LEGACY DEVICES FOUND")
-        for line in ("[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: NOT FOUND", "[INIT] VIRTIO TRANSITIONAL DEVICES: 1",
-                     "[INIT] LEGACY IDE CONTROLLER: FOUND 1", "[INIT] LEGACY AC97 AUDIO: NOT FOUND", "[INIT] LEGACY DEVICES FOUND: 1"):
-            require(report, line)
+        # The boot report of legacy hardware (x86): the transitional card needs no legacy code; the PIIX IDE controller does.
+        if args.arch == "x86_64":
+            report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+            for line in ("[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: NOT FOUND", "[INIT] VIRTIO TRANSITIONAL DEVICES: 1",
+                         "[INIT] LEGACY IDE CONTROLLER: FOUND 1", "[INIT] LEGACY AC97 AUDIO: NOT FOUND", "[INIT] LEGACY DEVICES FOUND: 1"):
+                require(report, line)
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
@@ -3065,22 +3116,26 @@ def net_suite(args, disk):
     finally:
         vm.close()
         web.shutdown()
-    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X).
-    for device, mode in [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]:
+    # A modern-only card (no legacy registers) and a legacy-only one (no modern structures, no MSI-X; x86 only: the
+    # aarch64 driver has no port I/O interface).
+    cards = [("virtio-net-pci,netdev=n0,disable-legacy=on", "MODERN MSI-X"), ("virtio-net-pci,netdev=n0,disable-modern=on", "LEGACY INTX")]
+    for device, mode in cards[:1] if args.arch == "aarch64" else cards:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", device])
         try:
             require(vm.service_logs("virtio_net", "[VIRTIO_NET] MAC="), mode)
-            report = vm.service_logs("init", "LEGACY DEVICES FOUND")
-            require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
-            assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
+            if args.arch == "x86_64":
+                report = vm.service_logs("init", "LEGACY DEVICES FOUND")
+                require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
+                assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
             require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             if mode == "MODERN MSI-X":
                 _msix_only(vm)
         finally:
             vm.close()
-    # QEMU's default e1000 has the same PCI class: it is not taken for a VirtIO card; the stack reports no network.
-    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
+    # for a VirtIO card; the stack reports no network.
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else ())
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
@@ -3092,7 +3147,7 @@ def net_suite(args, disk):
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
-          "(transitional and modern-only cards), legacy interface; e1000 not taken", flush=True)
+          f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
 
 
 def _certificates(directory):
@@ -3140,10 +3195,12 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", "qemu64,+rdrand"])
+    # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
+    entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
     try:
         require(vm.service_logs("keystore", "DEVICE KEY READY"), "[KEYSTORE] DEVICE KEY READY: MIND ")
-        require(vm.service_logs("tls", "[TLS] READY"), "[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM RDRAND")
+        require(vm.service_logs("tls", "[TLS] READY"), f"[TLS] READY: TLS 1.3 CLIENT, ROOTS FROM tlsroots.pem, RANDOM FROM {entropy}")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         page = vm.command(f"https 10.0.2.2:{ports['good']} /secure mind.test")
         for line in ("HTTPS: mind.test VERIFIED, TLS 1.3 SUITE", "HTTP/1.0 200 OK", "hello from the host: /secure to nobody"):
@@ -3198,10 +3255,10 @@ def tls_suite(args, disk):
         for server in (good, rogue, asking):
             server.shutdown()
         (Path(tempfile.gettempdir()) / f"mind-core-tls-{args.cpus}cpu.log").write_text(vm.log)
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=network)
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, *(["-cpu", without] if without else [])])
     try:
-        require(vm.service_logs("keystore", "NO RDRAND"), "[KEYSTORE] NO RDRAND: NO DEVICE KEY")
-        require(vm.service_logs("tls", "[TLS] READY"), "NO RDRAND: EVERY CONNECTION WILL BE REFUSED")
+        require(vm.service_logs("keystore", f"NO {entropy}"), f"[KEYSTORE] NO {entropy}: NO DEVICE KEY")
+        require(vm.service_logs("tls", "[TLS] READY"), f"NO {entropy}: EVERY CONNECTION WILL BE REFUSED")
         require(vm.command(f"https 10.0.2.2:{ports['good']} / mind.test"), "HTTPS: NoEntropy")
         require(vm.command("tls cert"), "TLS: NotFound")
     finally:
@@ -3210,7 +3267,7 @@ def tls_suite(args, disk):
     print("PASS: TLS 1.3 client service: HTTPS with the server certificate verified (by name and by address; AES-256-GCM, "
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
-          "which only the TLS service may ask; no RDRAND: no key and no connection", flush=True)
+          f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -3718,8 +3775,13 @@ def boot_suite(args, disk):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
-    parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--arch", choices=("x86_64", "aarch64"), default="x86_64", help="aarch64: QEMU virt with the aarch64_root build (scripts/build_aarch64.sh)")
+    parser.add_argument("--qemu", default=os.environ.get("QEMU"))
+    parser.add_argument("--cpus", type=int)
+    parser.add_argument("--machine", help="aarch64: QEMU -machine (default virt,gic-version=3,highmem=off; issue 205: highmem=on, gic-version=2)")
+    parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
+    parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")
+    parser.add_argument("--aavmf-vars", default="/usr/share/AAVMF/AAVMF_VARS.fd")
     parser.add_argument("--cpu-model", help="QEMU -cpu model, e.g. max: AVX state saved with XSAVE (issue 153)")
     parser.add_argument("--firmware", default="OVMF.fd")
     parser.add_argument("--busy-elf", help="test-only ELF built from tests/busy_app.rs")
@@ -3733,6 +3795,15 @@ def main():
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
     parser.add_argument("--asr-model", help="optional Vosk model directory (Russian) to check that tts speech is recognizable")
     args = parser.parse_args()
+    global IMAGE, BOOT_EFI, BOOT_DRIVE, BOOT_DRIVER
+    if args.arch == "aarch64":
+        # Four CPUs (issue 203); the busy fixture from scripts/build_aarch64.sh --fixtures.
+        IMAGE, BOOT_EFI = "aarch64_root", "EFI/BOOT/BOOTAA64.EFI"
+        BOOT_DRIVE, BOOT_DRIVER = "VIRTIO", "virtio_blk"
+        args.qemu, args.cpus = args.qemu or "qemu-system-aarch64", args.cpus or 4
+        fixture = ROOT / IMAGE / "fixture-busy_app.elf"
+        args.busy_elf = args.busy_elf or (str(fixture) if fixture.exists() else None)
+    args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
@@ -3740,6 +3811,8 @@ def main():
         suites.append("heap")
     if args.block_elf:
         suites.append("block")
+    if args.arch == "aarch64":
+        suites = ["normal", "shell", "vfs", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -3755,12 +3828,12 @@ def main():
         if suite == "disk":
             disk_suite(args)
             continue
-        with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / "usb_root") as temp:
+        with tempfile.TemporaryDirectory(prefix="smoke-", dir=ROOT / IMAGE) as temp:
             disk = Path(temp)
             (disk / "EFI/BOOT").mkdir(parents=True)
-            for name in [*(p.name for p in (ROOT / "usb_root").glob("*.elf")), "EFI/BOOT/BOOTX64.EFI"]:
-                shutil.copyfile(ROOT / "usb_root" / name, disk / name)
-            shutil.copytree(ROOT / "usb_root/voice", disk / "voice")  # the voice recognizer's model and grammar
+            for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+                shutil.copyfile(ROOT / IMAGE / name, disk / name)
+            shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
             if suite == "services":
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")

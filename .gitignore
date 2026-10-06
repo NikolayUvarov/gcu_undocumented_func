@@ -17,6 +17,7 @@ target/
 OVMF.fd
 *.fd
 usb_root/
+aarch64_root/
 dist/
 scripts/__pycache__/
 NvVars

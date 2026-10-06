@@ -1,4 +1,8 @@
-// Static PIE relocation support: R_X86_64_RELATIVE stores load_bias + addend.
+// Static PIE relocation support: RELATIVE (R_X86_64_RELATIVE, R_AARCH64_RELATIVE) stores load_bias + addend.
+#[cfg(not(target_arch = "aarch64"))]
+const RELATIVE: u64 = 8;
+#[cfg(target_arch = "aarch64")]
+const RELATIVE: u64 = 1027;
 // https://refspecs.linuxfoundation.org/elf/x86_64-abi-0.99.pdf, section 4.4.1.
 fn range(
     image_len: usize,
@@ -73,8 +77,8 @@ pub fn apply(
         if info == 0 {
             continue;
         } // R_X86_64_NONE
-        if info != 8 {
-            return Err("Only symbol-free R_X86_64_RELATIVE is supported");
+        if info != RELATIVE {
+            return Err("Only symbol-free RELATIVE relocations are supported");
         }
         let dest = range(image.len(), min_vaddr, target, 8)?;
         if dest.start < relas.end && dest.end > relas.start {
