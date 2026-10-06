@@ -22,5 +22,9 @@ pub static V2M: AtomicUsize = AtomicUsize::new(0); // GICv2m MSI frame; 0: none
 // GICv2: each CPU's interface number (SGI targets), in cpu.rs's order of CPUs.
 pub static INTERFACE: [AtomicUsize; crate::cpu::MAX] = [const { AtomicUsize::new(0) }; crate::cpu::MAX];
 
+// Pin controllers (issue 206): base and size of each, by kind (PLATFORM_PINS_*), as the DSDT and SSDTs name them.
+pub static PINS: [[AtomicUsize; 2]; 2 * crate::abi::PLATFORM_PINS_MAX] = [const { [const { AtomicUsize::new(0) }; 2] }; 2 * crate::abi::PLATFORM_PINS_MAX];
+pub const PINS_BCM2711: usize = crate::abi::PLATFORM_PINS_MAX; // PINS[..MAX] are PL061s, PINS[MAX..] BCM2711s
+
 pub fn get(value: &AtomicUsize) -> usize { value.load(Ordering::Relaxed) }
 pub fn set(value: &AtomicUsize, to: usize) { value.store(to, Ordering::Relaxed) }

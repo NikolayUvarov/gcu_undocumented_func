@@ -301,6 +301,9 @@ pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: a
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
+pub const PLATFORM_PINS_PL061: usize = 0x10; // + n: the n-th PL061 pin controller the firmware's tables name (issue 206)
+pub const PLATFORM_PINS_BCM2711: usize = 0x20; // + n: the n-th BCM2711 GPIO (Raspberry Pi 4)
+pub const PLATFORM_PINS_MAX: usize = 4; // controllers of one kind
 // DEVICE_FIND: arg1 = PCI class code (class<<16|subclass<<8|interface), arg2 = mask, msg[0] = n-th match, msg[1] = PCI
 // vendor | device << 16 to match as well (0: any); result = device index.
 

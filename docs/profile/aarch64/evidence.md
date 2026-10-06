@@ -17,6 +17,8 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | The boot disk on NVMe: the firmware boots from it, `nvme` serves it, files written pass fsck.fat, reboot and power off | `vfs` suite with `--disk nvme` (CI group "NVMe boot disk"; on x86 too) |
 | Linux key codes become the PS/2 set 1 codes the decoder expects | Host test `keys_become_set_1_scan_codes` (`tests/virtio_input_host.rs`) |
 | USB input without VirtIO input: a keyboard behind a hub (keys, layouts, host-side repeat), a tablet's click, a keyboard unplugged and plugged in on another port, `usb_hid` and `usb_host` killed and restarted | `usb` suite (CI group "programs, shell and four CPUs"; on x86 too, without a PS/2 controller) |
+| Pin controllers in definition blocks: QEMU's PL061 device with a static window, the Raspberry Pi 4 firmware's GPIO device whose `_CRS` is a method, a QWord window, a window not taken from the next device, unknown IDs and truncated or random blocks without a panic | Host tests in `tests/aml_host.rs` (blocks built as the ASL compiler encodes them; not the real firmware's tables) |
+| On QEMU `virt` the kernel reports no pin controller | every aarch64 boot (`MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES`) |
 | USB boot keyboard reports become PS/2 set 1 codes; report descriptors of a tablet and a mouse give their fields | Host tests in `tests/hid_host.rs` |
 
 ## Not covered by any test

@@ -1,6 +1,7 @@
 // aarch64 on QEMU's `virt` machine (issue 201): EL1, GICv3, the generic timer, the PL011 UART; the platform layout
 // of `virt` is fixed here until the device tree or ACPI is read (issue 202).
 pub mod acpi;
+pub mod aml;
 pub mod board;
 pub mod clock;
 pub mod context;
