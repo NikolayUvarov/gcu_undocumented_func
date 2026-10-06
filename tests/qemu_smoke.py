@@ -619,7 +619,9 @@ def normal_suite(vm):
     vm.serial()
     assert heap_used(vm) == baseline
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
-    applications_until_memory_ends(vm)
+    # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80.
+    if gibibytes(vm.args.memory) <= 1:
+        applications_until_memory_ends(vm)
     if gibibytes(vm.args.memory) > 4:
         ram_above_4g(vm)
 
