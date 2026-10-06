@@ -1,7 +1,7 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits.
-package mind:loader@1.3.0;
+package mind:loader@1.4.0;
 
 interface loader {
     /// Why a launch session failed.
@@ -14,8 +14,8 @@ interface loader {
     }
     /// What a program asks its launcher for (`mind::request!`, read from its ELF). It grants nothing.
     record needs { console: bool, sysinfo: bool, file: bool, lifecycle: bool, log: bool, files: bool }
-    /// The `*.elf` programs in the root of the boot disk (at most 64); services are marked.
-    list: func() -> list<program, 64>;
+    /// The `*.elf` programs in the root of the boot disk (at most 128, 1.4: 64 before); services are marked.
+    list: func() -> list<program, 128>;
     /// Starts program `name` (a name, or a path with `.` or `/`) with `args` in its info page; returns its PID.
     run: func(name: string<64>, args: string<1024>) -> result<u64, error-code>;
     /// Starts a launch of `name` (a program on the boot disk) with `args`; returns the session (1.1).

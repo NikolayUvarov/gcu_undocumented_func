@@ -109,7 +109,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(|_| lost())?.map_err(failed)?;
     // A console program runs in a window of `console`, which shows what it prints (issue u004).
     let display = requests & mind::process::REQUEST_DISPLAY != 0;
-    if needs.console {
+    if needs.console || mind::process::console_run(requests, args) {
         return start(&format!("console {}", command), front.filter(|_| display), true)
             .map_err(|_| format!("{} is a console program, and there is no console to run it in: run it in the shell", name));
     }

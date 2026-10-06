@@ -151,7 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 ipxe-qemu dosfstools mtools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 qemu-utils ipxe-qemu dosfstools mtools
       - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Build for aarch64
@@ -159,6 +159,11 @@ jobs:
       - name: Boot and fault containment
         if: ${{ matrix.smoke }}
         run: python3 tests/aarch64_smoke.py
+      - name: The USB image for aarch64, booted from a USB stick on xHCI
+        if: ${{ matrix.smoke }}
+        run: |
+          python3 scripts/make_usb_image.py --arch aarch64 --no-build --output /tmp/mind-core-usb-aarch64.img
+          python3 tests/usb_image_smoke.py --arch aarch64 --image /tmp/mind-core-usb-aarch64.img
       - name: QEMU suites on virt, four CPUs
         if: ${{ matrix.suites }}
         run: python3 tests/qemu_smoke.py --arch aarch64 --suites ${{ matrix.suites }} ${{ matrix.machine && format('--machine {0}', matrix.machine) || '' }} ${{ matrix.memory && format('--memory {0}', matrix.memory) || '' }} ${{ matrix.disk && format('--disk {0}', matrix.disk) || '' }}

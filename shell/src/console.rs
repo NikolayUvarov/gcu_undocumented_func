@@ -79,7 +79,8 @@ impl Console {
     pub fn put(&mut self, ch: char) {
         match ch {
             '\n' => self.newline(),
-            '\r' => {}
+            // The start of the line again: what comes next overwrites it (`clock --line`, issue u016).
+            '\r' => { self.cx = 0; self.dirty = true; }
             '\x08' => { if self.cx > 0 { self.cx -= 1; let (last, cx) = (self.last(), self.cx); self.row(last)[cx] = ' ' as u32; self.dirty = true; } }
             _ => {
                 if self.cx >= self.cols { self.newline(); }

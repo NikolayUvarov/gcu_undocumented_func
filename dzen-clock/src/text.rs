@@ -17,6 +17,29 @@ const START_TICK: u32 = 0x909090;
 const SMALL_TICK: u32 = 0x707070;
 
 pub const TITLE: &str = "DZEN CLOCK";
+
+/// The face on one line (`dzen-clock --line`, issue u016): the time, then the discs as the letters of their colors —
+/// top left and top right, the center, bottom left and bottom right; W a white step, `·` a disc that is off. Returns
+/// the bytes and their number.
+pub fn line(face: Face, seconds: usize) -> ([u8; 32], usize) {
+    let letter = |color: u32| -> &'static str {
+        match crate::face::COLORS.iter().position(|&c| c == color) {
+            Some(i) => ["R", "Y", "G", "C", "B", "M"][i],
+            None if color == crate::face::WHITE => "W",
+            None => "·",
+        }
+    };
+    let mut out = [0u8; 32];
+    let mut n = 0;
+    let time = time_text(seconds);
+    let parts = [core::str::from_utf8(&time).unwrap_or(""), "  ", letter(face.corners[3]), letter(face.corners[0]), " ", letter(face.center), " ",
+                 letter(face.corners[2]), letter(face.corners[1])];
+    for part in parts {
+        out[n..n + part.len()].copy_from_slice(part.as_bytes());
+        n += part.len();
+    }
+    (out, n)
+}
 pub const KEYS: &str = "D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   ESC: EXIT";
 /// On the program's own screen T switches to the pixel face.
 pub const KEYS_SWITCH: &str = "D: DIGITS   C: ORBIT   P: 10S TICKS   H: HINTS   T: PIXEL FACE   ESC: EXIT";

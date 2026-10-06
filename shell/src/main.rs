@@ -37,7 +37,7 @@ const HELP: &str = "- help [command or program]: these lines; with a name, what 
 
 // Words the shell completes with Tab besides program names.
 const COMMANDS: [&str; 47] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
-const NAMES: usize = 64;
+const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
 const SCOPE_RECEIVE: usize = 11;

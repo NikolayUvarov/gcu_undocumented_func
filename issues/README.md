@@ -19,18 +19,13 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-<<<<<<< HEAD
-| [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
-| [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
-=======
-| [164](164-usb-hid-keyboard-and-mouse.md) | USB keyboards and mice: `usb_host` (xHCI, hubs) and `usb_hid`; `usb_storage` on top of it; for real machines without PS/2 (PCs, Intel Macs, ARM boards) | kernel (drivers) | P1 | — | track A |
->>>>>>> origin/main
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` | tools | P2 | 207 | track H |
-| [u016](u016-clock-console-faces.md) | Console faces of `clock` and `dzen-clock`: the time on one line rewritten with `\r` (the shell's console and `console` honour it) | tools | P3 | — | track G |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
+
+Requests from other tracks that wait for the porting track's numbers: [porting-track-reports.md](porting-track-reports.md) (the aarch64 idle check's margin).
 
 ## Finished tasks (`issues-done/`)
 
@@ -149,6 +144,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u012](../issues-done/u012-load-graphs-aligned.done) | `load`: every graph ends at the same column and the scale labels end in one column, whatever their widths | done (2026-10-06) |
 | [u013](../issues-done/u013-quit-from-menus-and-key-bars.done) | Quit in a program's menu and key bar: `edit` and `view` take the mouse, menus take clicks, F10 quits from edit's open menu | done (2026-10-06) |
 | [u014](../issues-done/u014-record-a-window.done) | `record -w` in wm's run line records the window in front alone: wm lends a read-only lease of its surface and marks its frame " ● REC " | done (2026-10-06) |
+| [u016](../issues-done/u016-clock-console-faces.done) | `clock --line`, `dzen-clock --line`: console programs whose line is written again with `\r`; `REQUEST_LINE` and `mind::process::console_run` | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
@@ -176,12 +172,9 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
 | [163](../issues-done/163-window-broker-memory.done) | init gives the window broker a 128 MiB memory quota: pixel windows with room for the screen | done (2026-10-05) |
 | [165](../issues-done/165-display-client-for-programs.done) | A launcher may lend the compositor client (`REQUEST_DISPLAY`); the compositor shows a red dot while the screen is captured | done (2026-10-06) |
-<<<<<<< HEAD
 | [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) | USB keyboards, mice and tablets: `usb_host` (xHCI, hubs, hot plug, `idl/usb.wit`), `usb_hid`, `usb_storage` over it; no `ps2_kbd` without a controller; Intel chipsets' ports moved from EHCI | done (2026-10-06) |
-=======
 | [155](../issues-done/155-virtual-consoles.done) | Virtual consoles: the shell's four consoles, Ctrl+Alt+F1…F4 whatever program has the keyboard, each with its own text, history and programs | done (2026-10-06) |
 | [166](../issues-done/166-exit-status-for-launchers.done) | `EXIT` with a code, `EXIT_STATUS` (58) for the last 16 tasks that ended; `grep` exits 0/1/2; `msh` makes a failed program `err` | done (2026-10-06) |
 | [167](../issues-done/167-models-of-revoke-and-move.done) | TLA+ models of revoke and MOVE checked by TLC (stage II exit); a mapped memory capability no longer moves (the bug the model found) | done (2026-10-06) |
->>>>>>> origin/main
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

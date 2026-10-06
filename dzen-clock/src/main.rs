@@ -12,14 +12,34 @@ use view::View;
 
 fn print(text: &[u8]) { mind::process::log(text) }
 
+mind::request!(REQUEST_LINE);
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("dzen-clock — the Dzen clock on its own screen, or in a window under wm.\nUsage: dzen-clock [--text]   (--text: the text face, the indicators in colored text cells, sized to the screen or the window)\nD digital time, C orbit, P orbit with 10 s ticks, H title and keys, T the text face or the pixel one (on its own screen), Esc: exit.");
+    mind::about!("dzen-clock — the Dzen clock on its own screen, or in a window under wm.\nUsage: dzen-clock [--text | --line]   (--text: the text face, the indicators in colored text cells, sized to the screen or the window;\n--line: a console program, the time and the indicators' colors on one line, written again every second)\nD digital time, C orbit, P orbit with 10 s ticks, H title and keys, T the text face or the pixel one (on its own screen), Esc: exit.");
+    if mind::process::args_str().split_whitespace().any(|a| a == "--line") { return line_face(); }
     let mut text = mind::process::args_str().split_whitespace().any(|a| a == "--text" || a == "text");
     // T switches faces on the program's own screen; a window of wm is a text or a pixel window from the start.
     while (if text { text_face(info) } else { pixel_face(info) }) == Next::Switch {
         text = !text;
         print(if text { b"[DZEN-CLOCK] TEXT FACE\r\n" } else { b"[DZEN-CLOCK] PIXEL FACE\r\n" });
+    }
+}
+
+// Started as a console program (`dzen-clock --line`, issue u016): the face on one line, written again with \r each
+// second; Esc in the shell or `console` stops it.
+fn line_face() {
+    let mut previous = None;
+    loop {
+        if let Some(seconds) = mind::rtc::seconds_since_midnight().filter(|&s| previous != Some(s)) {
+            if let Some(face) = Face::at(seconds) {
+                let (line, n) = text::line(face, seconds);
+                print(b"\r");
+                print(&line[..n]);
+            }
+            previous = Some(seconds);
+        }
+        mind::time::sleep(100);
     }
 }
 

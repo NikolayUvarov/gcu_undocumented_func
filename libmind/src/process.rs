@@ -120,6 +120,13 @@ pub const REQUEST_WINDOW: u32 = 256; // a client of the window broker in SLOT_WI
 pub const REQUEST_WINDOW_MANAGER: u32 = 512; // the broker's manager client in SLOT_WINDOW: a window manager (issue 157)
 pub const REQUEST_DISPLAY: u32 = 1024; // the compositor's client in SLOT_DISPLAY: what is on the screen (`record`, issue 093)
 pub const REQUEST_GPIO: u32 = 2048; // the pin controller service's client with the control badge in SLOT_GPIO (issue 207)
+pub const REQUEST_LINE: u32 = 4096; // with `--line` among its arguments, a console program (no screen): `clock --line`, issue u016
+
+/// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
+/// the launchers decide alike (issue u016).
+pub fn console_run(requests: u32, args: &str) -> bool {
+    requests & REQUEST_CONSOLE != 0 || (requests & REQUEST_LINE != 0 && args.split_whitespace().any(|word| word == "--line"))
+}
 pub const REQUEST_MAGIC: &[u8; 8] = b"MINDREQ1";
 
 /// Contents of the `.mind_request` section: magic, flags, reserved.

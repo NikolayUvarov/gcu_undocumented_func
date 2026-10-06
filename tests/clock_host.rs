@@ -111,3 +111,13 @@ fn dzen_indicators_orbit_and_keys() {
         dzen::draw(&mut grid, face, None, Some(1), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
     }
 }
+
+#[test]
+fn the_dzen_clock_on_one_line() {
+    // Issue u016: the time, then the discs' colors — top left and right, the center, bottom left and right.
+    let seconds = 12 * 3600 + 34 * 60 + 56; // hour 12: red at the top left; step 2: white at the bottom left; cyan center
+    let (bytes, n) = dzen::line(face::Face::at(seconds).unwrap(), seconds);
+    assert_eq!(core::str::from_utf8(&bytes[..n]).unwrap(), "12:34:56  R· C W·");
+    let (bytes, n) = dzen::line(face::Face::at(0).unwrap(), 0);
+    assert_eq!(core::str::from_utf8(&bytes[..n]).unwrap(), "00:00:00  ·· R WR", "hour 0: red at the bottom right, step 0: white at the bottom left");
+}
