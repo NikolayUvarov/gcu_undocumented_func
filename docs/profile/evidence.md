@@ -22,6 +22,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
+| A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
 | A CPU budget of 20 ms per 100 ms keeps a busy loop at 12–35 % of its CPU and lifting it restores the full share; `init` restarts a service within 5 s while eight busy applications saturate every CPU | `busy`, `smp` suites |

@@ -120,7 +120,7 @@ fn frame_bytes(info: &BootInfo) -> usize { (info.stride * info.height * 4).div_c
 
 // Kernel spawn errors as ABI codes for the spawner.
 fn spawn_error(error: &'static str) -> usize {
-    match error { "TASK LIMIT REACHED" | "NO FREE TASK SLOT" => ERR_LIMIT, e if e.contains("MEMORY") || e.contains("PAGE TABLE") => ERR_NO_MEMORY, _ => ERR_INVALID }
+    match error { "TASK LIMIT REACHED" | "NO FREE TASK SLOT" | "OVER MEMORY QUOTA" => ERR_LIMIT, e if e.contains("MEMORY") || e.contains("PAGE TABLE") => ERR_NO_MEMORY, _ => ERR_INVALID }
 }
 
 // Copies bytes into a task's writable memory; false if any page is not writable.
@@ -277,9 +277,10 @@ impl Scheduler {
         }
         if self.focus_owner == slot { self.focus_owner = 0; if self.foreground == slot { self.focus(0); } }
         for listener in self.listeners.iter_mut() { if listener.is_some_and(|l| l.slot == slot) { *listener = None; } }
-        // The task's own memory leaves its payers' accounts (what it keeps referenced is bounded by DETACHED_MAX_BYTES);
+        // The task's own memory, image, stack and screen included, leaves its payers' accounts (what it keeps referenced is bounded by DETACHED_MAX_BYTES);
         // its children's memory is paid from now on by its payer, which already counts it.
-        let task = self.tasks[slot].as_ref().unwrap(); let own = task.heap.bytes() + task.heap.retained; let payer = task.payer;
+        let task = self.tasks[slot].as_ref().unwrap(); let payer = task.payer;
+        let own = task.heap.bytes() + task.heap.retained + task._image.len() + task._stack.len() + task.screen.as_ref().map_or(0, Region::len);
         if let Some(up) = self.payer_of(slot) { self.uncharge(up, own); }
         for child in self.tasks.iter_mut().flatten() { if child.payer == Some((slot, pid)) { child.payer = payer; } }
         let task = self.tasks[slot].as_mut().unwrap(); task.payer = None; task.memory_tree = 0;
@@ -478,6 +479,9 @@ impl Scheduler {
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
         let context = Region::new(context::SIZE, 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
+        // Image, stack and screen are charged to the spawner and every payer above it, after the last fallible step (issue 168).
+        let fixed = image.len() + stack.len() + screen.as_ref().map_or(0, Region::len);
+        if let Some((spawner, _)) = parent { if !self.charge(spawner, fixed) { return Err("OVER MEMORY QUOTA"); } }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
         self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace: caps, generations: [1; CAP_SLOTS], nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0 });

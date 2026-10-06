@@ -1657,7 +1657,53 @@ def memory_suite(vm):
     assert heap_used(vm) == baseline and frames_free(vm) == frames
     require(vm.command("run clock &"), "NAME=clock BACKGROUND")
     memory_beyond_the_arena(vm)
+    memory_charged_to_spawner(vm)
     print("PASS: out-of-memory rollback, surviving tasks and later successful launch", flush=True)
+
+
+def task_memory(vm, pid, raw=False):
+    # (image + stack + screen, memory used by the task and its descendants) from `stat <pid>`.
+    details = vm.command(f"stat {pid}", raw=raw)
+    sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) ", details)
+    used = re.search(r"MEMORY=(\d+)/\d+", details)
+    assert sizes and used, details
+    return sum(map(int, sizes.groups())), int(used[1])
+
+
+def memory_charged_to_spawner(vm):
+    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit."""
+    loader = vm.services()["loader"]
+    def loader_used():
+        previous = None
+        for _ in range(20):
+            used = task_memory(vm, loader, raw=True)[1]
+            if used == previous:
+                return used
+            previous = used
+            time.sleep(.1)
+        raise AssertionError("loader's memory account did not settle")
+    before = loader_used()
+    output = vm.command("run clock &")
+    started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
+    assert started, output
+    pid = int(started[1])
+    for _ in range(20):
+        fixed, used = task_memory(vm, pid)
+        after = loader_used()
+        if after - before == fixed + used and task_memory(vm, pid) == (fixed, used):
+            break
+        time.sleep(.2)
+    else:
+        raise AssertionError(f"loader's account grew by {after - before}, the program holds {fixed} + {used}")
+    assert fixed > 64 * 1024, fixed  # the stack alone is 64 KiB, the screen more
+    vm.command(f"kill {pid}")
+    for _ in range(20):
+        if loader_used() == before:
+            break
+        time.sleep(.2)
+    else:
+        raise AssertionError(f"loader's account {loader_used()} did not return to {before}")
+    print(f"PASS: a program's image, stack and screen ({fixed} bytes) charged to loader and returned at exit", flush=True)
 
 
 def memory_beyond_the_arena(vm):

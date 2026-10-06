@@ -1,0 +1,28 @@
+# 168 — A task's image, stack and screen are charged to its spawner's memory quota — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** stage II exit ("all queues and allocations are accounted"), track A · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+
+## Problem
+
+The memory quota (issue 150) charges a task's private memory — heap blocks, memory objects, freed blocks others still hold — to the task and to every payer above it. The memory `SPAWN` takes for the child itself comes from the same frame pool but is charged to nobody: the ELF image, the 64 KiB stack and the screen buffer (about 4 MiB at 1280 × 800, 9 MiB at 1920 × 1200). A spawner with a task quota can therefore make the frame pool give out memory its memory quota never sees, and the profile says "Memory is not charged to owners" (MC-1.7 partial).
+
+## Plan
+
+- `spawn_internal` charges image, stack and screen to the spawner and every payer above it (`charge`), after the last step that can fail, so a refused or failed spawn leaves no charge; over the quota the spawn fails with `ERR_LIMIT` and its regions return to the pool. The kernel's own spawn of `init` has no payer.
+- At exit the task's image, stack and screen leave its payers' accounts with its heap (`terminate`).
+- The child's own quota is not charged: what it pays for is what it allocates; the cost of creating it is its spawner's.
+- `stat <pid>` in the shell shows `MEMORY=used/quota`.
+- Test: `memory` suite — loader's account grows by exactly a started program's image, stack, screen and private memory and returns at exit.
+
+## Acceptance criteria
+
+- `memory` suite passes with the new check on x86 (its CI group) and in a local run on aarch64; the full local gate passes.
+- `docs/profile` (README MC-1.7 row, `kernel-objects.md`) say what is charged now and what is still not (page tables and kernel structures: the arena; DMA: its global limit).
+
+## Related
+
+Issue 150 (memory quotas); `kernel/src/scheduler.rs` (`spawn_internal`, `terminate`, `charge`).
+
+## Resolution
+
+`kernel/src/scheduler.rs`: `spawn_internal` charges the child's image, stack and screen to its spawner and every payer above it after the last fallible step (over the quota: `ERR_LIMIT`, the regions return to the pool); `terminate` removes them from the payers' accounts with the task's private memory. The shell's `stat <pid>` shows `MEMORY=used/quota`. Test: `memory` suite, `memory_charged_to_spawner` — loader's account grows by exactly a started `clock`'s image, stack, screen and private memory (4,239,360 bytes of image, stack and screen on x86 at 1280 × 800, 2,056,192 on aarch64) and returns to its value at exit; passed on x86 and aarch64. With the charge removed the check fails ("grew by 0"). A spawn refused for the memory quota has no test: loader holds all of init's quota, so the frame pool runs out first. Profile: README MC-1.7 row, `kernel-objects.md`, `evidence.md`.
