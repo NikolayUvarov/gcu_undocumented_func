@@ -1,0 +1,26 @@
+/// The USB host controller driver `usb_host` and its class drivers (issue 164): `usb_host` owns the xHCI controller,
+/// enumerates devices (through hubs) and hands each interface to one class driver; `usb_hid` and `usb_storage` are its
+/// clients. A client's badge names the device class it may claim (`mind::usb::BADGE_HID`, `BADGE_STORAGE`), so a class
+/// driver reaches only its own interfaces (MC-3.3). Data travel through the client's buffer, lent with `attach`.
+package mind:usb@1.0.0;
+
+interface usb {
+    /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
+    /// instance has none: every other call then fails with not-found and the client attaches again.
+    attach: func(buffer: borrow<memory>) -> result<_, error-code>;
+    /// Claims the next interface of the client's class that no client holds; returns its handle and writes its
+    /// description (`mind::usb::Interface`) at the buffer's start. Errors: not-found, none now (a device may come later);
+    /// invalid, no buffer is attached to this instance (it was restarted): attach, then claim again.
+    claim: func() -> result<u32, error-code>;
+    /// Gives a claimed interface back.
+    release: func(handle: u32) -> result<_, error-code>;
+    /// A control transfer on the device's endpoint 0; the data stage (up to 4096 bytes) is at the buffer's start.
+    /// Returns the bytes transferred. Error not-found: the device is gone or the handle is not the client's.
+    control: func(handle: u32, request-type: u8, request: u8, value: u16, index: u16, length: u16) -> result<u16, error-code>;
+    /// A bulk transfer on the endpoint with address `address` (bit 7 set for IN) of the claimed interface, `length` bytes
+    /// (up to 64 KiB) at `offset` in the buffer. Returns the bytes transferred.
+    bulk: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
+    /// The reports received on the interrupt IN endpoint with address `address` since the last call, written at the buffer's start as
+    /// a length byte and the report each; returns their count. The first call starts polling the endpoint.
+    reports: func(handle: u32, address: u8) -> result<u16, error-code>;
+}

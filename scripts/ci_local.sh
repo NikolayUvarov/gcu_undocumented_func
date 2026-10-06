@@ -60,7 +60,7 @@ X86_GROUPS=(
     "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"
@@ -72,7 +72,7 @@ X86_GROUPS=(
 A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
-    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy"
+    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb"
     "aarch64: files, network and TLS|$A64 --suites vfs,net,tls"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
@@ -83,7 +83,7 @@ host_tests() {
     local t
     rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
     rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input beep console say; do
+    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid beep console say jpeg; do
         rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
     done
     rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1

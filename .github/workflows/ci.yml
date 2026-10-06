@@ -29,7 +29,7 @@ jobs:
         run: |
           rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests
           rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests
-          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input beep console say jpeg; do
+          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid beep console say jpeg; do
             rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests"
           done
           # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
@@ -54,7 +54,7 @@ jobs:
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
-            args: --suites keys,shell,tools,windows,wm,tablet
+            args: --suites keys,shell,tools,windows,wm,tablet,usb
           - name: files and block writes
             args: --suites vfs,edit,disk,block
           - name: NVMe boot disk
@@ -126,7 +126,7 @@ jobs:
           - group: boot and fault containment
             smoke: true
           - group: programs, shell and four CPUs
-            suites: normal,shell,smp,busy
+            suites: normal,shell,smp,busy,usb
           - group: files, network and TLS
             suites: vfs,net,tls
           - group: RAM, ACPI and PCI above 4 GiB

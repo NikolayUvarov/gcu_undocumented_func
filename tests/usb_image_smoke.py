@@ -49,14 +49,15 @@ def main():
         for pid in [1, 3, 4]:
             require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
         assert heap_used(vm) == baseline
-        # Files are read from the same USB drive: xHCI -> usb_storage -> vfs_server.
-        require(vm.service_logs("usb_storage", "[USB] MASS STORAGE ON PORT"), "[USB] MASS STORAGE ON PORT")
+        # Files are read from the same USB drive: xHCI -> usb_host -> usb_storage -> vfs_server (issue 164).
+        require(vm.service_logs("usb_host", "SUPER SPEED"), "(SUPER SPEED)")
+        require(vm.service_logs("usb_storage", "[USB] MASS STORAGE: "), "[USB] MASS STORAGE: ")
         require(vm.service_logs("vfs_server", "[VFS] MOUNTED FAT16 FROM USB"), "[VFS] MOUNTED FAT16 FROM USB")
         require(vm.command("run files &"), "PID=5 NAME=files BACKGROUND")
         files_check(vm, 5)
         vm.command("kill 5")
         assert "FAULT PID=" not in vm.command("faults")
-        print("PASS: exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; VFS over xHCI USB mass storage")
+        print("PASS: exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; VFS over xHCI USB mass storage through usb_host")
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / "mind-core-usb-image.log"

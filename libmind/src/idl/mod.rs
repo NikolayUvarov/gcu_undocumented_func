@@ -17,6 +17,7 @@ pub mod socket;
 pub mod sysinfo;
 pub mod tls;
 pub mod tts;
+pub mod usb;
 pub mod vfs;
 pub mod voice;
 pub mod window;

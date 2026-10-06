@@ -47,6 +47,17 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     result
 }
 
+// Intel 7, 8 and 9 series chipsets (from 2012, Intel Macs among them) give their USB ports to the EHCI controllers
+// until the system hands them to the xHCI one (issue 164): Panther Point, Lynx Point (and LP), Wildcat Point (and LP).
+const INTEL_SWITCHABLE_XHCI: [u32; 5] = [0x1E31_8086, 0x8C31_8086, 0x9C31_8086, 0x8CB1_8086, 0x9CB1_8086];
+
+// USB 3 SuperSpeed on every port that has it (USB3_PSSEN from USB3PRM), USB 2 to xHCI (XUSB2PR from XUSB2PRM).
+unsafe fn route_to_xhci(bus: u8, device: u8, function: u8) {
+    write(bus, device, function, 0xD8, read(bus, device, function, 0xDC));
+    write(bus, device, function, 0xD0, read(bus, device, function, 0xD4));
+    crate::serial_print("MIND CORE KERNEL: PCI: INTEL XHCI: USB PORTS ROUTED FROM EHCI TO XHCI\n");
+}
+
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
 pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     let mut devices = alloc::vec::Vec::new();
@@ -60,6 +71,7 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 let class = read(bus, device, function, 0x08) >> 8;
                 let id = read(bus, device, function, 0); // vendor | device << 16
                 let irq = crate::pcicfg::line(bus, device, function);
+                if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 devices.push(Device { class, id, bars: bars(bus, device, function), irq, bus, device, function });
             }
         }

@@ -28,7 +28,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_storage", "virtio_blk", "nvme", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
 BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
@@ -49,7 +49,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
@@ -61,6 +61,10 @@ class VM:
         extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         if tablet:
             extra = (*extra, "-device", "virtio-tablet-pci")
+        if usb_input:
+            # USB input only (issue 164): a keyboard behind a hub, a tablet on a root port; no PS/2 or VirtIO input.
+            extra = (*extra, "-device", "qemu-xhci,id=xhci", "-device", "usb-hub,bus=xhci.0,port=1,id=hub",
+                     "-device", "usb-kbd,bus=xhci.0,port=1.1,id=kbd", "-device", "usb-tablet,bus=xhci.0,port=2,id=usbtablet")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -78,9 +82,9 @@ class VM:
             shutil.copyfile(args.aavmf_vars, variables)
             machine = ["-machine", getattr(args, "machine", None) or "virt,gic-version=3,highmem=off", *([] if "-cpu" in extra else ["-cpu", "max"]),
                        "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
-                       "-device", "ramfb", "-device", "virtio-keyboard-pci", *([] if "virtio-tablet-pci" in extra else ["-device", "virtio-tablet-pci"])]
+                       "-device", "ramfb", *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
         else:
-            machine = ["-bios", args.firmware]
+            machine = ["-bios", args.firmware, *(["-machine", "pc,i8042=off"] if usb_input else [])]
         self.process = subprocess.Popen(
             [args.qemu, *machine, *storage,
              *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
@@ -3648,6 +3652,82 @@ def wm_suite(vm):
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
+def usb_suite(vm):
+    """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port, usb_hid
+    turns their reports into keys and pointer events; devices come and go at run time, and both drivers restart."""
+    names = vm.services()
+    assert "usb_host" in names and "usb_hid" in names and "ps2_kbd" not in names and "virtio_input" not in names, names
+    hid = vm.service_logs("usb_hid", "TABLET")
+    require(hid, "[USB_HID] 0627:0001 KEYBOARD")
+    host = vm.command("dmesg -s usb_host", raw=True)
+    hub = re.search(r"\[USB\] 0409:55AA ON PORT (\d+) \(FULL SPEED\) HUB", host)
+    assert hub, host
+    require(host, f"[USB] 0627:0001 ON PORT {hub[1]}.1 (FULL SPEED)")  # the keyboard on the hub's first port
+    # The shell's keyboard client is usb_hid's (no PS/2 controller): keymap works through it.
+    require(vm.command("keymap"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT  LAYOUTS: US RU")
+
+    def typed(keys, hold=None):
+        # The keys program's lines for keys sent to the USB keyboard.
+        vm.send("run keys\n")
+        vm.expect("[KEYS] READY")
+        time.sleep(.2)
+        start = len(vm.log)
+        for key in keys:
+            vm.hmp(f"sendkey {key}" + (f" {hold}" if hold else ""))
+            time.sleep(.05 + (hold or 0) / 1000)  # sendkey returns at once; the key is released `hold` ms later
+        vm.serial(enter=False)
+        time.sleep(.5)
+        vm.collect()
+        got = re.findall(r"\[KEYS\] (code=[^\r\n]*)", vm.log[start:])
+        vm.send_bytes(b"\x1b")
+        vm.expect("EXITED. SHELL RESUMED.")
+        time.sleep(.1); vm.collect(); vm.output = ""
+        return got
+
+    def in_order(got, expected):
+        at = 0
+        for line in expected:
+            while at < len(got) and line not in got[at]:
+                at += 1
+            assert at < len(got), (line, got)
+            at += 1
+
+    keys = [("up", "code=Up mods=-"), ("shift-right", "code=Right mods=S"), ("f1", "code=F(1) mods=-"), ("f10", "code=F(10) mods=-"),
+            ("delete", "code=Delete mods=-"), ("home", "code=Home mods=-"), ("pgdn", "code=PageDown mods=-"),
+            ("ctrl-c", "code=Char mods=C char=c"), ("alt-x", "code=Char mods=A char=x"), ("shift-a", "code=Char mods=S char=A"),
+            ("backspace", "code=Backspace mods=-"), ("tab", "code=Tab mods=-"),
+            ("ctrl-shift", None), ("q", "char=й U+0439"), ("shift-q", "char=Й U+0419"), ("alt-shift", None), ("q", "char=q U+0071")]
+    in_order(typed([k for k, _ in keys]), [line for _, line in keys if line])
+    # A held key repeats: the host does it for a USB keyboard (after 500 ms, every 33 ms).
+    got = typed(["w"], hold=1200)
+    assert len([g for g in got if "char=w " in g]) >= 10, got
+    # The tablet: a click on fm's first entry puts the cursor there.
+    vm.send("fm\n")
+    vm.expect("[FM] READY")
+    time.sleep(.3)
+    start = len(vm.log)
+    vm.tablet_at(10 * 8 + 4, 2 * 16 + 8)
+    time.sleep(.05)
+    vm.tablet_click()
+    # The cell where the pixel is depends on the screen's size: x86's is the 1280 x 800 the clicks assume.
+    require(logged(vm, start, "BUTTONS=1"), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0" if vm.arch == "x86_64" else " BUTTONS=1 WHEEL=0")
+    vm.send_bytes(b"\x1b"); time.sleep(.3); vm.send("\n"); time.sleep(.3); vm.collect(); vm.output = ""
+    # Unplugged and plugged in again, on another hub port: usb_hid lets it go and takes the new one.
+    vm.qmp("device_del", id="kbd")
+    require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
+    vm.qmp("device_add", driver="usb-kbd", bus="xhci.0", port="1.2", id="kbd2")
+    require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
+    in_order(typed(["m", "n"]), ["char=m U+006D", "char=n U+006E"])
+    # Both drivers restart; the keyboard works again (usb_hid claims it from the new usb_host).
+    for driver in ("usb_hid", "usb_host"):
+        pid = vm.services()[driver]
+        require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
+        require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
+        require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
+        in_order(typed(["z"]), ["char=z U+007A"])
+    print("PASS: USB keyboard behind a hub and tablet: keys, layouts, repeat, a click, hot plug, driver restarts", flush=True)
+
+
 def tablet_suite(vm, wav):
     """The VirtIO tablet (issue 161): the host's pointer as a position, so the system's pointer is where the host's is
     and reaches the edges of the screen — fm's key bar in the bottom right corner, wm's buttons at the right edge."""
@@ -3895,7 +3975,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -3912,7 +3992,7 @@ def main():
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -3993,7 +4073,7 @@ def main():
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else (), tablet=suite == "tablet")
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else (), tablet=suite == "tablet", usb_input=suite == "usb")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
@@ -4006,7 +4086,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"
