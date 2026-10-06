@@ -155,6 +155,9 @@ pub const CAP_KIND_PLATFORM: usize = 11;
 pub const CAP_KIND_CONTROL: usize = 12;
 pub const CAP_KIND_RESTART: usize = 13; // spawn boot images and services again, nothing else (init after boot)
 pub const CAP_KIND_OBSERVE: usize = 14; // read-only statistics: STAT, TASK_LIST, CPU_INFO, KERNEL_HEAP, FAULTS
+// A privilege held in escrow (issue 170): its holder cannot use it, only grant it at a service spawn, where the child
+// gets the privilege itself; `rights` in STAT and CAP_INFO's arg2 name the privilege's kind.
+pub const CAP_KIND_ESCROW: usize = 15;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -311,7 +314,8 @@ pub const PLATFORM_DEVICE_BAR: usize = 4; // device index, BAR number: port rang
 pub const PLATFORM_DEVICE_IRQ: usize = 5; // device index
 pub const PLATFORM_FRAMEBUFFER: usize = 6;
 pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel for the platform's lifetime
-pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL or _RESTART
+pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL, _RESTART or _OBSERVE; b = PRIVILEGE_ESCROW: in escrow (not _RESTART)
+pub const PRIVILEGE_ESCROW: usize = 1;
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)

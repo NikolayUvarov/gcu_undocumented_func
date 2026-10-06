@@ -105,7 +105,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel; `PLATFORM_DEVICE_MSIX` (device, table entry) gives an interrupt line 16–31 whose MSI-X entry the kernel programs (on aarch64 through the GICv3 ITS); `PLATFORM_MMIO` (an index: `PLATFORM_UART`, `PLATFORM_RTC`, `PLATFORM_PINS_PL061` + n, `PLATFORM_PINS_BCM2711` + n) the registers of a platform device outside PCI that the board has: on aarch64 the console UART the SPCR names, QEMU's PL031, and the pin controllers the DSDT and SSDTs name (issue 206); none on x86 [platform privilege] |
+| 32 | `PLATFORM_CAP` | `arg1` = `PLATFORM_*` kind, `arg2`, `msg[0]` = arguments → handle; every resource is validated by the kernel; `PLATFORM_DEVICE_MSIX` (device, table entry) gives an interrupt line 16–31 whose MSI-X entry the kernel programs (on aarch64 through the GICv3 ITS); `PLATFORM_MMIO` (an index: `PLATFORM_UART`, `PLATFORM_RTC`, `PLATFORM_PINS_PL061` + n, `PLATFORM_PINS_BCM2711` + n) the registers of a platform device outside PCI that the board has: on aarch64 the console UART the SPCR names, QEMU's PL031, and the pin controllers the DSDT and SSDTs name (issue 206); none on x86 [platform privilege] `PLATFORM_PRIVILEGE` with `msg[0]` = `PRIVILEGE_ESCROW` gives the privilege in escrow (`CAP_KIND_ESCROW`, issue 170): its holder cannot use it, and a grant of it at a `SPAWN_SERVICE` spawn gives the child the privilege; at any other spawn it is refused. |
 | 59 | `MEMORY_RESERVE` | `arg1` = bytes of the frame pool kept for the system band (issue 169): an application-band task's heap block, or an application's image, stack and screen, is refused when it would leave less free (`ALLOC` → 0, `SPAWN` → `ERR_NO_MEMORY`); rounded up to pages, beyond the pool `ERR_INVALID` [platform privilege] |
 | 33 | `DEVICE_FIND` | `arg1` = PCI class code, `arg2` = mask, `msg[0]` = n-th match, `msg[1]` = PCI vendor \| device << 16 (0: any) → device index |
 | 54 | `DEVICE_CONFIG` | `arg1` = MMIO or port capability over a BAR of a PCI function, `arg2` = offset (< 256) → that function's configuration dword (read only; drivers find their capabilities); with the platform privilege as `arg1`, `msg[0]` = device index: any device, without enabling it |
@@ -120,7 +120,7 @@ At most `ENDPOINT_QUEUE` (4) senders wait on one endpoint; one more gets `ERR_BU
 | 40 | `FAULTS` | `arg1` = `FaultInfo` array, `arg2` = capacity → count [observe or process control] |
 | 41 | `CPU_INFO` | `arg1` = CPU index → APIC id; `arg2` = online, `msg[2]` = ticks [observe or process control] |
 | 42 | `KERNEL_HEAP` | → used bytes; `arg2` = free, `msg[2]` = 1 if a test allocation was released [observe or process control] |
-| 35 | `TASK_KILL` | `arg1` = PID [process control] |
+| 35 | `TASK_KILL` | `arg1` = PID [process control, or an ancestor of the task: its spawner or a live task above it (issue 170)] |
 | 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
 | 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
 | 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |

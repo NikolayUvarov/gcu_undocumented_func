@@ -2176,6 +2176,29 @@ def ahci_suite(vm):
     print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
+def escrow_check(vm):
+    """Issue 170: init keeps the privileges it grants in escrow and holds no process control: it can pass them to a
+    service it starts but not use them. Services restarted from escrow get the privilege itself."""
+    caps = vm.command("stat caps 1", raw=True)
+    kinds = [int(k) for k in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=(\d+) ", caps, re.M)]
+    usable = {6: "input", 7: "display", 11: "platform", 12: "control", 14: "observe"}
+    assert not {usable[k] for k in kinds if k in usable}, caps
+    escrowed = {int(r) for r in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=15 RIGHTS=(\d+) ", caps, re.M)}
+    assert {6, 7, 9, 12, 14} <= escrowed, caps
+    assert 13 in kinds and 9 in kinds, caps  # restart and its own spawn privilege
+    # Restarted from escrow: sysmon reads statistics with the observe privilege, loader starts programs with spawn.
+    for service, ready in (("sysmon", "[SYSMON] READY: SAMPLES EVERY 100 MS"), ("loader", "[LOADER] READY")):
+        old = vm.services()[service]
+        require(vm.command(f"svc restart {service}"), f"{service} restarted: PID")
+        assert vm.services()[service] != old, service
+        require(vm.service_logs(service, ready), ready)
+    started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))
+    assert started, "loader restarted from escrow does not start programs"
+    vm.command(f"kill {started[1]}")
+    require(vm.command("stat caps 1", raw=True), "KIND=15 RIGHTS=12 ")
+    print("PASS: init holds no usable input, display, observe or process-control privilege (escrow only); sysmon and loader restarted from escrow work", flush=True)
+
+
 def services_suite(vm):
     # The shell's fixed grants 13..15 (issue 151): sysmon's authority view (badged), the keyboard driver, the compositor.
     real = vm.services()
@@ -2414,6 +2437,7 @@ def services_suite(vm):
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
+    escrow_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")

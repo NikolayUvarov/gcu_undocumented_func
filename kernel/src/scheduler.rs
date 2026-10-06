@@ -43,7 +43,7 @@ impl Accounting {
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe }
+pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8) }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,10 @@ impl Name {
 enum Source<'a> { Boot(usize), Image(&'a [u8]) }
 
 impl Capability {
+    // A privilege by its kind (the escrowable ones).
+    fn privilege(kind: usize) -> Option<Self> {
+        match kind { CAP_KIND_INPUT => Some(Self::Input), CAP_KIND_DISPLAY => Some(Self::Display), CAP_KIND_SPAWN => Some(Self::Spawn), CAP_KIND_CONTROL => Some(Self::Control), CAP_KIND_OBSERVE => Some(Self::Observe), _ => None }
+    }
     fn overlaps(self, physical: usize, size: usize) -> bool {
         match self { Self::Memory(p, s, _) | Self::Dma(p, s) => p < physical + size && physical < p + s, _ => false }
     }
@@ -193,6 +197,17 @@ impl Scheduler {
         created + self.tasks.iter().flatten().filter(|t| t.state != State::Exited && t.parent == Some((slot, pid))).map(|t| t.quota_endpoints).sum::<usize>()
     }
     fn live(&self, slot: usize) -> bool { slot != 0 && self.tasks[slot].as_ref().is_some_and(|t| t.state != State::Exited) }
+    // Whether `slot` was spawned by `ancestor` or by one of its live descendants (the parent links, while each lives).
+    fn descends_from(&self, slot: usize, ancestor: usize) -> bool {
+        let mut at = slot;
+        for _ in 0..SLOTS {
+            let Some((parent, pid)) = self.tasks[at].as_ref().and_then(|t| t.parent) else { return false };
+            if !self.tasks[parent].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) { return false; }
+            if parent == ancestor { return true; }
+            at = parent;
+        }
+        false
+    }
     // The task that pays for `slot`'s memory above it, if it still lives.
     fn payer_of(&self, slot: usize) -> Option<usize> {
         let (payer, pid) = self.tasks[slot].as_ref()?.payer?;
@@ -465,7 +480,10 @@ impl Scheduler {
                 let region = Region::new(bytes, 64 * 1024).map_err(|_| ERR_NO_MEMORY)?;
                 let cap = Capability::Dma(region.ptr() as usize, region.len()); self.dma.push(region); Ok(cap)
             }
-            PLATFORM_PRIVILEGE => match a { CAP_KIND_INPUT => Ok(Capability::Input), CAP_KIND_DISPLAY => Ok(Capability::Display), CAP_KIND_SPAWN => Ok(Capability::Spawn), CAP_KIND_CONTROL => Ok(Capability::Control), CAP_KIND_RESTART => Ok(Capability::Restart), CAP_KIND_OBSERVE => Ok(Capability::Observe), _ => Err(ERR_INVALID) },
+            // In escrow the holder only passes the privilege on to a service it spawns (issue 170).
+            PLATFORM_PRIVILEGE if b == PRIVILEGE_ESCROW => Capability::privilege(a).map(|_| Capability::Escrow(a as u8)).ok_or(ERR_INVALID),
+            PLATFORM_PRIVILEGE if b != 0 => Err(ERR_INVALID),
+            PLATFORM_PRIVILEGE => if a == CAP_KIND_RESTART { Ok(Capability::Restart) } else { Capability::privilege(a).ok_or(ERR_INVALID) },
             _ => Err(ERR_INVALID),
         }
     }
@@ -711,6 +729,7 @@ impl Scheduler {
         let parent = Some((slot, spawner.pid));
         if length == 0 || length > NAME_MAX + 1 + ARGS_MAX || count > SPAWN_GRANTS_MAX || !task.space.validate_read(request.arg1, length) { return Err(ERR_INVALID); }
         if flags & SPAWN_SERVICE != 0 && !platform { return Err(ERR_RIGHTS); }
+        let service = flags & SPAWN_SERVICE != 0;
         // In front only for a task with a screen, and only from the task that has the focus now (issue 160).
         let front = if flags & SPAWN_FOREGROUND != 0 {
             if flags & SPAWN_SCREEN == 0 { return Err(ERR_INVALID); }
@@ -734,7 +753,9 @@ impl Scheduler {
             if !(1..SLOT_DYNAMIC).contains(&child) { return Err(ERR_INVALID); }
             // A moved handle may appear once: two slots must never share one node.
             if raw[..grant_bytes].chunks(8).enumerate().any(|(m, other)| m != n && other[..4] == grant[..4] && (flags | u16::from_le_bytes([other[6], other[7]])) & GRANT_MOVE != 0) { return Err(ERR_INVALID); }
-            let pending = self.transfer(slot, own, rights | if flags & GRANT_MOVE != 0 { CAP_TRANSFER_MOVE } else { 0 }).ok_or(ERR_INVALID)?;
+            let mut pending = self.transfer(slot, own, rights | if flags & GRANT_MOVE != 0 { CAP_TRANSFER_MOVE } else { 0 }).ok_or(ERR_INVALID)?;
+            // An escrowed privilege becomes the privilege only in a service the spawner may start (issue 170).
+            if let Capability::Escrow(kind) = pending.cap { if !service { return Err(ERR_INVALID); } pending.cap = Capability::privilege(kind as usize).ok_or(ERR_INVALID)?; }
             caps[child] = Some(pending.cap); nodes[child] = pending.node; moves[n] = pending.moved_from;
         }
         let source = if request.msg[0] & SPAWN_BOOT != 0 {
@@ -762,7 +783,9 @@ impl Scheduler {
     unsafe fn control(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
         // Statistics need only the observe privilege; kill, focus, key listening, logs, console and halt need process control (MC-10.2).
         let observation = matches!(request.syscall_num, SYSCALL_TASK_LIST | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_FAULTS | SYSCALL_STAT);
-        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) { return Err(ERR_RIGHTS); }
+        // A lifecycle owner ends its own descendants without process control (issue 170: init supervises without it).
+        let descendant = request.syscall_num == SYSCALL_TASK_KILL && self.find(request.arg1 as u64).is_some_and(|target| self.descends_from(target, slot));
+        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) && !descendant { return Err(ERR_RIGHTS); }
         let task_slot = |s: &Self, pid: usize| if pid == 0 { Some(slot) } else { s.find(pid as u64) };
         match request.syscall_num {
             SYSCALL_STAT => self.stat(slot, request),
@@ -1133,6 +1156,7 @@ impl Scheduler {
                     Some(Capability::Control) => (CAP_KIND_CONTROL, 0, 0),
                     Some(Capability::Restart) => (CAP_KIND_RESTART, 0, 0),
                     Some(Capability::Observe) => (CAP_KIND_OBSERVE, 0, 0),
+                    Some(Capability::Escrow(kind)) => (CAP_KIND_ESCROW, kind as usize, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
                 let sealed = match self.cap(slot, request.arg1) { Some(Capability::Memory(physical, size, _)) => self.sealed(physical, size), _ => false };

@@ -114,6 +114,7 @@ pub fn caps(out: &mut impl Write, pid: u64) {
             // Port ranges and IRQ lines carry their base in `rights`.
             CAP_KIND_PORTS => { let _ = write!(out, " PORTS={:#x}+{}", c.rights, c.size); }
             CAP_KIND_IRQ => { let _ = write!(out, " LINE={}", c.rights); }
+            CAP_KIND_ESCROW => { let _ = write!(out, " OF={}", stat::cap_name(c.rights)); }
             _ => {}
         }
         let _ = writeln!(out);

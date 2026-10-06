@@ -1,0 +1,37 @@
+# 170 — The supervisor without usable privileges: escrow for the privileges init grants, no process control — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** C6 "separating the supervisor from the bootstrap authority", stage II exit ("boot authority is separated") · **Constitution:** MC-3.12, MC-6.2, MC-6.8, MC-1.4
+
+## Problem
+
+After the boot `init` drops the platform privilege but stays a broad authority. To restart services it keeps every privilege it granted: process control (the shell), input (the keyboard and pointer drivers), display (the compositor), spawn (loader) and observe (logd, sysmon). It could also use all of them itself. On top of that it minted process control for itself, to stop services and applications: with it, it can also halt and reboot the machine, read any task's logs and console, and move the focus. MC-3.12 asks that retained recovery authorities be isolated and restricted; MC-6.2 that recovery policy have the minimum necessary authorities.
+
+## Plan
+
+- **Escrow (kernel).** `PLATFORM_CAP(PLATFORM_PRIVILEGE, kind, PRIVILEGE_ESCROW)` gives a capability of kind `CAP_KIND_ESCROW` holding the privilege. `holds` never matches it, so its holder cannot use it. Granted at a `SPAWN_SERVICE` spawn, the child gets the privilege itself, as a derived node, so `CAP_REVOKE` of the escrow still takes it back. At any other spawn the grant is refused, and an IPC transfer passes the escrow on unchanged. STAT and `CAP_INFO` report the kind inside.
+- **Lifecycle rule (kernel).** `TASK_KILL` is allowed to an ancestor of the target — its spawner, or a live task above it — as well as to process control.
+- **`init`.** It mints every privilege for a service in escrow, and it no longer mints process control for itself.
+- **Tests.** `services` suite: init's capabilities hold no usable input, display, platform, control or observe privilege, and those it grants are in escrow; `sysmon` and `loader` restarted from escrow work. The existing lifecycle checks still stop services and applications through init.
+
+## Acceptance criteria
+
+- `services` suite passes on x86; the full local gate passes.
+- Profile (MC-3.12), bootstrap description, API and roadmap C6 (both languages) say what init keeps and what stays usable.
+
+## Related
+
+Issues 020 and 021 (K1), 032 (C6), 167 (models of the capability tree), 169 (recovery reserve).
+
+## Resolution
+
+- **Code.**
+  - `common/abi.rs`: `CAP_KIND_ESCROW`, `PRIVILEGE_ESCROW`.
+  - `kernel/src/scheduler.rs`: `Capability::Escrow`, `Capability::privilege`, escrow minting in `platform_cap`, unwrapping at a service spawn in `spawn`, `descends_from` and the ancestor rule in `control`; STAT and `CAP_INFO` report the kind.
+  - `init/src/main.rs`: `Minted::privilege` mints in escrow; no process control.
+  - `libmind/src/stat.rs`, `shell/src/observe.rs`: the `escrow` kind name and `OF=<kind>`.
+- **Tests.** `escrow_check` in the `services` suite passed on x86, and the suite's lifecycle checks (stopping a service and an application through init) passed with init holding no process control.
+- **Docs.** `docs/profile` README (MC-3.12), `bootstrap.md`, `kernel-objects.md`, `evidence.md`; `docs/api/README.md`; ROADMAP 1.8 in both languages.
+- **Report.** The `caps` tool of the tools track does not know the new kind yet: [tools-track-reports.md](../issues/tools-track-reports.md).
+- **Remaining.**
+  - The device capabilities `init` keeps for restarts stay usable by it: ports, MMIO, IRQ lines and DMA regions. It stops devices through them.
+  - The escrow is not in the TLA+ model of the capability tree.
