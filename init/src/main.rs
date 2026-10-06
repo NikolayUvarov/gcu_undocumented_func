@@ -57,7 +57,8 @@ impl Minted {
     fn clock(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_RTC, 0) } else { self.ports(0x70, 2) } }
     // The platform's serial line: COM1 (LEGACY) on x86, the board's UART on aarch64.
     fn serial(&mut self) -> Result<usize> { if cfg!(target_arch = "aarch64") { self.mint(PLATFORM_MMIO, PLATFORM_UART, 0) } else { self.ports(0x3F8, 8) } }
-    fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, 0) }
+    // Kept in escrow: init grants it to the service and cannot use it itself (issue 170).
+    fn privilege(&mut self, kind: usize) -> Result<usize> { self.mint(PLATFORM_PRIVILEGE, kind, PRIVILEGE_ESCROW) }
 }
 impl Drop for Minted { fn drop(&mut self) { for &slot in &self.slots[..self.count] { let _ = ipc::drop_cap(slot); } } }
 
@@ -513,8 +514,7 @@ fn main(info: &'static BootInfo) {
         Ok(()) => mind::println!("[INIT] RECOVERY RESERVE {} MiB", RECOVERY_RESERVE_MIB),
         Err(_) => mind::println!("[INIT] NO RECOVERY RESERVE: APPLICATIONS MAY TAKE ALL TASK MEMORY"),
     }
-    // Process control, to stop services and applications on request (init is their lifecycle owner).
-    if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
+    // No process control: init ends services and applications as their ancestor, the kernel's lifecycle rule (issue 170).
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
     match platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_RESTART, 0) {
         Ok(_) => { let _ = ipc::drop_cap(SLOT_DEV0); mind::println!("[INIT] PLATFORM PRIVILEGE DROPPED"); }

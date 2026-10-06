@@ -56,7 +56,8 @@ Each step is its own commit, with the docs/profile statements (kernel-objects.md
   - `STAT` version 3: `argument` is the first record of `STAT_TASKS` and `STAT_ENDPOINTS` (`mind::stat::each` reads every page); `tasks_limit` and `endpoints_limit` are 0. The shell's `ps`, `quotas` and `stat <pid>` see every task; the monitors show no limit and `-` for a quota without a count.
   - An endpoint named by a watch or a blocked IPC is not handed out again while they last.
   - Tested in QEMU with 4 CPUs and 512 MiB: 80 clocks with screens at once on x86-64, 171 on aarch64 (its screen is smaller); the next one is refused with `OUT OF MEMORY` and the system goes on; the arena and the frame pool come back. Also the `services`, `memory`, `heap`, `isolation` and `tools` suites on x86-64.
-  - Left for step 2: the `sysinfo` interface (`sysmon`, `top`, the console's `ps`, `logd`'s names) still reads 40 tasks and 128 endpoints.
+  - Left for step 2: the `sysinfo` interface (`sysmon`, `top`, the console's `ps`, `logd`'s names) still reads 40 tasks and 128 endpoints. That part is the tools track's (`sysmon`, the monitors).
+- **Who does the rest.** Steps 1 and 2 were done by the tools session at the user's request, before TRACKS.md gave the kernel files to the kernel track alone. Steps 3–6 stay with the kernel track.
 
 ## Acceptance criteria
 

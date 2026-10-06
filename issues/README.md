@@ -8,26 +8,30 @@
    - add a `## Resolution` (or `## Done`) section saying what was done and where (files, tests);
    - fix relative links (`../issues/…md` for open tasks, `….done` for finished ones).
 3. **A task that became irrelevant** (replaced by another design or by a different task) is moved the same way with status `superseded` and a resolution naming what replaced it. Unfinished remainders are split into a new issue rather than keeping the old one open.
-4. **One file per task**: `NNN-short-name.md` (the tools track: `uNNN-short-name.md`), numbers are never reused. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
+4. **One file per task**: `NNN-TRK-MMMM-short-name.md` — `NNN` the main task it belongs to (`000`: none), `TRK` the track's code, `MMMM` the track's own counter — or `NNN-short-name.md` for a main task (numbered from the track's range). Numbers are never reused; numbers given before this scheme (`158`, `u015`, …) stay. Format: title, metadata line (Type · Priority · Status · Blocked by), Problem, Plan, Acceptance criteria, Related. Every task names the Constitution articles or roadmap item it serves.
 5. Update the tables below in the same commit.
 
 Tasks that need a person (repository settings, legal decisions, coordination of agent sessions) are in [issues-human/](../issues-human/README.md).
 
 ## Open tasks
 
-Tracks work in parallel and number their issues from separate ranges so the numbers never collide: the **tools track** builds the user tools after its plan ([docs/tools](../docs/tools/README.md), [docs/voice](../docs/voice/README.md); branch `claude/wizardly-franklin-kec1a9`) — its range 077–099 is used up, and it numbers its issues u001, u002, … from now on (`u001-short-name.md`), a counter of its own that no other track uses; the **network track** (100–149) builds the network drivers and services of track D; the **kernel track** (150–199) owns `kernel/`, `common/abi.rs` and the core services. The **porting track** (200–249) brings MIND Core to other architectures (track H, aarch64 first) and coordinates with the kernel track on `kernel/src/arch/`. A tools issue blocked by a kernel issue waits for it. ABI changes are made only in kernel issues.
+Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owners, branches and starting tasks are in the registry [TRACKS.md](../TRACKS.md). A task is numbered `NNN-TRK-MMMM` (main task, track code, the track's own counter); a request to another track goes to `requests-<TRK>.md`; ABI changes are made only in `KRN` tasks.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
-| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96); all RAM on x86 (now below 4 GiB) | kernel | P1 | — | K4 |
+| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks, applications, endpoints, CPUs (8), capability slots (96) or a program's memory; steps 1–2 done (all RAM on x86-64; no task or endpoint limit but memory) | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
+| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step) | main task, `STO` (open) | P2 | — | track B |
+| [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
+| [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
+| [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
+Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively).
 
-Requests from other tracks that wait for the porting track's numbers: [porting-track-reports.md](porting-track-reports.md) (Apple Silicon Macs natively).
 
 ## Finished tasks (`issues-done/`)
 
@@ -183,5 +187,6 @@ Requests from other tracks that wait for the porting track's numbers: [porting-t
 | [168](../issues-done/168-task-memory-charged-to-spawner.done) | A task's image, stack and screen are charged to its spawner's memory quota (MC-1.7) | done (2026-10-06) |
 | [169](../issues-done/169-recovery-reserve.done) | A recovery reserve of the frame pool (32 MiB, set by init): applications cannot take the memory a service restart needs (MC-6.5) | done (2026-10-06) |
 | [209](../issues-done/209-aarch64-smoke-interleaved-lines.done) | aarch64 smoke: a line goes out in one write, so lines of services printing at once stay whole (reported by the tools track) | done (2026-10-06) |
+| [170](../issues-done/170-supervisor-without-usable-privileges.done) | The supervisor without usable privileges: init keeps the privileges it grants in escrow and holds no process control (MC-3.12, C6) | done (2026-10-06) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

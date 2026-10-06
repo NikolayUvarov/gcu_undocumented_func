@@ -87,7 +87,7 @@ pub fn cap_name(kind: u32) -> &'static str {
     match kind as usize {
         CAP_KIND_ENDPOINT => "endpoint", CAP_KIND_MEMORY => "memory", CAP_KIND_DMA => "dma", CAP_KIND_PORTS => "ports", CAP_KIND_IRQ => "irq",
         CAP_KIND_INPUT => "input", CAP_KIND_DISPLAY => "display", CAP_KIND_MMIO => "mmio", CAP_KIND_SPAWN => "spawn", CAP_KIND_REPLY => "reply",
-        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_RESTART => "restart", CAP_KIND_OBSERVE => "observe", _ => "?",
+        CAP_KIND_PLATFORM => "platform", CAP_KIND_CONTROL => "control", CAP_KIND_RESTART => "restart", CAP_KIND_OBSERVE => "observe", CAP_KIND_ESCROW => "escrow", _ => "?",
     }
 }
 

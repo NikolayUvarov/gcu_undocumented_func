@@ -21,30 +21,36 @@ What follows from this order for an agent:
 - **No redefining requirements.** Never weaken or reinterpret a requirement to make the code conform (MC-12.5). If a requirement looks wrong, propose an amendment: a new edition with the reason, the guarantees affected, the alternatives and a migration plan. Founding documents carry versions and exist in English and Russian, and both change together.
 - **Interface changes are explicit.** An interface change gets a new version and an explicit transition (MC-12.4, 12.7). In this repository, the system-call ABI lives in `common/abi.rs` and changes only in kernel-track issues. Service interfaces live in `idl/*.wit`.
 
-## 2. Tracks, ranges and branches
+## 2. Tracks, task numbers and branches
 
-Each track has an owner, a set of directories it mainly changes, an issue-number range and a branch. Numbers never collide, so tracks never need to coordinate on numbering.
+Each track has a **code**, a **range of main-task numbers**, an owner, a set of directories it mainly changes and its branches. A task's number carries its track's code, so tracks never need to coordinate on numbering.
 
-| Track | Roadmap | Issues | Owns mainly |
-|---|---|---|---|
-| tools | G | `u001`, `u002`, … (a counter of its own) | user tools, `wm`, `fm`, `edit`, `view`, voice |
-| network | D | 100–149 | `virtio_net`, `netstack`, `netpolicy`, `tls`, `keystore` |
-| kernel | A and the kernel side of the others | 150–199 | `kernel/`, `common/abi.rs`, the core services |
-| porting | H | 200–249 | `kernel/src/arch/`, other architectures (with the kernel track) |
+**Task numbers.**
 
-The current owners, branches and ranges are listed in [issues/README.md](issues/README.md), which is the authoritative record. Roadmap tracks B (state and recovery), C (update and provenance), E (Marain), F (safety plane) and Assurance have no owner yet: they are the natural places for a new track.
+- A **main task** is `NNN`: three digits from its track's range (`issues/NNN-short-name.md`). It states a goal at the size of a roadmap step.
+- A **task** of a track is `NNN-TRK-MMMM` (`issues/NNN-TRK-MMMM-short-name.md`):
+  - `NNN` is the main task it belongs to. It may be another track's main task, for example `158-DRV-0003` is the drivers track's part of the video task 158. It is `000` for a task under no main task.
+  - `TRK` is the track's code.
+  - `MMMM` is the track's own counter: four digits, never reused within the track.
+- Two tracks never produce the same number, because the codes differ. A main task is split into tasks by any track that works on it: each numbers its own part.
+- Numbers given before this scheme (`158`, `205`, `u015`, …) stay as they are.
+
+The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane) and `ASR` (assurance).
+
+The registry of tracks — current owners, branches, statuses and starting tasks — is [TRACKS.md](TRACKS.md), the authoritative record. Open tracks can be taken in parallel.
 
 **To join:**
 
-1. **Join an existing track** by agreeing with its owner, through a GitHub issue or the maintainer. You then use that track's range and work on your own branch, never on the owner's.
-2. **Or ask for a new track.** Open a GitHub issue titled `Track proposal: <name>` that names:
-   - the roadmap track (A–H) or Constitution articles it serves;
+1. **Take an open track** (status "open" in [TRACKS.md](TRACKS.md)): tell the maintainer, who records you as its owner there. Start from the track's main task, if it has one, or propose one.
+2. **Or join an owned track** by agreeing with its owner. You use the track's code and counter, and work on your own branch, never on the owner's.
+3. **Or ask for a new track.** Open a GitHub issue titled `Track proposal: <name>` that names:
+   - the roadmap track or Constitution articles it serves;
    - the directories it will change;
    - what it needs from other tracks.
 
-   The maintainer gives it a number range (250 and up, in blocks of 50) or a prefix, and records it in `issues/README.md`. Until then, propose work as GitHub issues and do not create files in `issues/`.
+   The maintainer gives it a code and a range (from 600, in blocks of 50) and records it in [TRACKS.md](TRACKS.md). Until then, propose work as GitHub issues and do not create files in `issues/`.
 
-**Branches.** One branch per agent session or track. The name should show the tool and the track, for example `claude/<name>` or `codex/network-<name>`. CI runs on pushes to `main` and `claude/**` and on pull requests; with another prefix, open a pull request or add the prefix to `.github/workflows/ci.yml`. An agent:
+**Branches.** The branch name carries the tool and then the track code or the task number: `<tool>/<TRK>-<name>` for a track's long-lived branch (`claude/NET-stack`), `<tool>/<NNN-TRK-MMMM>-<name>` for one task (`codex/300-STO-0002-cid`). CI runs on pushes to `main`, to `claude/**` and to branches named this way under any tool prefix, and on pull requests. An agent:
 
 - pushes only to its own branch;
 - never force-pushes a branch another session uses;
@@ -52,7 +58,7 @@ The current owners, branches and ranges are listed in [issues/README.md](issues/
 
 ## 3. The cycle of one task
 
-1. **Pick or write an issue.** One file per task: `issues/NNN-short-name.md` (the tools track: `uNNN-short-name.md`). It contains:
+1. **Pick or write an issue.** One file per task: `issues/NNN-TRK-MMMM-short-name.md`, or `issues/NNN-short-name.md` for a main task (section 2). It contains:
    - a title;
    - a metadata line: Type · Owner · Priority · Status · Blocked by · Roadmap · Constitution;
    - the sections Problem, Plan, Acceptance criteria, Related.
@@ -68,7 +74,7 @@ The current owners, branches and ranges are listed in [issues/README.md](issues/
 5. **Update the evidence.** If the change alters a statement in `docs/profile` (a guarantee, the TCB or evidence), update that statement in the same commit. Update the README and `docs/api` when behaviour or interfaces change.
 6. **Commit.** One task per commit where possible. The message says what changed and why, and cites the issue. An agent's commits carry a trailer naming the tool and, if there is one, a link to the session (for example `Co-Authored-By:` and a session URL). The person directing the agent is the author of record and accepts the [licence of contributions](CONTRIBUTING.md#licence-of-contributions).
 7. **Close the issue** when its acceptance criteria are met:
-   - `git mv issues/NNN-x.md issues-done/NNN-x.done`;
+   - `git mv issues/NNN-TRK-MMMM-x.md issues-done/NNN-TRK-MMMM-x.done` (a main task: `NNN-x`), when the main task's own criteria are met and its tasks are done or split off;
    - append ` — done` to the title and set `Status: done (YYYY-MM-DD)`;
    - add a `## Resolution` section saying what was done and where;
    - fix the relative links and update both tables in `issues/README.md`.
@@ -103,10 +109,10 @@ The maintainer or the owning track reviews and merges it.
 ## 5. Working next to other tracks
 
 - **Stay in your track's directories.** If your task needs a change in another track's area, the agent:
-  1. writes an issue for that track in its range, or records a report in `issues/` the way `issues/tools-track-reports.md` does when the owner numbers its own issues (the owner numbers each request and removes the file when it is empty);
-  2. marks its own issue `Blocked by` that issue;
+  1. records a request in `issues/requests-<TRK>.md` for that track (the code in section 2): only the owner numbers its tasks, so it turns each request into an `NNN-TRK-MMMM` task and removes the file when it is empty;
+  2. marks its own issue `Blocked by` that request, and then by the task number it gets;
   3. moves on to other work.
-- **ABI changes are made only in kernel-track issues.** A tools issue blocked by a kernel issue waits for it.
+- **ABI changes are made only in `KRN` tasks.** A task blocked by a `KRN` task waits for it.
 - **Resolving conflicts.** When `main` brings a conflict, merge (do not rebase shared history) and keep both sides' behaviour. Regenerate generated files with their tools (`scripts/mind_idl.py`), never by hand. If both sides changed the same logic and choosing one loses behaviour, ask the owner of the other change.
 - **Reports from people.** A user report that belongs to another track is passed to that track as described in the first point. It is not fixed silently in passing.
 - **Tasks only a person can do** go to [issues-human/](issues-human/README.md): repository settings, legal questions, coordination between agent sessions.
@@ -126,9 +132,10 @@ The maintainer or the owning track reviews and merges it.
 Paste this at the start of a session and fill in the brackets:
 
 ```text
-You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <name> track.
+You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <name> track, code <TRK>.
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
-Your branch: <branch>. Your issue numbers: <range or prefix>. Your directories: <list>.
+Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
+Your directories: <list>. Requests to another track go to issues/requests-<THEIR TRK>.md.
 Never push to other branches; reach main only through the gate in AGENTS.md section 4.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.

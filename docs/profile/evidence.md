@@ -26,6 +26,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | With 6 GiB of RAM the frame pool holds the free RAM above 4 GiB (about 3 GiB of it), the highest range first, and a 144 MiB heap from it is written and read back; programs, screens, the network and the disks work on it (issue 171) | `normal`, `display`, `net`, `vfs` suites with `--memory 6G` (`ram_above_4g`) |
 | A program's image, stack, screen and kernel structure are charged to its spawner's memory quota and leave it at exit (issues 168, 171) | `memory` suite (`memory_charged_to_spawner`) |
 | Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
+| init holds the privileges it grants in escrow and no process control; services restarted from escrow get the privilege; init stops services and applications as their ancestor (issue 170) | `services` suite (`escrow_check`, `lifecycle_check`) |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
 | The task in front hands the focus to a program it starts and gets it back when the program ends, without a notice to the shell; a task in the background cannot (the program starts in the background); Ctrl+Z from the program goes to the shell (issue 160) | `tools` suite (`fm_check`, `console_check`) |
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |
