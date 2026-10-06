@@ -234,7 +234,7 @@ impl Top {
             "NAME" => { let mut name = String::new(); for _ in 1..depth { name.push_str("  "); } if depth > 0 { name.push_str("└ "); } name.push_str(&task.name); name }
             "STATE" => String::from(text::state(task.state)), "CPU" => format!("{}", task.cpu), "%CPU" => text::permille(usage.cpu),
             "TIME" => text::cpu_time(task.run_ns), "SYSC/s" => text::count(usage.syscalls), "MEM" => text::size(task.memory()), "HEAP" => text::size(task.heap),
-            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => format!("{}/{}", task.used_endpoints, task.quota_endpoints),
+            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => if task.quota_endpoints >= 10_000 { format!("{}", task.used_endpoints) } else { format!("{}/{}", task.used_endpoints, task.quota_endpoints) }, // init's and loader's quotas of 65 535 and 65 279 (issue 171) do not fit the column
             _ => String::new(),
         }
     }

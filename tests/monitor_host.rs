@@ -427,6 +427,19 @@ fn task_graph_to_its_own_scale() {
 }
 
 #[test]
+fn root_quota_in_the_endpoint_column() {
+    // 171-APP-0006: init holds the root quota (65 535) and lends loader 65 279: their use alone fits the EP column.
+    let mut source = system();
+    source.tasks[0].quota_endpoints = 65535; source.tasks[0].used_endpoints = 65302;
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    let screen = draw(&mut top, 160, 30);
+    let init = screen.iter().find(|l| l.contains(" init ")).unwrap();
+    assert!(init.trim_end().ends_with(" 65302") && !init.contains("65535"), "{:?}", init);
+    assert!(screen.iter().any(|l| l.contains(" busy ") && l.trim_end().ends_with(" 0/4")), "{:#?}", screen);
+}
+
+#[test]
 fn every_cpu() {
     // 171-APP-0007: top draws a bar for every CPU, more to a row for more CPUs, at most 8 rows; load draws a graph for
     // each of the 16 a sample keeps, and the mean and the busiest of all.
