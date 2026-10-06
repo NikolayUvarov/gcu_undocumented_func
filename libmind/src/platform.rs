@@ -5,6 +5,9 @@ use crate::sys::{check, syscall, Result};
 /// Mints a capability over a platform resource into a new slot (`PLATFORM_*` kinds in the ABI).
 pub fn cap(kind: usize, a: usize, b: usize) -> Result<usize> { check(syscall(SYSCALL_PLATFORM_CAP, kind, a, [b, 0, 0, 0]).result) }
 
+/// Keeps `bytes` of the frame pool for the system band: applications' allocations stop above it (MC-6.5, issue 169).
+pub fn reserve_memory(bytes: usize) -> Result<()> { check(syscall(SYSCALL_MEMORY_RESERVE, bytes, 0, [0; 4]).result).map(|_| ()) }
+
 /// Index of the `nth` PCI function whose class code matches `class` under `mask`.
 pub fn find_device(class: u32, mask: u32, nth: usize) -> Result<usize> { find_device_id(class, mask, 0, nth) }
 /// As `find_device`, also matching the PCI `vendor | device << 16` identifier (0: any).

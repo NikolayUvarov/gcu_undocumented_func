@@ -1,0 +1,28 @@
+# 169 — A recovery reserve of the frame pool: applications cannot take the memory a service restart needs — done
+
+**Type:** kernel · **Owner:** kernel track · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — ([168](168-task-memory-charged-to-spawner.done) done) · **Roadmap:** C6 "reserve for recovery", stage II exit · **Constitution:** MC-6.5, MC-5.1, MC-1.4
+
+## Problem
+
+MC-6.5: "A supervisor must not depend on a resource that the component being recovered is able to exhaust completely." CPU has a reserve (the system band runs first, C7), memory has none: memory quotas are limits, not reservations, and `loader` holds all of `init`'s quota, so applications together can take the whole frame pool. A service that fails then cannot be restarted, and a running service cannot grow its heap.
+
+## Plan
+
+- Kernel mechanism: `MEMORY_RESERVE` (system call 59, platform privilege) sets how many bytes of the frame pool the system band keeps. A heap block of an application-band task (`ALLOC`), or the image, stack and screen of an application (`SPAWN` without `SPAWN_SERVICE`), is refused when it would leave less free.
+- Policy in `init`: 32 MiB (`RECOVERY_RESERVE_MIB`), set before the platform privilege is dropped; logged as `[INIT] RECOVERY RESERVE 32 MiB`.
+- `memtest fill`: takes all the heap it can get, in smaller and smaller blocks, and holds it.
+- Tests: `memory` suite; `isolation` case `k` (an application's `MEMORY_RESERVE` is refused).
+
+## Acceptance criteria
+
+- Applications that take all they can leave between the reserve and the reserve plus 1 MiB free; a service killed meanwhile is restarted and serves; their frames come back afterwards. x86 and aarch64.
+- Without the reserve the check fails.
+- The API, the bootstrap description and the profile state the reserve and its limits.
+
+## Related
+
+Issues 150 (frame pool, memory quotas), 168 (image, stack and screen charged to the spawner), 038 (scheduling bands).
+
+## Resolution
+
+`common/abi.rs` `SYSCALL_MEMORY_RESERVE`; `kernel/src/scheduler.rs` (`reserve`, `leaves_reserve`, checks in `ALLOC` and `spawn_internal` before any region is allocated); `libmind/src/platform.rs` `reserve_memory`; `init/src/main.rs` `RECOVERY_RESERVE_MIB` = 32; `memtest fill`. Test `recovery_reserve` in the `memory` suite: three `memtest fill` instances left 33,583,104 bytes free on x86 and 33,572,096 on aarch64 (the reserve is 33,554,432); `rtc` was killed, restarted and answered `date`; the frames returned. With the reserve set to 0 the same check fails (151,552 bytes left). The test harness's `hold_frames` now leaves its margin above the reserve. Profile: README (MC-5.1–5.5, MC-6.4–6.9 rows), `kernel-objects.md` (frame pool), `bootstrap.md`, `evidence.md`; API: `docs/api/README.md`. Limits stated there: the window broker can draw on the reserve within its own quota for application windows; the reserve is free memory, not a contiguous block.

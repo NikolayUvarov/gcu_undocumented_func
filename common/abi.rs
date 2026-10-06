@@ -129,6 +129,10 @@ pub const EXIT_FAULT: usize = 2; // | vector << 8
 // EXIT_STATUS (process control): arg1 = PID of one of the last EXIT_STATUSES tasks that ended → its reason.
 pub const SYSCALL_EXIT_STATUS: usize = 58;
 pub const EXIT_STATUSES: usize = 16;
+// MEMORY_RESERVE (platform privilege): arg1 = bytes of the frame pool kept for the system band, the supervisor's recovery
+// reserve (MC-6.5, issue 169). A heap block of an application-band task, or an application's image, stack and screen,
+// is refused (ALLOC: 0, SPAWN: ERR_NO_MEMORY) when it would leave less free. Rounded up to pages; beyond the pool: ERR_INVALID.
+pub const SYSCALL_MEMORY_RESERVE: usize = 59;
 pub const EXIT_NOTICES_MAX: usize = 16; // undelivered exit notices kept by the kernel; further ones are counted as lost
 pub const DETACHED_MAX_BYTES: usize = 256 * 1024 * 1024; // all memory objects and freed-but-referenced blocks together
 

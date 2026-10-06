@@ -23,6 +23,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
 | A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |
+| Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |
 | The task in front hands the focus to a program it starts and gets it back when the program ends, without a notice to the shell; a task in the background cannot (the program starts in the background); Ctrl+Z from the program goes to the shell (issue 160) | `tools` suite (`fm_check`, `console_check`) |
 | Preemption and SIMD state preservation across CPUs | `busy`, `smp` suites |

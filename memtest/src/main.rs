@@ -3,7 +3,8 @@
 // memtest: test program of task memory beyond the kernel arena (issue 150).
 // `memtest alloc <MiB>` takes MiB of heap in 16 MiB blocks, writes and checks every word, tries one block beyond its
 // quota, and frees everything; `memtest hold <MiB>` keeps them until killed. `memtest share <MiB>` fills a block, seals it (a read-only memory object), maps it and
-// starts a second memtest that maps the same object; both check the contents.
+// starts a second memtest that maps the same object; both check the contents. `memtest fill` takes all the heap it can
+// get, in ever smaller blocks down to 64 KiB, and keeps it until killed (issue 169: the recovery reserve stops it).
 use mind::abi::{BootInfo, CAP_READ};
 use mind::idl::loader;
 use mind::ipc::{self, Endpoint, Message};
@@ -42,6 +43,20 @@ fn alloc(mib: usize, hold: bool) {
     drop(beyond);
     for block in blocks.iter_mut() { block.take(); }
     mind::println!("[MEMTEST] FREED");
+}
+
+fn fill_all() {
+    let mut blocks: [Option<Pages>; 64] = [const { None }; 64];
+    let (mut used, mut total) = (0, 0);
+    for size in [BLOCK, 4 * MIB, MIB, 256 * 1024, 64 * 1024] {
+        while used < blocks.len() {
+            let Some(mut pages) = Pages::new(size) else { break };
+            pages.as_mut_slice()[0] = 1;
+            blocks[used] = Some(pages); used += 1; total += size;
+        }
+    }
+    mind::println!("[MEMTEST] FILLED {} KiB", total / 1024);
+    loop { mind::time::sleep(1000); } // until killed
 }
 
 // Whether the contents are the pattern, and their sum, from one word in every 512 bytes (emulation is slow).
@@ -100,14 +115,15 @@ fn child() {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB>");
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
         "alloc" => alloc(mib, false),
         "hold" => alloc(mib, true),
         "share" => share(mib),
+        "fill" => fill_all(),
         "child" => child(),
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST SHARE <MiB>"),
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL"),
     }
 }

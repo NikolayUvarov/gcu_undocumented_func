@@ -221,6 +221,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_SPAWN, image, 4, abi::ERR_RIGHTS), // spawning is for holders of the spawn privilege
                     (abi::SYSCALL_PLATFORM_CAP, abi::PLATFORM_PORTS, 0x60, abi::ERR_RIGHTS), // bootstrap authority is init's
                     (abi::SYSCALL_DEVICE_FIND, 0, 0, abi::ERR_RIGHTS),
+                    (abi::SYSCALL_MEMORY_RESERVE, 0, 0, abi::ERR_RIGHTS), // the recovery reserve is init's policy (issue 169)
                     (abi::SYSCALL_TASK_KILL, 1, 0, abi::ERR_RIGHTS), // process control is the shell's
                     (abi::SYSCALL_FOCUS, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),

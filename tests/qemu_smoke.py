@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
 BOOT_EFI = "EFI/BOOT/BOOTX64.EFI"
@@ -345,8 +346,9 @@ def require(text, fragment):
 
 
 def hold_frames(vm, frames, leave_mib):
-    """Starts memtest instances that hold all but about `leave_mib` of the frame pool; returns their PIDs."""
-    holders, left = [], frames - leave_mib * 1024 * 1024
+    """Starts memtest instances that hold all but about `leave_mib` of what applications may take of the frame pool
+    (the recovery reserve stays for services, issue 169); returns their PIDs."""
+    holders, left = [], frames - leave_mib * 1024 * 1024 - RECOVERY_RESERVE
     while (mib := min(144, left // (1024 * 1024)) // 16 * 16) > 0:
         output = vm.command(f"run memtest hold {mib} &")
         holders.append(int(re.search(r"STARTED PID=(\d+)", output)[1]))
@@ -1683,7 +1685,7 @@ def isolation_suite(vm):
 
 def memory_suite(vm):
     baseline, frames = heap_used(vm), frames_free(vm)
-    # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of it, so spawns run out.
+    # Task memory comes from the frame pool (issue 150): memtest holds all but about 40 MiB of what applications may take, so spawns run out.
     holders = hold_frames(vm, frames, 40)
     pids = []
     for _ in range(8 - len(holders)):
@@ -1708,7 +1710,48 @@ def memory_suite(vm):
     require(vm.command("run clock &"), "NAME=clock BACKGROUND")
     memory_beyond_the_arena(vm)
     memory_charged_to_spawner(vm)
+    recovery_reserve(vm)
     print("PASS: out-of-memory rollback, surviving tasks and later successful launch", flush=True)
+
+
+def recovery_reserve(vm):
+    """Issue 169: applications that take all the heap they can leave init's recovery reserve in the frame pool; a
+    service killed meanwhile is restarted and serves."""
+    frames = frames_free(vm)
+    holders = []
+    for _ in range(8):
+        output = vm.command("run memtest fill &")
+        started = re.search(r"STARTED PID=(\d+)", output)
+        if not started:
+            require(output, "OUT OF MEMORY")  # not even an image and a stack fit above the reserve
+            break
+        holders.append(int(started[1]))
+        filled = int(re.search(r"FILLED (\d+) KiB", vm.program_logs(holders[-1], "FILLED"))[1])
+        if filled < 160 * 1024:
+            break
+    else:
+        raise AssertionError("applications did not run out of memory")
+    free = frames_free(vm)
+    # Above the reserve stays less than the smallest block memtest asks for (and an image); services may dip into it.
+    assert RECOVERY_RESERVE - 1024 * 1024 <= free < RECOVERY_RESERVE + 1024 * 1024, (free, RECOVERY_RESERVE)
+    rtc = vm.services()["rtc"]
+    vm.command(f"kill {rtc}", raw=True)
+    for _ in range(40):
+        if vm.services().get("rtc", rtc) != rtc:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("rtc was not restarted while applications held all they could")
+    assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the restarted rtc does not serve"
+    for pid in holders:
+        vm.command(f"kill {pid}")
+    for _ in range(40):
+        if frames_free(vm) >= frames - 1024 * 1024:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("the holders' frames were not returned")
+    print(f"PASS: applications holding all they could ({len(holders)} memtest) left {free} bytes of the frame pool (reserve {RECOVERY_RESERVE}); rtc restarted and served meanwhile", flush=True)
 
 
 def task_memory(vm, pid, raw=False):
@@ -1854,7 +1897,7 @@ def heap_suite(vm):
         pid = start()
         vm.background(pid)
         clients.append(pid)
-    # The frame pool (issue 150) is larger than four quotas: memtest holds all but about 40 MiB of it.
+    # The frame pool (issue 150) is larger than four quotas: memtest holds all but about 40 MiB of what applications may take.
     hogs = hold_frames(vm, frames_free(vm), 40)
     next_pid += len(hogs)
     holders, failed = [], []

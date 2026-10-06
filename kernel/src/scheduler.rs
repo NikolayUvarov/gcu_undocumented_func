@@ -106,6 +106,7 @@ struct Scheduler {
     ghosts: Vec<Node>, // removed capabilities that still have descendants (copies, mints or mappings) to revoke; allocated once
     devices: Vec<pci::Device>, // PCI enumeration: discovery is a kernel mechanism, the choice of drivers is init's
     dma: Vec<Region>, // DMA regions handed out to init; they outlive driver restarts
+    reserve: usize, // frame pool bytes application-band tasks may not take (MEMORY_RESERVE, issue 169)
     composited: usize, // screen the compositor already holds a capability for
     next_node: u64, // capability identities are never reused
 }
@@ -136,7 +137,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -196,6 +197,10 @@ impl Scheduler {
     fn payer_of(&self, slot: usize) -> Option<usize> {
         let (payer, pid) = self.tasks[slot].as_ref()?.payer?;
         self.tasks[payer].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited).then_some(payer)
+    }
+    // Whether an application-band allocation of `bytes` leaves the recovery reserve in the frame pool (MC-6.5, issue 169).
+    fn leaves_reserve(&self, application: bool, bytes: usize) -> bool {
+        !application || self.reserve == 0 || crate::frames::stats().1.saturating_sub(bytes) >= self.reserve
     }
     // Charges private memory to the task and every payer above it; none may go over its quota (MC-3.13).
     fn charge(&mut self, slot: usize, bytes: usize) -> bool {
@@ -472,11 +477,13 @@ impl Scheduler {
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
         let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
         let elf = elf::Image::parse(file)?;
+        let screen_bytes = if has_screen { frame_bytes(&self.boot) } else { 0 };
+        if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
         let mut image = Region::task(elf.size.div_ceil(4096) * 4096, 4096)?; let entry = elf.load(image.bytes_mut(), paging::USER_IMAGE)?;
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
-        let screen = if has_screen { Some(Region::task(frame_bytes(&self.boot), 4096)?) } else { None };
+        let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
         let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); // which images exist, not where info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
@@ -878,7 +885,7 @@ impl Scheduler {
                 Ok(crate::clock::now_ns() as usize)
             }
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
-                Some(size) if self.charge(slot, size) => {
+                Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
                     let task = (*tasks.add(slot)).as_mut().unwrap();
                     match task.heap.allocate(&mut task.space, size) { Some(address) => Ok(address), None => { self.uncharge(slot, size); Ok(0) } }
                 }
@@ -931,6 +938,11 @@ impl Scheduler {
                         (_, Err(error)) => Err(error),
                     }
                 }
+            }
+            SYSCALL_MEMORY_RESERVE => {
+                let bytes = request.arg1.checked_next_multiple_of(4096);
+                if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) }
+                else { match bytes { Some(bytes) if crate::frames::ready() && bytes <= crate::frames::stats().0 => { self.reserve = bytes; Ok(0) } _ => Err(ERR_INVALID) } }
             }
             SYSCALL_DEVICE_STATE => match self.devices.get(request.arg1).copied() {
                 // Whoever holds a capability over one of the device's registers may stop it.

@@ -36,6 +36,7 @@ const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
+const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -502,6 +503,11 @@ fn main(info: &'static BootInfo) {
         }
     }
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
+    // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.
+    match platform::reserve_memory(RECOVERY_RESERVE_MIB << 20) {
+        Ok(()) => mind::println!("[INIT] RECOVERY RESERVE {} MiB", RECOVERY_RESERVE_MIB),
+        Err(_) => mind::println!("[INIT] NO RECOVERY RESERVE: APPLICATIONS MAY TAKE ALL TASK MEMORY"),
+    }
     // Process control, to stop services and applications on request (init is their lifecycle owner).
     if platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_CONTROL, 0).is_err() { mind::println!("[INIT] NO PROCESS CONTROL: STOP REQUESTS WILL FAIL"); }
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
