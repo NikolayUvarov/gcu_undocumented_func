@@ -531,3 +531,25 @@ fn names_are_checked_and_bounded() {
     medium.writable = true;
     assert_eq!(mount(&mut medium, &mut Room::with_names(8, 1)).err(), Some(Error::Full));
 }
+
+#[test]
+fn a_block_cannot_plant_a_record_for_a_scan_after_damage() {
+    // A record's second sector starts SECTOR - HEADER bytes into the block's data.
+    let at = SECTOR - HEADER;
+    let mut medium = Memory::new(64);
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    for magic in [&b"MIND-REF"[..], b"MIND-BLK"] {
+        for offset in [at, at + SECTOR] {
+            let mut data = vec![0u8; at + 2 * SECTOR];
+            data[offset..offset + 8].copy_from_slice(magic);
+            assert_eq!(store.put(Codec::Raw, &data), Err(Error::Invalid));
+        }
+        // Elsewhere the same bytes are plain data.
+        let mut data = vec![0u8; at + 2 * SECTOR];
+        data[at + 1..at + 9].copy_from_slice(magic);
+        data[..8].copy_from_slice(magic);
+        assert!(store.put(Codec::Raw, &data).is_ok());
+    }
+    assert_eq!(store.stats().used, 1 + 2 * record_sectors(at + 2 * SECTOR) as u64);
+}

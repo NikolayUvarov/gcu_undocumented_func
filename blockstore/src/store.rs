@@ -59,8 +59,9 @@ pub enum Error {
     Foreign,
     /// A store of another layout version.
     Layout,
-    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a name that
-    /// is not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape.
+    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a block whose
+    /// bytes would start a sector with a record's magic; a name that is not 1 to NAME_MAX allowed bytes; a root whose
+    /// tree is out of shape.
     Invalid,
     /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
     Conflict,
@@ -339,6 +340,9 @@ impl<'a, D: Device> Store<'a, D> {
         record.fill(0);
         record[..HEADER].copy_from_slice(&header(&cid, data.len()));
         record[HEADER..HEADER + data.len()].copy_from_slice(data);
+        // Only a header sector starts with a record's magic, so a scan that resumes after a damaged sector cannot take
+        // a client's bytes for a name or a block record.
+        if record.chunks(SECTOR).skip(1).any(|s| &s[..8] == RECORD_MAGIC || &s[..8] == NAME_MAGIC) { return Err(Error::Invalid); }
         let lba = self.end;
         // The sectors are taken even if the write fails: they may hold part of it now, and are never written again.
         self.end += n as u64;

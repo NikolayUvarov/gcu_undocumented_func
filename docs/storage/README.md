@@ -79,6 +79,7 @@ Evidence: `tests/dag_host.rs`.
   - A block is at most 16 KiB, and the index holds 4096 blocks (the service's static memory).
   - A put beyond the medium or the index is refused with `full`, and a store with more blocks than the index holds is not mounted at all.
   - Bytes already held are not written again.
+  - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
 - **Durability.** A put returns once the device has flushed the record. On the RAM disk that means until the next reset, nothing more.
 - **What is not provided:**
   - deletion, retention and garbage collection (MC-4.5, 4.11);
