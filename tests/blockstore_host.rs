@@ -1,18 +1,21 @@
 //! Host tests of the block store's layout and logic (blockstore/src/store.rs, issue 300-STO-0002; MC-4.2, 4.8):
 //! put and get by CID, blocks found again after a remount, a flipped byte detected and never returned, no sector
 //! written twice, defined refusals for a full medium, a full index, a foreign or unknown medium and a read-only one;
-//! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004).
+//! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004); nodes stored only if they decode
+//! (issue 301-STO-0002).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
 #[path = "../libmind/src/cid.rs"]
 mod cid;
+#[path = "../libmind/src/dag.rs"]
+mod dag;
 #[path = "../blockstore/src/store.rs"]
 mod store;
 #[path = "../libmind/src/blockstore.rs"]
 mod rights;
 
-use cid::Cid;
+use cid::{Cid, Codec};
 use std::collections::HashMap;
 use store::{record_sectors, Device, Entry, Error, Stats, Store, BLOCK_MAX, BUFFER, HEADER, SECTOR};
 
@@ -64,17 +67,17 @@ fn put_and_get_by_content() {
     let mut medium = Memory::new(256);
     let mut room = Room::new(64);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    let a = store.put(b"hello world").unwrap();
+    let a = store.put(Codec::Raw, b"hello world").unwrap();
     assert_eq!(a.to_string(), "bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e");
-    let empty = store.put(b"").unwrap();
+    let empty = store.put(Codec::Raw, b"").unwrap();
     let big = block(1, BLOCK_MAX);
-    let b = store.put(&big).unwrap();
+    let b = store.put(Codec::Raw, &big).unwrap();
     assert_eq!(get(&mut store, &a).unwrap(), b"hello world");
     assert_eq!(get(&mut store, &empty).unwrap(), b"");
     assert_eq!(get(&mut store, &b).unwrap(), big);
     assert!(store.has(&a) && store.has(&b) && !store.has(&Cid::raw(b"absent")));
     assert_eq!(get(&mut store, &Cid::raw(b"absent")), Err(Error::NotFound));
-    assert_eq!(store.put(&block(2, BLOCK_MAX + 1)), Err(Error::TooLarge));
+    assert_eq!(store.put(Codec::Raw, &block(2, BLOCK_MAX + 1)), Err(Error::TooLarge));
     let mut small = [0u8; 4];
     assert_eq!(store.get(&a, &mut small), Err(Error::TooLarge));
     let used = 1 + record_sectors(11) + record_sectors(0) + record_sectors(BLOCK_MAX);
@@ -86,9 +89,9 @@ fn the_same_bytes_are_stored_once() {
     let mut medium = Memory::new(64);
     let mut room = Room::new(8);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    let first = store.put(&block(3, 1000)).unwrap();
+    let first = store.put(Codec::Raw, &block(3, 1000)).unwrap();
     let used = store.stats().used;
-    assert_eq!(store.put(&block(3, 1000)), Ok(first));
+    assert_eq!(store.put(Codec::Raw, &block(3, 1000)), Ok(first));
     assert_eq!((store.stats().blocks, store.stats().used), (1, used));
 }
 
@@ -98,7 +101,7 @@ fn a_put_returns_after_the_flush() {
     let mut room = Room::new(8);
     {
         let mut store = mount(&mut medium, &mut room).unwrap();
-        store.put(b"durable").unwrap();
+        store.put(Codec::Raw, b"durable").unwrap();
     }
     // The format and the put each flushed.
     assert_eq!(medium.flushes, 2);
@@ -112,7 +115,7 @@ fn blocks_are_found_again_after_a_remount() {
     {
         let mut room = Room::new(64);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        for i in 0..20 { cids.push((store.put(&block(i, i * 700)).unwrap(), block(i, i * 700))); }
+        for i in 0..20 { cids.push((store.put(Codec::Raw, &block(i, i * 700)).unwrap(), block(i, i * 700))); }
         stats = store.stats();
     }
     let mut room = Room::new(64);
@@ -128,8 +131,8 @@ fn a_flipped_byte_is_reported_and_never_returned() {
     {
         let mut room = Room::new(16);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        a = store.put(&block(1, 2000)).unwrap();
-        b = store.put(&block(2, 2000)).unwrap();
+        a = store.put(Codec::Raw, &block(1, 2000)).unwrap();
+        b = store.put(Codec::Raw, &block(2, 2000)).unwrap();
     }
     // A byte in the middle of a's data.
     medium.flip(1 + 2, 100);
@@ -142,7 +145,7 @@ fn a_flipped_byte_is_reported_and_never_returned() {
         assert_eq!(get(&mut store, &b).unwrap(), block(2, 2000));
         assert_eq!((store.stats().blocks, store.stats().corrupt), (1, 1));
         // A put of the same bytes stores them again, after the log, without touching the damaged record.
-        assert_eq!(store.put(&block(1, 2000)), Ok(a));
+        assert_eq!(store.put(Codec::Raw, &block(1, 2000)), Ok(a));
         assert_eq!(get(&mut store, &a).unwrap(), block(1, 2000));
     }
     assert!(medium.writes.iter().all(|&w| w <= 1), "no sector is written twice");
@@ -153,7 +156,7 @@ fn a_block_damaged_after_mounting_is_refused_when_read() {
     let mut medium = Memory::new(128);
     let mut room = Room::new(16);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    let a = store.put(&block(5, 600)).unwrap();
+    let a = store.put(Codec::Raw, &block(5, 600)).unwrap();
     // The last byte of the block, in its second sector.
     let last = HEADER + 600 - 1;
     store.device().flip(1 + (last / SECTOR) as u64, last % SECTOR);
@@ -170,7 +173,7 @@ fn a_damaged_header_loses_its_record_only() {
     {
         let mut room = Room::new(16);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        for i in 0..4 { cids.push(store.put(&block(i, 1500)).unwrap()); }
+        for i in 0..4 { cids.push(store.put(Codec::Raw, &block(i, 1500)).unwrap()); }
     }
     // The second record's header: its CID.
     medium.flip(1 + record_sectors(1500) as u64, 20);
@@ -182,7 +185,7 @@ fn a_damaged_header_loses_its_record_only() {
     assert_eq!((stats.blocks, stats.damaged), (3, record_sectors(1500) as u64));
     // New blocks go after the whole log.
     assert_eq!(stats.used, 1 + 4 * record_sectors(1500) as u64);
-    store.put(b"after").unwrap();
+    store.put(Codec::Raw, b"after").unwrap();
     assert!(store.device().writes.iter().all(|&w| w <= 1));
 }
 
@@ -193,8 +196,8 @@ fn a_torn_write_is_a_corrupt_record_and_the_log_goes_on() {
     {
         let mut room = Room::new(16);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        store.put(&block(1, 3000)).unwrap();
-        a = store.put(&block(2, 3000)).unwrap();
+        store.put(Codec::Raw, &block(1, 3000)).unwrap();
+        a = store.put(Codec::Raw, &block(2, 3000)).unwrap();
     }
     // Power lost after the header and the first sector of a's record: its other sectors are blank.
     let start = 1 + record_sectors(3000);
@@ -204,7 +207,7 @@ fn a_torn_write_is_a_corrupt_record_and_the_log_goes_on() {
     assert_eq!(get(&mut store, &a), Err(Error::NotFound));
     assert_eq!((store.stats().blocks, store.stats().corrupt), (1, 1));
     assert_eq!(store.stats().used, (1 + 2 * record_sectors(3000)) as u64);
-    assert_eq!(store.put(&block(2, 3000)), Ok(a));
+    assert_eq!(store.put(Codec::Raw, &block(2, 3000)), Ok(a));
     assert_eq!(get(&mut store, &a).unwrap(), block(2, 3000));
 }
 
@@ -213,23 +216,23 @@ fn a_full_medium_or_index_refuses_a_put() {
     let mut medium = Memory::new(1 + 2 * record_sectors(4000) + 3);
     let mut room = Room::new(8);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    store.put(&block(1, 4000)).unwrap();
-    store.put(&block(2, 4000)).unwrap();
+    store.put(Codec::Raw, &block(1, 4000)).unwrap();
+    store.put(Codec::Raw, &block(2, 4000)).unwrap();
     let before = store.stats();
-    assert_eq!(store.put(&block(3, 4000)), Err(Error::Full));
+    assert_eq!(store.put(Codec::Raw, &block(3, 4000)), Err(Error::Full));
     assert_eq!(store.stats(), before);
     // What still fits is taken.
-    store.put(&block(4, SECTOR * 3 - HEADER)).unwrap();
-    assert_eq!(store.put(b"x"), Err(Error::Full));
+    store.put(Codec::Raw, &block(4, SECTOR * 3 - HEADER)).unwrap();
+    assert_eq!(store.put(Codec::Raw, b"x"), Err(Error::Full));
     assert_eq!(get(&mut store, &Cid::raw(&block(1, 4000))).unwrap(), block(1, 4000));
 
     let mut medium = Memory::new(64);
     let mut room = Room::new(2);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    store.put(b"a").unwrap();
-    store.put(b"b").unwrap();
-    assert_eq!(store.put(b"c"), Err(Error::Full));
-    assert_eq!(store.put(b"a").map(|c| c == Cid::raw(b"a")), Ok(true));
+    store.put(Codec::Raw, b"a").unwrap();
+    store.put(Codec::Raw, b"b").unwrap();
+    assert_eq!(store.put(Codec::Raw, b"c"), Err(Error::Full));
+    assert_eq!(store.put(Codec::Raw, b"a").map(|c| c == Cid::raw(b"a")), Ok(true));
     drop(store);
     // A store with more blocks than the index holds is not mounted with some of them missing.
     let mut room = Room::new(1);
@@ -277,14 +280,14 @@ fn a_read_only_medium_is_read_but_not_written() {
     {
         let mut room = Room::new(4);
         let mut store = mount(&mut medium, &mut room).unwrap();
-        a = store.put(b"kept").unwrap();
+        a = store.put(Codec::Raw, b"kept").unwrap();
     }
     medium.writable = false;
     let mut room = Room::new(4);
     let mut store = mount(&mut medium, &mut room).unwrap();
     assert_eq!(get(&mut store, &a).unwrap(), b"kept");
-    assert_eq!(store.put(b"new"), Err(Error::ReadOnly));
-    assert_eq!(store.put(b"kept"), Ok(a));
+    assert_eq!(store.put(Codec::Raw, b"new"), Err(Error::ReadOnly));
+    assert_eq!(store.put(Codec::Raw, b"kept"), Ok(a));
 }
 
 #[test]
@@ -293,12 +296,12 @@ fn a_failed_write_is_not_offered_and_its_sectors_are_not_reused() {
     let mut room = Room::new(4);
     let mut store = mount(&mut medium, &mut room).unwrap();
     store.device().fail_write = true;
-    assert_eq!(store.put(&block(1, 700)), Err(Error::Device));
+    assert_eq!(store.put(Codec::Raw, &block(1, 700)), Err(Error::Device));
     assert!(!store.has(&Cid::raw(&block(1, 700))));
     store.device().fail_write = false;
     let used = store.stats().used;
     assert_eq!(used, 1 + record_sectors(700) as u64);
-    let a = store.put(&block(1, 700)).unwrap();
+    let a = store.put(Codec::Raw, &block(1, 700)).unwrap();
     assert_eq!(store.stats().used, used + record_sectors(700) as u64);
     assert_eq!(get(&mut store, &a).unwrap(), block(1, 700));
 }
@@ -317,7 +320,7 @@ fn random_puts_gets_and_remounts_match_a_model() {
             match next(4) {
                 0 | 1 => {
                     let data = block(next(60), [0, 1, 511, 512, HEADER, 4096, BLOCK_MAX][next(7)].min(next(BLOCK_MAX + 1)));
-                    match store.put(&data) {
+                    match store.put(Codec::Raw, &data) {
                         Ok(cid) => { assert!(cid.matches(&data)); model.insert(cid, data); }
                         Err(e) => assert_eq!(e, Error::Full),
                     }
@@ -353,4 +356,52 @@ fn rights_come_from_the_badge() {
     ] {
         assert_eq!([allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat)], [put, get, has, stat], "badge {badge:#x}");
     }
+}
+
+#[test]
+fn nodes_are_stored_only_if_they_decode() {
+    let mut medium = Memory::new(128);
+    let node_cid;
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let chunk = store.put(Codec::Raw, b"abc").unwrap();
+        let mut node = [0u8; dag::NODE_MAX];
+        let len = dag::encode(3, &[chunk], &mut node);
+        node_cid = store.put(Codec::DagCbor, &node[..len]).unwrap();
+        assert_eq!(node_cid, Cid::of(Codec::DagCbor, &node[..len]));
+        assert_eq!(get(&mut store, &node_cid).unwrap(), &node[..len]);
+        // The same bytes as raw content are another block.
+        let raw = store.put(Codec::Raw, &node[..len]).unwrap();
+        assert_ne!(raw, node_cid);
+        // Bytes that are not a node of the schema, or not its canonical encoding, are not stored as one.
+        let used = store.stats().used;
+        assert_eq!(store.put(Codec::DagCbor, b"abc"), Err(Error::Invalid));
+        let mut longer = node[..len].to_vec();
+        longer.push(0);
+        assert_eq!(store.put(Codec::DagCbor, &longer), Err(Error::Invalid));
+        assert_eq!(store.stats().used, used);
+    }
+    let mut room = Room::new(16);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert!(store.has(&node_cid));
+}
+
+#[test]
+fn a_record_typed_as_a_node_that_does_not_decode_is_corrupt() {
+    // A forged medium: a record whose CID says dag-cbor over bytes that match the digest but are no node.
+    let mut medium = Memory::new(64);
+    {
+        let mut room = Room::new(4);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        store.put(Codec::Raw, b"not a node").unwrap();
+    }
+    let header = SECTOR;
+    medium.data[header + 17] = 0x71;
+    let check = sha256::digest(&medium.data[header..header + 52]);
+    medium.data[header + 52..header + 84].copy_from_slice(&check);
+    let mut room = Room::new(4);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.stats().blocks, store.stats().corrupt), (0, 1));
+    assert!(!store.has(&Cid::of(Codec::DagCbor, b"not a node")));
 }

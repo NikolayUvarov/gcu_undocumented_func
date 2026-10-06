@@ -1,5 +1,5 @@
 /// Block store (`blockstore`, issue 300-STO-0002, docs/storage): immutable blocks named by their content identifier
-/// (CIDv1, `raw`, SHA-256; 36 bytes in binary form). Nothing stored is overwritten, and a block is checked against its
+/// (CIDv1, `raw` or `dag-cbor`, SHA-256; 36 bytes in binary form). Nothing stored is overwritten, and a block is checked against its
 /// CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
 /// What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
 package mind:blockstore@1.0.0;
@@ -7,15 +7,20 @@ package mind:blockstore@1.0.0;
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
     /// (`mind::blockstore`: put needs BADGE_PUT, get and has BADGE_GET, stat either).
-    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights }
+    /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002).
+    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid }
+
+    /// What a block's bytes are: opaque (`raw`), or a node of an object (`dag-cbor`, `mind::dag`), checked before it is
+    /// stored.
+    enum codec { raw, dag-cbor }
 
     /// Intact blocks and their bytes; sectors of the log and of the medium; records found corrupt and non-blank
     /// sectors outside every record; how many blocks the index can hold.
     record stats { blocks: u32, bytes: u64, used: u64, sectors: u64, corrupt: u32, damaged: u64, capacity: u32 }
 
-    /// Stores `data` as a raw block and returns its CID once the medium has flushed it; bytes already stored are not
-    /// written again. Errors: too-large, full (medium or index), read-only, device.
-    put: func(data: bytes<16384>) -> result<bytes<36>, error>;
+    /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
+    /// stored is not written again. Errors: invalid (not a node), too-large, full (medium or index), read-only, device.
+    put: func(codec: codec, data: bytes<16384>) -> result<bytes<36>, error>;
     /// The block `cid` names, only if its bytes match it. Errors: unsupported (not a supported CID), not-found,
     /// corrupt (the block also leaves the index, so a put of the same bytes stores them again), device.
     get: func(cid: bytes<36>) -> result<bytes<16384>, error>;

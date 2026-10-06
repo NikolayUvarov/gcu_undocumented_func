@@ -30,6 +30,8 @@ The `STO` track numbers its tasks itself and may change the split.
 ## Progress (2026-10-06)
 
 - **Done — [`301-STO-0001`](../issues-done/301-STO-0001-object-format.done):** `mind::dag` and `tests/dag_host.rs`.
+- **Done — [`301-STO-0002`](../issues-done/301-STO-0002-store-takes-nodes.done):** `put(codec, data)`; a node is stored only if it decodes, and a record typed as a node that does not is corrupt.
+- **Next — `301-STO-0003`:** objects over the running service. It waits, like 300-STO-0003, for [requests-KRN.md](requests-KRN.md).
 
 ## Related
 

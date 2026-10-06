@@ -49,7 +49,8 @@ An object larger than a block is a Merkle-DAG named by one root CID (`libmind/sr
   So the same bytes always give the same root, however they are written. One node of height 1 covers 4 MiB, height 2 covers 1 GiB, height 3 covers 256 GiB.
 - **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes. Integers must be in their shortest form, keys in DAG-CBOR's order with no others, and arrays of definite length. Each link is tag 42 over the identity multibase prefix and a supported CID (MC-4.2).
 - **The reader trusts no store.** `size` and `read_at` check every node and chunk on the way from the root against its CID. They also check it against its place in the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, and the chunk lengths. A block that does not match is refused as corrupt, and a tree out of shape is refused as such.
-- **Not provided yet:** the block store takes `raw` blocks only (301-STO-0002); there are no names or roots for objects (MC-4.3), and no retention or garbage collection by reachability (MC-4.5).
+- **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it, and a record typed as a node that does not decode is corrupt (301-STO-0002).
+- **Not provided yet:** there are no names or roots for objects (MC-4.3), and no retention or garbage collection by reachability (MC-4.5).
 
 Evidence: `tests/dag_host.rs`.
 - The roots and node bytes equal those of an independent reference: the tree built by its shape rule in Python, with the `dag-cbor` and `multiformats` libraries, for sizes around every boundary of the shape.
@@ -57,7 +58,7 @@ Evidence: `tests/dag_host.rs`.
 
 ## The block store — implemented, not started yet (300-STO-0002)
 
-`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.0 over a block client: `put` takes bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. The service builds for x86-64 and aarch64, but `init` does not start it yet: that is a request to the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)), and the store runs on the host tests' medium only.
+`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.0 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. The service builds for x86-64 and aarch64, but `init` does not start it yet: that is a request to the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)), and the store runs on the host tests' medium only.
 
 **Layout (version 1):**
 
@@ -71,7 +72,7 @@ Evidence: `tests/dag_host.rs`.
 - **Mount.**
   - Only a wholly blank medium is formatted, and only if it is writable. A file system may leave its first sectors zero, so a blank sector 0 alone is not enough.
   - Anything else is refused and left as it is: another file system, a damaged superblock, another layout version (MC-4.13).
-  - A store is scanned whole. Every record with a valid header is read and checked against its CID, and only intact blocks enter the index.
+  - A store is scanned whole. Every record with a valid header is read and checked against its CID (and a node against the schema), and only intact blocks enter the index.
   - Non-blank sectors outside every record are counted as damaged. The scan resynchronizes at the next valid header, so a damaged header loses only its own record.
 - **Reading.** A get reads the record again and checks it against the CID. A block whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy after the log.
 - **Limits.**

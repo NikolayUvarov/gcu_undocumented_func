@@ -6,8 +6,8 @@
 // logged. Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
-// store.rs names these as crate::cid and crate::sha256, so the host tests can build it from the libmind files.
-use mind::{cid, sha256};
+// store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
+use mind::{cid, dag, sha256};
 
 use cid::Cid;
 use mind::abi::BootInfo;
@@ -51,6 +51,7 @@ fn error(e: store::Error) -> Error {
         store::Error::Full => Error::Full,
         store::Error::TooLarge => Error::TooLarge,
         store::Error::ReadOnly => Error::ReadOnly,
+        store::Error::Invalid => Error::Invalid,
         store::Error::Device | store::Error::Foreign | store::Error::Layout => Error::Device,
     }
 }
@@ -90,8 +91,9 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Get { .. }, call)) if refused(Operation::Get) => blockstore::reply_get(call, Err(Error::Rights)),
             Ok((Request::Has { .. }, call)) if refused(Operation::Has) => blockstore::reply_has(call, Err(Error::Rights)),
             Ok((Request::Stat, call)) if refused(Operation::Stat) => blockstore::reply_stat(call, Err(Error::Rights)),
-            Ok((Request::Put { data }, call)) => {
-                let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(data).map_err(error)).map(|c| c.to_bytes());
+            Ok((Request::Put { codec, data }, call)) => {
+                let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
+                let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
                 blockstore::reply_put(call, cid.as_ref().map(|c| &c[..]).map_err(|e| *e))
             }
             Ok((Request::Get { cid }, call)) => {

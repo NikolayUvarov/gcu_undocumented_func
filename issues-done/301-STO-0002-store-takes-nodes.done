@@ -1,0 +1,35 @@
+# 301-STO-0002 — The block store takes nodes, checked against their type — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.13
+
+Part of main task [301](../issues/301-objects-as-merkle-dags.md).
+
+## Problem
+
+`blockstore` stored every block as `raw`, so an object's nodes could not be kept in it. MC-4.2 binds the type to the hashed data. A block the store calls a node must therefore be one, and the store must not hold bytes under a type they do not have.
+
+## Plan
+
+- `idl/blockstore.wit` 1.0: `put` takes the content type, `enum codec { raw, dag-cbor }`, and a new error `invalid`. The interface has not run anywhere yet, so this is still its first version.
+- **The store:**
+  - `put(codec, data)` refuses a `dag-cbor` block that `mind::dag::decode` does not accept: not a node of the schema, or not its canonical encoding.
+  - A mount or a get treats a record typed as a node that does not decode as corrupt, even if its digest matches.
+
+## Acceptance criteria
+
+- Host tests: a node is stored and read back; bytes that are not a canonical node are refused without writing; a forged record typed as a node is counted corrupt when mounting.
+- The service builds for both architectures.
+
+## Related
+
+[301-STO-0001](301-STO-0001-object-format.done), [300-STO-0002](../issues/300-STO-0002-blockstore-service.md), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+- **`blockstore/src/store.rs`:** `put(codec, data)`; `typed` checks a node with `dag::decode` before a put and in every verification, when mounting and when reading; `Error::Invalid`.
+- **`blockstore/src/main.rs`:** maps the interface's `codec` and the new error.
+- **Interface:** `idl/blockstore.wit` 1.0 has `put(codec, data)` and the `invalid` error; the bindings were regenerated.
+- **Tests** in `tests/blockstore_host.rs` (now 16):
+  - `nodes_are_stored_only_if_they_decode`: a node stored, read back and found again after a remount; the same bytes as `raw` are another block; non-node bytes and a node with a byte more refused without writing.
+  - `a_record_typed_as_a_node_that_does_not_decode_is_corrupt`.
+- **On the platform:** these checks have not run there; they wait for the service to run (300-STO-0003, 301-STO-0003).

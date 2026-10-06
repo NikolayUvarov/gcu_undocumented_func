@@ -1,11 +1,12 @@
-//! The block store's layout and logic (issue 300-STO-0002; MC-4.2, 4.8): immutable blocks named by their CID in an
-//! append-only log of records on a block device. Nothing here depends on the kernel: the host tests build it too.
+//! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002; MC-4.2, 4.8): immutable blocks named by
+//! their CID in an append-only log of records on a block device; a `dag-cbor` block must be a node of `dag`. Nothing here depends on the kernel: the host tests build it too.
 //!
 //! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector: a header (magic, layout
 //! version, length, the block's CID, a digest of the header) and the block's bytes, padded to the sector. A put
 //! writes only sectors after the last non-blank one, so nothing stored is ever overwritten; every block read is
 //! checked against its CID, and one that does not match is reported corrupt, never returned.
-use crate::cid::{self, Cid};
+use crate::cid::{self, Cid, Codec};
+use crate::dag;
 use crate::sha256;
 
 pub const SECTOR: usize = 512;
@@ -51,6 +52,8 @@ pub enum Error {
     Foreign,
     /// A store of another layout version.
     Layout,
+    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data).
+    Invalid,
 }
 
 /// What the store holds.
@@ -85,6 +88,9 @@ pub struct Store<'a, D: Device> {
     corrupt: u32,
     damaged: u64,
 }
+
+// Whether `data` is what its type says: any bytes are raw, a node must decode.
+fn typed(codec: Codec, data: &[u8]) -> bool { codec == Codec::Raw || dag::decode(data).is_ok() }
 
 /// Sectors of the record of a block of `len` bytes.
 pub const fn record_sectors(len: usize) -> usize { (HEADER + len).div_ceil(SECTOR) }
@@ -188,7 +194,8 @@ impl<'a, D: Device> Store<'a, D> {
     fn verify(&mut self, lba: u64, cid: &Cid, len: usize) -> Result<bool, Error> {
         let n = record_sectors(len);
         if !self.dev.read(lba, &mut self.buffer[..n * SECTOR]) { return Err(Error::Device); }
-        let whole = parse_header(&self.buffer[..SECTOR]) == Some((*cid, len)) && cid.matches(&self.buffer[HEADER..HEADER + len]);
+        let data = &self.buffer[HEADER..HEADER + len];
+        let whole = parse_header(&self.buffer[..SECTOR]) == Some((*cid, len)) && cid.matches(data) && typed(cid.codec(), data);
         if !whole { self.corrupt += 1; }
         Ok(whole)
     }
@@ -212,11 +219,12 @@ impl<'a, D: Device> Store<'a, D> {
 
     pub fn has(&self, cid: &Cid) -> bool { self.contains(cid) }
 
-    /// Stores `data` as a raw block and returns its CID, once the device has flushed it. A block already held is not
-    /// written again.
-    pub fn put(&mut self, data: &[u8]) -> Result<Cid, Error> {
+    /// Stores `data` as a block of type `codec` and returns its CID, once the device has flushed it. A node must decode
+    /// first; a block already held is not written again.
+    pub fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> {
         if data.len() > BLOCK_MAX { return Err(Error::TooLarge); }
-        let cid = Cid::raw(data);
+        if !typed(codec, data) { return Err(Error::Invalid); }
+        let cid = Cid::of(codec, data);
         if self.contains(&cid) { return Ok(cid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let n = record_sectors(data.len());
