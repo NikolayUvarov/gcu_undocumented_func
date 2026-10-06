@@ -1,0 +1,23 @@
+# u012 — load: every graph ends at the same column, the scale labels in one column — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user (2026-10-05, a screenshot of `load` in a wm window with 4 CPUs; recorded by the porting track in `issues/tools-track-reports.md`): the right side of the graphs is ragged. Each graph and its scale label (`100%`, `50 000/s`, `500/s`, `5 000/s`, `64.0M`, `32`) end at a different column.
+
+Each graph reserved room only for its own label: the plot was `area.w − (label + 1)` wide. A long label (`50 000/s`) moved its graph's right border further left than a short one (`32`). In two columns of graphs the gap between them changed from row to row too.
+
+## Plan
+
+- One reserve for every graph: the widest label of the graphs shown, plus a space. Every plot ends at the same column of its column of graphs, and every label is right-aligned in the reserve, on its graph's title row.
+- A title is cut where its plot ends, so it never runs into the label.
+
+## Acceptance criteria
+
+- Host (`tests/monitor_host.rs`, `load_graphs_line_up`): at six screen and window sizes, one and two columns of graphs, every plot starts and ends at the same columns as the others in its column of graphs, and the labels over each column of graphs end in one column.
+
+## Resolution
+
+- `monitor/src/load.rs`: `LoadView::scale` (the top of a graph and its label); `draw` computes the reserve once; `graph` takes it.
+- Tests: `tests/monitor_host.rs` (`load_graphs_line_up`).
