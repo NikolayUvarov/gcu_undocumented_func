@@ -1,6 +1,6 @@
 # 171 — Limits from the hardware: no fixed caps on tasks, endpoints, CPUs, capability slots or RAM
 
-**Type:** kernel · **Owner:** kernel track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** K4 (accounted kernel objects: memory is still paid from the kernel heap), C1 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+**Type:** kernel (main task) · **Owner:** kernel track (`KRN`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** K4 (accounted kernel objects: memory is still paid from the kernel heap), C1 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
 
 ## Problem
 
@@ -40,3 +40,15 @@ Each step is its own commit, with the docs/profile statements (kernel-objects.md
 ## Related
 
 [150](../issues-done/150-user-memory-beyond-the-arena.done), [168](../issues-done/168-task-memory-charged-to-spawner.done), [169](../issues-done/169-recovery-reserve.done), [024](../issues-done/024-accounted-kernel-objects.done).
+
+## Progress
+
+Split into `KRN` tasks (TRACKS.md), one for each step of the plan:
+
+| Task | Step | Status |
+|---|---|---|
+| [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | 1. All RAM on x86-64 | done (2026-10-06) |
+| `171-KRN-0002` | 2. Task and endpoint tables from memory, paid from quotas; no `MAX_APPS`, `APP_ENDPOINTS`; STAT pages | next |
+| `171-KRN-0003` | 3. As many CPUs as the firmware reports | planned |
+| `171-KRN-0004` | 4. Capability spaces that grow within the memory quota | planned |
+| `171-KRN-0005` | 5. Frame pool ranges that grow with the firmware map | planned |

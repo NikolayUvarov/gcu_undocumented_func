@@ -25,11 +25,20 @@ pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VAL
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED != 0) }
 /// Root entry 0 of every space: the kernel's identity map.
-/// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB.
+/// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB and of free RAM above.
 pub const KERNEL_ENTRIES: usize = 1;
 pub fn kernel_entry(_index: usize) -> u64 { KERNEL_PDPT.load(Ordering::Acquire) as u64 | 3 }
-/// The end of the kernel's identity map; RAM and devices above it are not used.
+/// The end of the kernel's identity map of everything (RAM and devices); devices above it are not used.
 pub const IDENTITY_END: u64 = 1 << 32;
+/// Above IDENTITY_END only free RAM is mapped, in whole 2 MiB pages, up to the end of root entry 0 (issue 171).
+pub const RAM_END: u64 = 1 << 39;
+const LARGE: u64 = 0x20_0000;
+const CONVENTIONAL: u32 = 7;
+/// The part of free RAM [start, end) above IDENTITY_END that the identity map covers: whole 2 MiB pages.
+pub fn high_ram(start: u64, end: u64) -> Option<(u64, u64)> {
+    let (start, end) = (start.max(IDENTITY_END).next_multiple_of(LARGE), end.min(RAM_END) & !(LARGE - 1));
+    (end > start).then_some((start, end))
+}
 /// Where a task's window starts (root entry 1).
 pub const USER_IMAGE: usize = 0x80_0000_0000;
 /// The space's translations changed: reload them if it is the active one.
@@ -48,7 +57,7 @@ pub fn kernel_root() -> usize {
     KERNEL_ROOT.load(Ordering::Acquire)
 }
 
-pub unsafe fn init(_map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
+pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     // The bootloader reserves all runtime RAM below 4 GiB. Retain supervisor
     // identity mappings for the kernel, boot stack and MMIO on every CR3.
     let root = Region::new(PAGE, PAGE)?;
@@ -66,6 +75,15 @@ pub unsafe fn init(_map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
             .add(gigabyte)
             .write(pd.ptr() as u64 | 3);
         core::mem::forget(pd);
+    }
+    // Free RAM above 4 GiB, write-back, never device windows: one page directory for each gigabyte that has some.
+    for entry in map.iter().filter(|e| e.kind == CONVENTIONAL) {
+        let Some((start, end)) = high_ram(entry.start, entry.start + entry.pages * PAGE as u64) else { continue };
+        for large in (start..end).step_by(LARGE as usize) {
+            let slot = (pdpt.ptr() as *mut u64).add((large >> 30) as usize);
+            if slot.read() & VALID == 0 { let pd = Region::new(PAGE, PAGE)?; slot.write(pd.ptr() as u64 | 3); core::mem::forget(pd); }
+            ((slot.read() & !0xFFF) as *mut u64).add((large >> 21 & 511) as usize).write(large | 0x83);
+        }
     }
     (root.ptr() as *mut u64).write(pdpt.ptr() as u64 | 3);
     KERNEL_PDPT.store(pdpt.ptr() as usize, Ordering::Release);

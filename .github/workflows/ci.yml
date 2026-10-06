@@ -69,6 +69,9 @@ jobs:
             args: --suites vfs,edit,disk,block
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
+          # RAM above 4 GiB in the frame pool (issue 171).
+          - name: RAM above 4 GiB
+            args: --memory 6G --suites normal
           - name: one CPU
             args: --cpus 1 --suites smp,isolation,heap,services
           # A CPU with AVX: its state is saved per task with XSAVE (issue 153).
