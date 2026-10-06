@@ -494,6 +494,8 @@ impl Scheduler {
         let cap = match self.cap(slot, handle)? { Capability::Endpoint(id, rights, badge) => Capability::Endpoint(id, rights & mask as u8, badge), Capability::Reply(..) => return None, other => other };
         if Self::move_only(cap) && mask & CAP_TRANSFER_MOVE == 0 { return None; } // a writable object without grant has one owner
         let source = self.tasks[slot].as_ref().unwrap().nodes[index];
+        // A memory capability moves only unmapped: the sender's mapping would stay a second owner (issue 167).
+        if mask & CAP_TRANSFER_MOVE != 0 && matches!(cap, Capability::Memory(..)) && self.tasks[slot].as_ref().unwrap().heap.made_from(source.id) { return None; }
         if mask & CAP_TRANSFER_MOVE != 0 { Some(Pending { cap, node: source, moved_from: Some(index) }) } else { let id = self.fresh(); Some(Pending { cap, node: Node { id, parent: source.id }, moved_from: None }) }
     }
     // Places a transferred capability in a fixed slot of `to`; a move empties the sender's slot if it still holds it.

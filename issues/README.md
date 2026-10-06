@@ -181,6 +181,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 =======
 | [155](../issues-done/155-virtual-consoles.done) | Virtual consoles: the shell's four consoles, Ctrl+Alt+F1…F4 whatever program has the keyboard, each with its own text, history and programs | done (2026-10-06) |
 | [166](../issues-done/166-exit-status-for-launchers.done) | `EXIT` with a code, `EXIT_STATUS` (58) for the last 16 tasks that ended; `grep` exits 0/1/2; `msh` makes a failed program `err` | done (2026-10-06) |
+| [167](../issues-done/167-models-of-revoke-and-move.done) | TLA+ models of revoke and MOVE checked by TLC (stage II exit); a mapped memory capability no longer moves (the bug the model found) | done (2026-10-06) |
 >>>>>>> origin/main
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

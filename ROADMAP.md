@@ -1,6 +1,6 @@
 # MIND CORE — Roadmap v1.1
 
-**Version:** 1.6 (1.5 → 1.6: track H adds the pins of ARM boards — pin controllers from the firmware's tables, a `gpio` service, hardware tables in `hwdocs/` outside the image, issues 206–207, and the `pins` tool of track G; 1.4 → 1.5: track H has the aarch64 platform `aarch64/QEMU-virt-0`, issues 200–204; boards are next, issue 205; 1.3 → 1.4: track H, porting to other architectures, starting with aarch64; 1.2 → 1.3: track D has a network stack, a policy broker and a TLS service with a key service; 1.1 → 1.2: stage II steps C1–C8 done; tracks A and D started with the VirtIO network driver)  
+**Version:** 1.7 (1.6 → 1.7: the assurance models of revoke and MOVE are checked by TLC — issue 167, `docs/assurance` — and found a kernel bug, fixed; 1.5 → 1.6: track H adds the pins of ARM boards — pin controllers from the firmware's tables, a `gpio` service, hardware tables in `hwdocs/` outside the image, issues 206–207, and the `pins` tool of track G; 1.4 → 1.5: track H has the aarch64 platform `aarch64/QEMU-virt-0`, issues 200–204; boards are next, issue 205; 1.3 → 1.4: track H, porting to other architectures, starting with aarch64; 1.2 → 1.3: track D has a network stack, a policy broker and a TLS service with a key service; 1.1 → 1.2: stage II steps C1–C8 done; tracks A and D started with the VirtIO network driver)  
 **Date:** 6 October 2026  
 **Based on:** [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md)  
 **Russian version:** [ROADMAP_RU.md](ROADMAP_RU.md) (kept in sync; the English text is the reference)
@@ -36,7 +36,7 @@ What exists (see [README](README.md) for details): x86-64 UEFI boot, SMP up to 8
 | **V. Update and distribution** | Not started | Boot images are not signed; no manifests, launch records, A/B activation, key roles (Article 9) |
 | **VI. Safety plane** | Not started | — (Article 8) |
 | **VII. User services** | Ahead of the plan | Compositor, audio gateway, TTS, shell already exist; they will need porting after stage II changes the capability and IPC ABI |
-| **Assurance** (continuous) | Tests only | QEMU suites cover isolation, faults, IPC, drivers; no protocol models, fuzzing of the ABI, fault injection (Article 12.2, Appendix C) |
+| **Assurance** (continuous) | Tests; models of revoke and MOVE | QEMU suites cover isolation, faults, IPC, drivers; TLA+ models of the capability tree, revoke, MOVE and revoke's completion point on several CPUs are checked by TLC within bounds (issue 167); no fuzzing of the ABI or fault injection yet (Article 12.2, Appendix C) |
 
 The issue tracker follows the rule in [`issues/README.md`](issues/README.md): `issues/` holds only near-term working tasks, finished and superseded ones move to [`issues-done/`](issues-done/). Issues 001–008 and 010 of the original prototype were closed on 2026-10-03.
 
@@ -131,7 +131,7 @@ Kernel work (steps 2–3) should be done by one owner or in close coordination: 
 | Done | K1 policy out of the kernel | Kernel has no shell or driver-selection policy; `init` holds bootstrap authority |
 | Done | K3, K4 clocks and accounted kernel objects | Monotonic clock with stated resolution; per-owner quotas for tasks and endpoints |
 | Done | C1–C8: capabilities, IPC modes, MIND IDL, supervision, budgets, services ported | Stage II capability, IPC and supervision criteria pass in tests (issues 025–039, 044) |
-| P1 | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked (the remaining stage II exit criterion) |
+| Done | Assurance models for revoke/MOVE | Invariants, assumptions and counterexamples checked by TLC within stated bounds (issue 167, `docs/assurance`); the model found a second owner after MOVE of a mapped object, fixed in the kernel |
 | P1 | Track A: VirtIO block and input on `mind::virtio` | Drivers restart under the supervisor with device quiesce; MSI-X (done for net: 100, 104) |
 | P2 | Track D: policy broker, TLS | Flows as capabilities with quotas (done: stack 101, broker 102, TLS 103) |
 | P2 | Tracks B, C, E–G in parallel | Per track |

@@ -54,6 +54,7 @@ HOST_GROUPS=(
     "build (x86)|./02_build.sh"
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only)"
     "host tests|host_tests"
+    "models (TLC)|scripts/model_check.sh"
 )
 X86_GROUPS=(
     "build (x86 test programs)|x86_fixtures"
@@ -117,12 +118,12 @@ fi
 cd "${TREE:-$ROOT}" || exit 2
 # Missing tools are reported up front, not as a failure in the middle of the run.
 missing=()
-for tool in cargo rustup python3 mcopy mkfs.fat qemu-img; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+for tool in cargo rustup python3 mcopy mkfs.fat qemu-img java; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Missing: ${missing[*]}" >&2
-    echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools" >&2
+    echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools default-jre-headless" >&2
     exit 2
 fi
 rustup toolchain install >/dev/null || exit 2
