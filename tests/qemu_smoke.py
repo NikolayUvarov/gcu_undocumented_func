@@ -1263,8 +1263,8 @@ def busy_suite(vm):
     share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
     assert 0.12 < share < 0.35, share
     require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
-    # Over 3 s, as with the budget: the window also holds the harness typing the next command while the shell takes
-    # its share of a single CPU (over 1 s that alone brought a loop at full speed to 0.57 on a slow runner).
+    # Over 3 s, as with the budget. On one CPU the compositor's copy of the screen takes its share too (about a fifth
+    # under TCG; the capture dot's code in its loop once made that a third, and the loop's 0.57).
     start_run, start = run_ms(), time.monotonic()
     time.sleep(3)
     share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)

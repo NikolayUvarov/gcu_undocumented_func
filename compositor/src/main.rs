@@ -24,6 +24,18 @@ fn dot(width: usize, height: usize) -> impl Iterator<Item = (usize, usize)> {
         .filter(move |&(x, y)| x < width && y < height && (x as isize - cx as isize).pow(2) + (y as isize - cy as isize).pow(2) <= r * r)
 }
 
+// The dot over the framebuffer while `capturing`, else the screen under it put back from the shadow copy. Kept out
+// of the main loop, whose copy of the screen it would otherwise slow down (about half again on one CPU under TCG).
+#[inline(never)]
+fn mark(info: &BootInfo, gop: *mut u32, shadow: *const u32, valid: bool, capturing: bool) {
+    let device = |pixel: u32| if info.pixel_format == PIXEL_BGR { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+    for (x, y) in dot(info.width, info.height) {
+        let at = y * info.stride + x;
+        let pixel = if capturing { 0x00E0_2020 } else if valid { unsafe { core::ptr::read(shadow.add(at)) } } else { 0 };
+        unsafe { core::ptr::write_volatile(gop.add(at), device(pixel)); }
+    }
+}
+
 // One display.wit request: the mode, or a sealed read-only copy of what `source` shows (true: a capture).
 fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire::Call) -> bool {
     let capture = matches!(request, Request::Capture);
@@ -53,8 +65,7 @@ fn main(info: &'static BootInfo) {
     let mut source: Option<Mapping> = None;
     let mut valid = false;
     let native = info.pixel_format == PIXEL_BGR; // screens already hold the framebuffer's layout
-    let device = |pixel: u32| if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
-    let (mut captured, mut lit) = (None::<usize>, false);
+    let mut captured = None::<usize>; // when the last capture was, while the dot is shown
     loop {
         let frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
         if frame == Frame::NewSource {
@@ -73,17 +84,12 @@ fn main(info: &'static BootInfo) {
             }
             valid = true;
         }
-        // The capture dot: drawn over every frame while captures come, then the screen under it put back.
-        let capturing = captured.is_some_and(|at| mind::time::uptime_ms() - at < DOT_MS);
-        if capturing {
-            for (x, y) in dot(info.width, info.height) { unsafe { core::ptr::write_volatile(gop.add(y * info.stride + x), device(0x00E0_2020)); } }
-        } else if lit {
-            for (x, y) in dot(info.width, info.height) {
-                let pixel = if valid { unsafe { core::ptr::read(shadow.add(y * info.stride + x)) } } else { 0 };
-                unsafe { core::ptr::write_volatile(gop.add(y * info.stride + x), device(pixel)); }
-            }
+        // The capture dot: drawn over every frame while captures come, then the screen under it put back once.
+        if let Some(at) = captured {
+            let capturing = mind::time::uptime_ms() - at < DOT_MS;
+            mark(info, gop, shadow, valid, capturing);
+            if !capturing { captured = None; }
         }
-        lit = capturing;
         // Wait for the next frame, answering requests meanwhile (without a service endpoint: just wait).
         match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, FRAME_MS) {
             Ok(request) => match display::decode(&request, RECEIVED_CAP) {
