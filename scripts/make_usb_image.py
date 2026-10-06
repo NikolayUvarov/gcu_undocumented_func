@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build MIND CORE and package a raw UEFI USB image; never access physical disks."""
+"""Build MIND CORE and package a raw UEFI USB image (x86_64, or aarch64 with --arch aarch64); never access physical disks."""
 import argparse
 import hashlib
 import json
@@ -15,6 +15,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 # Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
+# What differs between the architectures: where 02_build.sh puts the files, the bootloader's name, the ELF machine
+# (EM_X86_64, EM_AARCH64), the services built for it (aarch64 has no PS/2, IDE or AC97 driver), the image's name.
+ARCHES = {
+    "x86_64": {"root": "usb_root", "efi": "EFI/BOOT/BOOTX64.EFI", "machine": b">\x00", "missing": (), "image": "dist/mind-core-usb.img",
+               "boot": "UEFI x64, Secure Boot disabled. This is not a Legacy BIOS image."},
+    "aarch64": {"root": "aarch64_root", "efi": "EFI/BOOT/BOOTAA64.EFI", "machine": b"\xb7\x00", "missing": ("ps2_kbd.elf", "ata.elf", "audio_gw.elf"),
+                "image": "dist/mind-core-usb-aarch64.img",
+                "boot": "UEFI AArch64, Secure Boot disabled: QEMU virt with AAVMF (./03_run_qemu_aarch64.sh --image), boards with UEFI firmware (issue 205)."},
+}
 APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
 # Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font (THIRD_PARTY.md).
@@ -24,6 +33,16 @@ LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_P
 VOICE = ("voice/model.bin", "voice/commands.txt")
 FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE)
 SECTOR = 512
+
+
+def files(arch):
+    """The files of the image for `arch`: the bootloader, the kernel, its boot services, the applications, licences, voice."""
+    spec = ARCHES[arch]
+    if arch == "x86_64":
+        return FILES
+    boot = tuple(name for name in BOOT_FILES if name not in spec["missing"])
+    apps = tuple(sorted(p.name for p in (ROOT / spec["root"]).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
+    return (spec["efi"], "kernel.elf", *boot, *apps, *LICENSES, *VOICE)
 
 
 def find_qemu_img(requested):
@@ -51,9 +70,10 @@ def qemu_path(path, executable):
     return path
 
 
-def read_payloads(source):
+def read_payloads(source, arch="x86_64"):
     payloads = {}
-    for name in FILES:
+    machine = ARCHES[arch]["machine"]
+    for name in files(arch):
         file = source / name
         if not file.is_file():
             raise ValueError(f"Missing {file}. Run the build without --no-build.")
@@ -64,8 +84,8 @@ def read_payloads(source):
         if name in LICENSES or name in VOICE:
             pass
         elif name.endswith(".elf"):
-            if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != b">\x00":
-                raise ValueError(f"{file} is not an ELF64 x86-64 little-endian binary.")
+            if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:
+                raise ValueError(f"{file} is not an ELF64 {arch} little-endian binary.")
         elif data[:2] != b"MZ":
             raise ValueError(f"{file} is not a PE/EFI application.")
         payloads[name] = data
@@ -164,13 +184,15 @@ def check_image(image, payloads, mark_esp=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "dist/mind-core-usb.img",
-                        help="path to the .img (default: dist/mind-core-usb.img in the project)")
-    parser.add_argument("--no-build", action="store_true", help="use the already built usb_root/")
+    parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64", help="the architecture of the image (default: x86_64)")
+    parser.add_argument("--output", type=Path,
+                        help="path to the .img (default: dist/mind-core-usb.img, dist/mind-core-usb-aarch64.img for aarch64)")
+    parser.add_argument("--no-build", action="store_true", help="use the already built usb_root/ (aarch64_root/ for aarch64)")
     parser.add_argument("--force", action="store_true", help="overwrite an existing image file")
     parser.add_argument("--qemu-img", default=os.environ.get("QEMU_IMG"), help="path to qemu-img[.exe]")
     args = parser.parse_args()
-    output = args.output.absolute()
+    spec = ARCHES[args.arch]
+    output = (args.output or ROOT / spec["image"]).absolute()
     if output.suffix.lower() != ".img":
         raise ValueError("Output file must have the .img extension.")
     if output.is_symlink() or (output.exists() and not output.is_file()):
@@ -179,9 +201,9 @@ def main():
         raise ValueError(f"{output} already exists. Pass --force to overwrite it.")
     qemu_img = find_qemu_img(args.qemu_img)
     if not args.no_build:
-        print(">>> Building the project...", flush=True)
-        subprocess.run(["bash", str(ROOT / "02_build.sh")], cwd=ROOT, check=True)
-    payloads = read_payloads(ROOT / "usb_root")
+        print(f">>> Building the project for {args.arch}...", flush=True)
+        subprocess.run(["bash", str(ROOT / "02_build.sh")], cwd=ROOT, check=True, env={**os.environ, "ARCH": args.arch})
+    payloads = read_payloads(ROOT / spec["root"], args.arch)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Stage ONLY boot files. Never include old test disks, image files or local
     # firmware variables from usb_root. Conversion never touches the live tree.
@@ -197,7 +219,7 @@ def main():
             "driver": "vvfat", "dir": qemu_path(source, qemu_img),
             "fat-type": 16, "floppy": False, "rw": False, "label": "MIND CORE",
         }}
-        print(">>> Creating RAW USB image (MBR, FAT16, UEFI x64)...", flush=True)
+        print(f">>> Creating RAW USB image (MBR, FAT16, UEFI {args.arch})...", flush=True)
         subprocess.run([qemu_img, "convert", "-O", "raw", "json:" + json.dumps(descriptor),
                         qemu_path(temporary, qemu_img)], check=True)
         check_image(temporary, payloads, mark_esp=True)
@@ -214,8 +236,9 @@ def main():
             temporary.unlink()
         print(f">>> Done: {output}\nSize: {output.stat().st_size} bytes\n"
               f"SHA256: {digest.hexdigest()}\n"
-              "Write the .img to the whole USB drive in RAW/DD mode.\n"
-              "Boot: UEFI x64, Secure Boot disabled. This is not a Legacy BIOS image.")
+              "Write the .img to the whole USB drive in RAW/DD mode"
+              f"{'' if args.arch == 'x86_64' else ' (./05_write_usb_linux.sh --image ' + str(output.relative_to(ROOT) if output.is_relative_to(ROOT) else output) + ')'}.\n"
+              f"Boot: {spec['boot']}")
 
 
 if __name__ == "__main__":

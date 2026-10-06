@@ -251,12 +251,26 @@ arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
 The same kernel (with its aarch64 architecture layer), bootloader, services and programs build for aarch64 and run on QEMU's `virt` machine with VirtIO devices: the boot disk on `virtio-blk`, the network card, keyboard and tablet, the screen on `ramfb`, the shell on the PL011 in the terminal, the clock from the PL031. Four CPUs by default (`MIND_CPUS`), started through PSCI; `reboot --off` turns the machine off (issue 203). Needs the Rust targets of `rust-toolchain.toml`, `qemu-system-aarch64` and AAVMF (Debian/Ubuntu: `qemu-system-arm qemu-efi-aarch64 ipxe-qemu`):
 
 ```bash
-ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64_root/ (scripts/build_aarch64.sh)
+ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64_root/ (scripts/build_aarch64.sh); Ctrl+A X leaves
 python3 tests/aarch64_smoke.py   # after ARCH=aarch64 ./02_build.sh --fixtures
 python3 tests/qemu_smoke.py --arch aarch64   # the normal, shell, vfs, net, tls, busy and smp suites on virt (after --fixtures)
 ```
 
+On Windows, `03_run_qemu_aarch64_windows.bat` runs the same machine with the Windows QEMU (the installer's or MSYS2's) and the `edk2-aarch64-code.fd` firmware it ships; build in WSL or Linux first. `03_run_qemu_aarch64_windows.bat image` boots the USB image below. The firmware search covers AAVMF (Debian, Ubuntu), edk2 (Fedora) and QEMU's own; `MIND_AAVMF_CODE` and `MIND_AAVMF_VARS` choose another.
+
 The platform profile `aarch64/QEMU-virt-0` (what differs from x86-64, its TCB, threat model and evidence) is in [docs/profile/aarch64/](docs/profile/aarch64/README.md); CI runs the `aarch64` jobs next to the x86 ones.
+
+#### A USB image for aarch64
+
+```bash
+./04_make_usb_image_aarch64.sh             # builds with ARCH=aarch64, then dist/mind-core-usb-aarch64.img
+./03_run_qemu_aarch64.sh --image           # boots that image in QEMU as a USB stick on xHCI, before writing it
+./05_write_usb_linux.sh --image dist/mind-core-usb-aarch64.img --device /dev/sdX   # Windows: -Image
+```
+
+- **The image.** The same MBR, FAT16 and verification as the x86 image (below), with `EFI/BOOT/BOOTAA64.EFI`, the aarch64 kernel and what `aarch64_root/` holds. There is no `ps2_kbd`, `ata` or `audio_gw` on aarch64. The options are those of `04_make_usb_image.sh` (`--no-build`, `--force`, `--output`).
+- **In QEMU** the system loads its programs from the stick through `usb_host` and `usb_storage`. `tests/usb_image_smoke.py --arch aarch64` checks it, in CI too. `--image` uses a snapshot: QEMU writes nothing to the file.
+- **On hardware** it needs a board with UEFI firmware that boots from USB, with Secure Boot off. Only QEMU `virt` is tested. Boards (Raspberry Pi 4/5 with EDK2, servers with ACPI) are issue [205](issues/205-aarch64-boards.md).
 
 ### Bootable USB image
 

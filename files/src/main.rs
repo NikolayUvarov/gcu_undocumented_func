@@ -14,6 +14,12 @@ const BACKGROUND: u32 = 0x00101820; const TEXT: u32 = 0x00E0E0E0; const ACCENT: 
 // Drawn with the 8x16 font (MIND Mono 16); the services suite compares it with the font's bitmaps.
 const TITLE: &str = "Files — демо VFS-сервера ╞═╡ Esc: выход";
 
+// The bootloader of the architecture this program was built for.
+#[cfg(target_arch = "aarch64")]
+const BOOTLOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
+#[cfg(not(target_arch = "aarch64"))]
+const BOOTLOADER: &str = "EFI/BOOT/BOOTX64.EFI";
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("files — VFS demo: lists the root of the disk and reads a file through vfs_server.\nUsage: files\nEsc: exit.");
@@ -38,7 +44,7 @@ fn main(info: &'static BootInfo) {
     }
 
     // Read the whole ELF in chunks and compute a simple checksum.
-    for path in ["kernel.elf", "EFI/BOOT/BOOTX64.EFI"] {
+    for path in ["kernel.elf", BOOTLOADER] {
         out.clear();
         match File::open(path) {
             Ok(mut file) => {
