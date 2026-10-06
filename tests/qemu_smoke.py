@@ -367,6 +367,19 @@ def frames_free(vm):
 def heap_used(vm):
     # IDL clients allocate a buffer per call (log lines of the services, for instance), so a reading can catch one in
     # flight: the value counts once two readings in a row agree.
+    if not getattr(vm, "settled", False):
+        # The first reading is a suite's baseline. The kernel frees its list of memory revoked during the services' start
+        # once nothing references that memory, which can come after the first prompt (224 bytes on x86 and aarch64): the
+        # baseline waits until readings half a second apart agree.
+        vm.settled = True
+        used = heap_used(vm)
+        for _ in range(10):
+            time.sleep(.5)
+            again = heap_used(vm)
+            if again == used:
+                break
+            used = again
+        return used
     previous = None
     for _ in range(20):
         output = vm.command("heap")
