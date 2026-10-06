@@ -5,7 +5,19 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
-# The pins of an ARM board through the gpio service (issue u015): a console program.
+# The pins of an ARM board through the gpio service: pins (a console program, issue u015) and pinmap (the header on
+# a screen, issue u017).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pins"
+path = "src/bin/pins.rs"
+
+[[bin]]
+name = "pinmap"
+path = "src/bin/pinmap.rs"
+
 [dependencies]
 libmind = { path = "../libmind", features = ["alloc"] }
 
