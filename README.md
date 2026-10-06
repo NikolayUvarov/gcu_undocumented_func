@@ -260,6 +260,8 @@ python3 tests/qemu_smoke.py --arch aarch64   # the normal, shell, vfs, net, tls,
 
 On Windows, `03_run_qemu_aarch64_windows.bat` runs the same machine with the Windows QEMU (the installer's or MSYS2's) and the `edk2-aarch64-code.fd` firmware it ships; build in WSL or Linux first. `03_run_qemu_aarch64_windows.bat image` boots the USB image below. The firmware search covers AAVMF (Debian, Ubuntu), edk2 (Fedora) and QEMU's own; `MIND_AAVMF_CODE` and `MIND_AAVMF_VARS` choose another.
 
+On a Mac with Apple Silicon, `03_run_qemu_aarch64.sh` uses Homebrew's QEMU (`brew install qemu`) and its firmware, and runs the guest with the hypervisor (`-accel hvf -cpu host`) at the speed of the Mac's own cores; this is a virtual machine, not a native boot (Apple Silicon has no UEFI). `MIND_MEMORY` sets the RAM (default `512M`; above `3G` the machine places RAM and PCI above 4 GiB, `highmem=on`). The macOS path is not tested here: CI and the local runs are on Linux.
+
 The platform profile `aarch64/QEMU-virt-0` (what differs from x86-64, its TCB, threat model and evidence) is in [docs/profile/aarch64/](docs/profile/aarch64/README.md); CI runs the `aarch64` jobs next to the x86 ones.
 
 #### A USB image for aarch64
