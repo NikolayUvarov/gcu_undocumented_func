@@ -12,6 +12,13 @@ mind::request!(REQUEST_CONSOLE | REQUEST_LIFECYCLE);
 
 const LIFECYCLE: Endpoint = Endpoint(SLOT_LIFECYCLE);
 
+// The loader that started svc answers its launcher (the shell) before it takes another call. One call to it first, so
+// that stopping or restarting the loader cannot cut that answer off: the shell would report svc's start as failed
+// while svc goes on (000-APP-0003). The call names no session of svc's, so it changes nothing.
+fn settle(name: &str) {
+    if name == "loader" { let _ = mind::idl::loader::abort(Endpoint::LOADER, 0); }
+}
+
 fn reason(error: lifecycle::Error) -> &'static str {
     match error {
         lifecycle::Error::NotFound => "no such service or task",
@@ -53,7 +60,7 @@ fn main(_info: &'static BootInfo) {
             Err(mind::Error::Rights) => mind::println!("svc: start {}: init cannot start it after boot", name),
             Err(error) => failed("start", name, Err(error)),
         },
-        ("restart", Some(name)) => match lifecycle::restart(LIFECYCLE, name) {
+        ("restart", Some(name)) => match { settle(name); lifecycle::restart(LIFECYCLE, name) } {
             Ok(Ok(pid)) => mind::println!("{} restarted: PID {}", name, pid),
             Ok(Err(error)) => failed("restart", name, Ok(error)),
             Err(error) => failed("restart", name, Err(error)),
@@ -61,7 +68,7 @@ fn main(_info: &'static BootInfo) {
         ("stop", Some(target)) => {
             let result = match target.parse::<u64>() {
                 Ok(pid) => lifecycle::stop_task(LIFECYCLE, pid),
-                Err(_) => lifecycle::stop(LIFECYCLE, target),
+                Err(_) => { settle(target); lifecycle::stop(LIFECYCLE, target) }
             };
             match result {
                 Ok(Ok(())) => mind::println!("{} stopped", target),

@@ -1,0 +1,26 @@
+# 000-APP-0003 — `svc restart loader` could lose its own start — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** G, C6 · **Constitution:** MC-6.4
+
+## Problem
+
+A full local run of the merge of 170 and 171 failed in the `services` suite (`escrow_check`, 4 CPUs): `svc restart loader` printed `ERROR: LOADER NOT RUNNING` instead of `loader restarted: PID …`, and the shell reported no start of `svc`. Repeated, it failed in two of three runs while other emulators ran beside it, and in one of one with the host's CPUs kept busy. A run that looked after the failure found a new loader in `ps`, and `init`'s log said `STOPPED loader` and `STARTED loader`: `svc` had run and done its work, and only the answer to the shell was lost.
+
+The shell starts `svc` through the loader's launch session, and the loader answers `commit` only after `SPAWN` has returned. On another CPU `svc` can run at once and ask `init` to restart the loader. If `init` kills the loader before the loader has answered, the kernel fails the shell's call with `ERR_PEER`, and the shell says the loader does not run. Meanwhile `svc` goes on and the loader is restarted. Only `init` kills the loader, only at `svc`'s request, and `svc` exists only after the spawn inside `commit`, so this is the only way that answer can be lost. A host that deschedules a QEMU CPU for some milliseconds widens the window, which is why it showed up while other builds ran beside the tests. The same can happen to a person typing `svc stop loader`.
+
+## Plan
+
+`svc` makes one call to the loader before it asks `init` to stop or restart it. The loader takes calls one at a time and answers each before it receives the next. So when that call is answered, the loader has answered the shell's `commit`. The call is `abort` of a session `svc` does not have, which changes nothing.
+
+## Acceptance criteria
+
+`svc restart loader` and `svc stop loader` print their result; the `services` suite's `escrow_check` restarts the loader from `svc`.
+
+## Resolution
+
+- `svc/src/main.rs`: `settle` before `restart` and `stop` of `loader`.
+- Tested in the `services` suite on 4 CPUs with three host CPUs kept busy, which widens the window: without the fix it failed in the first run, with it ten runs in a row passed (`escrow_check` restarts the loader from `svc`). Tests cannot make the race happen on purpose; the reasoning above is why it cannot happen now: the loader answers the shell before it can take `svc`'s call.
+
+## Related
+
+[170](170-supervisor-without-usable-privileges.done) (its `escrow_check` found it), [050](050-logd-dmesg-svc.done) (`svc`).
