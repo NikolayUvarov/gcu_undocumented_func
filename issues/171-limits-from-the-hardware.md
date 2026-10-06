@@ -30,9 +30,21 @@ MC-1.7, MC-3.13 and MC-5.1 ask that every kernel object be accounted and bounded
 
 Each step is its own commit, with the docs/profile statements (kernel-objects.md, bootstrap.md) changed with it.
 
+## Progress
+
+- **Step 1 — done (2026-10-06).**
+  - The x86-64 kernel maps the free RAM above 4 GiB in 2 MiB pages, up to 512 GiB (root entry 0; `mmu::RAM_END`), a page directory per gigabyte that has any. The frame pool takes the same pages (`mmu::mapped`, shared by both).
+  - The pool now serves the highest range first, so memory below 4 GiB stays free longest, and the identity map is built before the pool.
+  - `03_run_qemu.sh`, `03_run_qemu_wsl.sh` and the Windows launchers take `MIND_MEMORY` (default `512M`).
+  - Tested: QEMU x86-64 with 6 GiB: the pool has 6018 MiB, 3071 MiB of it above 4 GiB; `memtest` writes and reads back a 144 MiB heap; the `normal`, `display`, `net` and `vfs` suites pass. aarch64 with 6 GiB: 6033 MiB, 3044 MiB above 4 GiB. CI runs the x86 group "RAM above 4 GiB".
+  - Left over, outside step 1:
+    - on x86, RAM between 3 and 4 GiB (real machines can have it) is still mapped uncached;
+    - x86 RAM above 512 GiB needs a second kernel root entry;
+    - the kernel arena is a fixed 64 MiB (step 2 moves task structures out of it).
+
 ## Acceptance criteria
 
-- **QEMU x86-64, 6 GiB:** the frame pool reports the RAM above 4 GiB, and a program allocates there.
+- **QEMU x86-64, 6 GiB:** the frame pool reports the RAM above 4 GiB, and a program allocates there. *(Met by step 1.)*
 - **QEMU, both architectures:** more than 32 applications run at once (console programs; screens cost 4 MiB each). The limit comes only when memory runs out, as a clean refusal (`TASK LIMIT`/`NO MEMORY`) with the system left working, and the recovery reserve keeps the services restartable.
 - **QEMU with 16 CPUs (x86, TCG):** all come online.
 - **Host and QEMU tests:** a task with more than 96 capabilities, and the STAT pages.

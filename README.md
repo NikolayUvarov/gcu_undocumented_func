@@ -231,8 +231,9 @@ On Linux, `./03_run_qemu.sh` does the same with the VM settings of the other lau
 - **Network:** `MIND_NET=none` leaves the network card out.
 - **Pointer:** a VirtIO tablet (`virtio-tablet-pci`), an absolute device: QEMU does not grab the pointer, which moves freely in and out of the window. `MIND_POINTER=ps2` leaves only the PS/2 mouse, which QEMU grabs on a click (Ctrl+Alt+G releases it); under Wayland, WSLg or Windows that grab may not hold the pointer in the window.
 - **CPU:** `MIND_CPU=<model>` replaces the CPU model.
+- **RAM:** `MIND_MEMORY=<size>` sets it (QEMU `-m`, default `512M`; for example `MIND_MEMORY=6G`). The system uses all of it, above 4 GiB too (issue 171).
 
-On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card, the VirtIO tablet and RDRAND.
+On Windows, use `03_run_qemu_windows.bat` or `03_run_qemu_windows_msys2.bat`; both enable the UART console with `-serial stdio`, initialize the RTC with the host's local time using `-rtc base=localtime`, and add the AC97 sound card (through DirectSound), the VirtIO network card, the VirtIO tablet and RDRAND. `set MIND_MEMORY=6G` before them gives the machine more RAM (default `512M`).
 
 From WSL with Windows interop enabled, build and launch Windows QEMU directly:
 
@@ -246,7 +247,7 @@ It locates `OVMF.fd` and `usb_root/` beside the script and converts their paths
 with `wslpath`, so it can be invoked from any directory. To use another Windows
 installation, set `QEMU=/mnt/d/path/to/qemu-system-x86_64.exe`. Any script
 arguments are passed through to QEMU. Sound goes through Windows (DirectSound);
-`MIND_AUDIO`, `MIND_NET`, `MIND_POINTER` and `MIND_CPU` work as with `03_run_qemu.sh`.
+`MIND_AUDIO`, `MIND_NET`, `MIND_POINTER`, `MIND_CPU` and `MIND_MEMORY` work as with `03_run_qemu.sh`.
 
 ### aarch64 (QEMU `virt`, issues 201–204)
 
@@ -482,7 +483,7 @@ logs 3
 
 The comments above explain the example; the shell does not parse comments. Each application draws into its own RAM buffer. The shell compositor compares the foreground buffer with a cached copy and updates only changed physical pixels. Background tasks cannot paint over the shell or consume its input.
 
-**Current scope:** x86-64 UEFI/QEMU with xAPIC and NX, tested with one and four CPUs. Runtime RAM and the GOP framebuffer must fit below 4 GiB; kernel structures use a reserved 64 MiB arena and task memory the free RAM below 4 GiB (RAM above 4 GiB is not used yet). There are at most eight application tasks and eight CPUs. CPU assignment is fixed for each task; there is no migration, work stealing, demand paging, or userspace allocator for sub-page objects yet. Kernel mappings are supervisor-only identity mappings (kernel text is not separately write-protected). The supported compiler target remains `x86_64-unknown-none`; context switching saves x87, SSE and, on CPUs with XSAVE and AVX, AVX state per task (XSAVE; FXSAVE otherwise; `cpus` shows `FPU=XSAVE+AVX` or `FPU=FXSAVE`).
+**Current scope:** x86-64 UEFI/QEMU with xAPIC and NX, tested with one and four CPUs. The boot data, the kernel's 64 MiB arena and the GOP framebuffer are below 4 GiB; task memory comes from all the free RAM, above 4 GiB too, up to 512 GiB (issue 171; tested with 6 GiB). There are at most eight application tasks and eight CPUs. CPU assignment is fixed for each task; there is no migration, work stealing, demand paging, or userspace allocator for sub-page objects yet. Kernel mappings are supervisor-only identity mappings (kernel text is not separately write-protected). The supported compiler target remains `x86_64-unknown-none`; context switching saves x87, SSE and, on CPUs with XSAVE and AVX, AVX state per task (XSAVE; FXSAVE otherwise; `cpus` shows `FPU=XSAVE+AVX` or `FPU=FXSAVE`).
 
 The clock asks the `rtc` service with `CALL` (`mind::rtc::seconds_since_midnight`), which returns seconds since midnight (or `usize::MAX` when unavailable). The driver checks for stable readings and handles both BCD/binary and 12/24-hour RTC modes. The application displays RTC time without applying a timezone offset. The supplied launch commands use local time; QEMU otherwise defaults to UTC ([QEMU RTC options](https://www.qemu.org/docs/master/system/invocation.html)).
 

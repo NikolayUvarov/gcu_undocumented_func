@@ -85,8 +85,9 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         init_serial();
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
-        frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
+        // The identity map first: the frame pool's ranges above 4 GiB exist only in it (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
+        frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
         scheduler::spawn_init().expect("init spawn");

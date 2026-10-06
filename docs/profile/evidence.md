@@ -22,6 +22,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
+| With 6 GiB of RAM the frame pool holds the free RAM above 4 GiB (about 3 GiB of it), the highest range first, and a 144 MiB heap from it is written and read back; programs, screens, the network and the disks work on it (issue 171) | `normal`, `display`, `net`, `vfs` suites with `--memory 6G` (`ram_above_4g`) |
 | A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |
 | Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |

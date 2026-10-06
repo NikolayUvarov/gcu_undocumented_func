@@ -54,10 +54,11 @@ NET=()
 # takes the pointer back halfway (issue 161; MIND_POINTER=ps2: the PS/2 mouse only).
 POINTER=()
 [[ "${MIND_POINTER:-tablet}" == ps2 ]] || POINTER=(-device virtio-tablet-pci)
+# RAM: MIND_MEMORY=<size> (QEMU -m, default 512M); the system uses all of it, above 4 GiB too (issue 171).
 exec "$QEMU_BIN" \
     -bios "$FIRMWARE_PATH" \
     -drive "format=raw,file=fat:rw:$USB_ROOT_PATH" \
-    -m 512 -smp 4,sockets=1,cores=4,threads=1 \
+    -m "${MIND_MEMORY:-512M}" -smp 4,sockets=1,cores=4,threads=1 \
     -cpu "${MIND_CPU:-qemu64,+rdrand}" \
     -serial stdio -rtc base=localtime \
     "${AUDIO[@]}" "${NET[@]}" "${POINTER[@]}" \

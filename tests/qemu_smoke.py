@@ -433,6 +433,29 @@ def qemu_cpu_seconds(vm, seconds):
     return total() - start
 
 
+def gibibytes(memory):
+    # QEMU -m as GiB: "6G", "6144M" or "6144" (MiB).
+    number, unit = re.fullmatch(r"(\d+)([GgMm]?)", memory or "512").groups()
+    return int(number) / (1 if unit in "Gg" and unit else 1024)
+
+
+def ram_above_4g(vm):
+    """Issue 171: the frame pool takes the free RAM above 4 GiB too, the highest range first; a program's heap from
+    it is written and read back whole."""
+    physmap = vm.command("physmap")
+    high = sum(max(0, int(last, 16) + 1 - max(int(start, 16), 1 << 32))
+               for start, last in re.findall(r"^0x([0-9a-f]+)-0x([0-9a-f]+) +\d+K free RAM$", physmap, re.M))
+    assert high >= (gibibytes(vm.args.memory) - 4) * (1 << 30), physmap
+    frames = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", vm.command("free"))[1])
+    # The pool has every 2 MiB page of it (the x86 kernel maps RAM above 4 GiB in 2 MiB pages) besides the RAM below.
+    assert frames >= high - (4 << 20) and frames > 4 << 30, (frames, high)
+    vm.send("memtest alloc 144\n")
+    output = vm.expect("MIND> ", timeout=120, after="memtest alloc 144\n")
+    require(output, "[MEMTEST] HELD 144 MiB INTACT=true")
+    require(output, "[MEMTEST] FREED")
+    print(f"PASS: {frames >> 20} MiB in the frame pool, {high >> 20} MiB of it above 4 GiB; a 144 MiB heap from the highest range written and read back", flush=True)
+
+
 def normal_suite(vm):
     # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
     assert "gpio" not in vm.services()
@@ -554,6 +577,8 @@ def normal_suite(vm):
     vm.serial()
     assert heap_used(vm) == baseline
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, limit/reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
+    if gibibytes(vm.args.memory) > 4:
+        ram_above_4g(vm)
 
 
 def keys_suite(vm):

@@ -24,12 +24,22 @@ pub fn user_readable(entry: u64) -> bool { entry & (VALID | USER) == VALID | USE
 pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VALID | USER | WRITE }
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED != 0) }
-/// Root entry 0 of every space: the kernel's identity map.
-/// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB.
+/// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB and of the RAM above.
 pub const KERNEL_ENTRIES: usize = 1;
 pub fn kernel_entry(_index: usize) -> u64 { KERNEL_PDPT.load(Ordering::Acquire) as u64 | 3 }
-/// The end of the kernel's identity map; RAM and devices above it are not used.
+/// The end of the identity map of everything (RAM, the boot data and device windows); above it only RAM is mapped.
 pub const IDENTITY_END: u64 = 1 << 32;
+/// The end of RAM the kernel can map: root entry 0 (issue 171).
+pub const RAM_END: u64 = 1 << 39;
+const HUGE: u64 = 0x20_0000; // a 2 MiB page
+const CONVENTIONAL: u32 = 7; // EfiConventionalMemory
+
+/// The part of RAM [start, end) the identity map covers: all of it below 4 GiB, its whole 2 MiB pages above, to RAM_END.
+pub fn mapped(start: u64, end: u64) -> (u64, u64) {
+    let end = end.min(RAM_END);
+    let end = if end > IDENTITY_END { (end & !(HUGE - 1)).max(IDENTITY_END) } else { end };
+    (if start >= IDENTITY_END { start.next_multiple_of(HUGE) } else { start }, end)
+}
 /// Where a task's window starts (root entry 1).
 pub const USER_IMAGE: usize = 0x80_0000_0000;
 /// The space's translations changed: reload them if it is the active one.
@@ -48,7 +58,7 @@ pub fn kernel_root() -> usize {
     KERNEL_ROOT.load(Ordering::Acquire)
 }
 
-pub unsafe fn init(_map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
+pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     // The bootloader reserves all runtime RAM below 4 GiB. Retain supervisor
     // identity mappings for the kernel, boot stack and MMIO on every CR3.
     let root = Region::new(PAGE, PAGE)?;
@@ -66,6 +76,20 @@ pub unsafe fn init(_map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
             .add(gigabyte)
             .write(pd.ptr() as u64 | 3);
         core::mem::forget(pd);
+    }
+    // Free RAM above 4 GiB, in the 2 MiB pages the frame pool takes (issue 171); a directory per gigabyte that has any.
+    for entry in map.iter().filter(|e| e.kind == CONVENTIONAL) {
+        let (mut page, end) = mapped(entry.start.max(IDENTITY_END), entry.start + entry.pages * 4096);
+        while page < end {
+            let slot = (pdpt.ptr() as *mut u64).add((page >> 30) as usize);
+            if slot.read() == 0 {
+                let pd = Region::new(PAGE, PAGE)?;
+                slot.write(pd.ptr() as u64 | 3);
+                core::mem::forget(pd);
+            }
+            ((slot.read() & !0xfff) as *mut u64).add((page >> 21) as usize & 511).write(page | 0x83);
+            page += HUGE;
+        }
     }
     (root.ptr() as *mut u64).write(pdpt.ptr() as u64 | 3);
     KERNEL_PDPT.store(pdpt.ptr() as usize, Ordering::Release);
