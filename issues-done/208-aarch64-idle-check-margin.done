@@ -1,6 +1,6 @@
-# 208 — aarch64: the idle check of the normal and smp suites has a margin
+# 208 — aarch64: the idle check of the normal and smp suites has a margin — done
 
-**Type:** porting (tests) · **Owner:** porting track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.2
+**Type:** porting (tests) · **Owner:** porting track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.2
 
 From the tools track's report (2026-10-06, formerly `porting-track-reports.md`).
 
@@ -23,3 +23,10 @@ The check passes with the host busy (a parallel build at `nice 19`) and fails wi
 ## Related
 
 [201](../issues-done/201-aarch64-boot.done), [203](../issues-done/203-aarch64-smp-and-power.done), [204](../issues-done/204-aarch64-profile-and-ci.done).
+
+## Resolution
+
+- `tests/qemu_smoke.py`: `idle_cpu_seconds` takes the lowest of three 1 s samples of QEMU's processor time; the `normal` and `smp` suites compare it with `IDLE_LIMIT` = 0.85 s (was one sample against 0.6 s).
+- With the host busy (three kernel builds at `nice 19`, `-j4` on four cores) the `normal` and `smp` suites passed twice in a row.
+- Mutation: with `wait_for_interrupt` executing `nop` instead of `wfi` (idle CPUs spin), the `normal` suite failed: "idle QEMU used at least 3.85 s of processor time a second". The idle figure is about 0.5 s, so the check keeps a wide margin on both sides.
+- Fewer wakeups at idle (the shell's 10 ms poll, `netstack`) is not done here; it would lower the idle figure further.

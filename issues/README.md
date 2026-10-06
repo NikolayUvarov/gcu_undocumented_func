@@ -24,7 +24,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` | tools | P2 | 207 | track H |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
-| [208](208-aarch64-idle-check-margin.md) | aarch64: the idle check of the normal and smp suites with a margin (the lowest of three samples; a spinning CPU still fails) | porting | P2 | — | track H |
 
 
 ## Finished tasks (`issues-done/`)
@@ -166,6 +165,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [203](../issues-done/203-aarch64-smp-and-power.done) | aarch64 SMP: CPUs from the MADT started through PSCI, SGIs, reset and power off | done (2026-10-05) |
 | [204](../issues-done/204-aarch64-profile-and-ci.done) | aarch64 profile `aarch64/QEMU-virt-0` and CI: `ARCH=aarch64 ./02_build.sh`, three CI groups | done (2026-10-05) |
 | [206](../issues-done/206-pin-controllers-from-firmware.done) | aarch64: pin controllers (BCM2711 GPIO, PL061) from the DSDT and SSDTs, their registers by `PLATFORM_MMIO` index | done (2026-10-06) |
+| [208](../issues-done/208-aarch64-idle-check-margin.done) | aarch64 idle check: the lowest of three samples against 0.85 s; passes under load, fails when idle CPUs spin (3.85 s) | done (2026-10-06) |
 | [151](../issues-done/151-shell-grant-slots-13-15.done) | Shell grant slots 13–15: authority view, keyboard, display | done (2026-10-04) |
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
