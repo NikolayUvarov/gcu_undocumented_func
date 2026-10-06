@@ -61,6 +61,7 @@ pub struct Screen {
     pub lines: Vec<(String, Kind)>,
     /// A program's output since its last newline, shown as the last line.
     partial: String,
+    at: usize, // where the next character of `partial` goes, in characters: before its end after a \r (issue u016)
     /// The start of a character a message split.
     carry: Vec<u8>,
     /// Rows scrolled back from the end.
@@ -73,7 +74,7 @@ pub struct Screen {
 impl Default for Screen { fn default() -> Self { Self::new() } }
 
 impl Screen {
-    pub fn new() -> Self { Self { lines: Vec::new(), partial: String::new(), carry: Vec::new(), scroll: 0, line: InputLine::new(), history: Vec::new(), recall: None } }
+    pub fn new() -> Self { Self { lines: Vec::new(), partial: String::new(), at: 0, carry: Vec::new(), scroll: 0, line: InputLine::new(), history: Vec::new(), recall: None } }
 
     fn push(&mut self, text: String, kind: Kind) {
         if self.lines.len() == LINES_MAX { self.lines.remove(0); }
@@ -103,21 +104,32 @@ impl Screen {
     fn chars(&mut self, text: &str) {
         for ch in text.chars() {
             match ch {
-                '\n' => { let line = core::mem::take(&mut self.partial); self.push(line, Kind::Output); }
-                '\t' => { let next = (self.partial.chars().count() / 8 + 1) * 8; while self.partial.chars().count() < next { self.partial.push(' '); } }
-                c if (c as u32) < 0x20 || c == '\u{7F}' => {} // \r and other controls
-                c => self.partial.push(c),
+                '\n' => { let line = core::mem::take(&mut self.partial); self.at = 0; self.push(line, Kind::Output); }
+                // The start of the line again: what comes next overwrites it (`clock --line`, issue u016).
+                '\r' => self.at = 0,
+                '\t' => { let next = (self.at / 8 + 1) * 8; while self.at < next { self.put(' '); } }
+                c if (c as u32) < 0x20 || c == '\u{7F}' => {} // other controls
+                c => self.put(c),
             }
         }
     }
 
+    // A character at `at`: over the one there, or at the end.
+    fn put(&mut self, c: char) {
+        match self.partial.char_indices().nth(self.at) {
+            Some((i, old)) => self.partial.replace_range(i..i + old.len_utf8(), c.encode_utf8(&mut [0; 4])),
+            None => self.partial.push(c),
+        }
+        self.at += 1;
+    }
+
     /// A line of `console`'s own; a program's unfinished line ends first.
     pub fn say(&mut self, text: &str, kind: Kind) {
-        if !self.partial.is_empty() { let line = core::mem::take(&mut self.partial); self.push(line, Kind::Output); }
+        if !self.partial.is_empty() { let line = core::mem::take(&mut self.partial); self.at = 0; self.push(line, Kind::Output); }
         for line in text.split('\n') { self.push(String::from(line), kind); }
     }
 
-    pub fn clear(&mut self) { self.lines.clear(); self.partial.clear(); self.scroll = 0; }
+    pub fn clear(&mut self) { self.lines.clear(); self.partial.clear(); self.at = 0; self.scroll = 0; }
 
     /// A key; Enter gives the line typed (it goes into the history and is shown after the prompt). `page`: the rows
     /// PgUp and PgDn scroll.

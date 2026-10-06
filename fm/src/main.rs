@@ -55,20 +55,21 @@ impl Disk for Vfs {
         let failed = |e: loader::Error| alloc::format!("{:?}", e);
         let lost = |e: mind::Error| alloc::format!("{:?}", e);
         let needs = loader::inspect(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
+        let requests = loader::inspect_requests(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
+        let console = mind::process::console_run(requests, args); // `clock --line` too (issue u016)
         // In a window, a console program runs in a window of `console`, which shows what it prints (issue u004).
-        if needs.console && mind::windowed::active() {
+        if console && mind::windowed::active() {
             let line = alloc::format!("{} {}", path, args);
             return self.run("console", line.trim()).map(|started| Started { place: Place::InConsole, ..started });
         }
-        let requests = loader::inspect_requests(Endpoint::LOADER, path).map_err(lost)?.map_err(failed)?;
         let session = loader::begin(Endpoint::LOADER, path, args).map_err(lost)?.map_err(failed)?;
         let holds = |slot: usize| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT;
         let lend = |slot: usize| matches!(loader::grant(Endpoint::LOADER, session, slot as u8, slot), Ok(Ok(())));
-        let window = !needs.console && mind::windowed::active() && requests & mind::process::REQUEST_WINDOW_MANAGER == 0 && lend(SLOT_WINDOW);
+        let window = !console && mind::windowed::active() && requests & mind::process::REQUEST_WINDOW_MANAGER == 0 && lend(SLOT_WINDOW);
         if needs.files && holds(SLOT_FILE) { lend(SLOT_FILE); }
         if needs.sysinfo && requests & mind::process::REQUEST_AUTHORITY == 0 && holds(SLOT_SYSINFO) { lend(SLOT_SYSINFO); }
         let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
-        Ok(Started { pid, place: if needs.console { Place::Console } else if window { Place::Window } else { Place::Screen } })
+        Ok(Started { pid, place: if console { Place::Console } else if window { Place::Window } else { Place::Screen } })
     }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         let mode = fs::MODE_WRITE | fs::MODE_CREATE | if replace { fs::MODE_TRUNCATE } else { fs::MODE_NEW };

@@ -771,6 +771,28 @@ def shell_suite(vm):
     vm.serial()
     print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
     msh_check(vm)
+    line_faces_check(vm)
+
+
+def line_faces_check(vm):
+    """`clock --line` and `dzen-clock --line` (issue u016): console programs in the shell, their line written again
+    with \\r every second: one line on the screen, the updates on the serial line; Esc stops them."""
+    for command, line, seconds in (("clock --line", r"\d\d:\d\d:\d\d  \d{4}-\d\d-\d\d", 3.2), ("dzen-clock --line", r"\d\d:\d\d:\d\d  \S\S \S \S\S", 2.2)):
+        start = len(vm.log)
+        vm.send(command + "\n")
+        vm.expect(f"NAME={command.split()[0]} FOREGROUND")
+        time.sleep(seconds)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        vm.collect()
+        shown = [row.strip() for row in screen if re.fullmatch(line, row.strip())]
+        assert len(shown) == 1, (command, shown, screen[-12:])
+        updates = re.findall("\r" + line, vm.log[start:])
+        assert len(updates) >= int(seconds) - 1, (command, updates)
+        vm.send_bytes(b"\x1b")
+        vm.expect("MIND> ")
+    assert task_rows(vm) == {}, task_rows(vm)
+    print("PASS: clock --line and dzen-clock --line run as console programs: one line on the screen, written again every second; Esc stops them", flush=True)
 
 
 # msh scripts on the shell suite's disk (issue 094).

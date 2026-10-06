@@ -43,9 +43,10 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{}: a window manager; start it from the shell", name)); }
+    let console = mind::process::console_run(requests, args); // `clock --line` too (issue u016)
     let session = loader::begin(Endpoint::LOADER, name, args).map_err(lost)?.map_err(failed)?;
     let grant = |slot: usize, cap: usize| matches!(loader::grant(Endpoint::LOADER, session, slot as u8, cap), Ok(Ok(())));
-    if needs.console { grant(SLOT_CONSOLE, output); } else if mind::windowed::active() { grant(SLOT_WINDOW, SLOT_WINDOW); }
+    if console { grant(SLOT_CONSOLE, output); } else if mind::windowed::active() { grant(SLOT_WINDOW, SLOT_WINDOW); }
     if needs.files { if holds(SLOT_FILE) { grant(SLOT_FILE, SLOT_FILE); } }
     else if needs.file && holds(SLOT_FILE) {
         // One file: a client confined to its directory, as the shell and wm make it.
@@ -64,7 +65,7 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
         let _ = ipc::drop_cap(SLOT_DISPLAY);
     }
     let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(failed)?;
-    Ok(Job { pid, name: String::from(name), console: needs.console, printed: false })
+    Ok(Job { pid, name: String::from(name), console, printed: false })
 }
 
 fn list(screen: &mut Screen) {

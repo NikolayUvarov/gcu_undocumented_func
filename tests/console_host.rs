@@ -132,3 +132,17 @@ fn the_command_line() {
     assert_eq!(parse("kill 3"), Command::Shell("kill"));
     assert_eq!(parse("nslookup ya.ru"), Command::Shell("nslookup"));
 }
+
+#[test]
+fn a_carriage_return_writes_the_line_again() {
+    // Issue u016: `clock --line` writes its line again after \r; what comes next overwrites the old characters.
+    let mut screen = Screen::new();
+    screen.output(b"started\n\r12:00:00  2026-10-06");
+    screen.output(b"\r12:00:01  2026-10-06");
+    screen.output(b"\rab");
+    let rows = |screen: &Screen| screen.rows(40).into_iter().map(|(t, _)| t).collect::<Vec<_>>();
+    assert_eq!(rows(&screen), ["started", "ab:00:01  2026-10-06"]);
+    // A line ended with CRLF stays as it is.
+    screen.output(b"\r\nnext\r\n");
+    assert_eq!(rows(&screen), ["started", "ab:00:01  2026-10-06", "next"]);
+}

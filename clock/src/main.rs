@@ -3,6 +3,7 @@
 use mind::abi::BootInfo;
 use mind::gfx::Screen;
 use mind::tui::Terminal;
+use core::fmt::Write;
 use mind::{tui, util};
 
 mod text;
@@ -10,9 +11,12 @@ mod text;
 const BACKGROUND: u32 = 0x001E1E2E; const FOREGROUND: u32 = 0x00A6E3A1;
 fn time_text(seconds: usize) -> [u8; 8] { let hour = seconds / 3600; let minute = (seconds / 60) % 60; let second = seconds % 60; [ b'0' + (hour / 10) as u8, b'0' + (hour % 10) as u8, b':', b'0' + (minute / 10) as u8, b'0' + (minute % 10) as u8, b':', b'0' + (second / 10) as u8, b'0' + (second % 10) as u8 ] }
 
+mind::request!(REQUEST_LINE);
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("clock — a digital clock from the RTC on its own screen, or in a window under wm.\nUsage: clock [--text]   (--text: large digits of text characters with the date, sized to the screen or the window)\nEsc: exit.");
+    mind::about!("clock — a digital clock from the RTC on its own screen, or in a window under wm.\nUsage: clock [--text | --line]   (--text: large digits of text characters with the date, sized to the screen or the window;\n--line: a console program, the time and the date on one line, written again every second)\nEsc: exit.");
+    if mind::process::args_str().split_whitespace().any(|a| a == "--line") { return line_face(); }
     if mind::process::args_str().split_whitespace().any(|a| a == "--text") { return text_face(info); }
     // Started by a window manager: a 320 × 176 window instead of the screen (issue 088), drawn again at the size of
     // its frame when that changes (issue u009).
@@ -33,6 +37,22 @@ fn main(info: &'static BootInfo) {
             mind::process::log(b"[CLOCK] "); mind::process::log(&text); mind::process::log(b"\r\n");
             previous_time = Some(seconds);
         }
+    }
+}
+
+// Started as a console program (`clock --line`, issue u016): the time and the date on one line, written again with \r
+// every second; Esc in the shell or `console` stops it.
+fn line_face() {
+    let mut previous = None;
+    loop {
+        if let Some(seconds) = mind::rtc::seconds_since_midnight().filter(|&s| previous != Some(s)) {
+            let mut line = util::FixedBuf::<40>::new();
+            let _ = write!(line, "\r{}", core::str::from_utf8(&time_text(seconds)).unwrap_or(""));
+            if let Some((year, month, day)) = mind::rtc::date() { let _ = write!(line, "  {:04}-{:02}-{:02}", year, month, day); }
+            mind::process::log(line.as_bytes());
+            previous = Some(seconds);
+        }
+        mind::time::sleep(100);
     }
 }
 

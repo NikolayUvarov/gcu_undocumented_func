@@ -1,0 +1,41 @@
+# u016 — Console faces of the clocks: the time on one line, updated in place — done
+
+**Type:** tools · **Owner:** tools track · **Priority:** P3 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-10.2
+
+Moved out of [155](../issues-done/155-virtual-consoles.done) (virtual consoles), which is done without it; left from [089](../issues-done/089-text-clock-faces.done).
+
+## Problem
+
+`clock` and `dzen-clock` have a pixel face (a screen, a `wm` pixel window) and a text face (089: a screen or a `wm` text window). Started as console programs of a console — in a console of the shell, in `console` — they have neither: they need a screen of their own.
+
+The shell's console has no way to rewrite a line: `\r` is dropped, so a time printed every second fills the scrollback.
+
+## Plan
+
+- `clock --line` and `dzen-clock --line`: no screen (they print); the time (and for `dzen-clock` the indicators as text) on one line, rewritten every second with `\r`.
+- The shell's console and `console` move the cursor to the start of the line on `\r` (the next characters overwrite it); the serial line gets the `\r` as it is.
+- How a program asks for no screen when it can also have one: a second program name, or a request read from its arguments (to be decided with the loader's `needs`).
+
+## Acceptance criteria
+
+QEMU `shell` suite: `clock --line` for 3 s leaves one line of time in the shell's text, not three; the serial line shows the updates. Host test: `\r` in the shell's console and `console`'s screen.
+
+## Related
+
+[089](089-text-clock-faces.done), [155](155-virtual-consoles.done), [u004](u004-console.done).
+
+## Resolution
+
+- **Decided: a request read with the arguments.** `REQUEST_LINE` (2048, `mind::process`) means: with `--line` among its arguments, the program is a console program (no screen).
+  - `mind::process::console_run(requests, args)` decides it for everyone: the loader (no screen at spawn), the shell (from the started task, as before), `wm` and `fm` (a `console` window in `wm`) and `console` (its output endpoint).
+  - The loader's `needs` and its interface are unchanged: `needs.console` is the ELF's `REQUEST_CONSOLE` alone, and the launchers combine it with the arguments.
+- **`clock --line`:** `HH:MM:SS  YYYY-MM-DD`, written again with `\r` when the second changes.
+- **`dzen-clock --line`:** the time, then its five discs as the letters of their colors (top left and right, the center, bottom left and right; W a white step, `·` off): `text::line`.
+- **`\r`:**
+  - The shell's console moves to the start of the line, and the next characters overwrite it. The serial line gets the `\r` as it is.
+  - `console`'s screen keeps a write position in the unfinished line (`Screen::put`). A line ended with CRLF stays as it is.
+- **Tests:**
+  - `tests/clock_host.rs` (`the_dzen_clock_on_one_line`);
+  - `tests/console_host.rs` (`a_carriage_return_writes_the_line_again`);
+  - QEMU `shell` suite (`line_faces_check`): `clock --line` for 3 s and `dzen-clock --line` for 2 s each leave one line on the screen; the serial line has a `\r` and the time for every second; Esc stops them.
+- **Docs:** README (`clock`, the requests), docs/tools §4.9 and its Russian copy, the programs' `--help`.

@@ -98,7 +98,8 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)]) -> Result<u64, Error> {
     let mut len = task.as_bytes().len();
     if !args.is_empty() { text[len + 1..len + 1 + args.len()].copy_from_slice(args); len += 1 + args.len(); }
     let windowed = extra.iter().any(|&(slot, _)| slot as usize == SLOT_WINDOW) && flags & mind::process::REQUEST_WINDOW_MANAGER == 0;
-    let screen = if flags & mind::process::REQUEST_CONSOLE != 0 || windowed { 0 } else { SPAWN_SCREEN };
+    let console = mind::process::console_run(flags, core::str::from_utf8(args).unwrap_or("")); // `clock --line` too (issue u016)
+    let screen = if console || windowed { 0 } else { SPAWN_SCREEN };
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;

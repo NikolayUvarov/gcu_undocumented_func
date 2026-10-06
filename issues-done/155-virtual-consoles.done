@@ -32,7 +32,7 @@ QEMU `keys` and `shell` suites:
 
 ## Related
 
-[154](154-push-to-talk-routing.done), [151](151-shell-grant-slots-13-15.done), [docs/tools](../docs/tools/README.md), [u016](../issues/u016-clock-console-faces.md).
+[154](154-push-to-talk-routing.done), [151](151-shell-grant-slots-13-15.done), [docs/tools](../docs/tools/README.md), [u016](u016-clock-console-faces.done).
 
 ## Resolution
 
@@ -50,7 +50,7 @@ Done in the shell (`shell/src/main.rs`, `shell/src/console.rs`), from the tools 
   - Notices (exit, Ctrl+Z) go to the console whose foreground program they name.
   - The UART is console 1's input. Its keys reach console 1's program only while console 1 is shown. PS/2 keys go to the console shown.
 - **Starting.** A program started in a console not shown (a command over the serial line while console 2 is shown) is its foreground program without taking the keyboard. `fg` of a program another console has in front moves it. `ps` ends the row of each program the shell started (the latest 32) with `CONSOLE=n`.
-- **Not done here:** the console faces of the clocks moved to [u016](../issues/u016-clock-console-faces.md). The right of a task without process control to register keys was tested with 154 (`keys`: `Err(Rights)`).
+- **Not done here:** the console faces of the clocks moved to [u016](u016-clock-console-faces.done). The right of a task without process control to register keys was tested with 154 (`keys`: `Err(Rights)`).
 - Tests: QEMU `keys` suite (`consoles_check`):
   - with `keys` in front in console 1, Ctrl+Alt+F2 opens console 2;
   - `wintest show w 2` typed there runs on while console 1 is shown again, and `keys` gets the keyboard back without having seen the switch keys or console 2's typing;
