@@ -2,7 +2,7 @@
 //! put and get by CID, blocks found again after a remount, a flipped byte detected and never returned, no sector
 //! written twice, defined refusals for a full medium, a full index, a foreign or unknown medium and a read-only one;
 //! the clients' rights by badge (libmind/src/blockstore.rs, issue 300-STO-0004); nodes stored only if they decode
-//! (issue 301-STO-0002).
+//! (issue 301-STO-0002); names published by compare-and-swap once their root's object is complete (302-STO-0001).
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -17,7 +17,7 @@ mod rights;
 
 use cid::{Cid, Codec};
 use std::collections::HashMap;
-use store::{record_sectors, Device, Entry, Error, Stats, Store, BLOCK_MAX, BUFFER, HEADER, SECTOR};
+use store::{record_sectors, Device, Entry, Error, Head, Stats, Store, BLOCK_MAX, BUFFER, HEADER, NAME_MAX, SECTOR};
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
@@ -46,11 +46,14 @@ impl Device for &mut Memory {
     fn flush(&mut self) -> bool { self.flushes += 1; true }
 }
 
-struct Room { index: Vec<Entry>, buffer: Box<[u8; BUFFER]> }
-impl Room { fn new(capacity: usize) -> Self { Self { index: vec![Entry::EMPTY; capacity], buffer: Box::new([0; BUFFER]) } } }
+struct Room { index: Vec<Entry>, heads: Vec<Head>, buffer: Box<[u8; BUFFER]> }
+impl Room {
+    fn new(capacity: usize) -> Self { Self::with_names(capacity, 8) }
+    fn with_names(capacity: usize, names: usize) -> Self { Self { index: vec![Entry::EMPTY; capacity], heads: vec![Head::EMPTY; names], buffer: Box::new([0; BUFFER]) } }
+}
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Result<Store<'a, &'a mut Memory>, Error> {
-    Store::mount(medium, &mut room.index, &mut room.buffer)
+    Store::mount(medium, &mut room.index, &mut room.heads, &mut room.buffer)
 }
 
 fn block(seed: usize, len: usize) -> Vec<u8> { (0..len).map(|i| (i * 31 + seed * 7 + 1) as u8).collect() }
@@ -81,7 +84,7 @@ fn put_and_get_by_content() {
     let mut small = [0u8; 4];
     assert_eq!(store.get(&a, &mut small), Err(Error::TooLarge));
     let used = 1 + record_sectors(11) + record_sectors(0) + record_sectors(BLOCK_MAX);
-    assert_eq!(store.stats(), Stats { blocks: 3, bytes: 11 + BLOCK_MAX as u64, used: used as u64, sectors: 256, corrupt: 0, damaged: 0, capacity: 64 });
+    assert_eq!(store.stats(), Stats { blocks: 3, bytes: 11 + BLOCK_MAX as u64, used: used as u64, sectors: 256, corrupt: 0, damaged: 0, capacity: 64, names: 0 });
 }
 
 #[test]
@@ -342,19 +345,22 @@ fn random_puts_gets_and_remounts_match_a_model() {
 
 #[test]
 fn rights_come_from_the_badge() {
-    use rights::{allowed, Operation::*, BADGE_GET, BADGE_PUT};
-    // (badge, put, get, has, stat)
-    for (badge, put, get, has, stat) in [
-        (0, false, false, false, false),
-        (BADGE_GET, false, true, true, true),
-        (BADGE_PUT, true, false, false, true),
-        (BADGE_GET | BADGE_PUT, true, true, true, true),
+    use rights::{allowed, Operation::*, BADGE_GET, BADGE_PUBLISH, BADGE_PUT};
+    // (badge, put, get, has, stat, publish, resolve)
+    for (badge, put, get, has, stat, publish, resolve) in [
+        (0, false, false, false, false, false, false),
+        (BADGE_GET, false, true, true, true, false, true),
+        (BADGE_PUT, true, false, false, true, false, false),
+        (BADGE_PUBLISH, false, false, false, true, true, false),
+        (BADGE_GET | BADGE_PUT, true, true, true, true, false, true),
+        (BADGE_GET | BADGE_PUT | BADGE_PUBLISH, true, true, true, true, true, true),
         // Bits of rights this version does not know grant nothing.
-        (4, false, false, false, false),
-        (0xfffc, false, false, false, false),
-        (0xffff, true, true, true, true),
+        (8, false, false, false, false, false, false),
+        (0xfff8, false, false, false, false, false, false),
+        (0xffff, true, true, true, true, true, true),
     ] {
-        assert_eq!([allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat)], [put, get, has, stat], "badge {badge:#x}");
+        let got = [allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat), allowed(badge, Publish), allowed(badge, Resolve)];
+        assert_eq!(got, [put, get, has, stat, publish, resolve], "badge {badge:#x}");
     }
 }
 
@@ -404,4 +410,124 @@ fn a_record_typed_as_a_node_that_does_not_decode_is_corrupt() {
     let store = mount(&mut medium, &mut room).unwrap();
     assert_eq!((store.stats().blocks, store.stats().corrupt), (0, 1));
     assert!(!store.has(&Cid::of(Codec::DagCbor, b"not a node")));
+}
+
+fn scratch() -> Box<[u8; dag::CHUNK]> { Box::new([0; dag::CHUNK]) }
+
+#[test]
+fn a_name_changes_only_from_the_version_expected() {
+    let mut medium = Memory::new(256);
+    let mut room = Room::new(16);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let (a, b) = (store.put(Codec::Raw, b"first").unwrap(), store.put(Codec::Raw, b"second").unwrap());
+    assert_eq!(store.resolve(b"notes"), Err(Error::NotFound));
+    assert_eq!(store.publish(b"notes", 0, &a, &mut scratch()), Ok(1));
+    assert_eq!(store.resolve(b"notes"), Ok((1, a)));
+    // Two writers that both read version 1: the first wins, the second learns it and nothing of it is published.
+    assert_eq!(store.publish(b"notes", 1, &b, &mut scratch()), Ok(2));
+    let used = store.stats().used;
+    assert_eq!(store.publish(b"notes", 1, &a, &mut scratch()), Err(Error::Conflict));
+    assert_eq!(store.publish(b"notes", 0, &a, &mut scratch()), Err(Error::Conflict));
+    assert_eq!((store.resolve(b"notes"), store.stats().used), (Ok((2, b)), used));
+    // Another name is independent; the same root may be named twice.
+    assert_eq!(store.publish(b"docs/a.txt", 0, &b, &mut scratch()), Ok(1));
+    assert_eq!(store.stats().names, 2);
+}
+
+#[test]
+fn a_root_is_published_only_with_every_block_stored() {
+    let mut medium = Memory::new(4096);
+    let mut room = Room::new(1024);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    // An object of 40 KiB written through the store as dag's blocks, then read back through it.
+    let data: Vec<u8> = (0..40_000).map(|i| (i % 241) as u8).collect();
+    let mut builder = Box::new(dag::Builder::new());
+    builder.write(&mut store, &data).unwrap();
+    let (root, size) = builder.finish(&mut store).unwrap();
+    assert_eq!((root.codec(), size), (Codec::DagCbor, 40_000));
+    assert_eq!(store.publish(b"object", 0, &root, &mut scratch()), Ok(1));
+    let (_, named) = store.resolve(b"object").unwrap();
+    let mut out = vec![0u8; data.len()];
+    let mut done = 0;
+    while done < data.len() { done += dag::read_at(&mut store, &named, done as u64, &mut out[done..], &mut scratch()).unwrap(); }
+    assert_eq!(out, data);
+    // A root whose blocks are not all stored: here a node over a chunk never put.
+    let mut node = [0u8; dag::NODE_MAX];
+    let missing = Cid::raw(&[7u8; dag::CHUNK]);
+    let len = dag::encode(dag::CHUNK as u64 + 1, &[missing, Cid::raw(b"x")], &mut node);
+    let partial = store.put(Codec::DagCbor, &node[..len]).unwrap();
+    let used = store.stats().used;
+    assert_eq!(store.publish(b"partial", 0, &partial, &mut scratch()), Err(Error::Incomplete));
+    assert_eq!(store.publish(b"partial", 0, &Cid::raw(b"never stored"), &mut scratch()), Err(Error::Incomplete));
+    // A node out of shape is no root.
+    let len = dag::encode(5, &[Cid::raw(b"x")], &mut node);
+    let small = store.put(Codec::DagCbor, &node[..len]).unwrap();
+    assert_eq!(store.publish(b"partial", 0, &small, &mut scratch()), Err(Error::Invalid));
+    assert_eq!((store.stats().used, store.resolve(b"partial")), (used + record_sectors(len) as u64, Err(Error::NotFound)));
+}
+
+#[test]
+fn names_are_found_again_after_a_remount() {
+    let mut medium = Memory::new(256);
+    let (a, b);
+    {
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.put(Codec::Raw, b"a").unwrap();
+        b = store.put(Codec::Raw, b"b").unwrap();
+        for (i, root) in [a, b, a, b, a].iter().enumerate() { assert_eq!(store.publish(b"head", i as u64, root, &mut scratch()), Ok(i as u64 + 1)); }
+        store.publish(b"other", 0, &b, &mut scratch()).unwrap();
+    }
+    let mut room = Room::new(16);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.resolve(b"head"), store.resolve(b"other")), (Ok((5, a)), Ok((1, b))));
+    assert_eq!(store.publish(b"head", 5, &b, &mut scratch()), Ok(6));
+    assert!(store.device().writes.iter().all(|&w| w <= 1), "no sector is written twice");
+}
+
+#[test]
+fn a_damaged_name_record_is_reported_and_the_version_before_stands() {
+    let mut medium = Memory::new(64);
+    let (a, b);
+    {
+        let mut room = Room::new(8);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.put(Codec::Raw, b"a").unwrap();
+        b = store.put(Codec::Raw, b"b").unwrap();
+        store.publish(b"head", 0, &a, &mut scratch()).unwrap();
+        store.publish(b"head", 1, &b, &mut scratch()).unwrap();
+    }
+    // The last record is version 2's: two block records of one sector each, then versions 1 and 2.
+    medium.flip(4, 30);
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.resolve(b"head"), Ok((1, a)));
+    assert_eq!(store.stats().damaged, 1);
+    // The next publication still goes after the damaged sector and takes the next version of what is current.
+    assert_eq!(store.publish(b"head", 1, &b, &mut scratch()), Ok(2));
+}
+
+#[test]
+fn names_are_checked_and_bounded() {
+    let mut medium = Memory::new(64);
+    let mut room = Room::with_names(8, 2);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let a = store.put(Codec::Raw, b"a").unwrap();
+    let long = [b'n'; NAME_MAX + 1];
+    for name in [&b""[..], &long[..], b"with space", b"a\\b", "имя".as_bytes(), b"a:b"] {
+        assert_eq!(store.publish(name, 0, &a, &mut scratch()), Err(Error::Invalid), "{name:?}");
+        assert_eq!(store.resolve(name), Err(Error::Invalid));
+    }
+    assert_eq!(store.publish(&long[..NAME_MAX], 0, &a, &mut scratch()), Ok(1));
+    assert_eq!(store.publish(b"A-z_0.9/x", 0, &a, &mut scratch()), Ok(1));
+    assert_eq!(store.publish(b"third", 0, &a, &mut scratch()), Err(Error::Full));
+    assert_eq!(store.publish(b"A-z_0.9/x", 1, &a, &mut scratch()), Ok(2));
+    drop(store);
+    medium.writable = false;
+    let mut room = Room::with_names(8, 2);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.publish(b"A-z_0.9/x", 2, &a, &mut scratch()), Err(Error::ReadOnly));
+    // A medium with more names than the table holds is not mounted with some missing.
+    medium.writable = true;
+    assert_eq!(mount(&mut medium, &mut Room::with_names(8, 1)).err(), Some(Error::Full));
 }

@@ -49,6 +49,8 @@ pub trait Blocks {
     fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error>;
     /// Copies the block `cid` names into `out` and returns its length.
     fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error>;
+    /// Whether the store holds the block `cid` names.
+    fn has(&mut self, cid: &Cid) -> Result<bool, Error>;
 }
 
 /// The least height of a tree over `size` bytes: 0 is a single chunk.
@@ -228,6 +230,33 @@ pub fn read_at<B: Blocks>(blocks: &mut B, root: &Cid, offset: u64, out: &mut [u8
         done += take;
     }
     Ok(done)
+}
+
+/// Whether every block of the object `root` is stored: every node is read and checked against its CID and the shape,
+/// every chunk is asked for with `has`. Returns the object's size; Err(NotFound) names nothing, only that one is missing.
+/// It descends from the root again for each node of height 1, so it needs no stack of nodes.
+pub fn complete<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK]) -> Result<u64, Error> {
+    if root.codec() == Codec::Raw { return if blocks.has(root)? { size(blocks, root, buffer) } else { Err(Error::NotFound) }; }
+    let total = size(blocks, root, buffer)?;
+    let span = capacity(1) as u64;
+    for leaf in 0..total.div_ceil(span) {
+        let (mut cid, mut h, mut held, mut within) = (*root, height(total), total, leaf * span);
+        loop {
+            let n = node(blocks, &cid, buffer)?;
+            n.check(h, held)?;
+            if h == 1 {
+                for i in 0..n.len() { if !blocks.has(&n.link(i))? { return Err(Error::NotFound); } }
+                break;
+            }
+            let capacity = capacity(h) as u64;
+            let child = (within / capacity) as usize;
+            cid = n.link(child);
+            held = capacity.min(held - child as u64 * capacity);
+            within -= child as u64 * capacity;
+            h -= 1;
+        }
+    }
+    Ok(total)
 }
 
 #[derive(Clone, Copy)]

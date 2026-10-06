@@ -1,10 +1,12 @@
-//! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002; MC-4.2, 4.8): immutable blocks named by
-//! their CID in an append-only log of records on a block device; a `dag-cbor` block must be a node of `dag`. Nothing here depends on the kernel: the host tests build it too.
+//! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002, 302-STO-0001; MC-4.2, 4.3, 4.4, 4.8):
+//! immutable blocks named by their CID, and names whose current version points at a root, in an append-only log of
+//! records on a block device. Nothing here depends on the kernel: the host tests build it too.
 //!
-//! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector: a header (magic, layout
-//! version, length, the block's CID, a digest of the header) and the block's bytes, padded to the sector. A put
-//! writes only sectors after the last non-blank one, so nothing stored is ever overwritten; every block read is
-//! checked against its CID, and one that does not match is reported corrupt, never returned.
+//! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector. A block record is a header
+//! (magic, layout version, length, the block's CID, a digest of the header) and the block's bytes, padded to the
+//! sector; a `dag-cbor` block must be a node of `dag`. A name record is one sector: the name, its version and root,
+//! and a digest. Writes go only after the last non-blank sector, so nothing stored is ever overwritten; every block
+//! read is checked against its CID, and one that does not match is reported corrupt, never returned.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
 use crate::sha256;
@@ -21,6 +23,11 @@ pub const BUFFER: usize = RECORD_SECTORS * SECTOR;
 pub const LAYOUT: u16 = 1;
 const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
 const RECORD_MAGIC: &[u8; 8] = b"MIND-BLK";
+const NAME_MAGIC: &[u8; 8] = b"MIND-REF";
+/// Bytes of a name at most; a name is 1 to NAME_MAX of `A-Z a-z 0-9 . _ / -`.
+pub const NAME_MAX: usize = 64;
+// A name record: magic, layout, name length (u16), version (u64), root CID, name (padded with zeros), digest.
+const NAME_RECORD: usize = 120 + 32;
 
 /// The medium under the store: sectors of SECTOR bytes, read and written up to RECORD_SECTORS at a time.
 pub trait Device {
@@ -52,8 +59,13 @@ pub enum Error {
     Foreign,
     /// A store of another layout version.
     Layout,
-    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data).
+    /// A `dag-cbor` block that is not a node of `dag`'s schema (MC-4.2: the type is bound to the data); a name that
+    /// is not 1 to NAME_MAX allowed bytes; a root whose tree is out of shape.
     Invalid,
+    /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
+    Conflict,
+    /// A block of the root's object is not stored (MC-4.4): nothing was published.
+    Incomplete,
 }
 
 /// What the store holds.
@@ -71,6 +83,8 @@ pub struct Stats {
     pub damaged: u64,
     /// Blocks the index can hold.
     pub capacity: u32,
+    /// Names published.
+    pub names: u32,
 }
 
 /// An index entry: the CID's binary form (their order is the CIDs' order) and where its record starts.
@@ -78,10 +92,50 @@ pub struct Stats {
 pub struct Entry { key: [u8; cid::BYTES], lba: u64, len: u32 }
 impl Entry { pub const EMPTY: Entry = Entry { key: [0; cid::BYTES], lba: 0, len: 0 }; }
 
+/// A name's current version and root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Head { name: [u8; NAME_MAX], len: u8, pub version: u64, root: [u8; cid::BYTES] }
+impl Head {
+    pub const EMPTY: Head = Head { name: [0; NAME_MAX], len: 0, version: 0, root: [0; cid::BYTES] };
+    pub fn name(&self) -> &[u8] { &self.name[..self.len as usize] }
+    pub fn root(&self) -> Cid { Cid::from_bytes(&self.root).unwrap() }
+}
+
+/// Whether `name` is 1 to NAME_MAX bytes of `A-Z a-z 0-9 . _ / -`.
+pub fn valid_name(name: &[u8]) -> bool {
+    (1..=NAME_MAX).contains(&name.len()) && name.iter().all(|&c| c.is_ascii_alphanumeric() || b"._/-".contains(&c))
+}
+
+fn name_record(head: &Head) -> [u8; SECTOR] {
+    let mut r = [0u8; SECTOR];
+    r[..8].copy_from_slice(NAME_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[10..12].copy_from_slice(&(head.len as u16).to_le_bytes());
+    r[12..20].copy_from_slice(&head.version.to_le_bytes());
+    r[20..56].copy_from_slice(&head.root);
+    r[56..120].copy_from_slice(&head.name);
+    let check = sha256::digest(&r[..120]);
+    r[120..NAME_RECORD].copy_from_slice(&check);
+    r
+}
+
+/// The head a sector names, if it is a whole, valid name record of this layout.
+fn parse_name(sector: &[u8]) -> Option<Head> {
+    if &sector[..8] != NAME_MAGIC || sector[120..NAME_RECORD] != sha256::digest(&sector[..120]) { return None; }
+    if u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[NAME_RECORD..].iter().any(|&b| b != 0) { return None; }
+    let len = u16::from_le_bytes([sector[10], sector[11]]) as usize;
+    let version = u64::from_le_bytes(sector[12..20].try_into().unwrap());
+    if !valid_name(sector.get(56..56 + len)?) || sector[56 + len..120].iter().any(|&b| b != 0) || version == 0 { return None; }
+    Cid::from_bytes(&sector[20..56]).ok()?;
+    Some(Head { name: sector[56..120].try_into().unwrap(), len: len as u8, version, root: sector[20..56].try_into().unwrap() })
+}
+
 pub struct Store<'a, D: Device> {
     dev: D,
     index: &'a mut [Entry],
     count: usize,
+    heads: &'a mut [Head],
+    names: usize,
     buffer: &'a mut [u8; BUFFER],
     end: u64,
     bytes: u64,
@@ -140,8 +194,8 @@ fn superblock() -> [u8; SECTOR] {
 
 impl<'a, D: Device> Store<'a, D> {
     /// Mounts the store on `dev`: a blank medium is formatted (if writable), a store is scanned and its blocks
-    /// verified; anything else is refused. `index` bounds how many blocks it can hold.
-    pub fn mount(mut dev: D, index: &'a mut [Entry], buffer: &'a mut [u8; BUFFER]) -> Result<Self, Error> {
+    /// verified; anything else is refused. `index` bounds how many blocks it can hold, `heads` how many names.
+    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], buffer: &'a mut [u8; BUFFER]) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
         if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
         if buffer[..SECTOR].iter().all(|&b| b == 0) {
@@ -154,7 +208,7 @@ impl<'a, D: Device> Store<'a, D> {
         } else if buffer[..16] != superblock()[..16] {
             return Err(Error::Layout);
         }
-        let mut store = Store { dev, index, count: 0, buffer, end: 1, bytes: 0, corrupt: 0, damaged: 0 };
+        let mut store = Store { dev, index, count: 0, heads, names: 0, buffer, end: 1, bytes: 0, corrupt: 0, damaged: 0 };
         store.scan()?;
         Ok(store)
     }
@@ -181,6 +235,16 @@ impl<'a, D: Device> Store<'a, D> {
                         lba = here + n;
                         break;
                     }
+                }
+                if let Some(head) = parse_name(sector) {
+                    // The latest version of a name is current.
+                    self.end = here + 1;
+                    match self.find(head.name()) {
+                        Ok(i) => if head.version > self.heads[i].version { self.heads[i] = head; },
+                        Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, head); }
+                    }
+                    at += 1;
+                    continue;
                 }
                 if sector.iter().any(|&b| b != 0) { self.damaged += 1; self.end = here + 1; }
                 at += 1;
@@ -219,6 +283,48 @@ impl<'a, D: Device> Store<'a, D> {
 
     pub fn has(&self, cid: &Cid) -> bool { self.contains(cid) }
 
+    fn find(&self, name: &[u8]) -> Result<usize, usize> { self.heads[..self.names].binary_search_by(|h| h.name().cmp(name)) }
+
+    fn add(&mut self, at: usize, head: Head) {
+        self.heads.copy_within(at..self.names, at + 1);
+        self.heads[at] = head;
+        self.names += 1;
+    }
+
+    /// The current version and root of `name`.
+    pub fn resolve(&self, name: &[u8]) -> Result<(u64, Cid), Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        let head = &self.heads[self.find(name).map_err(|_| Error::NotFound)?];
+        Ok((head.version, head.root()))
+    }
+
+    /// Publishes `root` as the next version of `name` if `expected` is its current version (0: a new name), once
+    /// every block of the object `root` names is stored (MC-4.3, 4.4); returns the new version after the device has
+    /// flushed it. `scratch` holds the blocks read on the way.
+    pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid, scratch: &mut [u8; dag::CHUNK]) -> Result<u64, Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let found = self.find(name);
+        let current = found.map_or(0, |i| self.heads[i].version);
+        if expected != current { return Err(Error::Conflict); }
+        match dag::complete(self, root, scratch) {
+            Ok(_) => {}
+            Err(dag::Error::NotFound) => return Err(Error::Incomplete),
+            Err(dag::Error::Corrupt) => return Err(Error::Corrupt),
+            Err(dag::Error::Store) => return Err(Error::Device),
+            Err(_) => return Err(Error::Invalid),
+        }
+        if found.is_err() && self.names == self.heads.len() { return Err(Error::Full); }
+        if self.end + 1 > self.dev.sectors() { return Err(Error::Full); }
+        let mut head = Head { name: [0; NAME_MAX], len: name.len() as u8, version: current + 1, root: root.to_bytes() };
+        head.name[..name.len()].copy_from_slice(name);
+        let lba = self.end;
+        self.end += 1;
+        if !self.dev.write(lba, &name_record(&head)) || !self.dev.flush() { return Err(Error::Device); }
+        match found { Ok(i) => self.heads[i] = head, Err(i) => self.add(i, head) }
+        Ok(head.version)
+    }
+
     /// Stores `data` as a block of type `codec` and returns its CID, once the device has flushed it. A node must decode
     /// first; a block already held is not written again.
     pub fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> {
@@ -256,10 +362,25 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn stats(&self) -> Stats {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
-            corrupt: self.corrupt, damaged: self.damaged, capacity: self.index.len() as u32,
+            corrupt: self.corrupt, damaged: self.damaged, capacity: self.index.len() as u32, names: self.names as u32,
         }
     }
 
     #[cfg(test)]
     pub fn device(&mut self) -> &mut D { &mut self.dev }
+}
+
+// The store as the blocks of `dag`: reads go through `get`, so every block is checked against its CID.
+impl<D: Device> dag::Blocks for Store<'_, D> {
+    fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> {
+        Store::put(self, codec, data).map_err(|e| match e { Error::Full => dag::Error::Full, _ => dag::Error::Store })
+    }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        Store::get(self, cid, out).map_err(|e| match e {
+            Error::NotFound => dag::Error::NotFound,
+            Error::Corrupt => dag::Error::Corrupt,
+            _ => dag::Error::Store,
+        })
+    }
+    fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> { Ok(self.contains(cid)) }
 }

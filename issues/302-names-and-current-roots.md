@@ -1,0 +1,39 @@
+# 302 — Names and their current roots: versions published by compare-and-swap (track B, third step)
+
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — (the service parts wait for [requests-KRN.md](requests-KRN.md), like 300) · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10, Appendix B.3
+
+## Problem
+
+Blocks and objects are immutable and named by their content ([300](300-checksummed-block-store.md), [301](301-objects-as-merkle-dags.md)). Nothing names what is current.
+
+- MC-4.3 asks that a stable entity, its immutable version and the reference to the current version are distinct. A change creates a new version and publishes a new root with authority. Concurrent updates follow a declared protocol, and confirmed changes are not silently lost.
+- MC-4.4 asks that a root is published only after all data needed for it is durable. References to data not yet received are marked, not presented as stored.
+- MC-4.10 asks that publication across several roots declares its boundary.
+
+## Plan
+
+The `STO` track numbers its tasks itself and may change the split.
+
+- `302-STO-0001` — names in the block store.
+  - A name record in the append-only log: the name, its version and its root. The latest valid version is current.
+  - `publish(name, expected, root)` succeeds only if `expected` is the current version (compare-and-swap; 0 for a new name). The root's object must be complete in the store (`mind::dag::complete`). The record is flushed before the reply.
+  - `resolve(name)`.
+  - A right of its own: `BADGE_PUBLISH`.
+  - Host tests.
+- `302-STO-0002` — names over the running service: a tool and the QEMU check, with 300-STO-0003.
+- **Later:** several names in one publication (MC-4.10), removing a name, names as roots of retention (MC-4.5).
+
+## Acceptance criteria
+
+- Two publishers of the same version: one succeeds, the other gets `conflict`, and nothing of it is written.
+- A root with a block missing is refused as `incomplete`.
+- Names survive a remount. A damaged latest record is reported, and the version before it stands.
+- The same in QEMU through the service.
+
+## Progress (2026-10-06)
+
+- **Done — [`302-STO-0001`](../issues-done/302-STO-0001-names-in-the-store.done).**
+
+## Related
+
+[docs/storage](../docs/storage/README.md); Constitution Article 4, Appendix B.3.

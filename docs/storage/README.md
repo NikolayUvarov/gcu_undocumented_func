@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.1 (2026-10-06) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main task [300](../../issues/300-checksummed-block-store.md) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.2 (2026-10-06) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues/301-objects-as-merkle-dags.md), [302](../../issues/302-names-and-current-roots.md) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -50,7 +50,7 @@ An object larger than a block is a Merkle-DAG named by one root CID (`libmind/sr
 - **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes. Integers must be in their shortest form, keys in DAG-CBOR's order with no others, and arrays of definite length. Each link is tag 42 over the identity multibase prefix and a supported CID (MC-4.2).
 - **The reader trusts no store.** `size` and `read_at` check every node and chunk on the way from the root against its CID. They also check it against its place in the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, and the chunk lengths. A block that does not match is refused as corrupt, and a tree out of shape is refused as such.
 - **In the block store:** `put` names the content type. A `dag-cbor` block is stored only if `decode` accepts it, and a record typed as a node that does not decode is corrupt (301-STO-0002).
-- **Not provided yet:** there are no names or roots for objects (MC-4.3), and no retention or garbage collection by reachability (MC-4.5).
+- **Not provided yet:** retention and garbage collection by reachability (MC-4.5). Names are below.
 
 Evidence: `tests/dag_host.rs`.
 - The roots and node bytes equal those of an independent reference: the tree built by its shape rule in Python, with the `dag-cbor` and `multiformats` libraries, for sizes around every boundary of the shape.
@@ -65,7 +65,7 @@ Evidence: `tests/dag_host.rs`.
 | Sectors | Content |
 |---|---|
 | 0 | superblock: `MIND-STO`, layout version (u16), sector size (u16), the SHA-256 of these 16 bytes |
-| 1 … | records, each starting on a sector: `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes, padded with zeros to the sector |
+| 1 … | records, each starting on a sector. Name records are described under Names. A block record: `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes, padded with zeros to the sector |
 
 **Rules:**
 - **Append only.** A put writes only sectors after the last non-blank one and returns after the device's flush. Sectors of a failed write are never used again, so nothing stored is overwritten (MC-4.8).
@@ -94,14 +94,33 @@ Evidence: `tests/blockstore_host.rs`.
 
 These are host tests of the logic on a simulated medium, not of the service on the platform.
 
+## Names — implemented, not exercised on the platform yet (302-STO-0001)
+
+A **name** is a stable entity, its **versions** are the immutable roots it has pointed at, and its **head** is the current one (MC-4.3). The three are kept distinct:
+- the root is a CID, immutable;
+- the name is 1 to 64 bytes of `A-Z a-z 0-9 . _ / -`;
+- the version counts publications from 1.
+
+- **Compare-and-swap.** `publish(name, expected, root)` succeeds only if `expected` is the name's current version (0 for a new name), and returns the new version. Of two publishers that read the same version, the first wins and the second gets `conflict`. Nothing of the refused publication is written, and the loser decides what to do: read the new head, merge, try again. This is the declared protocol for concurrent updates.
+- **Only complete roots (MC-4.4).** Before a publication, the store checks with `dag::complete` that every block of the root's object is stored. Every node is read and checked against its CID and the shape, and every chunk is looked up. A missing block is refused with `incomplete` and a tree out of shape with `invalid`. A name therefore never points at data the store has not received.
+- **Durability.** Blocks are flushed when they are put, and the name record is flushed before the reply. The durability level is what the device's flush gives; on the RAM disk that lasts until the next reset.
+- **Record.** One sector in the log, written only after its last non-blank sector: `MIND-REF`, layout version, name length, version, root CID, the name padded with zeros, and the SHA-256 of these 120 bytes. When mounting, the latest valid version of each name is current.
+- **A damaged record.** If the latest record of a name is damaged, it is counted as damaged (`stat`) and the version before it is current. That loses a confirmed change on a damaged medium, but the loss is reported, not silent. Copies on other media are not provided yet (MC-4.8).
+- **Boundary (MC-4.10).** One name per publication. There is no transaction across names, and a reader of two names may see one published and the other not.
+- **Rights.** `publish` needs `BADGE_PUBLISH` and `resolve` needs `BADGE_GET`. A publication is logged with the name, version, root and the caller's PID.
+- **Not provided yet:** removing a name, several names at once, names as roots of retention (MC-4.5).
+
+Evidence: `tests/blockstore_host.rs` (`a_name_changes_only_from_the_version_expected`, `a_root_is_published_only_with_every_block_stored`, `names_are_found_again_after_a_remount`, `a_damaged_name_record_is_reported_and_the_version_before_stands`, `names_are_checked_and_bounded`) and `tests/dag_host.rs` (`an_object_is_complete_only_with_every_block`).
+
 ## Authority — implemented, not exercised on the platform yet (300-STO-0004)
 
 A client's rights come from the badge `init` mints into its capability (`mind::blockstore`), and the service decides every request by it:
 
 | Badge bit | Allows |
 |---|---|
-| `BADGE_GET` (1) | `get`, `has`, `stat` |
+| `BADGE_GET` (1) | `get`, `has`, `resolve`, `stat` |
 | `BADGE_PUT` (2) | `put`, `stat` |
+| `BADGE_PUBLISH` (4) | `publish`, `stat` |
 
 - A client with neither bit may do nothing, and bits this version does not know grant nothing. A refusal is answered `rights` and logged with the caller's PID and badge.
 - **A CID grants nothing (MC-4.7).** A hash names a representation. It does not permit reading: a get needs `BADGE_GET`, whoever knows the CID.

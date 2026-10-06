@@ -3,6 +3,7 @@
 //! (CIDv1, `raw` or `dag-cbor`, SHA-256; 36 bytes in binary form). Nothing stored is overwritten, and a block is checked against its
 //! CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
 //! What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
+//! A name's current version points at the root of an object and changes only by compare-and-swap (302-STO-0001).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -16,14 +17,16 @@ pub const VERSION: (u8, u8, u8) = (1, 0, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-/// (`mind::blockstore`: put needs BADGE_PUT, get and has BADGE_GET, stat either).
-/// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002).
+/// (`mind::blockstore`: put needs BADGE_PUT, get, has and resolve BADGE_GET, publish BADGE_PUBLISH, stat any).
+/// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
+/// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
+/// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8 }
+pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8, Conflict = 9, Incomplete = 10 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), 9 => Some(Self::Conflict), 10 => Some(Self::Incomplete), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -47,13 +50,22 @@ impl Wire for Codec {
 }
 
 /// Intact blocks and their bytes; sectors of the log and of the medium; records found corrupt and non-blank
-/// sectors outside every record; how many blocks the index can hold.
+/// sectors outside every record; how many blocks the index can hold; names published.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Stats { pub blocks: u32, pub bytes: u64, pub used: u64, pub sectors: u64, pub corrupt: u32, pub damaged: u64, pub capacity: u32 }
+pub struct Stats { pub blocks: u32, pub bytes: u64, pub used: u64, pub sectors: u64, pub corrupt: u32, pub damaged: u64, pub capacity: u32, pub names: u32 }
 impl Wire for Stats {
-    const MAX: usize = <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.bytes.encode(w)?; self.used.encode(w)?; self.sectors.encode(w)?; self.corrupt.encode(w)?; self.damaged.encode(w)?; self.capacity.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, bytes: Wire::decode(r)?, used: Wire::decode(r)?, sectors: Wire::decode(r)?, corrupt: Wire::decode(r)?, damaged: Wire::decode(r)?, capacity: Wire::decode(r)? }) }
+    const MAX: usize = <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.bytes.encode(w)?; self.used.encode(w)?; self.sectors.encode(w)?; self.corrupt.encode(w)?; self.damaged.encode(w)?; self.capacity.encode(w)?; self.names.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, bytes: Wire::decode(r)?, used: Wire::decode(r)?, sectors: Wire::decode(r)?, corrupt: Wire::decode(r)?, damaged: Wire::decode(r)?, capacity: Wire::decode(r)?, names: Wire::decode(r)? }) }
+}
+
+/// A name's current version (from 1) and the CID of the root it points at (36 bytes).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Head { pub version: u64, pub root: List<u8, 36> }
+impl Wire for Head {
+    const MAX: usize = <u64 as Wire>::MAX + <List<u8, 36> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.root.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, root: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -112,9 +124,43 @@ pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
     };
     let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 44, false, false)?;
+    let length = wire::buffer_reply(&reply, 48, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Stats as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Makes `root` the next version of `name` if `expected` is its current version (0: a new name), once every block
+/// of the object `root` names is stored; returns the new version after the medium has flushed it (MC-4.3, 4.4).
+/// Errors: conflict, incomplete, invalid, unsupported, corrupt, full, read-only, device.
+pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Result<core::result::Result<u64, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        expected.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<36>(root, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 8, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u64 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The current version of `name` and its root. Errors: not-found, invalid.
+pub fn resolve(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Head, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 46, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Head as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
@@ -127,6 +173,8 @@ pub enum Request<'a> {
     Get { cid: &'a [u8] },
     Has { cid: &'a [u8] },
     Stat,
+    Publish { name: Text<64>, expected: u64, root: &'a [u8] },
+    Resolve { name: Text<64> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -163,11 +211,29 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Has { cid }, call))
         }
         4 => {
-            let (call, length) = wire::take_buffer(request, cap, 44, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 48, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Stat, call))
+        }
+        5 => {
+            let (call, length) = wire::take_buffer(request, cap, 8, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let expected = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let root = codec::decode_bytes::<36>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Publish { name, expected, root }, call))
+        }
+        6 => {
+            let (call, length) = wire::take_buffer(request, cap, 46, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Resolve { name }, call))
         }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
@@ -186,6 +252,14 @@ pub fn reply_has(call: Call, value: core::result::Result<bool, Error>) -> Result
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_stat(call: Call, value: core::result::Result<&Stats, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_publish(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_resolve(call: Call, value: core::result::Result<&Head, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

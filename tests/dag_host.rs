@@ -11,7 +11,7 @@ mod cid;
 mod dag;
 
 use cid::{Cid, Codec};
-use dag::{decode, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
+use dag::{complete, decode, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
 use std::collections::HashMap;
 
 /// Blocks in memory; `replace` makes the store answer a CID with other bytes.
@@ -29,6 +29,7 @@ impl Blocks for Memory {
         out[..data.len()].copy_from_slice(data);
         Ok(data.len())
     }
+    fn has(&mut self, cid: &Cid) -> Result<bool, Error> { Ok(self.blocks.contains_key(cid)) }
 }
 
 fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
@@ -209,4 +210,31 @@ fn heights_follow_the_size() {
     assert_eq!(height((CHUNK * FANOUT) as u64), 1);
     assert_eq!(height((CHUNK * FANOUT) as u64 + 1), 2);
     assert_eq!(height(u64::MAX), 7);
+}
+
+#[test]
+fn an_object_is_complete_only_with_every_block() {
+    let mut buffer = Box::new([0u8; CHUNK]);
+    // Three levels: 256 chunks and one more, so a node of height 2 over two of height 1.
+    let data: Vec<u8> = (0..CHUNK * FANOUT + 10).map(|i| (i / CHUNK) as u8 ^ (i % 253) as u8).collect();
+    let mut blocks = Memory::default();
+    let (root, total) = store(&mut blocks, &data, 65536);
+    assert_eq!(complete(&mut blocks, &root, &mut buffer), Ok(total));
+    // A chunk missing, in the first or the last node of height 1.
+    for chunk in [&data[CHUNK * 7..CHUNK * 8], &data[CHUNK * FANOUT..]] {
+        let mut partial = Memory { blocks: blocks.blocks.clone(), ..Default::default() };
+        partial.blocks.remove(&Cid::raw(chunk));
+        assert_eq!(complete(&mut partial, &root, &mut buffer), Err(Error::NotFound));
+    }
+    // A node of height 1 missing.
+    let first: Vec<Cid> = data[..CHUNK * FANOUT].chunks(CHUNK).map(Cid::raw).collect();
+    let mut node = [0u8; NODE_MAX];
+    let len = encode((CHUNK * FANOUT) as u64, &first, &mut node);
+    let mut partial = Memory { blocks: blocks.blocks.clone(), ..Default::default() };
+    assert!(partial.blocks.remove(&Cid::of(Codec::DagCbor, &node[..len])).is_some());
+    assert_eq!(complete(&mut partial, &root, &mut buffer), Err(Error::NotFound));
+    // A single chunk.
+    let small = blocks.put(Codec::Raw, b"small").unwrap();
+    assert_eq!(complete(&mut blocks, &small, &mut buffer), Ok(5));
+    assert_eq!(complete(&mut Memory::default(), &small, &mut buffer), Err(Error::NotFound));
 }

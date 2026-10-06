@@ -25,12 +25,12 @@ Each piece below is in the kernel track's files: `common/abi.rs`, `init`, the sh
 - **Clients:**
   - A fixed slot `SLOT_BLOCKSTORE` for the shell (`SLOT_DYNAMIC` moves up), lent in `init`'s `shell` arm.
   - `REQUEST_BLOCKSTORE` in `mind::process`. The shell lends the slot for it in `start_with`, and `loader` accepts the slot.
-  - Clients are minted with the badges of [300-STO-0004](300-STO-0004-rights-by-badge.md) (`mind::blockstore`): `BADGE_GET` reads, `BADGE_PUT` stores. The service refuses an unbadged client everything. The shell's client gets `BADGE_GET | BADGE_PUT`. The shell may lend a program a narrower client (`BADGE_GET` only) where that is enough.
+  - Clients are minted with the badges of [300-STO-0004](300-STO-0004-rights-by-badge.md) (`mind::blockstore`): `BADGE_GET` reads, `BADGE_PUT` stores. The service refuses an unbadged client everything. The shell's client gets `BADGE_GET | BADGE_PUT | BADGE_PUBLISH` (302-STO-0001: `BADGE_PUBLISH` makes a name point at a new root). The shell may lend a program a narrower client (`BADGE_GET` only) where that is enough.
 - **Task budget:** this adds two services against `MAX_TASKS` = 32 (issue 171).
 
 ### Acceptance criteria
 
-- After boot, blockstore's log has `[BLOCKSTORE] READY BLOCKS=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0` (8 MiB RAM disk), on x86 and aarch64.
+- After boot, blockstore's log has `[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0` (8 MiB RAM disk), on x86 and aarch64.
 - A program holding `REQUEST_BLOCKSTORE` reaches `idl/blockstore.wit` with the badge it was lent.
 - The STO track then adds a test tool and the QEMU suite: put and get, a corrupt block refused, a full store refused.
 

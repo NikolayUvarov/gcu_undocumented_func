@@ -2,21 +2,27 @@
 /// (CIDv1, `raw` or `dag-cbor`, SHA-256; 36 bytes in binary form). Nothing stored is overwritten, and a block is checked against its
 /// CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
 /// What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
+/// A name's current version points at the root of an object and changes only by compare-and-swap (302-STO-0001).
 package mind:blockstore@1.0.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-    /// (`mind::blockstore`: put needs BADGE_PUT, get and has BADGE_GET, stat either).
-    /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002).
-    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid }
+    /// (`mind::blockstore`: put needs BADGE_PUT, get, has and resolve BADGE_GET, publish BADGE_PUBLISH, stat any).
+    /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
+    /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
+    /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything.
+    enum error { not-found, corrupt, full, too-large, read-only, device, unsupported, rights, invalid, conflict, incomplete }
 
     /// What a block's bytes are: opaque (`raw`), or a node of an object (`dag-cbor`, `mind::dag`), checked before it is
     /// stored.
     enum codec { raw, dag-cbor }
 
     /// Intact blocks and their bytes; sectors of the log and of the medium; records found corrupt and non-blank
-    /// sectors outside every record; how many blocks the index can hold.
-    record stats { blocks: u32, bytes: u64, used: u64, sectors: u64, corrupt: u32, damaged: u64, capacity: u32 }
+    /// sectors outside every record; how many blocks the index can hold; names published.
+    record stats { blocks: u32, bytes: u64, used: u64, sectors: u64, corrupt: u32, damaged: u64, capacity: u32, names: u32 }
+
+    /// A name's current version (from 1) and the CID of the root it points at (36 bytes).
+    record head { version: u64, root: list<u8, 36> }
 
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. Errors: invalid (not a node), too-large, full (medium or index), read-only, device.
@@ -27,4 +33,10 @@ interface blockstore {
     /// Whether the index holds `cid`; the block is not read. Error: unsupported.
     has: func(cid: bytes<36>) -> result<bool, error>;
     stat: func() -> result<stats, error>;
+    /// Makes `root` the next version of `name` if `expected` is its current version (0: a new name), once every block
+    /// of the object `root` names is stored; returns the new version after the medium has flushed it (MC-4.3, 4.4).
+    /// Errors: conflict, incomplete, invalid, unsupported, corrupt, full, read-only, device.
+    publish: func(name: string<64>, expected: u64, root: bytes<36>) -> result<u64, error>;
+    /// The current version of `name` and its root. Errors: not-found, invalid.
+    resolve: func(name: string<64>) -> result<head, error>;
 }
