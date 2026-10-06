@@ -412,6 +412,16 @@ def center_pixel(vm):
     return pixels[at:at + 3]
 
 
+# aarch64 idle check (issue 208): an idle virt with 4 CPUs uses about 0.45-0.6 s of host processor time a second
+# under TCG, one vCPU that spins instead of waiting in WFI about 1 s on its own. The lowest of a few samples is
+# compared, so one sample that meets a busy host or a burst of wakeups does not fail the check.
+IDLE_LIMIT = .85
+
+
+def idle_cpu_seconds(vm, samples=3):
+    return min(qemu_cpu_seconds(vm, 1) for _ in range(samples))
+
+
 def qemu_cpu_seconds(vm, seconds):
     """Processor time QEMU used in `seconds` of wall time (user and system, all its threads)."""
     def total():
@@ -528,8 +538,8 @@ def normal_suite(vm):
     # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
     # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
     if vm.arch == "aarch64":
-        used = qemu_cpu_seconds(vm, 1)
-        assert used < .6, f"idle QEMU used {used:.2f} s of processor time in 1 s: the CPU does not wait in WFI"
+        used = idle_cpu_seconds(vm)
+        assert used < IDLE_LIMIT, f"idle QEMU used at least {used:.2f} s of processor time a second: a CPU does not wait in WFI"
     else:
         for _ in range(10):
             registers = vm.hmp("info registers")
@@ -1535,8 +1545,8 @@ def smp_suite(vm):
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
         vm.serial()
-        used = qemu_cpu_seconds(vm, 1)
-        assert used < .6, f"idle QEMU used {used:.2f} s of processor time in 1 s: a CPU does not wait in WFI"
+        used = idle_cpu_seconds(vm)
+        assert used < IDLE_LIMIT, f"idle QEMU used at least {used:.2f} s of processor time a second: a CPU does not wait in WFI"
     else:
         for cpu in range(vm.cpus):
             vm.hmp(f"cpu {cpu}")
