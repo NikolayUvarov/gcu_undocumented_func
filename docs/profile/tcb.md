@@ -4,14 +4,14 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 
 | Guarantee | TCB |
 |---|---|
-| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices, bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_storage`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`** (no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
+| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices, bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`** (no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
 | Kernel integrity | Same as above. |
 | Capability confinement of applications | Kernel; `loader` (decides which client capabilities an application gets); `init` (decides what `loader` holds). |
 | Capability confinement of services | Kernel; `init`. |
-| Correct program images | Boot disk contents (not authenticated), `ata`/`ahci`/`usb_storage`/`virtio_blk`/`nvme`, `vfs_server`, `loader`, kernel ELF loader. |
-| Integrity of disk contents (writes) | Kernel (badges); `init` (gives the write-badged block clients to `vfs_server` only); `ata`/`ahci`/`usb_storage` (check the badge, write the medium); `vfs_server` (the only writer; it confines the user's client to `ram:` and `data/`); `shell` (holds the user's file client). |
+| Correct program images | Boot disk contents (not authenticated), `ata`/`ahci`/`usb_host` and `usb_storage`/`virtio_blk`/`nvme`, `vfs_server`, `loader`, kernel ELF loader. |
+| Integrity of disk contents (writes) | Kernel (badges); `init` (gives the write-badged block clients to `vfs_server` only); `ata`/`ahci`/`usb_storage` (check the badge, write the medium; `usb_storage`'s data pass through `usb_host`); `vfs_server` (the only writer; it confines the user's client to `ram:` and `data/`); `shell` (holds the user's file client). |
 | Process control (kill, focus, logs) used only as the user intends | Kernel; `init` (grants the control privilege); `shell`. |
-| Keyboard input reaches only the focused task | Kernel; `ps2_kbd`, `virtio_input` and `shell` (all hold the input privilege and can inject arbitrary input). |
+| Keyboard input reaches only the focused task | Kernel; `ps2_kbd`, `virtio_input`, `usb_hid` and `shell` (all hold the input privilege and can inject arbitrary input); `usb_host` (it hands `usb_hid` the keyboard's reports). |
 | Screen shows the focused task | Kernel; `compositor` (display privilege, framebuffer). |
 
 ## Notes

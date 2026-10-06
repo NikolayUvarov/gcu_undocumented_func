@@ -16,6 +16,8 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | A GICv2 with a GICv2m frame: CPU interface in memory, SGIs through the distributor, MSI-X as GICv2m SPIs | `normal`, `smp` and `net` suites on `virt,gic-version=2` (CI group "GICv2 with GICv2m") |
 | The boot disk on NVMe: the firmware boots from it, `nvme` serves it, files written pass fsck.fat, reboot and power off | `vfs` suite with `--disk nvme` (CI group "NVMe boot disk"; on x86 too) |
 | Linux key codes become the PS/2 set 1 codes the decoder expects | Host test `keys_become_set_1_scan_codes` (`tests/virtio_input_host.rs`) |
+| USB input without VirtIO input: a keyboard behind a hub (keys, layouts, host-side repeat), a tablet's click, a keyboard unplugged and plugged in on another port, `usb_hid` and `usb_host` killed and restarted | `usb` suite (CI group "programs, shell and four CPUs"; on x86 too, without a PS/2 controller) |
+| USB boot keyboard reports become PS/2 set 1 codes; report descriptors of a tablet and a mouse give their fields | Host tests in `tests/hid_host.rs` |
 
 ## Not covered by any test
 

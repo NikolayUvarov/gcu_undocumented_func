@@ -22,7 +22,7 @@
 
 ## Out of scope (not claimed)
 
-- **DMA-capable drivers and devices.** Without an IOMMU, `ahci`, `usb_storage`, `audio_gw` and the devices they program can access all physical memory. A compromise of any of them defeats every memory guarantee (MC-1.5).
+- **DMA-capable drivers and devices.** Without an IOMMU, `ahci`, `usb_host`, `audio_gw` and the devices they program can access all physical memory. A compromise of any of them defeats every memory guarantee (MC-1.5).
 - `init` and the platform privilege: `init` can mint device capabilities, DMA regions and privileges; it is trusted.
 - Firmware, the UEFI bootloader, physical access, malicious hardware, supply chain of the toolchain.
 - Side channels (caches, timing, speculative execution) and SMT interference.

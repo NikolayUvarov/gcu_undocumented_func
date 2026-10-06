@@ -40,7 +40,8 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | `init` drops the platform privilege before READY; quotas are reported per task | `services` suite |
 | `STAT` agrees with `ps` (task count) and `heap` (arena used); the shell's address-space map has its known regions; every CPU accounts busy and idle time; an application without the observe privilege is refused | `services` suite; `isolation` case `k` |
 | A client of a quarantined service is not left waiting in a send (init keeps no receive right) | `services` suite |
-| Drivers with MMIO and DMA capabilities work (AHCI, xHCI) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
+| Drivers with MMIO and DMA capabilities work (AHCI, xHCI through `usb_host` and `usb_storage`) | `ahci` suite, USB image smoke (`tests/usb_image_smoke.py`) |
+| Without a PS/2 controller (`pc,i8042=off`, as Intel Macs) `ps2_kbd` does not start; a USB keyboard behind a hub types (keys, layouts, host-side repeat), a USB tablet clicks, a keyboard plugged in and out at run time is let go and taken; `usb_hid` and `usb_host` restart and the keyboard works again (issue 164) | `usb` suite; host tests in `tests/hid_host.rs` |
 | Endpoint badges are set once, kept by children, reported by `CAP_INFO` and delivered with each message | `isolation` suite, case `k` |
 | The FAT writer keeps FAT12/16/32 volumes consistent: long and Cyrillic names, files across clusters, truncation, moves, removal, growing directories, formatting; a random sequence matches a model | `tests/fat_host.rs` (`fsck.fat -n`, mtools) |
 | The read-only check finds what `fsck.fat` finds — a cut chain, a cross link, a lost cluster, a wrong size, a bad short name — and passes clean volumes; any change marks the volume dirty until a flush | `tests/fat_host.rs`; QEMU `disk` suite |

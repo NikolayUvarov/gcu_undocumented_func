@@ -15,10 +15,13 @@ interface usb {
     /// Gives a claimed interface back.
     release: func(handle: u32) -> result<_, error-code>;
     /// A control transfer on the device's endpoint 0; the data stage (up to 4096 bytes) is at the buffer's start.
-    /// Returns the bytes transferred. Error not-found: the device is gone or the handle is not the client's.
+    /// Returns the bytes transferred. Errors: not-found, the device is gone or the handle is not the client's; rights,
+    /// a request for the device as a whole other than reading a descriptor (its address or configuration), or for
+    /// another interface; invalid, the device refused (a stall); timeout, no answer.
     control: func(handle: u32, request-type: u8, request: u8, value: u16, index: u16, length: u16) -> result<u16, error-code>;
     /// A bulk transfer on the endpoint with address `address` (bit 7 set for IN) of the claimed interface, `length` bytes
-    /// (up to 64 KiB) at `offset` in the buffer. Returns the bytes transferred.
+    /// (up to 64 KiB) at `offset` in the buffer. Returns the bytes transferred. Errors as for `control`; after a
+    /// stall the endpoint is reset on both sides, so the next transfer can run.
     bulk: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
     /// The reports received on the interrupt IN endpoint with address `address` since the last call, written at the buffer's start as
     /// a length byte and the report each; returns their count. The first call starts polling the endpoint.

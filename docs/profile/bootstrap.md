@@ -20,7 +20,9 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `compositor` | server endpoint (requests from the shell's display client, issue 086), framebuffer memory, display privilege |
 | `ata` | server endpoint, ports 0x1F0–0x1F7 and 0x3F6 |
 | `ahci` | server endpoint, ABAR (BAR5) MMIO of the first AHCI controller, 128 KiB DMA |
-| `usb_storage` | server endpoint, BAR0 MMIO of the first xHCI controller, 256 KiB DMA |
+| `usb_host` | server endpoint, BAR0 MMIO of the first xHCI controller, 512 KiB DMA (issue 164) |
+| `usb_storage` | server endpoint, a client of `usb_host` badged for mass storage interfaces (only when `usb_host` runs) |
+| `usb_hid` | server endpoint (the keyboard service), a client of `usb_host` badged for HID interfaces, input privilege (only when `usb_host` runs) |
 | `ramdisk` | server endpoint |
 | `vfs_server` | server endpoint, write-badged client endpoints of the running block drivers and of `ramdisk`, an `rtc` client (slot 6) |
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |

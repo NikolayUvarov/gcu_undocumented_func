@@ -20,7 +20,8 @@ MIND Core runs on aarch64 only in QEMU's `virt` machine (`aarch64/QEMU-virt-0`).
 - **Done — memory:** the identity map covers 1 TiB with memory types from the UEFI map; the ECAM comes from the MCFG. Tested with `-m 6G` and `highmem=on` (normal, net, tls).
 - **Done — GICv2:** GICC CPU interface, SGIs through GICD_SGIR, MSIs through GICv2m. Tested with `gic-version=2` (normal, shell, smp, net).
 - **Done — NVMe:** the `nvme` service (admin and one I/O queue, polled, PRP lists) is a boot disk on both architectures; CI's "NVMe boot disk" groups.
-- **Open — USB HID keyboard** (the boards have no PS/2 or virtio-input): issue [164](164-usb-hid-keyboard-and-mouse.md).
+- **Done — USB keyboard** (the boards have no PS/2 or virtio-input): issue [164](../issues-done/164-usb-hid-keyboard-and-mouse.done), tested on `virt` with `qemu-xhci`. On the Raspberry Pi 4 its xHCI (VL805) sits behind a PCIe root that is not a standard ECAM: open.
+- **Done — no console at a guessed address:** the UART and RTC start as none and get `virt`'s addresses only on QEMU (XSDT OEM ID `BOCHS`); an SPCR naming a UART the kernel does not drive (a 16550, the Pi's mini UART) leaves no console instead of writes that may land in RAM.
 - **Open — hardware or `sbsa-ref`:** the SBSA firmware is not packaged and its download needs an account, so the acceptance run could not be made here.
 - **Open — board profiles** (`aarch64/RPi4-EDK2-0`, `aarch64/ACPI-server-0`) wait for that run.
 

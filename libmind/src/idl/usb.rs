@@ -44,7 +44,9 @@ pub fn release(endpoint: Endpoint, handle: u32) -> Result<()> {
 }
 
 /// A control transfer on the device's endpoint 0; the data stage (up to 4096 bytes) is at the buffer's start.
-/// Returns the bytes transferred. Error not-found: the device is gone or the handle is not the client's.
+/// Returns the bytes transferred. Errors: not-found, the device is gone or the handle is not the client's; rights,
+/// a request for the device as a whole other than reading a descriptor (its address or configuration), or for
+/// another interface; invalid, the device refused (a stall); timeout, no answer.
 pub fn control(endpoint: Endpoint, handle: u32, request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Result<u16> {
     let words = [4 | MAJOR << 8 | ((handle) as usize) << 16 | ((request_type) as usize) << 48 | ((request) as usize) << 56, ((value) as usize) << 0 | ((index) as usize) << 16 | ((length) as usize) << 32];
     let reply = wire::call(endpoint, words, None)?;
@@ -54,7 +56,8 @@ pub fn control(endpoint: Endpoint, handle: u32, request_type: u8, request: u8, v
 }
 
 /// A bulk transfer on the endpoint with address `address` (bit 7 set for IN) of the claimed interface, `length` bytes
-/// (up to 64 KiB) at `offset` in the buffer. Returns the bytes transferred.
+/// (up to 64 KiB) at `offset` in the buffer. Returns the bytes transferred. Errors as for `control`; after a
+/// stall the endpoint is reset on both sides, so the next transfer can run.
 pub fn bulk(endpoint: Endpoint, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
     let words = [5 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48, ((offset) as usize) << 0 | ((length) as usize) << 32];
     let reply = wire::call(endpoint, words, None)?;

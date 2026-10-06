@@ -1,6 +1,6 @@
 # Platform profile `aarch64/QEMU-virt-0`
 
-**Version:** 1.1 (2026-10-05; 1.0 → 1.1: the board's layout from ACPI, RAM and devices above 4 GiB, GICv2, NVMe — issue 205) · **Constitution:** [v1.6](../../../constitution/EN/MIND_CORE_Constitution_v1.6.md), stage 0 · **Roadmap:** track H (issues 201–205)
+**Version:** 1.2 (2026-10-06; 1.1 → 1.2: USB keyboards, mice and tablets through `usb_host` and `usb_hid` — issue 164; no console UART or RTC at `virt`'s addresses on other boards — issue 205; 1.0 → 1.1: the board's layout from ACPI, RAM and devices above 4 GiB, GICv2, NVMe — issue 205) · **Constitution:** [v1.6](../../../constitution/EN/MIND_CORE_Constitution_v1.6.md), stage 0 · **Roadmap:** track H (issues 201–205)
 
 This is the second platform of MIND Core. It shares the kernel's generic part, every service's source and the system-call interface with [`x86-64/QEMU-0`](../README.md); what differs is the architecture layer (`kernel/src/arch/aarch64/`, `libmind/src/arch/aarch64.rs`), the bootloader's few architecture lines and the devices. Like the x86 profile it states what the implementation is, guarantees and does not claim (MC-12.1, MC-12.3), for the code of the commit that contains it; a change that alters a statement here updates it in the same commit (MC-12.9). Where this profile says nothing, the x86 profile's statement holds unchanged: its [conformance table](../README.md#conformance), [kernel objects](../kernel-objects.md), [clocks](../clocks.md), [bootstrap](../bootstrap.md) and [memory transfers](../README.md#memory-transfers-appendix-b2).
 
@@ -60,6 +60,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | virtio-blk (PCI) | `virtio_blk` (both architectures) | the boot disk; modern interface, requests polled; vfs mounts FAT from it (`FROM VIRTIO`) |
 | NVMe (PCI) | `nvme` (both architectures, issue 205) | a boot disk on NVMe (`FROM NVME`), as boards and servers have |
 | virtio-net (PCI) | `virtio_net` | modern interface, MSI-X through the ITS (INTx without it) |
+| xHCI (PCI) with USB keyboards, mice, tablets, hubs, mass storage | `usb_host`, `usb_hid`, `usb_storage` (both architectures, issue 164) | devices behind USB 2 hubs, plugged in and out at run time; the keyboard service is `usb_hid`'s when there is no VirtIO keyboard; the boards' only keyboards |
 | virtio-keyboard, virtio-tablet (PCI) | `virtio_input` | up to two devices; keys go through the PS/2 decoder (layouts, Ctrl+Z, the keyboard service `idl/keyboard.wit`), the tablet gives absolute pointer events |
 | PL011 | `shell` | its console, as COM1 on x86 |
 | PL031 | `rtc` | seconds since 1970, UTC |
@@ -69,7 +70,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 
 | Requirement | Status here | Difference |
 |---|---|---|
-| MC-1.5 DMA boundary | **not met — declared** | No SMMU is used (QEMU `virt` has none unless `iommu=smmuv3`): `virtio_blk`, `nvme`, `virtio_net`, `virtio_input` and their devices can read and write all physical memory and are in the TCB of every memory guarantee. Unlike x86 the ITS keys each MSI by the device's requester ID, so a device can raise only the LPIs mapped for its own events; this does not help against DMA. |
+| MC-1.5 DMA boundary | **not met — declared** | No SMMU is used (QEMU `virt` has none unless `iommu=smmuv3`): `virtio_blk`, `nvme`, `virtio_net`, `virtio_input`, `usb_host` and their devices can read and write all physical memory and are in the TCB of every memory guarantee. Unlike x86 the ITS keys each MSI by the device's requester ID, so a device can raise only the LPIs mapped for its own events; this does not help against DMA. |
 | MC-2.6 transfer modes | as on x86 | `block.attach` also goes to `virtio_blk` (the same SHARE_RW adapter). |
 | MC-5.1–5.5 budgets | as on x86 | Evidence: `busy` and `smp` suites on four CPUs. |
 | MC-5.6 explicit clocks | met (measurement) | The generic timer's virtual count; calendar time from the PL031 (`rtc`), seconds since 1970 in UTC. |
@@ -81,10 +82,9 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 
 ## Not yet
 
-- Boards on hardware: Raspberry Pi 4/5 with the EDK2 port, servers with ACPI; a USB keyboard (HID on xHCI); QEMU `sbsa-ref` (its firmware is not packaged) — issue [205](../../../issues/205-aarch64-boards.md). CPUs beyond eight, CPU hotplug.
+- Boards on hardware: Raspberry Pi 4/5 with the EDK2 port (its xHCI is a VL805 behind a non-standard PCIe root), servers with ACPI; QEMU `sbsa-ref` (its firmware is not packaged) — issue [205](../../../issues/205-aarch64-boards.md). CPUs beyond eight, CPU hotplug.
 - An SMMU, so the DMA drivers leave the TCB.
 - FP/SIMD state, so programs are soft-float; sound (virtio-snd); `virtio_rng` for machines without RNDR.
-- The ECAM above 4 GiB (`highmem=on`): the kernel would need to map it.
 - PAN (Privileged Access Never): not enabled yet; the kernel reaches task memory only through its identity map, never through user addresses.
 
 ## Evidence

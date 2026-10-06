@@ -1,6 +1,6 @@
 # 158 — Video capture devices: cameras through a video gateway
 
-**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P2 · **Status:** open · **Blocked by:** [164](164-usb-hid-keyboard-and-mouse.md) for the USB stack (step 1 below is done there) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
+**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P2 · **Status:** open · **Blocked by:** — (the USB stack, step 1 below, is done: [164](../issues-done/164-usb-hid-keyboard-and-mouse.done)) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
 
 ## Problem
 
@@ -8,7 +8,7 @@ MIND Core can speak (`tts`) and hear (`listen`, voice V0–V2), but it cannot se
 
 ## Plan
 
-1. **A general USB stack.** `usb_storage` today drives the xHCI controller only for one mass-storage device.
+1. **A general USB stack** — done in [164](../issues-done/164-usb-hid-keyboard-and-mouse.done): `usb_host` and `idl/usb.wit`; a UVC driver needs isochronous transfers added to it. Originally: `usb_storage` drove the xHCI controller only for one mass-storage device.
    - Split it into an xHCI host-controller driver (`usb_host`: ports, enumeration, device and configuration descriptors, control, bulk, interrupt and isochronous transfers; USB 2 and 3) and class drivers that get one device's interface through it.
    - `usb_storage` becomes the first class driver. This is also the path to USB HID (keyboards and mice without the legacy PS/2, see `docs/legacy.md`).
 2. **UVC class driver** (`uvc`, USB Video Class 1.1/1.5): the video control and streaming interfaces, the formats and frame sizes a camera offers (YUY2, MJPEG), isochronous or bulk streaming, payload headers and frame assembly.

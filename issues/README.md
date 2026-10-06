@@ -20,7 +20,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
-| [164](164-usb-hid-keyboard-and-mouse.md) | USB keyboards and mice: `usb_host` (xHCI, hubs) and `usb_hid`; `usb_storage` on top of it; for real machines without PS/2 (PCs, Intel Macs, ARM boards) | kernel (drivers) | P1 | — | track A |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
@@ -171,5 +170,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
 | [163](../issues-done/163-window-broker-memory.done) | init gives the window broker a 128 MiB memory quota: pixel windows with room for the screen | done (2026-10-05) |
 | [165](../issues-done/165-display-client-for-programs.done) | A launcher may lend the compositor client (`REQUEST_DISPLAY`); the compositor shows a red dot while the screen is captured | done (2026-10-06) |
+| [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) | USB keyboards, mice and tablets: `usb_host` (xHCI, hubs, hot plug, `idl/usb.wit`), `usb_hid`, `usb_storage` over it; no `ps2_kbd` without a controller; Intel chipsets' ports moved from EHCI | done (2026-10-06) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
