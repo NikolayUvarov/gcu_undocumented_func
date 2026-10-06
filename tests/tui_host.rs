@@ -10,7 +10,7 @@ mod util;
 mod tui;
 use abi::*;
 use keys::{event, Key};
-use tui::widgets::{fkey_bar, message, Edit, History, InputLine, ListState, MenuAction, MenuBar};
+use tui::widgets::{fkey_at, fkey_bar, message, Edit, History, InputLine, ListState, MenuAction, MenuBar};
 use tui::{Cell, Grid, Line, Rect, Style, CLASSIC};
 
 fn text(grid: &Grid, y: usize) -> String { (0..grid.cols).map(|x| grid.get(x, y).ch).collect::<String>() }
@@ -145,6 +145,34 @@ fn menu_bar_and_key_bar() {
     }
     message(&mut grid, "Ошибка", &["Нет файла"], &["OK"], 0, &CLASSIC);
     assert!((0..6).any(|y| text(&grid, y).contains("[ OK ]")));
+}
+
+#[test]
+fn menu_bar_and_key_bar_take_clicks() {
+    // Issue u013: the bar drawn as "   Файл   Справка": a title opens its menu, the open one's title closes it, an item
+    // is chosen, a press elsewhere closes the menu, the mouse over an item highlights it.
+    let items: [&[&str]; 2] = [&["Открыть", "Выход"], &["О программе"]];
+    let mut menu = MenuBar::new(&["Файл", "Справка"], &items);
+    assert_eq!(menu.pointer(4, 0, 0, true), Some(MenuAction::None), "Файл clicked: its menu opens");
+    assert!(menu.open && menu.menu == 0 && menu.item == 0);
+    assert_eq!(menu.pointer(5, 3, 0, false), Some(MenuAction::None), "over Выход");
+    assert_eq!(menu.item, 1);
+    assert_eq!(menu.pointer(5, 3, 0, true), Some(MenuAction::Chosen(0, 1)));
+    assert!(!menu.open);
+    assert_eq!(menu.pointer(20, 3, 0, true), None, "closed: a press off the titles is not the menu's");
+    menu.pointer(10, 0, 0, true);
+    assert!(menu.open && menu.menu == 1, "Справка");
+    assert_eq!(menu.pointer(3, 0, 0, true), Some(MenuAction::None), "another title: its menu instead");
+    assert_eq!(menu.menu, 0);
+    assert_eq!(menu.pointer(3, 0, 0, true), Some(MenuAction::Closed), "the open menu's title again");
+    menu.pointer(3, 0, 0, true);
+    assert_eq!(menu.pointer(30, 5, 0, true), Some(MenuAction::Closed), "elsewhere");
+    assert_eq!(menu.pointer(2, 1, 0, true), None, "the frame of a closed menu is nothing");
+    menu.pointer(3, 0, 0, true);
+    assert_eq!(menu.pointer(2, 1, 0, true), Some(MenuAction::Closed), "the frame is not an item");
+    // The buttons of a ten-slot key bar, 80 columns: 8 each, the last one to the edge.
+    assert_eq!((fkey_at(80, 0), fkey_at(80, 7), fkey_at(80, 8), fkey_at(80, 72), fkey_at(80, 79)), (1, 1, 2, 10, 10));
+    assert_eq!((fkey_at(85, 84), fkey_at(5, 4)), (10, 5), "past the last slot; a bar narrower than ten cells");
 }
 
 #[test]

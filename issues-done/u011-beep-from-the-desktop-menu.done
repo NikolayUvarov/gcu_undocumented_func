@@ -1,0 +1,38 @@
+# u011 — beep started from wm's desktop menu: checked, tested, and console says when a program ends — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user (2026-10-05, a screenshot; recorded by the porting track in `issues/tools-track-reports.md`): in `wm`, the desktop menu → **Sound and voice** → **beep** did nothing audible.
+
+`beep` asks for a console (`REQUEST_CONSOLE`), so the menu runs it as `console beep` (`wm::menu::catalogue`). Without arguments it plays the gateway demo, three tones and a sweep (about 1 s), and ends.
+
+## What was found
+
+Reproduced on the current build in QEMU, with the sound written to a WAV file and the menu clicked through the VirtIO tablet:
+- wm starts `console beep`;
+- console starts beep with an endpoint for its output;
+- the loader lends beep the audio client, as it does to every program;
+- console's window shows `[BEEP] DEVICE=true RATE=48000`, `[BEEP] PCM QUEUED 24000 FRAMES`, `[BEEP] DONE`;
+- the WAV has the demo's tones (523, 659 and 784 Hz).
+
+Every link works, and the failure did not reproduce. The report predates the merges of u004 to u010 into the porting branch, so the user's build may have been older. The run scripts all add the AC97 card (`MIND_AUDIO=none` turns it off).
+
+One thing could make a run look like nothing happened. When a program had printed something, console said nothing when it ended; only a program that printed nothing got a note. A one-second sound with no visible end was easy to miss.
+
+## Plan
+
+- console says when every program ends: `(beep ended)`, or `(… ended without printing anything)`.
+- The acceptance test the report asks for, so the path stays checked.
+
+## Acceptance criteria
+
+QEMU (`tablet` suite, with its sound in a WAV file): the menu's Sound and voice → beep, clicked through the tablet, opens a console window in the bottom-right quarter that shows beep's lines, and the WAV has the demo's three tones.
+
+## Resolution
+
+- `console/src/main.rs`: the ended line for every program.
+- `tests/qemu_smoke.py`: the tablet suite has a sound card writing a WAV, and starts beep from the menu. `tone_power` and `beep_demo_tones` are shared with the audio suite.
+- Docs: docs/tools §4.10 (EN/RU, console's ended line).
+- If beep from the menu is still silent on the user's machine, `beep 440` from the shell tells the device apart from the menu: `[BEEP] DEVICE=false` means QEMU has no sound card.

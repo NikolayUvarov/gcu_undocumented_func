@@ -21,7 +21,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
-| [—](tools-track-reports.md) | User reports for the tools track to number: beep from wm's menu, Quit in a program's menu | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
@@ -138,7 +137,9 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u008](../issues-done/u008-clickable-top-bar.done) | wm: the items of the top bar can be clicked instead of their keys (for a host that keeps Alt+Tab for itself) | done (2026-10-05) |
 | [u009](../issues-done/u009-pixel-windows-follow-their-frame.done) | wm: a pixel window's content follows its frame (`clock` and `dzen-clock` laid out again at its size) | done (2026-10-05) |
 | [u010](../issues-done/u010-say-text-on-screen.done) | `say` shows its text whole on its screen, Cyrillic as it is (8x16 font, rows cut at spaces) | done (2026-10-05) |
+| [u011](../issues-done/u011-beep-from-the-desktop-menu.done) | beep from wm's desktop menu: works (its lines in console, its tones in a WAV), now tested; console says when every program ends | done (2026-10-06) |
 | [u012](../issues-done/u012-load-graphs-aligned.done) | `load`: every graph ends at the same column and the scale labels end in one column, whatever their widths | done (2026-10-06) |
+| [u013](../issues-done/u013-quit-from-menus-and-key-bars.done) | Quit in a program's menu and key bar: `edit` and `view` take the mouse, menus take clicks, F10 quits from edit's open menu | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

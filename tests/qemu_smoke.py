@@ -2587,6 +2587,19 @@ def block_suite(args, block_elf):
     print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
+def tone_power(samples, rate, start, hz):
+    """How much of `hz` the 40 ms of `samples` from `start` hold."""
+    window = samples[start:start + int(rate * 0.04)]
+    return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
+
+
+def beep_demo_tones(left, rate, first):
+    """beep's demo from sample `first`: 523, 659 and 784 Hz, 150 ms each, each stronger than the other two."""
+    for index, hz in enumerate((523, 659, 784)):
+        start = first + int(rate * (0.05 + 0.15 * index))
+        assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
+
+
 def audio_suite(vm, wav):
     require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
     output = ""
@@ -2619,12 +2632,8 @@ def audio_suite(vm, wav):
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
     def power(start, hz):
-        window = left[start:start + int(rate * 0.04)]
-        return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate))
-                       for i, x in enumerate(window))) / len(window)
-    for index, hz in enumerate((523, 659, 784)):
-        start = demo[0] + int(rate * (0.05 + 0.15 * index))
-        assert power(start, hz) > 5 * max(power(start, other) for other in (523, 659, 784) if other != hz), hz
+        return tone_power(left, rate, start, hz)
+    beep_demo_tones(left, rate, demo[0])
     seconds = (notes[-1] - notes[0]) / rate
     assert 0.55 < seconds < 0.65, seconds  # 200 ms, a 100 ms pause, 300 ms
     first, second = notes[0] + int(rate * 0.08), notes[0] + int(rate * 0.4)
@@ -3583,7 +3592,7 @@ def wm_suite(vm):
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
-def tablet_suite(vm):
+def tablet_suite(vm, wav):
     """The VirtIO tablet (issue 161): the host's pointer as a position, so the system's pointer is where the host's is
     and reaches the edges of the screen — fm's key bar in the bottom right corner, wm's buttons at the right edge."""
     require(vm.service_logs("virtio_input", "[VIRTIO_INPUT] "), "[VIRTIO_INPUT] QEMU Virtio Tablet X=0..32767 Y=0..32767")
@@ -3602,6 +3611,21 @@ def tablet_suite(vm):
     time.sleep(.3)
     require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry
     require(click(159, 49, "[FM] DONE"), "[FM] POINTER 159,49 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    # Quit in a program's menu and key bar (issue u013): edit's File > Quit clicked (F9 opens the menu: File's third
+    # item is on row 4); view's 10 Quit clicked.
+    vm.send("edit ram:quit.txt\n")
+    vm.expect("[EDIT] READY")
+    time.sleep(.3)
+    vm.hmp("sendkey f9")
+    vm.serial(enter=False)
+    time.sleep(.3)
+    require(click(5, 4, "[EDIT] DONE"), "[EDIT] POINTER 5,4 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    vm.send("view kernel.elf\n")
+    vm.expect("[VIEW] OPEN")
+    time.sleep(.3)
+    click(159, 49, "[VIEW] DONE")
     vm.expect("SHELL RESUMED.")
     # wm: top in the top right quarter; its [▲] maximizes it, [×] next to the screen's right edge closes it.
     start = len(vm.log)
@@ -3647,13 +3671,38 @@ def tablet_suite(vm):
             break
     else:
         raise AssertionError(screen)
+    # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, in the
+    # bottom right quarter, which shows beep's lines; its tones reach the sound card (checked in the WAV below).
+    assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
+    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
+    time.sleep(.2)
+    require(click(121, 39, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("[BEEP] DONE") in row[80:] for row in screen[25:]):
+            break
+    else:
+        raise AssertionError(screen)
+    assert any(canon("[BEEP] DEVICE=true RATE=48000") in row[80:] for row in screen[25:]), screen
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
+    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
-          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window", flush=True)
+    vm.close()
+    import struct, wave
+    with wave.open(str(wav)) as audio:
+        frames = audio.readframes(audio.getnframes())
+        rate = audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if sample]
+    assert loud, "beep from the menu: no sound"
+    beep_demo_tones(left, rate, loud[0])
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge; "
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window; "
+          "beep from the menu: its lines in its console window, its tones in the WAV", flush=True)
 
 
 def windows_suite(vm):
@@ -3880,7 +3929,7 @@ def main():
             if suite == "netbench":
                 netbench_suite(args, disk)
                 continue
-            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
+            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
@@ -3893,11 +3942,12 @@ def main():
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
                     listen_suite(vm, starts)
+                elif suite == "tablet":
+                    tablet_suite(vm, wav)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite,
-                     "tablet": tablet_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

@@ -199,29 +199,66 @@ impl<'a> MenuBar<'a> {
         }
         MenuAction::None
     }
+    // Where each title is on the bar: its first column and width, the spaces around it included.
+    fn places(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let mut x = 2;
+        self.titles.iter().map(move |title| { let len = title.chars().count(); let place = (x, len + 2); x += len + 3; place })
+    }
+
+    // The frame of menu `index` when the bar is on row `y`.
+    fn frame(&self, index: usize, y: usize) -> Rect {
+        let items = self.items.get(index).copied().unwrap_or(&[]);
+        let x = self.places().nth(index).map_or(2, |(x, _)| x);
+        Rect::new(x, y + 1, items.iter().map(|i| i.chars().count()).max().unwrap_or(0) + 4, items.len() + 2)
+    }
+
+    /// The mouse at cell (x, y), the bar on row `y`; `pressed`: a button went down, else it moved (issue u013). A title
+    /// opens its menu (the open one again closes it); an item is chosen; a press elsewhere closes the menu; moving
+    /// over an item highlights it. None: the menu is closed and the press was not on a title, so it is not the menu's.
+    pub fn pointer(&mut self, x: usize, y: usize, bar: usize, pressed: bool) -> Option<MenuAction> {
+        let title = if y == bar { self.places().position(|(at, w)| x >= at && x < at + w) } else { None };
+        if !self.open {
+            let index = title.filter(|_| pressed)?;
+            (self.open, self.menu, self.item) = (true, index, 0);
+            return Some(MenuAction::None);
+        }
+        let frame = self.frame(self.menu, bar);
+        let item = (frame.contains(x, y) && y > frame.y && y + 1 < frame.bottom()).then(|| y - frame.y - 1);
+        match (title, item) {
+            (Some(index), _) if pressed && index == self.menu => { self.open = false; Some(MenuAction::Closed) }
+            (Some(index), _) if pressed => { (self.menu, self.item) = (index, 0); Some(MenuAction::None) }
+            (_, Some(item)) => {
+                self.item = item;
+                if pressed { self.open = false; Some(MenuAction::Chosen(self.menu, item)) } else { Some(MenuAction::None) }
+            }
+            _ if pressed => { self.open = false; Some(MenuAction::Closed) }
+            _ => Some(MenuAction::None),
+        }
+    }
+
     /// Draws the bar on row `y` (always) and the open menu below it.
     pub fn draw(&self, grid: &mut Grid, y: usize, theme: &Theme) {
         grid.fill(Rect::new(0, y, grid.cols, 1), ' ', theme.menu);
-        let mut x = 2;
-        for (index, title) in self.titles.iter().enumerate() {
+        for (index, ((x, _), title)) in self.places().zip(self.titles.iter()).enumerate() {
             let style = if self.open && index == self.menu { theme.menu_selected } else { theme.menu };
             let len = title.chars().count();
             grid.put(x, y, ' ', style); grid.text(x + 1, y, title, style); grid.put(x + 1 + len, y, ' ', style);
             if self.open && index == self.menu {
                 let items = self.items.get(index).copied().unwrap_or(&[]);
-                let width = items.iter().map(|i| i.chars().count()).max().unwrap_or(0) + 4;
-                let area = Rect::new(x, y + 1, width, items.len() + 2);
+                let area = self.frame(index, y);
                 grid.frame(area, Line::Single, theme.menu);
                 for (row, item) in items.iter().enumerate() {
                     let style = if row == self.item { theme.menu_selected } else { theme.menu };
-                    grid.text_padded(area.x + 1, area.y + 1 + row, "", width - 2, style);
+                    grid.text_padded(area.x + 1, area.y + 1 + row, "", area.w - 2, style);
                     grid.text(area.x + 2, area.y + 1 + row, item, style);
                 }
             }
-            x += len + 3;
         }
     }
 }
+
+/// The F-key (1-10) of the button of a ten-slot `fkey_bar` at column `x` on a screen `cols` wide (issue u013).
+pub fn fkey_at(cols: usize, x: usize) -> u16 { (x / (cols / 10).max(1)).min(9) as u16 + 1 }
 
 /// The Norton Commander key bar on row `y`: `1Help 2Save ...`; empty labels leave their slot blank.
 pub fn fkey_bar(grid: &mut Grid, y: usize, labels: &[&str], theme: &Theme) {

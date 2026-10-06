@@ -943,3 +943,51 @@ fn draws_jobs_and_dialogs_on_any_screen() {
         let _ = draw(&mut fm, cols, rows);
     }
 }
+
+// The first cell of `text` anywhere on the screen.
+fn cell(screen: &[String], text: &str) -> (usize, usize) {
+    screen.iter().enumerate().find_map(|(y, line)| line.find(text).map(|at| (line[..at].chars().count(), y))).unwrap_or_else(|| panic!("{} not on the screen: {:#?}", text, screen))
+}
+
+#[test]
+fn the_mouse_in_menus_and_the_editor() {
+    // Issue u013: fm's own menu takes clicks; in fm's editor, File > Quit clicked and "10 Quit" on the key bar close
+    // the editor (a changed text asks first), as F10 does.
+    let mut disk = Mem::sample();
+    disk.dirs.push("data".into());
+    disk.add_file("data/notes.txt", b"one\ntwo\n");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    draw(&mut fm, 100, 30);
+    fm.key(f(9), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    let (x, y) = cell(&screen, "Files");
+    assert_eq!(fm.pointer(x, y, POINTER_LEFT, 0, 1000, &mut disk), Outcome::Redraw, "the Files menu");
+    assert_eq!(fm.pointer(x, y, 0, 0, 1010, &mut disk), Outcome::Ignored, "releasing changes nothing");
+    let screen = draw(&mut fm, 100, 30);
+    let (x, y) = cell(&screen, "Make directory");
+    assert_eq!(fm.pointer(x, y, 0, 0, 1100, &mut disk), Outcome::Redraw, "highlighted");
+    fm.pointer(x, y, POINTER_LEFT, 0, 1200, &mut disk);
+    fm.pointer(x, y, 0, 0, 1210, &mut disk);
+    assert!(!fm.menu.open && draw(&mut fm, 100, 30).iter().any(|l| l.contains("Make directory")), "chosen: its dialog");
+    fm.key(code(KEY_ESC), &mut disk);
+    // fm's editor: File > Quit clicked.
+    fm.edit("data/notes.txt", false, &mut disk);
+    fm.key(f(9), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    let (x, y) = cell(&screen, "Quit  F10");
+    fm.pointer(x, y, POINTER_LEFT, 0, 2000, &mut disk);
+    fm.pointer(x, y, 0, 0, 2010, &mut disk);
+    assert!(fm.editor.is_none(), "File > Quit closed the editor");
+    // "10 Quit" on the key bar, with a changed text: asked first, Don't save closes it.
+    fm.edit("data/notes.txt", false, &mut disk);
+    draw(&mut fm, 100, 30);
+    fm.key(chr('x'), &mut disk);
+    fm.pointer(95, 29, POINTER_LEFT, 0, 3000, &mut disk);
+    fm.pointer(95, 29, 0, 0, 3010, &mut disk);
+    assert!(fm.editor.as_ref().is_some_and(|e| e.dialog.is_some()), "asked about the changed text");
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.editor.is_none());
+    assert_eq!(disk.file("data/notes.txt").unwrap(), b"one\ntwo\n", "not saved");
+}
