@@ -530,27 +530,43 @@ def normal_suite(vm):
     for pid in [1, 4]:
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     assert heap_used(vm) == baseline, "task teardown leaked resources"
-    for pid in range(6, 14):
-        require(vm.command("run clock &"), f"PID={pid} NAME=clock BACKGROUND")
-    require(vm.command("run app &"), "TASK LIMIT REACHED")
-    assert len(task_rows(vm)) == 8
-    for pid in range(6, 14):
+    # Issue 171: no fixed count of tasks or applications. 40 applications at once, more than the former 8 and than the
+    # former 32 tasks of the whole system (the task table grows a chunk); afterwards the kernel heap is back where it was.
+    many = 40
+    for pid in range(6, 6 + many):
+        require(vm.command("run memtest hold 0 &"), f"PID={pid} NAME=memtest")
+    assert len(task_rows(vm)) == many
+    tasks = int(re.search(r"TASKS=(\d+)/", vm.command("free"))[1])
+    assert tasks > 32 + many // 2, tasks
+    for pid in range(6, 6 + many):
         vm.command(f"kill {pid}")
-    assert heap_used(vm) == baseline, "slot exhaustion/reuse leaked resources"
+    # And more than the former 127 endpoints: 40 programs that each create the 4 loader allows.
+    for pid in range(6 + many, 6 + 2 * many):
+        require(vm.command("run memtest endpoints &"), f"PID={pid} NAME=memtest")
+    for pid in range(6 + many, 6 + 2 * many):
+        require(vm.program_logs(pid, "ENDPOINTS"), "[MEMTEST] ENDPOINTS 4")
+    endpoints = int(re.search(r"ENDPOINTS=(\d+)/", vm.command("free"))[1])
+    assert endpoints > 127 + many, endpoints
+    for pid in range(6 + many, 6 + 2 * many):
+        vm.command(f"kill {pid}")
+    many *= 2
+    assert heap_used(vm) == baseline, "growing the tables and reusing slots leaked resources"
     # Repeated creation/freeing must retain the same empty-system heap baseline.
-    for pid in range(14, 24):
+    first = 6 + many
+    for pid in range(first, first + 10):
         require(vm.command("run app &"), f"PID={pid} NAME=app BACKGROUND")
         vm.command(f"kill {pid}")
     assert heap_used(vm) == baseline
     vm.send("boot\n")
-    vm.expect("PID=24 NAME=app FOREGROUND")
+    vm.expect(f"PID={first + 10} NAME=app FOREGROUND")
     vm.hmp("sendkey esc")
     vm.serial()
     assert task_rows(vm) == {}
     vm.keys("run clock &\n")
     vm.serial()
-    assert 25 in task_rows(vm), "PS/2 Shift+7 must produce a background launch"
-    vm.keys("fg 25\n")
+    clock = first + 11
+    assert clock in task_rows(vm), "PS/2 Shift+7 must produce a background launch"
+    vm.keys(f"fg {clock}\n")
     # Give the clock a chance to render, then capture the actual foreground.
     time.sleep(.2)
     screenshot = vm.screenshot()
@@ -563,8 +579,8 @@ def normal_suite(vm):
     assert green > 1000, "fg must display the actual clock framebuffer"
     vm.hmp("sendkey ctrl-z")
     vm.serial()
-    assert 25 in task_rows(vm), "PS/2 fg/Ctrl+Z must preserve the task"
-    vm.keys("kill 25\n")
+    assert clock in task_rows(vm), "PS/2 fg/Ctrl+Z must preserve the task"
+    vm.keys(f"kill {clock}\n")
     vm.serial()
     assert task_rows(vm) == {}
     # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
@@ -1143,7 +1159,7 @@ def monitors_check(vm):
     time.sleep(.2)
     screen = screen_text(vm)
     vm.serial()
-    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/32")), screen
+    assert table_row(screen, re.escape(canon("Kernel arena 64.0M: used"))) and table_row(screen, canon(f"Tasks {tasks}/65535")), screen
     largest = table_row(screen, r"Kernel arena 64\.0M: used .*, largest free block (\d+(?:\.\d)?)M")
     assert largest and table_row(screen, r"Free outside the largest block: "), screen  # issue 076
     vm.send("3")
@@ -1177,7 +1193,7 @@ def monitors_check(vm):
     screen = screen_text(vm)
     vm.serial()
     assert int(re.search(r"SAMPLES=(\d+)", tool_status(vm, "[LOAD] WINDOW=30S TOTAL=0"))[1]) > 10
-    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 32"]:
+    for name in [f"CPU{cpu} " for cpu in range(vm.cpus)] + ["interrupts ", "syscalls ", "IPC messages ", "context switches ", "kernel arena ", f"tasks  {tasks} of 65535"]:
         assert table_row(screen, "^ " + re.escape(canon(name))), (name, screen)
     vm.send("c")
     vm.expect("TOTAL=1")
@@ -2234,11 +2250,21 @@ def escrow_check(vm):
     assert {6, 7, 9, 12, 14} <= escrowed, caps
     assert 13 in kinds and 9 in kinds, caps  # restart and its own spawn privilege
     # Restarted from escrow: sysmon reads statistics with the observe privilege, loader starts programs with spawn.
-    for service, ready in (("sysmon", "[SYSMON] READY: SAMPLES EVERY 100 MS"), ("loader", "[LOADER] READY")):
-        old = vm.services()[service]
-        require(vm.command(f"svc restart {service}"), f"{service} restarted: PID")
-        assert vm.services()[service] != old, service
-        require(vm.service_logs(service, ready), ready)
+    # loader is ended from the shell and init restarts it (svc, which loader itself started, would race the shell's
+    # call to loader that is still open while loader goes).
+    old = vm.services()["sysmon"]
+    require(vm.command("svc restart sysmon"), "sysmon restarted: PID")
+    assert vm.services()["sysmon"] != old
+    require(vm.service_logs("sysmon", "[SYSMON] READY: SAMPLES EVERY 100 MS"), "[SYSMON] READY: SAMPLES EVERY 100 MS")
+    old = vm.services()["loader"]
+    vm.command(f"kill {old}", raw=True)
+    for _ in range(40):
+        if vm.services().get("loader", old) != old:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("init did not restart loader")
+    require(vm.service_logs("loader", "[LOADER] READY"), "[LOADER] READY")
     started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))
     assert started, "loader restarted from escrow does not start programs"
     vm.command(f"kill {started[1]}")
@@ -2266,7 +2292,7 @@ def services_suite(vm):
     # Observation (STAT): the task table agrees with ps, the memory summary with heap, and every CPU is online.
     tasks = len(re.findall(r"^\d+ [\w-]+ ", vm.command("ps", raw=True), re.M))
     free = vm.command("free")
-    assert f"TASKS={tasks}/32 " in free and re.search(r"ENDPOINTS=\d+/127 ", free), (tasks, free)
+    assert f"TASKS={tasks}/65535 " in free and re.search(r"ENDPOINTS=\d+/65535 ", free), (tasks, free)
     arena, used, free_bytes, largest = map(int, re.search(r"ARENA=(\d+) USED=(\d+) FREE=(\d+) LARGEST=(\d+)", free).groups())
     assert arena == 64 << 20 and 0 < used < arena and used + free_bytes <= arena, free
     # Issue 075: the largest free block (found by trial allocations) fits in the free memory; page tables are counted.
@@ -2314,7 +2340,7 @@ def services_suite(vm):
     assert len(cpus) == vm.cpus and all(int(b) + int(i) > 0 for b, i in cpus), cpus
     # Quotas delegated at spawn: init holds the root quota, loader may run 8 applications with 4 endpoints each.
     quotas = vm.command("quotas", raw=True)
-    assert re.search(r"^\d+ loader 0/8 0/32$", quotas, re.M) and re.search(r"^1 init \d+/31 \d+/127$", quotas, re.M), quotas
+    assert re.search(r"^\d+ loader 0/65279 0/65279$", quotas, re.M) and re.search(r"^1 init \d+/65535 \d+/65535$", quotas, re.M), quotas
     # Services do not occupy a screen and are not restarted.
     require(vm.command("run rtc &"), "SERVICE ALREADY RUNNING")
     baseline = heap_used(vm)

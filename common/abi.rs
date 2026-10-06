@@ -9,7 +9,8 @@ pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", 
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 1] = ["virtio_net#1"];
-pub const MAX_APPS: usize = 8; // init's policy: live applications loader may start (its task quota)
+// The largest task or endpoint quota SPAWN can delegate (16 bits): the root quota init holds (issue 171).
+pub const QUOTA_MAX: usize = 0xFFFF;
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
 
 #[derive(Clone, Copy)] #[repr(C)] pub struct ProgramImage { pub data: *const u8, pub len: usize }

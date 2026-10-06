@@ -93,7 +93,7 @@ fn pid_arg(args: &[u8]) -> Option<u64> {
 fn error_text(error: Error, service: bool) -> &'static str {
     match error {
         Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
-        Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (8)",
+        Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (QUOTA)",
         Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
         Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
         Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
@@ -106,10 +106,14 @@ fn error_text(error: Error, service: bool) -> &'static str {
 
 fn label(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?").trim_end_matches([' ', '\0']) }
 
-fn tasks() -> ([TaskInfo; 40], usize) {
-    let mut list = [unsafe { core::mem::zeroed::<TaskInfo>() }; 40];
-    let count = control::tasks(&mut list).unwrap_or(0);
-    (list, count)
+// Every task: the list doubles until the kernel fills it no more (issue 171: no fixed count of tasks).
+fn tasks() -> (alloc::vec::Vec<TaskInfo>, usize) {
+    let mut list = alloc::vec![unsafe { core::mem::zeroed::<TaskInfo>() }; 64];
+    loop {
+        let count = control::tasks(&mut list).unwrap_or(0);
+        if count < list.len() { return (list, count); }
+        list.resize(list.len() * 2, unsafe { core::mem::zeroed::<TaskInfo>() });
+    }
 }
 
 impl Shell {
@@ -511,7 +515,7 @@ impl Shell {
                 let _ = write!(self.term, "{} {} {} {} {} {} {} {}", t.pid, label(&t.name), label(&t.state), if t.focus != 0 { "FG" } else { "BG" }, t.cpu, t.runs, t.ticks, t.calls);
                 let _ = match self.owner(t.pid) { Some(console) => writeln!(self.term, " CONSOLE={}", console + 1), None => writeln!(self.term) };
             }
-            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; LIMIT={} APPS + SERVICES", count, self.own, MAX_APPS);
+            let _ = writeln!(self.term, "{} TASK(S); SHELL PID={}; NO FIXED LIMIT: MEMORY AND QUOTAS DECIDE", count, self.own);
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"reboot") {

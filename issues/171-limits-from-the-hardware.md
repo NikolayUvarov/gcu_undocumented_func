@@ -48,7 +48,8 @@ Split into `KRN` tasks (TRACKS.md), one for each step of the plan:
 | Task | Step | Status |
 |---|---|---|
 | [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | 1. All RAM on x86-64 | done (2026-10-06) |
-| `171-KRN-0002` | 2. Task and endpoint tables from memory, paid from quotas; no `MAX_APPS`, `APP_ENDPOINTS`; STAT pages | next |
+| [171-KRN-0002](../issues-done/171-KRN-0002-task-and-endpoint-tables.done) | 2. Task and endpoint tables that grow; root quota 65 535; no `MAX_APPS` | done (2026-10-06) |
+| `171-KRN-0007` | STAT with an offset, so callers page through any number of records; `sysmon` and `top` page (with `APP`) | planned |
 | [171-KRN-0003](../issues-done/171-KRN-0003-every-cpu.done) | 3. As many CPUs as the firmware reports; no tick for idle CPUs | done (2026-10-06) |
 | [171-KRN-0004](../issues-done/171-KRN-0004-growing-capability-tables.done) | 4. Capability tables that grow on demand, up to 4095 slots (handle: 12 bits of slot, 20 of generation) | done (2026-10-06) |
 | `171-KRN-0006` | `sysmon`'s per-CPU samples for every CPU (`idl/sysinfo.wit` 2.0), with `APP` for `top` and the load monitor | planned |

@@ -8,10 +8,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 mod stat;
 
-pub const MAX_TASKS: usize = 32; // services + applications
-const SLOTS: usize = MAX_TASKS + 1;
 const STACK_SIZE: usize = 64 * 1024;
-const ENDPOINTS: usize = 128;
+const ENDPOINTS: usize = 128; // the endpoint table's first size; it grows on demand (issue 171)
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
 const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
@@ -32,12 +30,12 @@ struct Pending { cap: Capability, node: Node, moved_from: Option<usize> }
 // Counters for STAT (MC-10.2: observation, never authority).
 struct Accounting {
     last_switch: [u64; cpu::MAX], busy_ns: [u64; cpu::MAX], idle_ns: [u64; cpu::MAX], interrupts: [u64; cpu::MAX], switches: [u64; cpu::MAX],
-    irqs: [u64; LINES], endpoint: [EndpointCounters; ENDPOINTS],
+    irqs: [u64; LINES], endpoint: Vec<EndpointCounters>,
 }
 #[derive(Clone, Copy, Default)]
 struct EndpointCounters { messages: u64, busy: u64, timeouts: u64 }
 impl Accounting {
-    fn new() -> Self { Self { last_switch: [0; cpu::MAX], busy_ns: [0; cpu::MAX], idle_ns: [0; cpu::MAX], interrupts: [0; cpu::MAX], switches: [0; cpu::MAX], irqs: [0; LINES], endpoint: [EndpointCounters::default(); ENDPOINTS] } }
+    fn new() -> Self { Self { last_switch: [0; cpu::MAX], busy_ns: [0; cpu::MAX], idle_ns: [0; cpu::MAX], interrupts: [0; cpu::MAX], switches: [0; cpu::MAX], irqs: [0; LINES], endpoint: alloc::vec![EndpointCounters::default(); ENDPOINTS] } }
 }
 // Memory kept alive by references after its owner let go; charged to the owner's heap quota while that owner lives.
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
@@ -94,8 +92,30 @@ struct IrqBinding { ep: usize, slot: usize, pid: u64, pending: bool, unacked: bo
 #[derive(Clone, Copy)]
 struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
 const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
+// The task table (issue 171): chunks of 32 slots added as needed and dropped when empty at the end. A task never moves:
+// the system call path holds raw pointers to tasks while the table may grow.
+const CHUNK: usize = 32;
+struct Table<T> { chunks: Vec<alloc::boxed::Box<[Option<T>]>> }
+impl<T> Table<T> {
+    fn new() -> Self { let mut table = Self { chunks: Vec::new() }; assert!(table.grow(), "task table"); table }
+    fn grow(&mut self) -> bool {
+        let mut chunk = Vec::new();
+        if self.chunks.try_reserve(1).is_err() || chunk.try_reserve_exact(CHUNK).is_err() { return false; }
+        for _ in 0..CHUNK { chunk.push(None); }
+        self.chunks.push(chunk.into_boxed_slice()); true
+    }
+    // Drops empty chunks at the end, keeping the first.
+    fn shrink(&mut self) { while self.chunks.len() > 1 && self.chunks.last().unwrap().iter().all(Option::is_none) { self.chunks.pop(); } }
+    fn len(&self) -> usize { self.chunks.len() * CHUNK }
+    fn iter(&self) -> impl Iterator<Item = &Option<T>> { self.chunks.iter().flat_map(|c| c.iter()) }
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Option<T>> { self.chunks.iter_mut().flat_map(|c| c.iter_mut()) }
+    fn ptr(&mut self, index: usize) -> *mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] }
+}
+impl<T> core::ops::Index<usize> for Table<T> { type Output = Option<T>; fn index(&self, index: usize) -> &Option<T> { &self.chunks[index / CHUNK][index % CHUNK] } }
+impl<T> core::ops::IndexMut<usize> for Table<T> { fn index_mut(&mut self, index: usize) -> &mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] } }
+
 struct Scheduler {
-    boot: BootInfo, tasks: [Option<Task>; SLOTS], current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
+    boot: BootInfo, tasks: Table<Task>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
     foreground: usize, // focused task: its screen is shown and it receives input
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
@@ -103,7 +123,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize); EXIT_STATUSES], ended_next: usize, // (PID, reason) of the last tasks that ended (EXIT_STATUS)
-    dirty: bool, endpoints: [bool; ENDPOINTS], endpoint_owner: [Option<(usize, u64)>; ENDPOINTS], irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
+    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -141,18 +161,17 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
-    let mut endpoints = [false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: core::array::from_fn(|_| None), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: [None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
     Ok(())
 }
 
 impl Scheduler {
     // Ready tasks of one band on `cpu` that have budget left; the idle slot takes part only in the application band, so
     // a CPU still passes through idle (and CPU 0 through reaping) when only applications run.
-    fn states(&self, cpu: usize, band: u8) -> [State; SLOTS] {
-        core::array::from_fn(|i| if i == 0 { if band == BAND_APPLICATION as u8 { State::Ready } else { State::Empty } } else {
-            self.tasks[i].as_ref().filter(|t| t.cpu == cpu && t.band == band && (t.budget_ns == 0 || t.consumed < t.budget_ns)).map_or(State::Empty, |t| t.state)
-        })
+    fn ready(&self, slot: usize, cpu: usize, band: u8) -> bool {
+        if slot == 0 { return band == BAND_APPLICATION as u8; }
+        self.tasks[slot].as_ref().is_some_and(|t| t.cpu == cpu && t.band == band && (t.budget_ns == 0 || t.consumed < t.budget_ns) && t.state == State::Ready)
     }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
         let current = self.current[cpu];
@@ -170,8 +189,9 @@ impl Scheduler {
             task.period_start = now - (now - task.period_start) % task.period_ns; task.consumed = 0;
         }
         let [system, application] = self.cursor[cpu];
-        let next = match task_state::next(&self.states(cpu, BAND_SYSTEM as u8), system) {
-            0 => { let next = task_state::next(&self.states(cpu, BAND_APPLICATION as u8), application); self.cursor[cpu][1] = next; next }
+        let len = self.tasks.len();
+        let next = match task_state::next_by(len, system, |i| self.ready(i, cpu, BAND_SYSTEM as u8)) {
+            0 => { let next = task_state::next_by(len, application, |i| self.ready(i, cpu, BAND_APPLICATION as u8)); self.cursor[cpu][1] = next; next }
             next => { self.cursor[cpu][0] = next; next }
         };
         self.current[cpu] = next;
@@ -194,14 +214,14 @@ impl Scheduler {
     }
     fn used_endpoints(&self, slot: usize) -> usize {
         let pid = self.tasks[slot].as_ref().unwrap().pid;
-        let created = (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e] && self.endpoint_owner[e] == Some((slot, pid))).count();
+        let created = (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e] && self.endpoint_owner[e] == Some((slot, pid))).count();
         created + self.tasks.iter().flatten().filter(|t| t.state != State::Exited && t.parent == Some((slot, pid))).map(|t| t.quota_endpoints).sum::<usize>()
     }
     fn live(&self, slot: usize) -> bool { slot != 0 && self.tasks[slot].as_ref().is_some_and(|t| t.state != State::Exited) }
     // Whether `slot` was spawned by `ancestor` or by one of its live descendants (the parent links, while each lives).
     fn descends_from(&self, slot: usize, ancestor: usize) -> bool {
         let mut at = slot;
-        for _ in 0..SLOTS {
+        for _ in 0..self.tasks.len() {
             let Some((parent, pid)) = self.tasks[at].as_ref().and_then(|t| t.parent) else { return false };
             if !self.tasks[parent].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) { return false; }
             if parent == ancestor { return true; }
@@ -221,7 +241,7 @@ impl Scheduler {
     // Charges private memory to the task and every payer above it; none may go over its quota (MC-3.13).
     fn charge(&mut self, slot: usize, bytes: usize) -> bool {
         let mut at = Some(slot); let mut depth = 0;
-        while let Some(s) = at.filter(|_| depth < SLOTS) {
+        while let Some(s) = at.filter(|_| depth < self.tasks.len()) {
             let task = self.tasks[s].as_ref().unwrap();
             if task.memory_tree.saturating_add(bytes) > task.memory_quota { return false; }
             at = self.payer_of(s); depth += 1;
@@ -232,7 +252,7 @@ impl Scheduler {
     fn uncharge(&mut self, slot: usize, bytes: usize) { self.walk_payers(slot, |task| task.memory_tree = task.memory_tree.saturating_sub(bytes)); }
     fn walk_payers(&mut self, slot: usize, mut f: impl FnMut(&mut Task)) {
         let mut at = Some(slot); let mut depth = 0;
-        while let Some(s) = at.filter(|_| depth < SLOTS) { f(self.tasks[s].as_mut().unwrap()); at = self.payer_of(s); depth += 1; }
+        while let Some(s) = at.filter(|_| depth < self.tasks.len()) { f(self.tasks[s].as_mut().unwrap()); at = self.payer_of(s); depth += 1; }
     }
     fn focus(&mut self, slot: usize) {
         if let Some(task) = self.tasks[self.foreground].as_mut() { task.input.clear(); }
@@ -279,11 +299,11 @@ impl Scheduler {
         if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
-        for other in 1..SLOTS {
+        for other in 1..self.tasks.len() {
             let Some(State::BlockedSend(ep)) = self.tasks[other].as_ref().map(|t| t.state) else { continue };
             if !self.receivable(ep) { let sender = self.tasks[other].as_mut().unwrap(); sender.pending_cap = None; sender.state = State::Ready; unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(other)).result), ERR_PEER); } }
         }
-        for other in 1..SLOTS { if self.tasks[other].as_ref().is_some_and(|t| t.state == State::BlockedReply(slot)) { self.fail_reply(other); } }
+        for other in 1..self.tasks.len() { if self.tasks[other].as_ref().is_some_and(|t| t.state == State::BlockedReply(slot)) { self.fail_reply(other); } }
         if self.foreground == slot {
             // Output the focus owner has not read yet is kept until the next focused task exits.
             let console = core::mem::replace(&mut self.tasks[slot].as_mut().unwrap().console, Queue::new());
@@ -318,7 +338,7 @@ impl Scheduler {
     // Fails blocked IPC whose deadline passed (MC-2.13): no message is half-delivered and no reply can reach a new call.
     fn expire(&mut self, now: u64) -> bool {
         let mut woken = false;
-        for slot in 1..SLOTS {
+        for slot in 1..self.tasks.len() {
             let Some(task) = self.tasks[slot].as_mut() else { continue };
             if task.deadline == 0 || now < task.deadline || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
             // A late reply finds the caller no longer waiting for this call number and fails with ERR_PEER.
@@ -338,7 +358,15 @@ impl Scheduler {
         unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).result), ERR_PEER); }
         self.tasks[slot].as_mut().unwrap().state = State::Ready;
     }
-    fn find(&self, pid: u64) -> Option<usize> { (1..SLOTS).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
+    fn find(&self, pid: u64) -> Option<usize> { (1..self.tasks.len()).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
+    // A free endpoint index; the tables double when full (issue 171), unless the kernel heap cannot grow them.
+    fn new_endpoint(&mut self) -> Option<usize> {
+        if let Some(ep) = (FIRST_ENDPOINT..self.endpoints.len()).find(|&e| !self.endpoints[e]) { return Some(ep); }
+        let (len, more) = (self.endpoints.len(), self.endpoints.len());
+        if self.endpoints.try_reserve_exact(more).is_err() || self.endpoint_owner.try_reserve_exact(more).is_err() || self.accounting.endpoint.try_reserve_exact(more).is_err() { return None; }
+        self.endpoints.resize(len + more, false); self.endpoint_owner.resize(len + more, None); self.accounting.endpoint.resize(len + more, EndpointCounters::default());
+        Some(len)
+    }
     // A free kernel-allocated slot, or the next one the table can grow by (issue 171).
     fn free_slot(cspace: &[Option<Capability>]) -> Option<usize> { (SLOT_DYNAMIC..cspace.len()).find(|&i| cspace[i].is_none()).or((cspace.len() < CAP_SLOTS_MAX).then_some(cspace.len())) }
     // Handle -> slot index (MC-3.2): fixed slots take generation 0, kernel-allocated ones their current generation.
@@ -404,12 +432,13 @@ impl Scheduler {
     // Frees exited tasks only after their CPU has switched to a different CR3.
     fn reap(&mut self) {
         let mut released: Vec<Region> = Vec::new();
-        for slot in 1..SLOTS {
+        for slot in 1..self.tasks.len() {
             if self.current.contains(&slot) || !self.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { continue; }
             for index in 1..self.tasks[slot].as_ref().unwrap().cspace.len() { self.remove(slot, index); }
             let mut task = self.tasks[slot].take().unwrap();
             released.extend(task.heap.take_regions()); released.extend(task.screen.take());
         }
+        self.tasks.shrink(); // empty chunks at the end of the table go back to the kernel heap
         // The IRQ binding is removed once nobody owns the line capability anymore.
         for irq in 0..LINES {
             // A binder that ended no longer holds the line back.
@@ -435,11 +464,17 @@ impl Scheduler {
         let mut index = 0;
         while index < self.ghosts.len() { if self.derived(self.ghosts[index].id) { index += 1; } else { self.ghosts.swap_remove(index); } }
         if self.orphans.is_empty() && self.orphans.capacity() != 0 { self.orphans = Vec::new(); } // an empty list holds no heap memory
-        let mut used = [false; ENDPOINTS]; used[..FIRST_ENDPOINT].fill(true);
+        let mut used = alloc::vec![false; self.endpoints.len()]; used[..FIRST_ENDPOINT].fill(true);
         for task in self.tasks.iter().flatten() { for cap in task.cspace.iter().flatten().chain(task.pending_cap.as_ref().map(|p| &p.cap)) { if let Capability::Endpoint(id, _, _) = cap { used[*id] = true; } } }
         for b in self.irq_bind.iter().flatten().flatten() { used[b.ep] = true; }
         for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
         self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
+        // Unused endpoints at the end of a grown table go, back to its first size at least (issue 171).
+        let keep = used.iter().rposition(|&u| u).map_or(0, |last| last + 1).max(ENDPOINTS);
+        if keep < used.len() {
+            used.truncate(keep); used.shrink_to_fit();
+            self.endpoint_owner.truncate(keep); self.endpoint_owner.shrink_to_fit(); self.accounting.endpoint.truncate(keep); self.accounting.endpoint.shrink_to_fit();
+        }
         self.endpoints = used;
     }
 
@@ -502,7 +537,8 @@ impl Scheduler {
     // New task from an ELF with the given capabilities; flags are SPAWN_SERVICE / SPAWN_SCREEN.
     fn spawn_internal(&mut self, source: Source, name: Name, args: &[u8], flags: usize, caps: [Option<Capability>; SLOT_DYNAMIC], nodes: [Node; SLOT_DYNAMIC], parent: Option<(usize, u64)>, quotas: (usize, usize, usize)) -> Result<u64, &'static str> {
         let (service, has_screen) = (flags & SPAWN_SERVICE != 0, flags & SPAWN_SCREEN != 0);
-        let slot = (1..SLOTS).find(|&i| self.tasks[i].is_none()).ok_or("NO FREE TASK SLOT")?;
+        // A free slot, or a new chunk of the table (issue 171): the kernel heap is the only limit beyond the quotas.
+        let slot = match (1..self.tasks.len()).find(|&i| self.tasks[i].is_none()) { Some(slot) => slot, None => { let len = self.tasks.len(); if !self.tasks.grow() { return Err("OUT OF MEMORY: TASK TABLE"); } len } };
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
         let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
         let elf = elf::Image::parse(file)?;
@@ -618,7 +654,7 @@ impl Scheduler {
             other => Some(other),
         }
     }
-    fn blocked(&self, state: State) -> Option<usize> { (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
+    fn blocked(&self, state: State) -> Option<usize> { (1..self.tasks.len()).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
     // Someone alive can still receive on the endpoint (otherwise a send would wait forever).
     fn receivable(&self, ep: usize) -> bool {
         self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
@@ -703,7 +739,7 @@ impl Scheduler {
         let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
         if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
-        let sender = (1..SLOTS).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
+        let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg1);
         Ok(Some(self.select(sp, cpu)))
@@ -898,7 +934,7 @@ impl Scheduler {
 
     unsafe fn syscall(&mut self, slot: usize, sp: usize, cpu: usize) -> usize {
         let ptr = self.mailbox(slot); let request = core::ptr::read_volatile(ptr);
-        let tasks = self.tasks.as_mut_ptr(); let task = (*tasks.add(slot)).as_mut().unwrap(); task.calls += 1;
+        let tasks: *mut Table<Task> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC => Ok(cpu::cycles() as usize),
@@ -926,7 +962,7 @@ impl Scheduler {
             }
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
                 Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
-                    let task = (*tasks.add(slot)).as_mut().unwrap();
+                    let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
                     match task.heap.allocate(&mut task.space, size) { Some(address) => Ok(address), None => { self.uncharge(slot, size); Ok(0) } }
                 }
                 _ => Ok(0),
@@ -946,7 +982,7 @@ impl Scheduler {
                 task.dirty = true; return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
-            SYSCALL_ENDPOINT_CREATE => match ((FIRST_ENDPOINT..ENDPOINTS).find(|&e| !self.endpoints[e]), Self::free_slot(&task.cspace)) {
+            SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::free_slot(&task.cspace)) {
                 _ if self.used_endpoints(slot) >= task.quota_endpoints => Err(ERR_LIMIT),
                 (Some(ep), Some(_)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); let node = self.root(); Ok(Self::insert(task, Capability::Endpoint(ep, ENDPOINT_ALL, 0), node).unwrap()) }
                 _ => Err(ERR_NO_SLOT),
@@ -973,7 +1009,7 @@ impl Scheduler {
             SYSCALL_PLATFORM_CAP => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
                     match (Self::free_slot(&task.cspace), self.platform_cap(request.arg1, request.arg2, request.msg[0])) {
-                        (Some(_), Ok(cap)) => { let node = self.root(); Ok(Self::insert((*tasks.add(slot)).as_mut().unwrap(), cap, node).unwrap()) }
+                        (Some(_), Ok(cap)) => { let node = self.root(); Ok(Self::insert((*(*tasks).ptr(slot)).as_mut().unwrap(), cap, node).unwrap()) }
                         (None, Ok(_)) => Err(ERR_NO_SLOT),
                         (_, Err(error)) => Err(error),
                     }
@@ -1030,8 +1066,8 @@ impl Scheduler {
             },
             // A child that already ended (and is not reclaimed yet) gets its exit notice at once: a service that dies
             // before its owner watches it is not lost (issue 201).
-            SYSCALL_TASK_WATCH if (1..SLOTS).any(|i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited && t.parent == Some((slot, task.pid)))) => {
-                let target = (1..SLOTS).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited)).unwrap();
+            SYSCALL_TASK_WATCH if (1..self.tasks.len()).any(|i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited && t.parent == Some((slot, task.pid)))) => {
+                let target = (1..self.tasks.len()).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited)).unwrap();
                 match self.cap(slot, request.arg2) {
                     Some(Capability::Endpoint(ep, rights, _)) if rights & CAP_READ != 0 => { let reason = self.tasks[target].as_ref().unwrap().exit_reason; self.post_exit(ep, request.arg1 as u64, reason); Ok(0) }
                     _ => Err(ERR_RIGHTS),
@@ -1145,12 +1181,12 @@ impl Scheduler {
             SYSCALL_COMPOSITOR_PULL => {
                 if !self.holds(slot, Capability::Display) || !(1..SLOT_DYNAMIC).contains(&request.arg1) { Err(ERR_RIGHTS) } else {
                     let focused = self.foreground;
-                    match (*tasks.add(focused)).as_mut().filter(|_| focused != 0).filter(|t| t.screen.is_some()) {
+                    match (*(*tasks).ptr(focused)).as_mut().filter(|_| focused != 0).filter(|t| t.screen.is_some()) {
                         None => Ok(0),
                         Some(t) => {
                             let (source, dirty) = (t.screen.as_ref().unwrap().ptr() as usize, core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty));
                             // New capability only on screen change: the compositor keeps the mapping across frames.
-                            if source != self.composited { self.composited = source; self.remove(slot, request.arg1); let task = (*tasks.add(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
+                            if source != self.composited { self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
                         }
                     }
                 }
@@ -1215,11 +1251,11 @@ pub fn spawn_init() -> Result<u64, &'static str> {
         caps[SLOT_SERVICE] = Some(Capability::Endpoint(ep, ENDPOINT_ALL, 0));
         caps[SLOT_DEV0] = Some(Capability::Platform); caps[SLOT_DEV1] = Some(Capability::Spawn);
         let nodes = core::array::from_fn(|i| if caps[i].is_some() { s.root() } else { Node::default() });
-        // init holds the root quota: every other task slot and every dynamic endpoint,
+        // init holds the root quota: as many tasks and endpoints as a quota can say (16 bits in SPAWN; issue 171),
         // and all task memory: the frame pool (issue 150).
         let memory = if crate::frames::ready() { crate::frames::stats().0 } else { s.boot.heap_len };
-        let pid = s.spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), &[], SPAWN_SERVICE, caps, nodes, None, (MAX_TASKS - 1, ENDPOINTS - FIRST_ENDPOINT, memory))?;
-        s.endpoint_owner[ep] = (1..SLOTS).find(|&i| s.tasks[i].as_ref().is_some_and(|t| t.pid == pid)).map(|i| (i, pid));
+        let pid = s.spawn_internal(Source::Boot(0), Name::new(BOOT_SERVICES[0].as_bytes()), &[], SPAWN_SERVICE, caps, nodes, None, (QUOTA_MAX, QUOTA_MAX, memory))?;
+        s.endpoint_owner[ep] = (1..s.tasks.len()).find(|&i| s.tasks[i].as_ref().is_some_and(|t| t.pid == pid)).map(|i| (i, pid));
         Ok(pid)
     })
 }
@@ -1267,4 +1303,4 @@ unsafe fn serial_number(mut number: u64) { let mut buffer = [0; 20]; let mut at 
 // Called from the BSP idle loop: reclaims memory of exited tasks.
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
-pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); [BAND_SYSTEM as u8, BAND_APPLICATION as u8].iter().any(|&band| s.states(cpu::id(), band)[1..].iter().any(|t| *t == State::Ready)) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }
+pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); let c = cpu::id(); (1..s.tasks.len()).any(|i| s.ready(i, c, BAND_SYSTEM as u8) || s.ready(i, c, BAND_APPLICATION as u8)) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }

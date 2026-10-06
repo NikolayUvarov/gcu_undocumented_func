@@ -14,7 +14,7 @@ use mind::sys::Error;
 use mind::util::FixedBuf;
 
 const RECEIVED_CAP: usize = 9;
-const APP_ENDPOINTS: u16 = 4; // endpoints an application may create
+const APP_ENDPOINTS: u16 = 4; // endpoints an application may create: loader's policy for each program
 const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for (the frame pool limits it further)
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;

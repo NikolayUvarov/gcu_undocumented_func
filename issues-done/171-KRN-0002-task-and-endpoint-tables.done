@@ -1,0 +1,47 @@
+# 171-KRN-0002 — No fixed count of tasks, applications or endpoints — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [171](../issues/171-limits-from-the-hardware.md), step 2 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+
+## Problem
+
+The kernel had a table of 32 tasks (`MAX_TASKS`) and of 128 endpoints (`ENDPOINTS`). init's policy allowed 8 applications (`MAX_APPS`) with 4 endpoints each. No machine set these numbers.
+
+## Plan
+
+- **Task table.** It grows in chunks of 32 slots and gives back empty chunks at its end. A task never moves, because the system call path holds raw pointers to tasks while the table may grow. Chunks are boxed slices, built without a large stack temporary.
+- **Endpoint tables.** The flags, owners and counters start at 128 entries, double when full and are cut back to their last used entry, but not below 128, when endpoints are reclaimed.
+- **Root quota.** It is what `SPAWN` can delegate: 65 535 tasks and endpoints (16-bit fields, `QUOTA_MAX`). init gives loader all of it but 256 kept for the services. `MAX_APPS` is gone.
+- **Loader.** It keeps its own per-program policy of 4 endpoints a program, a share rather than a system limit.
+- **Shell.** `ps` and `quotas` read every task: the list doubles until the kernel no longer fills it.
+- **Scheduler.** It picks the next task through a predicate (`task_state::next_by`), with no array as long as the table.
+- **Tests.** In the `normal` suite:
+  - 40 applications at once, which makes more than 32 + 20 tasks;
+  - 40 programs creating 4 endpoints each, which makes more than 167 endpoints;
+  - after both, the kernel heap is back at its baseline.
+
+  The `services` and `tools` suites check the new quotas and limits.
+
+## Acceptance criteria
+
+More than 32 applications and more than 127 endpoints exist at once, and the kernel heap returns to its baseline. Spawns beyond memory are refused cleanly and the recovery reserve still holds: these are the existing `memory` suite checks.
+
+## Resolution
+
+- **Code:**
+  - `kernel/src/scheduler.rs`: `Table`, `new_endpoint`, the endpoint cut-back in reclaim, `ready` and `next_by` in `select` and `idle`, the slot search that grows the table, `QUOTA_MAX` for init;
+  - `kernel/src/task_state.rs`: `next_by`;
+  - `kernel/src/scheduler/stat.rs`: the limits are `QUOTA_MAX`, and the endpoint ranges follow the table;
+  - `common/abi.rs`: `QUOTA_MAX` replaces `MAX_APPS`;
+  - `init/src/main.rs`: loader's quota;
+  - `shell/src/main.rs`: `tasks()` grows its list; the `ps` footer;
+  - `memtest/src/main.rs`: `memtest endpoints`.
+- **Tests:**
+  - `normal`: 40 applications, more than 127 endpoints, the heap baseline;
+  - `services`: quotas `loader 0/65279`, `init n/65535`, `free` limits;
+  - `tools`: the expected limits in `memmap` and the load monitor.
+- **Race found while testing:** the `escrow_check` of issue 170 restarted loader through `svc`, which loader itself had started. The shell's call to loader that was still open then failed with `ERR_PEER`. With the new ticks (171-KRN-0003) the race came out the other way. The check now ends loader from the shell and lets init restart it.
+- **Profile:** `kernel-objects.md` (task and endpoint rows, quotas, STAT), `bootstrap.md`, `evidence.md`, README.
+- **Not done:**
+  - the task table's chunks are paid from the kernel heap, not charged to a memory quota;
+  - STAT has no offset: a caller sees as many records as its buffer holds, with the total in the header — `171-KRN-0007`;
+  - the load monitor scales its task graph to `tasks_limit`, which is now 65 535 ([requests-APP.md](../issues/requests-APP.md)).

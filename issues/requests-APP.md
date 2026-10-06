@@ -51,3 +51,17 @@ Show `n/4095` (`CAP_SLOTS_MAX - 1`), or the count alone.
 ### Acceptance criteria
 
 The views show the new bound; the tools tests that check them are updated.
+
+## The load monitor and `memmap`: the task and endpoint limits are 65 535 now
+
+### Problem
+
+Since 171-KRN-0002 there is no fixed count of tasks or endpoints. STAT's `tasks_limit` and `endpoints_limit` report the root quota: 65 535 (`QUOTA_MAX`). The load monitor (`monitor/src/load.rs`) scales its task graph to `tasks_limit`, so the graph now lies flat. `memmap` and `top` show `Tasks n/65535`. The QEMU tools suite was updated to the new numbers (`Tasks n/65535`, `tasks  n of 65535`).
+
+### Plan
+
+Scale the task graph to its own maximum, or to the frame pool, instead of `tasks_limit`. Show the limit only where it says something.
+
+### Acceptance criteria
+
+The task graph shows a change from 20 to 60 tasks. The tests check it.

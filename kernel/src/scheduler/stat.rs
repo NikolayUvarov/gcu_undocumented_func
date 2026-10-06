@@ -35,7 +35,7 @@ fn largest_free(free: usize) -> usize {
     low
 }
 
-fn wait_of(state: State, running: bool, tasks: &[Option<Task>; SLOTS]) -> (u8, u32) {
+fn wait_of(state: State, running: bool, tasks: &Table<Task>) -> (u8, u32) {
     if running { return (WAIT_RUNNING, 0); }
     match state {
         State::BlockedSend(ep) => (WAIT_SEND, ep as u32),
@@ -108,7 +108,7 @@ impl Scheduler {
             STAT_MEMORY => {
                 let (used, free) = { let heap = crate::ALLOCATOR.lock(); (heap.used(), heap.free()) };
                 let mut m = StatMemory { arena: self.boot.heap_len as u64, used: used as u64, free: free as u64, dma_limit: DMA_LIMIT as u64, objects_limit: DETACHED_MAX_BYTES as u64,
-                    largest_free: if argument == 1 { largest_free(free) as u64 } else { 0 }, tasks_limit: MAX_TASKS as u32, endpoints_limit: (ENDPOINTS - FIRST_ENDPOINT) as u32, ..Default::default() };
+                    largest_free: if argument == 1 { largest_free(free) as u64 } else { 0 }, tasks_limit: QUOTA_MAX as u32, endpoints_limit: QUOTA_MAX as u32, ..Default::default() };
                 for task in self.tasks.iter().flatten() {
                     m.images += task._image.len() as u64; m.stacks += task._stack.len() as u64;
                     m.task_pages += (task.context.len() + task._exit.len() + task.abi.len()) as u64;
@@ -118,7 +118,7 @@ impl Scheduler {
                 m.objects = self.orphans.iter().map(|o| o.region.len() as u64).sum();
                 m.dma = self.dma.iter().map(|r| r.len() as u64).sum();
                 let (frames, frames_free) = crate::frames::stats(); m.frames = frames as u64; m.frames_free = frames_free as u64;
-                m.endpoints = (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]).count() as u64;
+                m.endpoints = (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e]).count() as u64;
                 out.push(m);
             }
             STAT_PHYSMAP => {
@@ -174,7 +174,7 @@ impl Scheduler {
                     }
                 }
             }
-            STAT_ENDPOINTS => for ep in (FIRST_ENDPOINT..ENDPOINTS).filter(|&e| self.endpoints[e]) {
+            STAT_ENDPOINTS => for ep in (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e]) {
                 let live = || self.tasks.iter().flatten().filter(|t| t.state != State::Exited);
                 let c = self.accounting.endpoint[ep];
                 out.push(StatEndpoint {
