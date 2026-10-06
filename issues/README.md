@@ -19,12 +19,12 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
 | [164](164-usb-hid-keyboard-and-mouse.md) | USB keyboards and mice: `usb_host` (xHCI, hubs) and `usb_hid`; `usb_storage` on top of it; for real machines without PS/2 (PCs, Intel Macs, ARM boards) | kernel (drivers) | P1 | — | track A |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` | tools | P2 | 207 | track H |
 | [u016](u016-clock-console-faces.md) | Console faces of `clock` and `dzen-clock`: the time on one line rewritten with `\r` (the shell's console and `console` honour it) | tools | P3 | — | track G |
+| [166](166-exit-status-for-launchers.md) | An exit status a launcher can read (`EXIT` with a code, in the watch post and the shell's notice), for `msh`'s results | kernel | P2 | — | track G |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [206](206-pin-controllers-from-firmware.md) | aarch64: pin controllers from the firmware's tables (DSDT scan), their registers and the board's identity for `init` | porting (+ kernel for the ABI) | P2 | — | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting | P2 | 206 | track H |
@@ -126,6 +126,7 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [091](../issues-done/091-program-list-fits-the-screen.done) | `list`: sorted in columns that fit the screen; `list -l` says what each program does | done (2026-10-04) |
 | [092](../issues-done/092-help-for-every-program.done) | `help <program>`, and `--help` in every application (`mind::about!`) | done (2026-10-04) |
 | [093](../issues-done/093-screen-recording.done) | `record`: the screen as AVI/MJPEG (`mind::jpeg` with a restart per row of blocks, `mind::avi`); one window: u014 | done (2026-10-06) |
+| [094](../issues-done/094-shell-script-language.done) | `msh`: the shell's script language — values, records, results as in Marain (`?`, `or`, `try`), commands as typed, `capture`/`ps()`/`files()`, `requires:` limits a script's authority | done (2026-10-06) |
 | [095](../issues-done/095-list-by-mask.done) | `list a*`: the programs whose names match a mask (`mind::mask` without allocation) | done (2026-10-04) |
 | [096](../issues-done/096-audio-without-interrupts.done) | `say` and `listen` hung when the sound card shared its interrupt line (`audio_gw` looks at its ring while a client waits) | done (2026-10-05) |
 | [097](../issues-done/097-fm-command-line-and-hidden-panels.done) | fm: the command line under the panels (`cd`, `edit`, `view`, programs with arguments) and hiding panels with Ctrl+O, Ctrl+F1/F2, Ctrl+P | done (2026-10-05) |

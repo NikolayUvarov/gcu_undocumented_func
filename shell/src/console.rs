@@ -1,5 +1,6 @@
 // The shell's console: a scrollback of text lines drawn with the 8x16 font through mind::tui, mirrored to the serial line (COM1 or the PL011).
 // The shell keeps one per virtual console (issue 155): the one shown holds the screen, only the first the serial line.
+use alloc::vec::Vec;
 use core::fmt::Write;
 use mind::dev::Uart;
 use mind::gfx::Screen;
@@ -24,6 +25,8 @@ pub struct Console {
     pub serial: Option<Uart>,
     /// Shown at the top right while more than one console is open: which one this is.
     pub label: &'static str,
+    /// While a script captures a command's output (`capture`, issue 094): the bytes it printed, kept off the screen.
+    pub capture: Option<Vec<u8>>,
 }
 
 impl Console {
@@ -31,7 +34,7 @@ impl Console {
         let term = screen.and_then(Terminal::new);
         let (cols, rows) = term.as_ref().map_or((80, 25), |t| (t.cols().min(MAX_COLS), t.rows()));
         let text = Pages::new(SCROLLBACK * cols * 4);
-        let mut console = Self { term, cols, rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial, label: "" };
+        let mut console = Self { term, cols, rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial, label: "", capture: None };
         console.clear_line(0);
         console
     }
@@ -39,7 +42,7 @@ impl Console {
     /// An empty console of the same size, without the screen or the serial line (None: no memory for its lines).
     pub fn sibling(&self) -> Option<Self> {
         let text = Some(Pages::new(SCROLLBACK * self.cols * 4)?);
-        let mut console = Self { term: None, cols: self.cols, rows: self.rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial: None, label: "" };
+        let mut console = Self { term: None, cols: self.cols, rows: self.rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial: None, label: "", capture: None };
         console.clear_line(0);
         Some(console)
     }
@@ -90,6 +93,7 @@ impl Console {
 
     /// A byte of output: to the serial line as is (LF as CRLF), to the screen decoded as UTF-8.
     pub fn print_char(&mut self, byte: u8) {
+        if let Some(captured) = self.capture.as_mut() { if captured.len() < 64 * 1024 { captured.push(byte); } return; }
         if byte == b'\n' { self.serial(b'\r'); }
         self.serial(byte);
         self.back = 0;

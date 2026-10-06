@@ -1,0 +1,87 @@
+# 094 — `msh`: the shell's script language — done
+
+**Type:** tools (shell, interpreter) · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — (exit statuses and output capture: a small kernel part, see below) · **Roadmap:** track G, next to track E (Marain) · **Constitution:** MC-3.11 (a request grants nothing), MC-3.3, RFC 001 Marain §7.5 (result model)
+
+## Problem
+
+The shell runs one command at a time from the keyboard or the UART. Nothing can be automated: a start-up sequence, a test, a repeated task, a recipe for the user. A POSIX shell would bring along its quoting rules, global environment and ambient authority. MIND Core needs its own small language that fits its model: results instead of exit codes and strings, capabilities instead of ambient rights.
+
+## Plan
+
+- **Language `msh`**, interpreted by the shell. Scripts are files (`*.msh`), run as `msh file [args]` or as a program name. The same language works at the prompt, so a script is what the user would type.
+  - **Commands** as today: `name args…`, `run name &`, the shell's own commands.
+  - **Values:** strings, integers, booleans, lists, records (`{name: "x", size: 3}`).
+  - **Variables:** `let x = …`, local to a block. Interpolation: `"size: {x.size}"`. No word splitting, no globbing unless asked (`glob("ram:*.txt")`).
+  - **Control:** `if`/`else`, `while`, `for item in list`, `fn name(args) { … }`, `return`.
+  - **Results, as in Marain** (RFC 001 §7.5):
+    - every command and function returns `ok(value)` or `err(reason)`;
+    - `cmd?` propagates an error, `cmd or { … }` handles it, `try { … } catch e { … }` handles a block;
+    - nothing continues silently after an error, unlike `set -e`, which a shell has to remember.
+  - **Output:** `let out = capture(cmd)` takes a command's console output as text; `lines(out)`, `words(text)`, `contains`, `match(pattern)` with `mind::pattern`.
+  - **Built-ins** for the system's typed interfaces, so scripts do not parse text where an IDL answer exists: `ps()`, `services()`, `files(dir)`, `ip()`, `log(text)`, `sleep(ms)`, `now()`.
+- **Authority:**
+  - A script runs with the authority of the shell session that starts it, but no more than it declares.
+  - The first line after `#!msh` is `requires: files network log …`, the same words as `mind::request!`. The shell shows them and asks once before a script from outside `A:` uses them.
+  - Programs a script starts get what they ask for through the usual launch session, never more than the script declared.
+  - A script cannot reach the shell's process control except through declared `requires: lifecycle`.
+- **Kernel and loader part, small:**
+  - an exit status: `EXIT` with a code, readable by the program's launcher through the existing exit notice (`TASK_WATCH`);
+  - capture of a program's console output through the loader session (the shell already reads `LOGS`).
+  
+  This is done with the kernel owner as a separate kernel issue when the interpreter needs it.
+- **Later, with Marain:** `msh` stays the interactive and glue language. A script can call a Marain component as a command. Its syntax for values, records and results follows Marain's, so moving logic from a script into a typed component is a rewrite of the same ideas, not a translation between two worlds.
+- **Implementation:**
+  - `mind::script`: lexer, parser to an AST, tree-walking interpreter with step and memory budgets (no endless loop can hang the shell: Ctrl+Z or the budget stops a script);
+  - the shell uses it for its prompt and for files;
+  - `msh -c "…"` for one line; `msh --check file` parses and checks names without running.
+
+## Acceptance criteria
+
+- **Host tests:** the lexer and parser (errors with line and column), evaluation of expressions, results and `?`/`or`/`try`, step-budget stop.
+- **QEMU `shell` suite:**
+  - a script in `data/` that loops over files on `ram:`, writes a summary with `write`, and handles a missing file with `or`;
+  - a script that captures `ps` output and checks a service is running;
+  - a script with `requires: network` is refused the network without it, and gets it when declared;
+  - Ctrl+Z stops a script in an endless loop.
+- **Documentation:** `docs/msh.md` (EN/RU) with the grammar and examples; `help msh`.
+
+## Related
+
+[RFC 001 Marain](../constitution/EN/RFC_001_Marain_v0.4.md), [155](155-virtual-consoles.done), [088](088-text-window-manager.done), [docs/tools](../docs/tools/README.md), [166](../issues/166-exit-status-for-launchers.md).
+
+## Resolution
+
+- **`mind::script`** (libmind, `alloc`):
+  - `parse.rs`: one pass over the characters, to a syntax tree. Errors carry line and column.
+  - A line that starts with a name not followed by `(` or `=` is a command, read as words (`"quoted"`, `{expr}` inside). It ends at the line, `;` or `}`; `or` after it takes a handler.
+  - `mod.rs`: values (`nil`, booleans, `i64`, strings, lists, records, `ok`/`err`) and a tree-walking `Interpreter` against a `Host` (commands, host functions, printing, interruption).
+  - Results as in the plan: a statement that ends in `err(r)` fails; `?`, `or { … }` (with `error`), `try`/`catch`, `fail`.
+  - Functions see their parameters and the outermost scope. 26 built-in functions; `Interpreter::unknown_calls` for `--check`.
+  - Budgets: 10 million steps, 64 KiB strings, 16 Ki items, call depth 64. A stop (budget, Ctrl+Z) is not catchable.
+- **The shell** (`shell/src/msh.rs`):
+  - `msh file [args]`, a name ending in `.msh`, `msh -c`, `msh --check`. Statements at the prompt (`let`, `if`, `for`, `while`, `fn`, `try`, `name = …`, `name(…)`) keep each console's variables and functions.
+  - A command's output is captured: `ERROR:` lines make it `err`. It is replayed unless `capture()` keeps it. A console program the command started runs to its end; a foreground one, until it leaves the foreground.
+  - Host functions: `capture`, `ps`, `services`, `files`, `glob`, `log`, `sleep`, `now`.
+  - Esc and Ctrl+C on either keyboard, Ctrl+Z on the serial line stop a script. PS/2 Ctrl+Z is the kernel's attention key and does not reach the shell.
+- **Authority:**
+  - `requires:` holds the words of `mind::request!`. The shell's commands that change files, use the network, write the log or end programs need theirs.
+  - `start_with` lends a program a script starts only what the script declared.
+  - A script outside the boot disk asks once: `SCRIPT … REQUIRES …. ALLOW? (Y/N)`.
+  - What the user types has the session's authority.
+- **The shell's stack.** The shell now has a heap (libmind `alloc`), and its state is a `Box`. On the 64 KiB stack, the `Shell` value left too little for a script listing a directory: a page fault, the shell restarted by init.
+- **Kernel part:**
+  - Exit statuses are issue [166](../issues/166-exit-status-for-launchers.md).
+  - Capturing a program's output needed nothing new: the shell drains a program's console output (`CONSOLE_READ`).
+- **Tests:**
+  - `tests/script_host.rs`: parse errors with positions, expressions and interpolation, results, commands against a mock host, functions and scopes, budgets, `--check`.
+  - QEMU `shell` suite (`msh_check`, scripts in `data/`):
+    - a script sums the files on `ram:` into a summary and handles a missing file with `or`;
+    - another checks `vfs_server` and `logd` through `capture("ps")` and `ps()`;
+    - `requires: network` refused and granted;
+    - the prompt's variables and functions, `glob`, `--check`, a parse error;
+    - a script from `ram:` asks, and is not run on N;
+    - Ctrl+Z stops an endless loop.
+- **Not done:**
+  - Keys from the serial line do not reach a foreground program a script waits for.
+  - `ip()` is for later.
+- **Docs:** `docs/msh.md` and `docs/msh_RU.md`; README; docs/tools §4.8; `help msh`.

@@ -252,6 +252,8 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab com
 - The console shown is named at the top right of the screen; `ps` ends the row of each program the shell started with `CONSOLE=n`.
 - Not Alt+F1…F4: `fm` keeps Alt+F1/F2 for its volume dialogs, as Midnight Commander does.
 
+**Scripts** (issue 094): `msh` is the shell's script language ([docs/msh.md](../msh.md)). Scripts are files run with `msh file` or by a name ending in `.msh`; statements (`let`, `if`, `for`, …) also work at the prompt. Results follow Marain: `ok`/`err`, `?`, `or`, `try`. A script gets no more authority than its `requires:` line declares.
+
 ### 4.9 `wm` — window manager (issue 088, on the window broker of issue 157)
 
 An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit ram:a.txt` with arguments) starts the programs in windows; Alt+R starts more.

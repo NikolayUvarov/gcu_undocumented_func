@@ -766,6 +766,99 @@ def shell_suite(vm):
     vm.hmp("sendkey shift-pgdn")
     vm.serial()
     print("PASS: shell line editing (Home/End/Left/Delete), history, Esc, Tab completion, Cyrillic input and display, PS/2 history, scrollback", flush=True)
+    msh_check(vm)
+
+
+# msh scripts on the shell suite's disk (issue 094).
+MSH_SCRIPTS = {
+    "sum.msh": """#!msh
+requires: files
+# The files on ram:, their sizes summed into ram:summary.txt; a missing file handled.
+let total = 0
+let names = []
+for f in files("ram:")? {
+    if f.dir { continue }
+    total = total + f.size
+    names = push(names, f.name)
+}
+write ram:summary.txt "{len(names)} files, {total} bytes: {join(names, " ")}"
+cat ram:missing.txt or { print("handled: {error}") }
+print("sum done: {total}")
+""",
+    "services.msh": """#!msh
+# Is vfs_server running? From ps's text, and from ps() records.
+let out = capture("ps")?
+if !contains(out, " vfs_server ") { fail("vfs_server is not running") }
+let running = []
+for task in ps()? {
+    if task.service { running = push(running, task.name) }
+}
+if !contains(running, "logd") { fail("logd is not running") }
+print("vfs_server runs; {len(running)} services; ps printed {len(lines(out))} lines")
+""",
+    "net0.msh": """#!msh
+ping 10.0.2.2
+print("not reached")
+""",
+    "net1.msh": """#!msh
+requires: network
+ping 10.0.2.2 or { print("ping failed: {error}") }
+print("network allowed")
+""",
+    "check.msh": """#!msh
+fn twice(x) { return x * 2 }
+print(twice(nope(1)))
+""",
+    "broken.msh": """#!msh
+let x = 1
+let = 2
+""",
+}
+
+
+def msh_check(vm):
+    """msh (issue 094): a script that sums the files on ram: and handles a missing one; one that checks services from
+    ps's captured text and ps() records; requires: network refused and granted; statements at the prompt; msh --check;
+    a script outside the boot disk asks first; Ctrl+Z stops an endless loop."""
+    require(vm.command("write ram:a.txt hello"), "WROTE 6 BYTES")
+    require(vm.command("write ram:b.txt hi there"), "WROTE 9 BYTES")
+    out = vm.command("msh data/sum.msh")
+    require(out, "handled: CAT: NOT FOUND")
+    require(out, "sum done: 15")
+    require(vm.command("cat ram:summary.txt"), "2 files, 15 bytes: a.txt b.txt")
+    require(vm.command('print(glob("ram:*.TXT")?)'), '["ram:a.txt", "ram:b.txt", "ram:summary.txt"]')
+    require(vm.command("msh data/services.msh"), "vfs_server runs; ")
+    # The network: refused without requires:, granted with it (whatever ping then finds).
+    out = vm.command("msh data/net0.msh")
+    require(out, "SCRIPT FAILED: ping needs `requires: network` in the script (LINE 2)")
+    assert "not reached" not in out, out
+    out = vm.command("data/net1.msh")
+    require(out, "network allowed")
+    assert "requires: network" not in out, out
+    # A script's name runs it; statements typed at the prompt keep their variables and functions.
+    vm.command("let n = 2 + 3")
+    vm.command("fn sq(x) { return x * x }")
+    require(vm.command('print("n = {n}, n squared = {sq(n)}")'), "n = 5, n squared = 25")
+    require(vm.command('msh -c "let s = 0; for i in range(1, 5) { s = s + i }; print(s)"'), "10")
+    require(vm.command("print(undefined_name)"), "SCRIPT FAILED: undefined_name is not defined (LINE 1)")
+    # msh --check: names that do not exist, parse errors with line and column.
+    require(vm.command("msh --check data/check.msh"), "MSH: data/check.msh: line 3, column 13: no function nope")
+    require(vm.command("msh --check data/sum.msh"), "MSH: data/sum.msh: OK, REQUIRES: files")
+    require(vm.command("msh data/broken.msh"), "MSH: data/broken.msh: line 3, column 5: expected a name")
+    # A script outside the boot disk asks before it uses what it declares.
+    require(vm.command("write ram:w.msh requires: files"), "WROTE 16 BYTES")
+    vm.send("msh ram:w.msh\n")
+    vm.expect("SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)")
+    vm.send_bytes(b"n")
+    require(vm.expect("MIND> "), "MSH: ram:w.msh: NOT RUN")
+    # Ctrl+Z (0x1A on the serial line) stops a script in an endless loop.
+    vm.send('msh -c "let i = 0; while true { i = i + 1 }"\n')
+    time.sleep(1)
+    vm.send_bytes(b"\x1a")
+    require(vm.expect("MIND> "), "SCRIPT STOPPED: stopped (LINE 1)")
+    require(vm.command("help msh"), "- msh <file> [args], msh -c")
+    print("PASS: msh: a script sums the files on ram: and handles a missing one, another checks services through ps; requires: network refused and granted; "
+          "statements at the prompt keep variables and functions; --check and parse errors with line and column; a script from ram: asks first; Ctrl+Z stops a loop", flush=True)
 
 
 NOTES = "".join(f"Строка {i}: съешь же ещё этих мягких французских булок, да выпей чаю. Line {i}.\n" for i in range(1, 301))
@@ -4061,6 +4154,10 @@ def main():
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
+            if suite == "shell":
+                (disk / "data").mkdir(exist_ok=True)
+                for name, text in MSH_SCRIPTS.items():
+                    (disk / "data" / name).write_text(text, encoding="utf-8")
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
