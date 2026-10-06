@@ -51,12 +51,16 @@ def to_ordinal(text):
 class VM:
     def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
-        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through a QMP socket (`tablet_at`).
+        # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
+        # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
+        # and line ends came in the middle of lines the guest printed.
         self.disk = disk
-        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock" if tablet else None
+        self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
+        self.monitor_used, self.monitor_cpu = False, None
+        extra = (*extra, "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
         if tablet:
-            extra = (*extra, "-device", "virtio-tablet-pci", "-qmp", f"unix:{self.qmp_path},server=on,wait=off")
+            extra = (*extra, "-device", "virtio-tablet-pci")
         self.cpus, self.args = args.cpus, args
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
@@ -88,7 +92,6 @@ class VM:
         self.queue = queue.Queue()
         self.output = ""
         self.log = ""
-        self.monitor = False
         threading.Thread(target=self._read, daemon=True).start()
         if not prompt:
             return
@@ -104,7 +107,12 @@ class VM:
         # One QMP command (the tablet's events: input-send-event); the reply.
         if self.qmp_file is None:
             connection = socket.socket(socket.AF_UNIX)
-            connection.connect(str(self.qmp_path))
+            for _ in range(100):  # QEMU creates the socket as it starts
+                try:
+                    connection.connect(str(self.qmp_path))
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    time.sleep(.05)
             self.qmp_file = connection.makefile("rw")
             self.qmp_file.readline()  # the greeting
             self.qmp("qmp_capabilities")
@@ -186,7 +194,7 @@ class VM:
         raise AssertionError(f"Timeout waiting for {text!r}: {clean[-3000:]}")
 
     def send(self, text, raw=False):
-        if not self.monitor and not raw:
+        if not raw:
             text = to_real(text)
         # Pace the UART, including Windows' line-buffered pipe input, rather than
         # overrunning the emulated 16550 FIFO with several pasted commands.
@@ -204,21 +212,26 @@ class VM:
     def command(self, text, raw=False):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw or self.monitor else to_real(text)) + "\n")
+        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
-        if not self.monitor:
-            self.send("\x01c\n")
-            self.expect("(qemu)")
-            self.monitor = True
-        self.send(command + "\n")
-        return self.expect("(qemu)")
+        # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
+        # commands look at, as it does in the monitor. Paced as typing it into the monitor at 10 ms a byte was (and
+        # entering the monitor first): the suites' waits grew around that time.
+        time.sleep(.01 * (len(command) + 1) + (0 if self.monitor_used else .03))
+        self.monitor_used = True
+        if cpu := re.fullmatch(r"cpu (\d+)", command):
+            self.monitor_cpu = int(cpu[1])
+            return ""
+        return self.qmp("human-monitor-command", **{"command-line": command}, **({} if self.monitor_cpu is None else {"cpu-index": self.monitor_cpu}))
 
     def serial(self, enter=True):
-        # The newline after leaving the monitor reaches the program in front as Enter; `enter=False` leaves it out.
-        if self.monitor:
-            self.send("\x01c\n" if enter else "\x01c")
-            self.monitor = False
+        # After monitor commands: Enter reaches the program in front, as it did when leaving the monitor on the
+        # serial line (`enter=False` leaves it out); what came meanwhile is not waited for.
+        if self.monitor_used:
+            if enter:
+                self.send("\n")
+            self.monitor_used = False
             time.sleep(.1)
             self.collect()
             self.output = ""
@@ -254,8 +267,7 @@ class VM:
         if self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
-        if self.qmp_path is not None:
-            shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
+        shutil.rmtree(self.qmp_path.parent, ignore_errors=True)
         self.collect()
 
 
@@ -2576,6 +2588,19 @@ def block_suite(args, block_elf):
     print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
+def tone_power(samples, rate, start, hz):
+    """How much of `hz` the 40 ms of `samples` from `start` hold."""
+    window = samples[start:start + int(rate * 0.04)]
+    return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate)) for i, x in enumerate(window))) / len(window)
+
+
+def beep_demo_tones(left, rate, first):
+    """beep's demo from sample `first`: 523, 659 and 784 Hz, 150 ms each, each stronger than the other two."""
+    for index, hz in enumerate((523, 659, 784)):
+        start = first + int(rate * (0.05 + 0.15 * index))
+        assert tone_power(left, rate, start, hz) > 5 * max(tone_power(left, rate, start, other) for other in (523, 659, 784) if other != hz), hz
+
+
 def audio_suite(vm, wav):
     require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
     output = ""
@@ -2608,12 +2633,8 @@ def audio_suite(vm, wav):
     assert 0.8 < seconds < 1.3, seconds  # 3 tones of 150 ms + 0.5 s sweep
 
     def power(start, hz):
-        window = left[start:start + int(rate * 0.04)]
-        return abs(sum(x * complex(math.cos(2 * math.pi * hz * i / rate), -math.sin(2 * math.pi * hz * i / rate))
-                       for i, x in enumerate(window))) / len(window)
-    for index, hz in enumerate((523, 659, 784)):
-        start = demo[0] + int(rate * (0.05 + 0.15 * index))
-        assert power(start, hz) > 5 * max(power(start, other) for other in (523, 659, 784) if other != hz), hz
+        return tone_power(left, rate, start, hz)
+    beep_demo_tones(left, rate, demo[0])
     seconds = (notes[-1] - notes[0]) / rate
     assert 0.55 < seconds < 0.65, seconds  # 200 ms, a 100 ms pause, 300 ms
     first, second = notes[0] + int(rate * 0.08), notes[0] + int(rate * 0.4)
@@ -3461,6 +3482,14 @@ def wm_suite(vm):
     wait(lines=2)
     mode, focus, rects = state()
     assert focus == clock and rects[clock] == (0, 1, 80, 48), (focus, rects)
+    # A pixel window's content follows its frame (issue u009): the clock draws again at the pixels of the left half,
+    # its digits wider than the 320 pixels it had.
+    until(f"[WM] PIXELS {clock} 624X736")
+    time.sleep(.5)
+    _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    green = [px for py in range(2 * 16, 48 * 16) for px in range(8, 79 * 8) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
+    assert green and max(green) > 8 + 400, (len(green), max(green, default=0))
     # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
     # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
     # wheel moves fm's cursor.
@@ -3507,6 +3536,7 @@ def wm_suite(vm):
     point(20, 1)
     mode, focus, rects = mouse("mouse_button 1", *mouse_moves(30 * 8, 10 * 16), "mouse_button 0", lines=2)
     assert focus == clock and rects[clock] == (40, 11, 42, 13), (focus, rects)
+    until(f"[WM] PIXELS {clock} 320X176")  # and its content the size it had
     # A program started from wm that asks for more than wm holds runs without it: caps has no authority view.
     keys("alt-r", "c", "a", "p", "s", "ret", text="STARTED caps")
     caps_pid = re.findall(r"\[WM\] STARTED caps PID (\d+) WITH window WITHOUT authority", "".join(seen))[-1]
@@ -3557,13 +3587,13 @@ def wm_suite(vm):
             break
         time.sleep(.2)
     assert heap_used(vm) == baseline
-    print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels); keys to the window in front only; "
+    print("PASS: wm: fm, clock and top in windows (text frames and content, the clock's pixels, drawn again at its frame's size); keys to the window in front only; "
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
           "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; programs get only what wm holds; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
-def tablet_suite(vm):
+def tablet_suite(vm, wav):
     """The VirtIO tablet (issue 161): the host's pointer as a position, so the system's pointer is where the host's is
     and reaches the edges of the screen — fm's key bar in the bottom right corner, wm's buttons at the right edge."""
     require(vm.service_logs("virtio_input", "[VIRTIO_INPUT] "), "[VIRTIO_INPUT] QEMU Virtio Tablet X=0..32767 Y=0..32767")
@@ -3582,6 +3612,21 @@ def tablet_suite(vm):
     time.sleep(.3)
     require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry
     require(click(159, 49, "[FM] DONE"), "[FM] POINTER 159,49 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    # Quit in a program's menu and key bar (issue u013): edit's File > Quit clicked (F9 opens the menu: File's third
+    # item is on row 4); view's 10 Quit clicked.
+    vm.send("edit ram:quit.txt\n")
+    vm.expect("[EDIT] READY")
+    time.sleep(.3)
+    vm.hmp("sendkey f9")
+    vm.serial(enter=False)
+    time.sleep(.3)
+    require(click(5, 4, "[EDIT] DONE"), "[EDIT] POINTER 5,4 BUTTONS=1 WHEEL=0")
+    vm.expect("SHELL RESUMED.")
+    vm.send("view kernel.elf\n")
+    vm.expect("[VIEW] OPEN")
+    time.sleep(.3)
+    click(159, 49, "[VIEW] DONE")
     vm.expect("SHELL RESUMED.")
     # wm: top in the top right quarter; its [▲] maximizes it, [×] next to the screen's right edge closes it.
     start = len(vm.log)
@@ -3627,13 +3672,38 @@ def tablet_suite(vm):
             break
     else:
         raise AssertionError(screen)
+    # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, in the
+    # bottom right quarter, which shows beep's lines; its tones reach the sound card (checked in the WAV below).
+    assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
+    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
+    time.sleep(.2)
+    require(click(121, 39, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("[BEEP] DONE") in row[80:] for row in screen[25:]):
+            break
+    else:
+        raise AssertionError(screen)
+    assert any(canon("[BEEP] DEVICE=true RATE=48000") in row[80:] for row in screen[25:]), screen
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
+    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
-    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; wm's [▲] and [×] at the screen's right edge; "
-          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window", flush=True)
+    vm.close()
+    import struct, wave
+    with wave.open(str(wav)) as audio:
+        frames = audio.readframes(audio.getnframes())
+        rate = audio.getframerate()
+    left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+    loud = [i for i, sample in enumerate(left) if sample]
+    assert loud, "beep from the menu: no sound"
+    beep_demo_tones(left, rate, loud[0])
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge; "
+          "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window; "
+          "beep from the menu: its lines in its console window, its tones in the WAV", flush=True)
 
 
 def windows_suite(vm):
@@ -3863,7 +3933,7 @@ def main():
             if suite == "netbench":
                 netbench_suite(args, disk)
                 continue
-            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts") else "none" if suite == "listen" else None
+            wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
@@ -3876,11 +3946,12 @@ def main():
                     tts_suite(vm, wav, args.asr_model)
                 elif suite == "listen":
                     listen_suite(vm, starts)
+                elif suite == "tablet":
+                    tablet_suite(vm, wav)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite,
-                     "tablet": tablet_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

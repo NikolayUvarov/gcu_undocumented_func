@@ -1,0 +1,39 @@
+# u013 — Quit in a program's menu and key bar works with the mouse and with F10 — done
+
+**Type:** bug · **Owner:** tools track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+
+## Problem
+
+Reported by the user (2026-10-05; recorded by the porting track in `issues/tools-track-reports.md`): the **Quit** item of a program's menu does nothing.
+
+The only menu with Quit is edit's File menu (`Quit  F10`); fm's pull-down menu has none. The key bars of edit and the viewer end with `10 Quit`. What did not work:
+- `edit` and `view` did not ask for the mouse at all (u001 gave it to fm only). A click on File > Quit, or on `10 Quit`, did nothing.
+- With edit's menu open, F10, the key the item names, only closed the menu (`MenuBar::key` closes on Esc, F9 and F10).
+- fm passed clicks on its key bar on, so its `10 Quit` worked in fm's editor and viewer. A click with a menu open (fm's own or its editor's) was dropped.
+
+Through the keyboard, File > Quit with Enter did quit.
+
+## Plan
+
+- `MenuBar::pointer`: a title opens its menu (the open one's title closes it); an item is chosen; a press elsewhere closes the menu; the mouse over an item highlights it. None when the menu is closed and the press was not on a title.
+- `widgets::fkey_at`: the F-key of a key-bar column, one place for fm, edit and view.
+- `edit`: asks for the mouse. `Editor::pointer`: the key bar's buttons are their F-keys with the modifiers held; an open menu takes clicks; a click in the text puts the cursor there; the wheel moves it three lines a step. F10 quits from the open menu too. Dialogs (such as "Save?") take keys only.
+- `view`: asks for the mouse; key-bar clicks and the wheel are the keys they stand for.
+- `fm`: an open menu takes the mouse; its editor gets the mouse through `Editor::pointer`; the editor's outcome handling is shared by keys and the mouse.
+
+## Acceptance criteria
+
+- Host:
+  - `tests/tui_host.rs`: the menu bar's clicks, hover and closing; `fkey_at`.
+  - `tests/edit_host.rs`: File > Quit with Enter and with a click, F10 with the menu open, `10 Quit` clicked, a changed text asks first, titles, the text and the wheel.
+  - `tests/fm_host.rs`: fm's menu clicked, File > Quit clicked in fm's editor, `10 Quit` with a changed text asks and Don't save closes.
+- QEMU (`tablet` suite, through the VirtIO tablet, on a full screen): edit's File > Quit clicked ends edit; view's `10 Quit` clicked ends view; fm's `10 Quit` already did.
+
+## Resolution
+
+- `libmind/src/tui/widgets.rs`: `MenuBar::pointer` (with `places` and `frame`, shared with `draw`), `fkey_at`.
+- `edit/src/editor.rs`: `Editor::pointer`, F10 in the open menu. `edit/src/main.rs`: the mouse.
+- `view/src/main.rs`: the mouse (`pointer_key`).
+- `fm/src/fm.rs`: the open menu and the editor take the mouse; `editor_outcome`.
+- Tests: `tests/tui_host.rs`, `tests/edit_host.rs`, `tests/fm_host.rs`, QEMU `tablet` suite.
+- Docs: docs/tools §4.2, §4.3 (EN/RU), README (`edit`, `view`).

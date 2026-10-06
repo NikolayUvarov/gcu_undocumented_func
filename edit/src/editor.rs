@@ -1,8 +1,9 @@
 //! The editor: cursor and selection over a `Buffer`, keys (docs/tools §4.2), dialogs and drawing. It does no I/O:
 //! saving is asked for with `Outcome::Save`, and the program reports back with `saved`.
+use crate::abi::{KEY_DOWN, KEY_F1, KEY_UP, POINTER_LEFT};
 use crate::buffer::{decode, Buffer};
-use crate::keys::{Code, Key};
-use crate::tui::widgets::{fkey_bar, input_dialog, message, Edit, InputLine, KeyBars, MenuAction, MenuBar};
+use crate::keys::{self, Code, Key};
+use crate::tui::widgets::{fkey_at, fkey_bar, input_dialog, message, Edit, InputLine, KeyBars, MenuAction, MenuBar};
 use crate::tui::{Grid, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
@@ -56,6 +57,7 @@ pub struct Editor {
     width: usize,
     /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bar shows what the keys do with them.
     pub modifiers: u8,
+    buttons: u8, // the mouse buttons held at the last pointer event
 }
 
 fn is_word(c: char) -> bool { c.is_alphanumeric() || c == '_' }
@@ -65,7 +67,7 @@ impl Editor {
     pub fn new(text: Vec<u8>, path: &str, read_only: bool) -> Self {
         let notice = read_only.then(|| String::from(READ_ONLY));
         Self { buffer: Buffer::new(text), cursor: 0, anchor: None, goal: None, top: 0, left: 0, path: String::from(path), read_only, overwrite: false, tab: 4,
-               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0 }
+               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0 }
     }
 
     pub fn line(&self) -> usize { self.buffer.line_of(self.cursor) }
@@ -328,9 +330,45 @@ impl Editor {
         Outcome::Redraw
     }
 
+    /// The mouse at cell (x, y) of the screen the editor last drew (issue u013): a button of the key bar does what
+    /// its key does (with the modifiers held), an open menu takes clicks and highlights the item under the mouse, a
+    /// click in the text puts the cursor there, the wheel moves it three lines a step. Dialogs take keys only.
+    pub fn pointer(&mut self, x: usize, y: usize, buttons: u8, wheel: i32) -> Outcome {
+        let pressed = buttons & !self.buttons & POINTER_LEFT != 0;
+        self.buttons = buttons;
+        if self.dialog.is_some() { return Outcome::Ignored; }
+        if self.menu.open {
+            let before = (self.menu.menu, self.menu.item);
+            return match self.menu.pointer(x, y, 0, pressed) {
+                Some(MenuAction::Chosen(menu, item)) => self.command(menu, item),
+                Some(MenuAction::None) if (self.menu.menu, self.menu.item) == before => Outcome::Ignored,
+                _ => Outcome::Redraw,
+            };
+        }
+        let rows = self.height + 2;
+        if pressed && y + 1 == rows {
+            return Key::from_event(keys::event(KEY_F1 + fkey_at(self.width, x) - 1, 0, self.modifiers)).map_or(Outcome::Ignored, |key| self.key(key));
+        }
+        if wheel != 0 {
+            let Some(key) = Key::from_event(keys::event(if wheel < 0 { KEY_UP } else { KEY_DOWN }, 0, 0)) else { return Outcome::Ignored };
+            for _ in 0..3 * wheel.unsigned_abs() { self.key(key); }
+            return Outcome::Redraw;
+        }
+        if pressed && y >= 1 && y <= self.height {
+            self.notice = None;
+            let line = (self.top + y - 1).min(self.buffer.line_count().saturating_sub(1));
+            let at = self.offset_at(line, self.left + x);
+            self.move_to(at, false, false);
+            return Outcome::Redraw;
+        }
+        Outcome::Ignored
+    }
+
     pub fn key(&mut self, key: Key) -> Outcome {
         if self.dialog.is_some() { return self.dialog_key(key); }
         if self.menu.open {
+            // F10 quits from the menu too, as its File menu says ("Quit  F10", issue u013).
+            if key.code() == Code::F(10) && !key.shift() && !key.ctrl() && !key.alt() { self.menu.open = false; return self.quit(); }
             if let MenuAction::Chosen(menu, item) = self.menu.key(key) { return self.command(menu, item); }
             return Outcome::Redraw;
         }

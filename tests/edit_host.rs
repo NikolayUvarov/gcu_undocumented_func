@@ -477,3 +477,52 @@ fn draws_text_status_and_dialogs() {
     let (screen, _, _) = draw(&mut e, 80, 25);
     assert!(screen_has(&screen, "Don't save"));
 }
+
+#[test]
+fn quit_from_the_menu_and_the_key_bar() {
+    // Issue u013: File > Quit (Enter or a click), F10 with the menu open, and a click on the key bar's "10 Quit" all
+    // do what F10 does: an unchanged file ends the editor, a changed one asks first.
+    let fresh = || { let mut e = Editor::new(b"one\ntwo\n\tthree\n".to_vec(), "ram:a.txt", false); draw(&mut e, 80, 25); e };
+    let mut editor = fresh();
+    editor.key(f(9));
+    editor.key(code(KEY_DOWN)); editor.key(code(KEY_DOWN));
+    assert_eq!(editor.key(enter()), Outcome::Quit, "File > Quit with Enter");
+    let mut editor = fresh();
+    editor.key(f(9));
+    assert_eq!(editor.key(f(10)), Outcome::Quit, "F10 while the menu is open, as the item says");
+    let mut editor = fresh();
+    editor.key(f(9));
+    let (screen, _, _) = draw(&mut editor, 80, 25);
+    let row = screen.iter().position(|l| l.contains("Quit  F10")).expect("the File menu is drawn");
+    let column = screen[row].find("Quit").map(|byte| screen[row][..byte].chars().count()).unwrap();
+    assert_eq!(editor.pointer(column, row, 0, 0), Outcome::Redraw, "the mouse over Quit highlights it");
+    assert_eq!(editor.menu.item, 2);
+    assert_eq!(editor.pointer(column + 1, row, 0, 0), Outcome::Ignored, "moving over the same item changes nothing");
+    assert_eq!(editor.pointer(column, row, POINTER_LEFT as u8, 0), Outcome::Quit, "File > Quit clicked");
+    let mut editor = fresh();
+    assert_eq!(editor.pointer(75, 24, POINTER_LEFT as u8, 0), Outcome::Quit, "10 Quit clicked on the key bar");
+    let mut editor = fresh();
+    typed(&mut editor, "x");
+    assert_eq!(editor.pointer(75, 24, POINTER_LEFT as u8, 0), Outcome::Redraw, "a changed text asks first");
+    assert!(editor.dialog.is_some());
+    // A click on a menu title opens it, elsewhere closes it; a click in the text puts the cursor there; the wheel.
+    let mut editor = fresh();
+    editor.key(f(9));
+    editor.pointer(0, 0, 0, 0);
+    let (screen, _, _) = draw(&mut editor, 80, 25);
+    let edit_title = screen[0].find("Edit").map(|byte| screen[0][..byte].chars().count()).unwrap();
+    assert_eq!(editor.pointer(edit_title, 0, POINTER_LEFT as u8, 0), Outcome::Redraw);
+    assert!(editor.menu.open && editor.menu.menu == 1, "the Edit menu");
+    editor.pointer(edit_title, 0, 0, 0);
+    assert_eq!(editor.pointer(60, 20, POINTER_LEFT as u8, 0), Outcome::Redraw);
+    assert!(!editor.menu.open, "closed by a click outside it");
+    editor.pointer(60, 20, 0, 0);
+    editor.pointer(6, 3, POINTER_LEFT as u8, 0);
+    assert_eq!(editor.cursor, b"one\ntwo\n\tth".len(), "row 3 is the third line; column 6 is inside \"three\" after the tab");
+    editor.pointer(6, 3, 0, 0);
+    editor.pointer(0, 1, POINTER_LEFT as u8, 0);
+    assert_eq!(editor.cursor, 0);
+    editor.pointer(0, 1, 0, 0);
+    assert_eq!(editor.pointer(0, 1, 0, 1), Outcome::Redraw);
+    assert_eq!(editor.line(), 3, "one wheel step: three lines down (the last, empty line after the final newline)");
+}

@@ -15,8 +15,9 @@ const ORBIT_TICKS: u32 = 0x282828;
 const START_TICK: u32 = 0x606060;
 const SMALL_TICK: u32 = 0x404040;
 
-pub struct View<'a> {
-    info: &'a BootInfo,
+/// The pixel face's layout on a framebuffer (its own copy of where it is and how large: a window's changes, u009).
+pub struct View {
+    info: BootInfo,
     x: usize,
     y: usize,
     half: usize,
@@ -28,14 +29,13 @@ mod tests {
     use super::*;
     use crate::abi::{ProgramImage, BOOT_IMAGES, PIXEL_BGR};
 
-    #[test]
-    fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
-        let mut pixels = std::vec![0u32; 640 * 480];
-        let info = BootInfo {
+    // A framebuffer of `width` × `height` at the start of `pixels`.
+    fn framebuffer(pixels: &mut [u32], width: usize, height: usize) -> BootInfo {
+        BootInfo {
             fb_ptr: pixels.as_mut_ptr(),
-            width: 640,
-            height: 480,
-            stride: 640,
+            width,
+            height,
+            stride: width,
             programs: [ProgramImage {
                 data: core::ptr::null(),
                 len: 0,
@@ -51,7 +51,13 @@ mod tests {
             pixel_masks: [0; 3],
             acpi_rsdp: 0,
             cpu_features: 0,
-        };
+        }
+    }
+
+    #[test]
+    fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
+        let mut pixels = std::vec![0u32; 640 * 480];
+        let info = framebuffer(&mut pixels, 640, 480);
         let view = View::new(&info);
         view.clear();
         view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
@@ -90,13 +96,37 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn the_face_is_laid_out_for_the_window_it_is_given() {
+        // A window resized (issue u009): the face centred in its new size, larger in a larger one, and nothing drawn
+        // outside it.
+        const GUARD: u32 = 0x00ABCDEF;
+        let mut halves = std::vec::Vec::new();
+        for (width, height) in [(400, 320), (1264, 752), (160, 96), (624, 736)] {
+            let mut pixels = std::vec![GUARD; width * height + 4096];
+            let info = framebuffer(&mut pixels, width, height);
+            let view = View::new(&info);
+            view.clear();
+            view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
+            let lit: std::vec::Vec<usize> = (0..width * height).filter(|&i| pixels[i] != BACKGROUND).map(|i| i % width).collect();
+            let (left, right) = (*lit.iter().min().unwrap(), *lit.iter().max().unwrap());
+            assert!((left + right) / 2 >= width / 2 - 2 && (left + right) / 2 <= width / 2 + 2, "{}x{}: {}..{}", width, height, left, right);
+            view.hints(true, false);
+            view.digital(b"19:35:05", true);
+            view.cycle(None, Some(point_at(25000, view.half() * 3 / 4)), OrbitMode::Off, OrbitMode::Ticks);
+            assert!(pixels[width * height..].iter().all(|&p| p == GUARD), "{}x{}: drawn past the framebuffer", width, height);
+            halves.push(view.half());
+        }
+        assert!(halves[1] > halves[0] && halves[0] > halves[2], "{:?}", halves);
+    }
 }
 
-impl<'a> View<'a> {
-    pub fn new(info: &'a BootInfo) -> Self {
+impl View {
+    pub fn new(info: &BootInfo) -> Self {
         let half = (info.width.min(info.height) / 5).clamp(1, 160);
         Self {
-            info,
+            info: *info,
             x: info.width / 2,
             y: (info.height / 2).saturating_sub(24),
             half,

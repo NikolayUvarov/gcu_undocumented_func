@@ -153,7 +153,8 @@ fn main(info: &'static BootInfo) {
             jobs.retain(|job| {
                 if mind::process::alive(job.pid) { return true; }
                 mind::println!("[CONSOLE] ENDED {} PID {}", job.name, job.pid);
-                if !job.printed { screen.say(&format!("({} ended without printing anything)", job.name), Kind::Note); }
+                // A program that ends at once still shows that it ran (issue u011).
+                screen.say(&format!("({} ended{})", job.name, if job.printed { "" } else { " without printing anything" }), Kind::Note);
                 dirty = true;
                 false
             });

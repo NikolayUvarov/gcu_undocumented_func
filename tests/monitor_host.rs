@@ -98,6 +98,8 @@ fn system() -> Fake {
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
 fn code(code: u16) -> Key { Key(event(code, 0, 0)) }
 
+use std::collections::BTreeSet;
+
 fn draw(tool: &mut dyn Tool, cols: usize, rows: usize) -> Vec<String> {
     let mut cells = vec![Cell::BLANK; cols * rows];
     let mut grid = Grid::new(&mut cells, cols, rows);
@@ -555,4 +557,35 @@ fn caps_tree_and_revoke() {
     assert!(tool.status().contains("ENTRIES=0") && tool.status().ends_with("DENIED=1"), "{}", tool.status());
     let screen = draw(&mut tool, 120, 20);
     assert!(screen.iter().any(|l| l.contains("No authority")), "{:#?}", screen);
+}
+
+#[test]
+fn load_graphs_line_up() {
+    // Issue u012: whatever the width of its scale label (100%, 50 000/s, 64.0M, 32), every graph starts and ends at
+    // the same columns as the others in its column of graphs, and the labels end in one column.
+    let mut source = system();
+    source.samples = (0..300).map(|i| Sample { busy: [500, 1000, 0, 0, 0, 0, 0, 0], interrupts: 5000, syscalls: 30, messages: 400, switches: 2, used_kib: 16384,
+                                                tasks: 5 + (i % 2) as u8, ..Sample::default() }).collect();
+    let mut view = load::LoadView::new();
+    view.refresh(&mut source).unwrap();
+    let braille = |c: char| ('\u{2800}'..='\u{28FF}').contains(&c);
+    for (cols, rows) in [(78, 46), (80, 25), (100, 37), (158, 23), (160, 50), (240, 67)] {
+        let screen = draw(&mut view, cols, rows);
+        let lines: Vec<Vec<char>> = screen.iter().map(|l| l.chars().collect()).collect();
+        let shown = || screen.join("\n");
+        // Where the plots start (a run of braille) and end (their right border).
+        let starts: BTreeSet<usize> = lines.iter().flat_map(|l| (0..l.len()).filter(|&x| braille(l[x]) && (x == 0 || !braille(l[x - 1])))).collect();
+        let borders: BTreeSet<usize> = lines.iter().flat_map(|l| (0..l.len()).filter(|&x| l[x] == '│')).collect();
+        assert!(!borders.is_empty() && borders.len() <= 2 && starts.len() == borders.len(), "{}x{}: starts {:?}, borders {:?}\n{}", cols, rows, starts, borders, shown());
+        // A graph's scale label is on its title row, between its border's column and the next column of graphs.
+        let starts: Vec<usize> = starts.into_iter().collect();
+        for (n, &border) in borders.iter().enumerate() {
+            let limit = starts.get(n + 1).copied().unwrap_or(cols);
+            let ends: BTreeSet<usize> = (1..lines.len() - 1)
+                .filter(|&y| lines[y + 1][border] == '│' && lines[y][border] != '│')
+                .filter_map(|y| (border + 1..limit).rev().find(|&x| lines[y][x] != ' '))
+                .collect();
+            assert_eq!(ends.len(), 1, "{}x{}: the labels over the border at {} end at {:?}\n{}", cols, rows, border, ends, shown());
+        }
+    }
 }

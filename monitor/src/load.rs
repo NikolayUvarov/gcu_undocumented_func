@@ -84,15 +84,22 @@ impl LoadView {
         match series { Series::Cpu(_) | Series::CpuTotal => 0xA6E3A1, Series::Arena => 0xF080C0, Series::Tasks => 0xE0E060, _ => 0x80D0FF }
     }
 
-    fn graph(&self, grid: &mut Grid, area: Rect, series: Series, theme: &Theme) {
+    /// The top of a series' graph and its label (`100%`, `50 000/s`, `64.0M`, `32`).
+    fn scale(&self, series: Series, values: &[u64]) -> (u64, String) {
+        let max = self.limit(series).unwrap_or_else(|| text::nice_max(values.iter().copied().max().unwrap_or(0).max(1)));
+        let label = match series { Series::Cpu(_) | Series::CpuTotal => String::from("100%"), Series::Arena => text::size(max), Series::Tasks => format!("{}", max), _ => format!("{}/s", text::count(max)) };
+        (max, label)
+    }
+
+    // A graph in `area`: its title, then the plot; the `reserve` columns at the right, the same for every graph (the
+    // widest label and a space, issue u012), hold its label right-aligned, so all plots end at one column.
+    fn graph(&self, grid: &mut Grid, area: Rect, series: Series, reserve: usize, theme: &Theme) {
         if area.h < 2 || area.w < 8 { return; }
         let values = self.values(series);
-        grid.text_max(area.x, area.y, &self.title(series, &values), area.w, theme.header);
-        let max = self.limit(series).unwrap_or_else(|| text::nice_max(values.iter().copied().max().unwrap_or(0).max(1)));
-        let scale = match series { Series::Cpu(_) | Series::CpuTotal => String::from("100%"), Series::Arena => text::size(max), Series::Tasks => format!("{}", max), _ => format!("{}/s", text::count(max)) };
-        let label = scale.chars().count() + 1;
+        let (max, scale) = self.scale(series, &values);
+        let plot = Rect::new(area.x, area.y + 1, area.w.saturating_sub(reserve), area.h - 1);
+        grid.text_max(area.x, area.y, &self.title(series, &values), plot.w, theme.header);
         grid.text_right(area.right(), area.y, &scale, theme.dim);
-        let plot = Rect::new(area.x, area.y + 1, area.w.saturating_sub(label), area.h - 1);
         grid.fill(plot, ' ', theme.panel);
         grid.graph(plot, &resample(&values, plot.w * 2), max, Style::new(Self::color(series), theme.panel.bg));
         grid.vline(plot.right(), plot.y, plot.h, crate::tui::Line::Single, theme.dim);
@@ -116,6 +123,7 @@ impl Tool for LoadView {
         grid.text(1, 0, &format!("load   {}   load average {} {} {}   up {}", window, text::hundredths(self.load.one), text::hundredths(self.load.five),
                                   text::hundredths(self.load.fifteen), text::uptime(self.load.uptime_ms)), theme.status);
         let series = self.series();
+        let reserve = series.iter().map(|&s| self.scale(s, &self.values(s)).1.chars().count()).max().unwrap_or(0) + 1;
         let rows = h.saturating_sub(2);
         // One column, or two on a wide screen when one is too short for every graph to get a title and two rows.
         let columns = if w >= 100 && series.len() * 3 > rows { 2 } else { 1 };
@@ -127,7 +135,7 @@ impl Tool for LoadView {
             let y = 1 + index * height;
             if y + 2 > h - 1 { continue; } // no room: the graph is left out
             let area = Rect::new(1 + column * width, y, width.saturating_sub(2), height.min(h - 1 - y).saturating_sub(if height > 3 { 1 } else { 0 }));
-            self.graph(grid, area, s, theme);
+            self.graph(grid, area, s, reserve, theme);
         }
         grid.fill(Rect::new(0, h - 1, w, 1), ' ', theme.status);
         grid.text(1, h - 1, "1 30 s  2 10 min  c per CPU/total  q quit", theme.status);

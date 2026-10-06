@@ -21,7 +21,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 |---|---|---|---|---|---|
 | [093](093-screen-recording.md) | `record`: screen and window recording (AVI/MJPEG) | tools | P2 | — (a window: 088 done) | track G |
 | [094](094-shell-script-language.md) | `msh`: the shell's script language (results as in Marain, declared authority) | tools | P2 | — | track G |
-| [—](tools-track-reports.md) | Three user reports for the tools track to number: beep from wm's menu, load's right edge, Quit in a program's menu | tools | P2 | — | track G |
 | [155](155-virtual-consoles.md) | Virtual consoles: several shell consoles, Alt+F1…F4 | shell (key routing done in 154) | P2 | — | track G |
 | [158](158-video-capture.md) | Video capture devices: USB stack, UVC cameras, video gateway with consent, synthetic test source | kernel + services | P2 | — | tracks A, G |
 | [160](160-focus-for-a-started-program.md) | A program in front hands the focus to the program it starts (`fm` on a full screen), and gets it back | kernel + loader | P2 | — | track G |
@@ -136,7 +135,11 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [u006](../issues-done/u006-console-commands.done) | console: its own `ps`, `ls`, `cat`, `date`, `time`, `ping` (through its policy grant); the shell's commands named; `run <program>` | done (2026-10-05) |
 | [u007](../issues-done/u007-time-clock-dzen-text.done) | The shell's one-line `clock` is `time`, `clock` starts the clock again; dzen-clock: T switches to the text face | done (2026-10-05) |
 | [u008](../issues-done/u008-clickable-top-bar.done) | wm: the items of the top bar can be clicked instead of their keys (for a host that keeps Alt+Tab for itself) | done (2026-10-05) |
+| [u009](../issues-done/u009-pixel-windows-follow-their-frame.done) | wm: a pixel window's content follows its frame (`clock` and `dzen-clock` laid out again at its size) | done (2026-10-05) |
 | [u010](../issues-done/u010-say-text-on-screen.done) | `say` shows its text whole on its screen, Cyrillic as it is (8x16 font, rows cut at spaces) | done (2026-10-05) |
+| [u011](../issues-done/u011-beep-from-the-desktop-menu.done) | beep from wm's desktop menu: works (its lines in console, its tones in a WAV), now tested; console says when every program ends | done (2026-10-06) |
+| [u012](../issues-done/u012-load-graphs-aligned.done) | `load`: every graph ends at the same column and the scale labels end in one column, whatever their widths | done (2026-10-06) |
+| [u013](../issues-done/u013-quit-from-menus-and-key-bars.done) | Quit in a program's menu and key bar: `edit` and `view` take the mouse, menus take clicks, F10 quits from edit's open menu | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
@@ -161,5 +164,6 @@ Tracks work in parallel and number their issues from separate ranges so the numb
 | [152](../issues-done/152-reboot-system-call.done) | `REBOOT` system call | done (2026-10-04) |
 | [161](../issues-done/161-absolute-pointer-virtio-tablet.done) | Absolute pointer events and the `virtio_input` driver: with QEMU's VirtIO tablet the system's pointer follows the host's to every edge | done (2026-10-05) |
 | [162](../issues-done/162-console-output-slot.done) | `SLOT_CONSOLE`: a launcher may lend an endpoint where what the program prints goes too (`mind::output`) | done (2026-10-05) |
+| [163](../issues-done/163-window-broker-memory.done) | init gives the window broker a 128 MiB memory quota: pixel windows with room for the screen | done (2026-10-05) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

@@ -14,16 +14,18 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("clock — a digital clock from the RTC on its own screen, or in a window under wm.\nUsage: clock [--text]   (--text: large digits of text characters with the date, sized to the screen or the window)\nEsc: exit.");
     if mind::process::args_str().split_whitespace().any(|a| a == "--text") { return text_face(info); }
-    // Started by a window manager: a 320 × 176 window instead of the screen (issue 088).
+    // Started by a window manager: a 320 × 176 window instead of the screen (issue 088), drawn again at the size of
+    // its frame when that changes (issue u009).
     let info = mind::windowed::pixels(info, 320, 176, "clock");
-    let Some(screen) = Screen::new(info) else { return };
-    screen.clear(BACKGROUND);
-    screen.text(24, 24, b"CLOCK (IPC RTC)", 2, FOREGROUND, Some(BACKGROUND));
-    let scale = (info.width / 80).min(info.height / 32).clamp(1, 8); let x = info.width.saturating_sub(64 * scale) / 2; let y = info.height.saturating_sub(8 * scale) / 2;
-    screen.text(x, y, b"--:--:--", scale, FOREGROUND, Some(BACKGROUND));
+    let Some(mut screen) = Screen::new(info) else { return };
     let mut previous_time = None;
+    let (mut x, mut y, mut scale) = face(&screen, previous_time);
     loop {
         mind::input::wait_or_exit(100);
+        if let Some(resized) = mind::windowed::pixels_resized() {
+            if let Some(new) = Screen::new(&resized) { screen = new; (x, y, scale) = face(&screen, previous_time); }
+            mind::println!("[CLOCK] SIZE {}X{}", resized.width, resized.height);
+        }
         let Some(seconds) = mind::rtc::seconds_since_midnight() else { continue };
         if previous_time != Some(seconds) {
             let text = time_text(seconds);
@@ -32,6 +34,17 @@ fn main(info: &'static BootInfo) {
             previous_time = Some(seconds);
         }
     }
+}
+
+// The whole face at the screen's size: the title where it fits above the time, and the time (dashes before the
+// first); returns where the time goes and its scale.
+fn face(screen: &Screen, seconds: Option<usize>) -> (usize, usize, usize) {
+    screen.clear(BACKGROUND);
+    let scale = (screen.width / 80).min(screen.height / 32).clamp(1, 8);
+    let (x, y) = (screen.width.saturating_sub(64 * scale) / 2, screen.height.saturating_sub(8 * scale) / 2);
+    if y >= 48 && screen.width >= 264 { screen.text(24, 24, b"CLOCK (IPC RTC)", 2, FOREGROUND, Some(BACKGROUND)); }
+    screen.text(x, y, &seconds.map_or(*b"--:--:--", time_text), scale, FOREGROUND, Some(BACKGROUND));
+    (x, y, scale)
 }
 
 // The text face (issue 089): drawn again at every change of the second, and at once when a window is resized.

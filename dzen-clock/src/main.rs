@@ -31,12 +31,13 @@ enum Next { Exit, Switch }
 fn switch_key(key: Option<mind::input::Key>) -> bool { !mind::windowed::active() && key.and_then(|k| k.char()).is_some_and(|c| c.eq_ignore_ascii_case(&'t')) }
 
 fn pixel_face(info: &'static BootInfo) -> Next {
-    // Started by a window manager: a 400 × 320 window instead of the screen (issue 088).
+    // Started by a window manager: a 400 × 320 window instead of the screen (issue 088), laid out again at the size
+    // of its frame when that changes (issue u009).
     let info = mind::windowed::pixels(info, 400, 320, "dzen-clock");
     print(
         b"\r\n[DZEN-CLOCK] STARTED. D: DIGITS, C: ORBIT, P: 10S TICKS, H: TEXT, CTRL+Z: SHELL, ESC: EXIT.\r\n",
     );
-    let view = View::new(info);
+    let mut view = View::new(info);
     view.clear();
     view.hints(true, !mind::windowed::active());
     view.face(Face::DARK);
@@ -57,6 +58,17 @@ fn pixel_face(info: &'static BootInfo) -> Next {
             return Next::Exit;
         }
         if switch_key(key) { return Next::Switch; }
+        if let Some(resized) = mind::windowed::pixels_resized() {
+            view = View::new(&resized);
+            view.clear();
+            view.hints(show_hints, !mind::windowed::active());
+            view.face(previous_face);
+            if show_digits { view.digital(&previous_time.map(time_text).unwrap_or(*b"--:--:--"), true); }
+            // The orbit, when shown, is drawn again below.
+            previous_dot = None;
+            previous_mode = OrbitMode::Off;
+            mind::println!("[DZEN-CLOCK] SIZE {}X{}", resized.width, resized.height);
+        }
         // D/d, H/h, C/c, P/p from either keyboard (key events carry the character).
         let key = key.and_then(|k| k.char()).map_or(0, |c| c.to_ascii_lowercase() as usize);
         if key == b'd' as usize {

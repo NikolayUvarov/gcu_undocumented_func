@@ -7,7 +7,7 @@ use crate::abi::{KEY_DOWN, KEY_F1, KEY_UP, POINTER_LEFT, POINTER_RIGHT};
 use crate::keys::{self, Code, Key};
 use crate::panel::{self, display, inside, is_root, join, matches, parent, resolve, same_volume, Entry, Mode, Panel, Sort};
 use crate::tui::viewer::{Action, Source, Viewer};
-use crate::tui::widgets::{buttons_key, dialog, fkey_bar, input_dialog, message, progress, Edit, InputLine, KeyBars, ListState, MenuAction, MenuBar};
+use crate::tui::widgets::{buttons_key, dialog, fkey_at, fkey_bar, input_dialog, message, progress, Edit, InputLine, KeyBars, ListState, MenuAction, MenuBar};
 use crate::tui::{Grid, Line, Rect, Theme};
 use alloc::boxed::Box;
 use alloc::format;
@@ -457,11 +457,18 @@ impl<'b> Fm<'b> {
 
     fn editor_key(&mut self, key: Key, disk: &mut dyn Disk) -> Outcome {
         let Some(editor) = self.editor.as_mut() else { return Outcome::Ignored };
-        let (path, quit) = match editor.key(key) {
+        match editor.key(key) { EditOutcome::Ignored => Outcome::Redraw, outcome => self.editor_outcome(outcome, disk) }
+    }
+
+    // What the editor asked for with a key or the mouse: it is saved, or closed.
+    fn editor_outcome(&mut self, outcome: EditOutcome, disk: &mut dyn Disk) -> Outcome {
+        let Some(editor) = self.editor.as_mut() else { return Outcome::Ignored };
+        let (path, quit) = match outcome {
             EditOutcome::Quit => { self.close_editor(disk); return Outcome::Redraw; }
             EditOutcome::Save(path) => (path, false),
             EditOutcome::SaveAndQuit(path) => (path, true),
-            EditOutcome::Redraw | EditOutcome::Ignored => return Outcome::Redraw,
+            EditOutcome::Redraw => return Outcome::Redraw,
+            EditOutcome::Ignored => return Outcome::Ignored,
         };
         let result = Self::save(&path, &editor.buffer.text(), disk);
         let saved = result.is_ok();
@@ -950,12 +957,25 @@ impl<'b> Fm<'b> {
         if w == 0 || h < 3 { return Outcome::Ignored; }
         let press = |code: u16, mods: u8| Key::from_event(keys::event(code, 0, mods));
         if pressed & POINTER_LEFT != 0 && y + 1 == h {
-            let number = (x / (w / 10).max(1)).min(9) as u16;
-            return match press(KEY_F1 + number, self.modifiers) { Some(key) => self.key(key, disk), None => Outcome::Ignored };
+            return match press(KEY_F1 + fkey_at(w, x) - 1, self.modifiers) { Some(key) => self.key(key, disk), None => Outcome::Ignored };
         }
         let lines = 3 * wheel.unsigned_abs() as usize;
-        if self.job.is_some() || self.dialog.is_some() || self.menu.open { return Outcome::Ignored; }
-        if self.editor.is_some() || self.viewer.is_some() {
+        if self.job.is_some() || self.dialog.is_some() { return Outcome::Ignored; }
+        // An open menu takes the mouse (issue u013): a title, an item chosen, the item under the mouse highlighted.
+        if self.menu.open {
+            let before = (self.menu.menu, self.menu.item);
+            return match self.menu.pointer(x, y, 0, pressed & POINTER_LEFT != 0) {
+                Some(MenuAction::Chosen(menu, item)) => { self.command(menu, item, disk); Outcome::Redraw }
+                Some(MenuAction::None) if (self.menu.menu, self.menu.item) == before => Outcome::Ignored,
+                _ => Outcome::Redraw,
+            };
+        }
+        // The editor takes the mouse as `edit` does: its menu, the text, the wheel.
+        if let Some(editor) = self.editor.as_mut() {
+            let outcome = editor.pointer(x, y, buttons, wheel);
+            return self.editor_outcome(outcome, disk);
+        }
+        if self.viewer.is_some() {
             if wheel == 0 { return Outcome::Ignored; }
             let Some(key) = press(if wheel < 0 { KEY_UP } else { KEY_DOWN }, 0) else { return Outcome::Ignored };
             for _ in 0..lines { if self.key(key, disk) == Outcome::Quit { return Outcome::Quit; } }
