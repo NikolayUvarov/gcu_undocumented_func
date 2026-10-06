@@ -286,7 +286,7 @@ impl Shell {
                 };
                 // voice gets a client of the shell's endpoint in its SLOT_INIT; the loader keeps a copy until it starts.
                 let Ok(client) = mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) else { return self.report("OUT OF CAPABILITY SLOTS") };
-                let started = self.start_with(b"voice", rest, false, &[(SLOT_INIT, client)]);
+                let started = self.start_with(b"voice", rest, false, &[(SLOT_INIT, client)], false);
                 let _ = mind::ipc::drop_cap(client);
                 match started {
                     Ok(pid) => {

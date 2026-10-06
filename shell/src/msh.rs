@@ -15,7 +15,7 @@ use mind::script::{parse, Host, Interpreter, Script, Value};
 
 /// The functions the shell gives scripts (beside mind::script's).
 pub const HOST_FUNCTIONS: [&str; 8] = ["capture", "ps", "services", "files", "glob", "log", "sleep", "now"];
-const WORDS: [&str; 11] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display"];
+const WORDS: [&str; 13] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera"];
 const MAX_SCRIPT: usize = 64 * 1024;
 
 // The shell's commands that need a declared word in a script.
@@ -201,7 +201,7 @@ fn read(path: &str) -> Result<String, &'static str> {
 }
 
 // Asks a yes/no question on the screen and the serial line; the answer is a key on either keyboard.
-fn ask(shell: &mut Shell, question: &str) -> bool {
+pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
     let _ = write!(shell.term, "{} (Y/N) ", question);
     shell.term.render(None);
     let until = mind::time::uptime_ms() + 60_000;

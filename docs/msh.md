@@ -129,7 +129,8 @@ after an error**:
 
   Without its word a command fails: `ping needs requires: network in the script`.
 - **Programs a script starts** get, of what they ask for, only what the script declared (`sysinfo`, `file`, `files`,
-  `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`); they run without the rest.
+  `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`); they run without the rest. A program
+  asking for `camera` still gets it only if the user says yes when the shell asks.
 - **A script from outside the boot disk** (`ram:`, a USB disk) asks once before it runs:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.
 - **What the user types** at the prompt (and `msh -c`) has the session's authority.

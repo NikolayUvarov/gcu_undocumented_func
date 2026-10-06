@@ -1,6 +1,7 @@
 /// The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
-/// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it.
-package mind:display@1.0.0;
+/// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
+/// mark with it (1.1).
+package mind:display@1.1.0;
 
 interface display {
     /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy.
@@ -12,4 +13,7 @@ interface display {
     /// What is on the screen now (the screen of the task in front): a sealed read-only copy (SHARE_RO) of
     /// `stride * height` pixels `0x00RRGGBB`, row after row.
     capture: func() -> result<own<memory>, error>;
+    /// A camera stream is open: the compositor shows the camera mark for 1.5 s after the last call. The video gateway
+    /// calls it while any stream is open (issue 158, 1.1); nothing turns the mark off sooner.
+    camera: func();
 }

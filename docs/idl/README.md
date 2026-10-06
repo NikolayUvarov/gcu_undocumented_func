@@ -106,5 +106,6 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/loader.wit`](../../idl/loader.wit) | `loader` (program list, start with arguments; 1.1 adds launch sessions: `begin`, `grant`, `commit`, `abort`, `inspect`; 1.2 `inspect-requests`; 1.3 `grant-memory`; 1.4 lists 128 programs; 1.5 `commit-in-front`, issue 160) | 1.5.0 |
 | [`idl/sysinfo.wit`](../../idl/sysinfo.wit) | `sysmon` (`STAT` records and load history for the monitors; 2.0 carries the fields of `STAT` version 2: largest free block, limits, kernel memory per task, PCI location, holders; 2.1 adds `holders` of an endpoint; 3.0 adds `authority` and gives who holds what — `holders`, `authority`, the derivation links in `caps` — only to the client with the authority badge) | 3.0.0 |
 | [`idl/keyboard.wit`](../../idl/keyboard.wit) | `ps2_kbd`, `virtio_input`, `usb_hid` (layout and layout switch; the shell's `keymap`) | 1.0.0 |
-| [`idl/display.wit`](../../idl/display.wit) | `compositor` (the mode and a sealed copy of the screen as a capability result; the shell's `screenshot`) | 1.0.0 |
+| [`idl/display.wit`](../../idl/display.wit) | `compositor` (the mode and a sealed copy of the screen as a capability result; the shell's `screenshot`; 1.1 `camera`, the camera mark's heartbeat, issue 158) | 1.1.0 |
+| [`idl/video.wit`](../../idl/video.wit) | `video_gw` (cameras, one owner a stream, frames into a lent buffer with their number and time, issue 158) | 1.0.0 |
 | [`idl/log.wit`](../../idl/log.wit) | `logd` (the system log; reading needs the read badge) | 1.0.0 |
