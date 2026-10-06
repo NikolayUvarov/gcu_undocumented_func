@@ -1,0 +1,48 @@
+# 300-STO-0001 — Content identifiers: a versioned format that names its hash algorithm — done
+
+**Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.13, MC-12.2
+
+Part of main task [300](../issues/300-checksummed-block-store.md).
+
+## Problem
+
+The block store names every block by its content. MC-4.2 asks for an identifier format with a version and the hash algorithm's identity, and for unambiguous encoding and type binding. MC-4.13 asks that an unknown format or algorithm is never silently accepted. `libmind` had no hash and no identifier format. The host tests are built with `rustc` alone, so a hash from an outside crate could not be tested there.
+
+## Plan
+
+- Use the CIDv1 of multiformats instead of a format of our own. It has a version, a content type and a self-describing hash, plus a defined text form, and other implementations exist to check against.
+- Support exactly one combination for now: version 1, content type `raw`, hash `sha2-256`. Refuse everything else, including encodings that would make two different byte strings name one identifier.
+- SHA-256 in `libmind`, without heap or dependencies, so the services and the host tests build the same file.
+
+## Acceptance criteria
+
+- SHA-256 gives the FIPS 180-2 digests and agrees with an independent implementation at every padding boundary.
+- Identifiers, in binary and text form, equal those of a reference implementation for a set of vectors.
+- Every unsupported or non-canonical form has a refusing test case.
+- The host test runs in CI and in `scripts/ci_local.sh`.
+
+## Related
+
+[docs/storage](../docs/storage/README.md); `idl/block.wit`; Constitution Article 4.
+
+## Resolution
+
+- **`libmind/src/sha256.rs`:** SHA-256 per FIPS 180-4 (`digest`, incremental `Sha256`), no heap, no SIMD.
+- **`libmind/src/cid.rs`:** `Cid`, a CIDv1 with content type `raw` (0x55) and `sha2-256` (0x12).
+  - `Cid::raw` computes one; `matches` checks bytes against one.
+  - Binary form: `to_bytes`, `from_bytes`, and `read` for an identifier inside a longer record (36 bytes).
+  - Text form: `to_text`, `from_text`, `Display` (`b` and lowercase base32, 59 characters).
+  - Each refusal has its own `cid::Error`:
+    - another version (CIDv0 too), content type or algorithm;
+    - a wrong digest length;
+    - a varint longer than its shortest form;
+    - truncated or trailing bytes;
+    - another multibase prefix, uppercase, padding, stray bits.
+  - The content type is part of the identifier; the digest covers the content's exact bytes.
+- **Tests:** `tests/cid_host.rs`, 9 tests, added to both host test lists (`.github/workflows/ci.yml`, `scripts/ci_local.sh`).
+  - SHA-256 against the FIPS 180-2 examples (including a million `a`) and against `hashlib` digests at lengths 1–1000 around both padding cases, in one call and in pieces split at every point.
+  - Identifiers against four vectors from the reference library `multiformats` 0.3.1, in both forms.
+  - The refusals above.
+  - The ordering of identifiers equals the ordering of their binary forms.
+- **Builds:** `libmind` builds without warnings for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`, with and without `alloc`.
+- **Documents:** [docs/storage](../docs/storage/README.md) describes the format and marks the migration protocol of MC-4.13 as plan. `docs/api` lists the modules. The profile's Article 4 row stays "not claimed" and now names the format; `docs/profile/evidence.md` cites the test.
