@@ -293,6 +293,20 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
 - **Where it was tested.** The host test drives the tool against the register models and the Raspberry Pi 4's tables. The run on a board belongs to issue 205.
 - **Still to do.** The full-screen view and a place in `wm`'s menu are issue u017.
 
+### 4.12 `camera` — what a camera sees (issue 158)
+
+`camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]` works through the video gateway `video_gw` (`idl/video.wit`).
+
+- **Consent.** The gateway's only client is the shell's. It lends it in slot 24 to a program that asks for `REQUEST_CAMERA`, and only after the user answers yes to `CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)`. It asks every time. A refused program runs without a camera: `camera` says so and exits with 1.
+- **The stream.** One task owns a camera at a time. Frames come at the requested rate, each with its number and the time it was taken, into a buffer `camera` lends for each read. The gateway logs every open and close with who asked.
+- **The camera mark.** While a stream is open, the compositor draws a green camera mark left of the capture dot. It is drawn on the framebuffer only, so no program can hide it and no capture holds it.
+- **What `camera` does:**
+  - by default, shows the stream on its screen (a window in `wm`) until Esc or `q`;
+  - with `-s`, writes one frame as a 24-bit BMP;
+  - with `-t`, records an AVI of Motion JPEG frames (the encoder of `record`).
+  - Defaults: 320 × 240 at 10 frames a second.
+- **Sources.** There is no camera driver yet: UVC over `usb_host` is the next step of 158. With `video/synthetic` on the boot disk, the gateway serves a moving test pattern instead: eight colour bars moving left 4 pixels a frame, and the frame number in the bottom rows. The QEMU `vfs` suite checks the still against it pixel for pixel.
+
 ## 5. Phases
 
 ```mermaid

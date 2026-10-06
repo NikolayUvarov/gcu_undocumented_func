@@ -24,6 +24,42 @@ MIND Core can speak (`tts`) and hear (`listen`, voice V0–V2), but it cannot se
    - `camera`: shows the stream in a window (088) or full screen, takes a still (BMP, as `screenshot`) and records (AVI/MJPEG, as `record` in 093);
    - later, vision for the voice dialogue: describing what the camera sees through a model on the host bench, the way `hear` works.
 
+## Progress (2026-10-06)
+
+Steps 3–5 are done on the synthetic source; step 2 (UVC with isochronous transfers in `usb_host`) is open.
+
+- **Done — the gateway** `video_gw` (a boot service), `idl/video.wit` 1.0:
+  - `cameras`, `open` (one owner a camera; a stream whose owner ended is closed), `read` (the next frame into a lent buffer, when it is due), `frame` (its number, time and size), `close`.
+  - Every open and close is logged with the PID.
+- **Done — the test source** (`libmind/src/video.rs`), only when the boot disk holds `video/synthetic`: eight colour bars moving left 4 pixels a frame, and the frame number in 32 cells of the bottom 16 rows. The module also has the YUY2 conversion a UVC camera will need.
+- **Done — consent:**
+  - `init` gives the gateway's only client to the shell (`SLOT_CAMERA` = 24, so `SLOT_DYNAMIC` is now 25).
+  - The shell lends it for `REQUEST_CAMERA` (8192) only after the user answers yes to `<NAME> ASKS FOR THE CAMERA. ALLOW? (Y/N)`, asked every time.
+  - A script must declare `camera` too (msh's words; `gpio` was added there as well).
+- **Done — the indicator:**
+  - `display.wit` 1.1 `camera`: the gateway's heartbeat while a stream is open.
+  - The compositor draws a green camera mark left of the capture dot for 1.5 s after the last heartbeat, on the framebuffer only.
+- **Done — `camera`:**
+  - it shows the stream (screen or `wm` window);
+  - `-s` writes a still (BMP);
+  - `-t` records an AVI of Motion JPEG frames (`mind::jpeg`, `mind::avi`, as `record`).
+- **Done — tests:**
+  - `tests/video_host.rs`: the pattern, the counter read back, sizes, YUY2.
+  - QEMU `vfs` suite, x86 and aarch64 (`camera_check`, `camera_files`):
+    - the shell asks, and a refused `camera` runs without a camera;
+    - a still whose pixels are the pattern's frame exactly;
+    - 3 s at 10/s give 30 frames numbered over 29 steps, every timestamp on the rate's grid (a slow encoder repeats pictures), and ffprobe reads the AVI;
+    - the camera mark is on the screen during the stream and gone after it.
+- **Fixed on the way:**
+  - **The loader's slots:** the loader's list of slots a launcher may fill lacked `SLOT_GPIO` (207) and now `SLOT_CAMERA`; both are allowed.
+  - **A program that ends at once:** a screen program that ended before the shell's `FOCUS` (`camera` without a camera, on aarch64) lost its output and its exit notice. The shell now starts foreground programs in front with `commit-in-front` (issue 160), so the kernel's foreground exit path keeps both.
+- **Camera time:** a reader slower than the rate (MJPEG under TCG on aarch64) gets the latest frame. `camera -t` keeps camera time: each number it did not get repeats the picture before it, as `record` keeps screen time. Every timestamp lies on the rate's grid.
+- **Changed — "a program without it gets `ERR_RIGHTS`":** a program without `REQUEST_CAMERA`, or one the user refused, holds no capability to the gateway at all. Nothing in its capability space names the gateway, which is a stronger property than a refusal by the gateway. The test checks the refused program.
+- **Open:**
+  - step 2, UVC (isochronous transfers in `usb_host`, payload headers and frame assembly, with host tests) and a camera passed through to QEMU (manual);
+  - YUY2 and MJPEG sources;
+  - vision for the voice dialogue.
+
 ## Acceptance criteria
 
 - **QEMU** (CI, synthetic source):

@@ -77,6 +77,7 @@ USER_CRATES=(
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
+    "video_gw:video_gw:video_gw.elf"
     "virtio_net:virtio_net:virtio_net.elf"
     "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
@@ -118,6 +119,7 @@ USER_CRATES=(
     "beep:beep:beep.elf"
     "record:record:record.elf"
     "pins:pins:pins.elf"
+    "camera:camera:camera.elf"
 )
 
 echo ">>> [1/3] Building the kernel and apps (ELF)..."

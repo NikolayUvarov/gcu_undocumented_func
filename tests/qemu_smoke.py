@@ -28,7 +28,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -2524,9 +2524,10 @@ def block_pattern(kind, sector):
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
 
 
-def raw_fat_image(temp, replace=None):
+def raw_fat_image(temp, replace=None, extra=None):
     """A raw disk image: an MBR with one EFI system partition (what OVMF boots from a fixed disk) holding a FAT16 file
-    system of BLOCK_FS_MB with the built OS; `replace` maps file names to other files. Returns (image, start, sectors)."""
+    system of BLOCK_FS_MB with the built OS; `replace` maps file names to other files, `extra` paths to the bytes of
+    more files. Returns (image, start, sectors)."""
     image = temp / "disk.img"
     start, fs_sectors = 2048, (BLOCK_FS_MB << 20) // 512
     with image.open("wb") as f:
@@ -2542,6 +2543,9 @@ def raw_fat_image(temp, replace=None):
         shutil.copyfile(ROOT / IMAGE / name, files / name)
     for name, source in (replace or {}).items():
         shutil.copyfile(source, files / name)
+    for name, data in (extra or {}).items():
+        (files / name).parent.mkdir(parents=True, exist_ok=True)
+        (files / name).write_bytes(data)
     subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
     return image, start, fs_sectors
 
@@ -2560,6 +2564,84 @@ def raw_tools():
     return all(shutil.which(t) for t in ("mkfs.fat", "mcopy", "mtype", "mdel", "fsck.fat"))
 
 
+# The video gateway's test pattern (libmind/src/video.rs, issue 158): eight bars moving left 4 pixels a frame, and the
+# frame number in 32 cells of the bottom 16 rows.
+VIDEO_BARS = (0xFFFFFF, 0xFFFF00, 0x00FFFF, 0x00FF00, 0xFF00FF, 0xFF0000, 0x0000FF, 0x000000)
+
+
+def video_pattern(sequence, x, y, width, height):
+    if y >= height - 16:
+        return 0xFFFFFF if sequence >> (31 - x * 32 // width) & 1 else 0
+    return VIDEO_BARS[(x + sequence * 4 % width) % width * 8 // width]
+
+
+def camera_check(vm):
+    """camera (issue 158) on the synthetic source: the shell asks before lending the camera, a refused program runs
+    without it; a still and 3 s of video; the camera mark while the stream is open, gone after it."""
+    def ask(command, answer):
+        vm.send(command + "\n")
+        vm.expect("CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)")
+        vm.send_bytes(answer)
+    ask("camera -s data/cam.bmp", b"n")
+    require(vm.expect("SHELL RESUMED."), "camera: no camera was granted")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    ask("camera -s data/cam.bmp", b"y")
+    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", vm.expect("SHELL RESUMED.", timeout=30))
+    assert still, vm.log[-2000:]
+    time.sleep(.2); vm.collect(); vm.output = ""
+    ask("camera -r 10 -t 3 data/cam.avi", b"y")
+    vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
+    time.sleep(1)
+    _, size, _, during = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    width = int(size.split()[0])
+    mark = ((13 * width) + width - 48 - 6) * 3  # the camera mark's body, left of the capture dot
+    assert during[mark:mark + 3] == bytes((0x20, 0xC0, 0x40)), ("the camera mark while the stream is open", during[mark:mark + 3])
+    # 30 frames of camera time; a slow encoder (aarch64 under TCG) gets fewer pictures and repeats the last one.
+    video = re.search(r"\[CAMERA\] VIDEO data/cam.avi: 30 FRAMES \((\d+) PICTURES\) 320X240 AT 10/S, SEQUENCE (\d+)\.\.(\d+), TIMESTAMPS ON THE RATE, (\d+) BYTES",
+                      vm.expect("SHELL RESUMED.", timeout=60))
+    assert video and int(video[3]) - int(video[2]) == 29 and int(video[1]) >= 3, (video and video.groups(), vm.log[-2000:])
+    time.sleep(1.8)
+    _, _, _, after = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    assert after[mark:mark + 3] != bytes((0x20, 0xC0, 0x40)), "the mark goes out once no stream is open"
+    logged_lines = vm.service_logs("video_gw", "CLOSED AFTER")
+    require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
+    assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: camera: the shell asks first and a refused program runs without the camera; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    return int(still[1]), (int(video[4]), int(video[1]))
+
+
+def camera_files(mtype, frame, video):
+    """The camera's files on the disk: the still is the test pattern's frame exactly, the video 30 Motion JPEG frames."""
+    bmp = mtype("data/cam.bmp")
+    assert bmp[:2] == b"BM" and struct.unpack_from("<iiHH", bmp, 18) == (320, 240, 1, 24), bmp[:54]
+    stride = 320 * 3
+    for y in range(240):
+        row = bmp[54 + (239 - y) * stride:][:stride]
+        for x in range(0, 320, 3):
+            p = video_pattern(frame, x, y, 320, 240)
+            assert row[x * 3:x * 3 + 3] == bytes((p & 0xFF, p >> 8 & 0xFF, p >> 16)), (x, y, row[x * 3:x * 3 + 3], hex(p))
+    avi = mtype("data/cam.avi")
+    size, pictures = video
+    assert len(avi) == size and avi[:4] == b"RIFF" and avi[8:12] == b"AVI " and struct.unpack_from("<I", avi, 48)[0] == 30, avi[:64]
+    chunks, at = [], 224
+    while avi[at:at + 4] == b"00dc":
+        length, = struct.unpack_from("<I", avi, at + 4)
+        chunks.append(avi[at + 8:at + 8 + length])
+        at += 8 + length + (length & 1)
+    shown = [c for c in chunks if c]  # an empty chunk repeats the picture before it
+    assert len(chunks) == 30 and chunks[0] and len(shown) == pictures and all(c[:2] == b"\xff\xd8" and c[-2:] == b"\xff\xd9" for c in shown) and len(set(shown)) == pictures, (len(chunks), len(shown))
+    if shutil.which("ffprobe"):
+        probe = Path(tempfile.gettempdir()) / "mind-core-cam.avi"
+        probe.write_bytes(avi)
+        info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height,r_frame_rate,nb_frames", "-of", "csv=p=0", str(probe)],
+                              capture_output=True, text=True).stdout.strip()
+        assert info == "mjpeg,320,240,10/1,30", info
+    print("PASS: camera files: the still is the test pattern's frame pixel for pixel, the video 30 Motion JPEG frames that ffprobe reads", flush=True)
+
+
 def vfs_suite(args):
     """Writing a raw FAT disk through vfs_server: the shell changes files in data/, syncs, the host checks the image
     (fsck.fat, mtools), and after a reboot the files are there while the RAM disk is empty again."""
@@ -2567,7 +2649,8 @@ def vfs_suite(args):
         print("SKIP: vfs suite needs mkfs.fat, fsck.fat and mtools", flush=True)
         return
     with tempfile.TemporaryDirectory(prefix="smoke-vfs-", dir=ROOT / IMAGE) as temp:
-        image, start, fs_sectors = raw_fat_image(Path(temp))
+        # video/synthetic: the video gateway serves its test pattern (issue 158).
+        image, start, fs_sectors = raw_fat_image(Path(temp), extra={"video/synthetic": b"the video gateway's test pattern stands in for a camera\n"})
         part = f"{image}@@{start * 512}"
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
@@ -2611,6 +2694,7 @@ def vfs_suite(args):
                 time.sleep(.5)
             else:
                 raise AssertionError("record did not end")
+            cam_still, cam_video = camera_check(vm)
             require(vm.command("sync"), "OK")
         finally:
             vm.close()
@@ -2660,12 +2744,14 @@ def vfs_suite(args):
             info = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height,r_frame_rate,nb_frames", "-of", "csv=p=0", str(probe)],
                                   capture_output=True, text=True).stdout.strip()
             assert info == f"mjpeg,{width},{height},10/1,30", info
+        camera_files(mtype, cam_still, cam_video)
         # After a reboot: the disk keeps its files, the RAM disk starts empty.
         subprocess.run(["mdel", "-i", part, "::/NvVars"], env=MTOOLS_ENV, capture_output=True)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
         try:
             require(vm.command("cat data/notes.txt"), "line one")
-            require(vm.command("ls data"), f"4 ENTRIES, 4 FILES, {15 + size + len(avi_file)} BYTES")  # with the screenshot and the recording
+            # With the screenshot, the recording, and the camera's still and video.
+            require(vm.command("ls data"), f"6 ENTRIES, 6 FILES, {15 + size + len(avi_file) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()

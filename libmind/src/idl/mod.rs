@@ -20,5 +20,6 @@ pub mod tls;
 pub mod tts;
 pub mod usb;
 pub mod vfs;
+pub mod video;
 pub mod voice;
 pub mod window;

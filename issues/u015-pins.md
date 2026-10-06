@@ -29,6 +29,7 @@ Requested by the user (2026-10-06): a tool that, on an ARM board with a pin cont
   - QEMU `shell` suite on x86 and aarch64: no gpio client.
 - **Done — docs:** README, docs/tools §4.11 (EN and RU).
 - **Split off — [u017](u017-pins-view.md):** the full-screen and window view (the header as two columns of pins) and the place in `wm`'s menu. Under `wm` and `console`, `pins` has no client yet, because only the shell lends one.
+- **Fixed with 158:** the loader refused `SLOT_GPIO` in a launch session (its list of slots a launcher may fill lacked it), so on a board the shell could not have lent the gpio client and `pins` would not have started. QEMU cannot show it (no `gpio`); the same list now takes `SLOT_CAMERA`, which the QEMU camera test exercises.
 - **Open — the board run** (with 205).
 
 ## Acceptance criteria

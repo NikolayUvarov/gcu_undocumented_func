@@ -42,6 +42,7 @@ pub mod time;
 pub mod tts;
 pub mod tui;
 pub mod usb;
+pub mod video;
 pub mod util;
 pub mod window;
 pub mod windowed;
