@@ -11,14 +11,14 @@ An immutable representation is named by a **content identifier** (CID): the [CID
 | Field | Encoding | Supported | Meaning |
 |---|---|---|---|
 | version | unsigned varint | `1` | the identifier format's version (MC-4.2) |
-| content type | unsigned varint, a multicodec code | `0x55` `raw` | what the hashed bytes are; `raw` is opaque data, identified as the exact byte sequence (MC-4.2) |
+| content type | unsigned varint, a multicodec code | `0x55` `raw`, `0x71` `dag-cbor` | what the hashed bytes are: `raw` is opaque data, identified as the exact byte sequence; `dag-cbor` is a node of an object (below) (MC-4.2) |
 | hash algorithm | unsigned varint, a multihash code | `0x12` `sha2-256` | which hash made the digest (MC-4.2, 4.13) |
 | digest length | unsigned varint | `32` | must equal the algorithm's length |
 | digest | bytes | SHA-256 of the exact bytes | |
 
 - **Binary form:** the fields in order, 36 bytes for every supported identifier (`01 55 12 20` and the digest).
 - **Text form:** the multibase prefix `b` and the binary form in lowercase RFC 4648 base32 without padding, 59 characters, for example `bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku` for empty content.
-- **Type binding.** The content type is part of the identifier, and the digest covers the content's bytes only. The same bytes under another type would get another identifier; no type other than `raw` is accepted yet.
+- **Type binding.** The content type is part of the identifier, and the digest covers the content's bytes only. The same bytes under another type get another identifier. Only `raw` and `dag-cbor` are accepted.
 - **One encoding per identifier.** A varint written longer than its shortest form, bytes after the digest, another multibase prefix, uppercase text, padding or non-zero bits after the last byte are refused. Two different encodings never name the same identifier.
 - **Unknown is refused (MC-4.13).** CIDv0, any other version, content type or hash algorithm, and a digest length other than the algorithm's are errors (`cid::Error`). They are never read as a supported identifier.
 - **Ordering.** Identifiers order as their binary forms do, so a sorted index may use either.
@@ -33,6 +33,27 @@ A new hash algorithm or content type gets its own code. Identifiers that already
 - roots and retention move under the protocol, not by renaming.
 
 Until it exists, the store accepts only `sha2-256`.
+
+## Objects — implemented (301-STO-0001)
+
+An object larger than a block is a Merkle-DAG named by one root CID (`libmind/src/dag.rs`, Appendix B.3).
+
+- **Chunks:** the object's bytes cut into chunks of 16 KiB, each a `raw` block.
+- **Nodes:** DAG-CBOR blocks `{"v": 1, "size": <bytes under the node>, "links": [<CID>, ...]}`, at most 256 links and 10523 bytes. `"v"` is the schema's version, and another is refused (MC-4.13).
+- **The shape follows from the size alone:**
+  - an object of at most 16 KiB, the empty one too, is a single `raw` block;
+  - a larger one has a root of the least height h with size ≤ 16 KiB × 256^h;
+  - a node of height k has ⌈size / (16 KiB × 256^(k−1))⌉ children, all full but the last, each of height k − 1;
+  - the children of height 1 are chunks.
+
+  So the same bytes always give the same root, however they are written. One node of height 1 covers 4 MiB, height 2 covers 1 GiB, height 3 covers 256 GiB.
+- **One encoding.** A node is accepted only if re-encoding it gives exactly its bytes. Integers must be in their shortest form, keys in DAG-CBOR's order with no others, and arrays of definite length. Each link is tag 42 over the identity multibase prefix and a supported CID (MC-4.2).
+- **The reader trusts no store.** `size` and `read_at` check every node and chunk on the way from the root against its CID. They also check it against its place in the shape: the link count, the children's types (chunks under height 1, nodes above) and sizes, and the chunk lengths. A block that does not match is refused as corrupt, and a tree out of shape is refused as such.
+- **Not provided yet:** the block store takes `raw` blocks only (301-STO-0002); there are no names or roots for objects (MC-4.3), and no retention or garbage collection by reachability (MC-4.5).
+
+Evidence: `tests/dag_host.rs`.
+- The roots and node bytes equal those of an independent reference: the tree built by its shape rule in Python, with the `dag-cbor` and `multiformats` libraries, for sizes around every boundary of the shape.
+- Non-canonical nodes, trees out of shape and forged blocks are refused.
 
 ## The block store — implemented, not started yet (300-STO-0002)
 

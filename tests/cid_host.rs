@@ -1,6 +1,7 @@
 //! Host tests of libmind/src/sha256.rs and libmind/src/cid.rs (issue 300-STO-0001; MC-4.2, 4.13): SHA-256 against the
 //! FIPS 180-2 examples and digests from Python's hashlib, content identifiers against CIDv1 computed by the reference
-//! Python library `multiformats` 0.3.1, and every unsupported or non-canonical form refused.
+//! Python library `multiformats` 0.3.1 (with `dag-cbor` 0.3.3 for a node), and every unsupported or non-canonical form
+//! refused.
 #![allow(dead_code)]
 #[path = "../libmind/src/sha256.rs"]
 mod sha256;
@@ -92,6 +93,19 @@ fn identifiers_match_multiformats() {
 }
 
 #[test]
+fn dag_cbor_identifiers_match_multiformats() {
+    // The node {"size": 3, "links": [raw "abc"]}, encoded by the reference dag-cbor library (issue 301-STO-0001).
+    let node = unhex("a26473697a6503656c696e6b7381d82a58250001551220ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    let cid = Cid::of(Codec::DagCbor, &node);
+    assert_eq!(cid.to_string(), "bafyreigjckioaeqyqeuf47cuhs5utlkhjm6bywip265pdn4sl4ncrmu2gq");
+    assert_eq!(hex(&cid.to_bytes()), "01711220c91290e0121881285e7c543cbb49ad474b3c1c590fd7baf1b7925f1a28b29a34");
+    assert_eq!(Cid::from_text(cid.to_string().as_bytes()), Ok(cid));
+    // The same bytes as raw content are another identifier.
+    assert_ne!(Cid::raw(&node), cid);
+    assert_eq!(Cid::raw(&node).digest(), cid.digest());
+}
+
+#[test]
 fn a_changed_byte_is_another_identifier() {
     let data = pattern(4096);
     let cid = Cid::raw(&data);
@@ -122,9 +136,9 @@ fn unsupported_binary_forms_are_refused() {
     assert_eq!(Cid::from_bytes(&with(&[0x12, 0x20], digest)), Err(Error::Version));
     assert_eq!(Cid::from_bytes(&with(&[0x02, 0x55, 0x12, 0x20], digest)), Err(Error::Version));
     assert_eq!(Cid::from_bytes(&with(&[0x00, 0x55, 0x12, 0x20], digest)), Err(Error::Version));
-    // dag-pb, dag-cbor: types not supported yet.
+    // dag-pb and dag-json (a code of two varint bytes): types not supported.
     assert_eq!(Cid::from_bytes(&with(&[0x01, 0x70, 0x12, 0x20], digest)), Err(Error::Codec));
-    assert_eq!(Cid::from_bytes(&with(&[0x01, 0x71, 0x12, 0x20], digest)), Err(Error::Codec));
+    assert_eq!(Cid::from_bytes(&with(&[0x01, 0xa9, 0x02, 0x12, 0x20], digest)), Err(Error::Codec));
     // sha2-512, sha3-256, identity: algorithms not supported, whatever the digest.
     assert_eq!(Cid::from_bytes(&with(&[0x01, 0x55, 0x13, 0x40], &[digest, digest].concat())), Err(Error::Algorithm));
     assert_eq!(Cid::from_bytes(&with(&[0x01, 0x55, 0x16, 0x20], digest)), Err(Error::Algorithm));

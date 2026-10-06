@@ -16,11 +16,13 @@ const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 pub enum Codec {
     /// Opaque bytes: the exact byte sequence is identified, nothing is assumed about its meaning (`raw`, 0x55).
     Raw,
+    /// A DAG-CBOR node (`dag-cbor`, 0x71); the store's nodes are those of `mind::dag` (issue 301-STO-0001).
+    DagCbor,
 }
 
 impl Codec {
-    pub const fn code(self) -> u64 { match self { Codec::Raw => 0x55 } }
-    pub const fn from_code(code: u64) -> Option<Self> { match code { 0x55 => Some(Codec::Raw), _ => None } }
+    pub const fn code(self) -> u64 { match self { Codec::Raw => 0x55, Codec::DagCbor => 0x71 } }
+    pub const fn from_code(code: u64) -> Option<Self> { match code { 0x55 => Some(Codec::Raw), 0x71 => Some(Codec::DagCbor), _ => None } }
 }
 
 /// The hash algorithm (a multihash code) and its digest length.
@@ -38,7 +40,7 @@ impl Algorithm {
 }
 
 // Every code fits one varint byte, so the binary form is BYTES long.
-const _: () = assert!(VERSION < 0x80 && Codec::Raw.code() < 0x80 && Algorithm::Sha2_256.code() < 0x80);
+const _: () = assert!(VERSION < 0x80 && Codec::Raw.code() < 0x80 && Codec::DagCbor.code() < 0x80 && Algorithm::Sha2_256.code() < 0x80);
 
 /// Why bytes or text are not a supported identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -16,6 +16,7 @@ pub mod block_protocol;
 pub mod blockstore;
 pub mod cid;
 pub mod control;
+pub mod dag;
 pub mod dev;
 pub mod fs;
 pub mod gfx;
