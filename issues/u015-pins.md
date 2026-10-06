@@ -1,6 +1,6 @@
 # u015 — `pins`: the pins of an ARM board — list, functions, signals
 
-**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** open · **Blocked by:** [207](207-gpio-service.md) (the `gpio` service; it needs [206](../issues-done/206-pin-controllers-from-firmware.done)) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-3.3, MC-10.2
+**Type:** tools · **Owner:** tools track · **Priority:** P2 · **Status:** open (done except the board run) · **Blocked by:** [205](205-aarch64-boards.md) (a board to run on; [207](207-gpio-service.md) gives the service) · **Roadmap:** track H (with track F for physical control) · **Constitution:** MC-3.3, MC-10.2
 
 Requested by the porting track for the user in `tools-track-reports.md` (2026-10-06), numbered here.
 
@@ -16,9 +16,33 @@ Requested by the user (2026-10-06): a tool that, on an ARM board with a pin cont
 - A full-screen and window view (like `load`, `memmap`): the header drawn as two columns of pins coloured by function; click or Enter on a pin shows its functions and lets the operator change it, with a confirmation before the first change of a session.
 - `wm`'s menu: under System.
 
+## Progress (2026-10-06)
+
+- **Done — the program** `pins` (`pins/src/main.rs`; the logic in `pins/src/tool.rs`): a console program asking for `REQUEST_CONSOLE | REQUEST_GPIO`.
+  - **Commands:** `pins`, `pins <n>`, `pins set <n> in|out|alt<k>`, `pins write <n> 0|1`, `pins pull <n> up|down|none`, `pins watch <n>... [-t seconds]`, and `-c <controller>`.
+  - **Refusals say why:** reserved by the board, no control client, not an output, no pulls on a PL061, no such pin.
+  - **Exit codes:** 1 without a controller or service, 2 when refused or used wrongly.
+  - **No `/hwdocs`:** function numbers.
+  - **No gpio client:** it says that the service runs only where the firmware names a known controller and that the shell lends it.
+- **Done — tests:**
+  - `tests/pins_host.rs`: a model service built like `gpio/src/main.rs` from `mind::gpio`'s register models and the hwdocs tables.
+  - QEMU `shell` suite on x86 and aarch64: no gpio client.
+- **Done — docs:** README, docs/tools §4.11 (EN and RU).
+- **Split off — [u017](u017-pins-view.md):** the full-screen and window view (the header as two columns of pins) and the place in `wm`'s menu. Under `wm` and `console`, `pins` has no client yet, because only the shell lends one.
+- **Open — the board run** (with 205).
+
 ## Acceptance criteria
 
-On QEMU `virt` (aarch64 suite) `pins` lists the PL061's pins, `pins 3` shows input/output with the active one marked, `pins set 3 out` and `pins write 3 1` change the level `pins` reads back, a reserved pin is refused; without `/hwdocs` it shows function numbers; a host test checks the list and the per-pin view against a recorded `gpio` answer and the BCM2711 tables (pin 14: ALT0 `TXD0` active, ALT1–ALT5 listed). On x86 it reports no pin controller.
+The criteria were amended on 2026-10-06. The reason: issue 206 found that QEMU `virt` with UEFI and ACPI has no pin controller (its PL061 exists only with `acpi=off`, which this kernel cannot boot). So the QEMU end-to-end part could not be met, and it moved to the board run, as it did for 207.
+
+- **Host test** against the register models of `mind::gpio` and the repository's hwdocs tables:
+  - the list, and the per-pin view (pin 14: ALT0 `TXD0` active, ALT1–ALT5 listed);
+  - `set`, `write` and `pull` read back;
+  - a reserved pin refused, and a client without the control badge refused;
+  - function numbers without `/hwdocs`;
+  - a PL061 without pulls.
+- **QEMU** (x86 and aarch64): `pins` reports that it has no gpio client.
+- **On a Raspberry Pi 4** (with 205): the 58 pins are listed with UART0 active on 14/15, and `pins set 17 out` then `pins write 17 1` lights an LED on header position 11.
 
 ## Related
 

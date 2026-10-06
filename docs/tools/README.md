@@ -278,6 +278,21 @@ An application, not a service: `wm fm fm clock dzen-clock` (or `wm fm data, edit
 
 Its own commands (issue u006), done with what it holds: `ps` (the task table from system information), `ls`, `cat`, `mkdir`, `rm`, `mv`, `write` (the user's files), `date`, `time`, and `ping`, through a flow grant of console's own — when the shell starts `console` and `netpolicy.txt` names destinations for it (`console 1.1.1.1 icmp`, `console dns`); `wm` passes no network, and console says so. The shell's commands that need what only the shell holds (`kill`, `fg`, `logs`, `ip`, `nslookup`, `fetch`, its own `ping` to any host, …) are named as such. `run <program>` starts a program whose name a command has (`run ping`: the IPC demo).
 
+### 4.11 `pins` — the pins of an ARM board (issue u015)
+
+`pins` talks only to the `gpio` service (issue 207) through the client the shell lends it (`REQUEST_GPIO`, slot 23). It is a console program.
+
+- **Where it works.** The shell lends the client only where `gpio` runs: a board whose firmware names a known pin controller. On x86 and on QEMU there is none (issue 206), and `pins` says so and exits with 1.
+- **`pins`.** Every pin: its position on the board's header (`POS`, from `hwdocs/boards/`), its active function by name (`ALT0 TXD0`, `output`), its level, its pull, and a `reserved` mark.
+- **`pins <n>`.** All the functions of pin n, the active one marked `*`.
+- **Changing a pin.** `pins set <n> in|out|alt<k>`, `pins write <n> 0|1`, `pins pull <n> up|down|none`.
+  - A change needs the control client the shell lends.
+  - A pin the board reserves is refused (only the platform may change it), and so is writing a pin that is not an output. Each refusal names its reason, and `gpio` logs every change with who asked.
+- **`pins watch <n>... [-t seconds]`.** Prints the levels, then a line for each change (every 100 ms), until Esc or the time is up.
+- **Names.** They come from `hwdocs/` when the image has it (`make_usb_image.py --hwdocs`); without it, function numbers.
+- **Where it was tested.** The host test drives the tool against the register models and the Raspberry Pi 4's tables. The run on a board belongs to issue 205.
+- **Still to do.** The full-screen view and a place in `wm`'s menu are issue u017.
+
 ## 5. Phases
 
 ```mermaid

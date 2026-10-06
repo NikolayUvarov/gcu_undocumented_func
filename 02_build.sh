@@ -117,6 +117,7 @@ USER_CRATES=(
     "svc:svc:svc.elf"
     "beep:beep:beep.elf"
     "record:record:record.elf"
+    "pins:pins:pins.elf"
 )
 
 echo ">>> [1/3] Building the kernel and apps (ELF)..."
