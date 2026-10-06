@@ -262,6 +262,8 @@ python3 tests/qemu_smoke.py --arch aarch64   # the normal, shell, vfs, net, tls,
 
 On Windows, `03_run_qemu_aarch64_windows.bat` runs the same machine with the Windows QEMU (the installer's or MSYS2's) and the `edk2-aarch64-code.fd` firmware it ships; build in WSL or Linux first. `03_run_qemu_aarch64_windows.bat image` boots the USB image below. The firmware search covers AAVMF (Debian, Ubuntu), edk2 (Fedora) and QEMU's own; `MIND_AAVMF_CODE` and `MIND_AAVMF_VARS` choose another.
 
+On a Mac with Apple Silicon, `03_run_qemu_aarch64.sh` uses Homebrew's QEMU (`brew install qemu`) and its firmware, and runs the guest with the hypervisor (`-accel hvf -cpu host`) at the speed of the Mac's own cores; this is a virtual machine, not a native boot (Apple Silicon has no UEFI). `MIND_MEMORY` sets the RAM (default `512M`; above `3G` the machine places RAM and PCI above 4 GiB, `highmem=on`). The macOS path is not tested here: CI and the local runs are on Linux.
+
 The platform profile `aarch64/QEMU-virt-0` (what differs from x86-64, its TCB, threat model and evidence) is in [docs/profile/aarch64/](docs/profile/aarch64/README.md); CI runs the `aarch64` jobs next to the x86 ones.
 
 #### A USB image for aarch64
@@ -417,6 +419,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `find [path] [-name masks] [-type f|d] [-size +N|-N]` — entries of a volume, depth-first in name order (`A:` or nothing for the boot disk, `ram:` for the RAM disk; masks with `*` and `?`, case-insensitive; sizes in bytes or with `k`/`M`).
 * `grep [-i] [-n] [-r] [-l] [-c] pattern [path...]` — lines matching a simple regular expression (`.`, `*`, `[a-z]`, `[^...]`, `^`, `$`, `\`); `-i` folds Latin and Cyrillic case; `-r` searches directories; a file with a NUL byte is reported as binary.
 * `pins [pin | set <pin> in|out|alt<k> | write <pin> 0|1 | pull <pin> up|down|none | watch <pin>...]` — the pins of an ARM board through the `gpio` service (issue u015): every pin with its header position, active function by name (from `hwdocs/`), level and pull; one pin's functions with the active one marked; changes with the shell's control client (a reserved pin is refused). A console program; without a pin controller (x86, QEMU) it says so.
+* `pinmap [controller]` — the board's header on a screen (issue u017): the positions in two columns as on the board, each pin's function and level; Enter lists a pin's functions, `w` toggles an output, `p` cycles the pull; the first change of a session asks first. Without a pin controller (x86, QEMU) it says so.
 * `camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]` — what a camera sees through the video gateway (issue 158): on its screen or in a window, a still as a BMP, or a recording as an AVI of Motion JPEG frames. The shell asks before lending it the camera (`REQUEST_CAMERA`); a green mark in the screen's corner shows a stream is open. No camera driver yet: with `video/synthetic` on the boot disk the gateway serves a moving test pattern.
 * `df` — the volumes: label, FAT type, cluster size, size, used and free space in KiB.
 * `format ram: [-l LABEL] -y` — a new empty FAT volume on the RAM disk (`vfs.wit` 2.3 `format`, run by `vfs_server` for the user's client); without `-y` it only says what it would erase; the boot disk is refused.

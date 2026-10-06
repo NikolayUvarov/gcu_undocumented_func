@@ -291,7 +291,7 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
 - **`pins watch <n>... [-t seconds]`.** Prints the levels, then a line for each change (every 100 ms), until Esc or the time is up.
 - **Names.** They come from `hwdocs/` when the image has it (`make_usb_image.py --hwdocs`); without it, function numbers.
 - **Where it was tested.** The host test drives the tool against the register models and the Raspberry Pi 4's tables. The run on a board belongs to issue 205.
-- **Still to do.** The full-screen view and a place in `wm`'s menu are issue u017.
+- **`pinmap`** (issue u017) draws the board's header on a screen (a window in `wm`, whose System menu lists it): the positions in two columns as on the board, each pin with its function and level, refreshed every 100 ms. ←↑↓→ move; Enter lists a pin's functions (the active one marked `*`; Enter picks one); `w` toggles an output; `p` cycles the pull. The first change of a session asks before it touches the hardware. `wm` and `console` now ask for `REQUEST_GPIO` and pass the client on, so `pins` and `pinmap` work from them too.
 
 ### 4.12 `camera` — what a camera sees (issue 158)
 

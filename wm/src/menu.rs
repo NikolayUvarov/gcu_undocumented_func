@@ -24,7 +24,7 @@ pub enum Kind { Window, Console, Manager }
 /// The categories, in this order; programs not named here go under "Other".
 pub const CATEGORIES: [(&str, &[&str]); 5] = [
     ("Files", &["fm", "edit", "view", "find", "grep", "df", "fsck", "format"]),
-    ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "reboot"]),
+    ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "pinmap", "reboot"]),
     ("Clocks", &["clock", "dzen-clock"]),
     ("Sound and voice", &["beep", "say", "listen", "hear"]),
     ("Network", &["netcheck", "netbench"]),

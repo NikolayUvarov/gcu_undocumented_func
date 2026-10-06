@@ -21,7 +21,8 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 |---|---|---|---|---|---|
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
-| [u017](u017-pins-view.md) | `pins --view`: the board's header on a screen, changes by pointing; `pins` in `wm`'s menu with the gpio client | tools | P3 | — | track H |
+| [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
+| [171](171-limits-from-the-hardware.md) | Limits from the hardware: no fixed caps on tasks (32), applications (8), endpoints (128), CPUs (8), capability slots (96); all RAM on x86 (now below 4 GiB) | kernel | P1 | — | K4 |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step) | main task, `STO` (open) | P2 | — | track B |
@@ -30,6 +31,8 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
 Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers).
+
+Requests from other tracks that wait for the porting track's numbers: [porting-track-reports.md](porting-track-reports.md) (Apple Silicon Macs natively).
 
 ## Finished tasks (`issues-done/`)
 

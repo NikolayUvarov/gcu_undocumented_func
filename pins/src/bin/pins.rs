@@ -4,46 +4,14 @@
 // control client of `gpio` in SLOT_GPIO for REQUEST_GPIO where a pin controller runs; without it there is nothing to
 // show. Reading is open, a change needs the control badge, a pin the board reserves the platform's (idl/gpio.wit).
 extern crate alloc;
-mod tool;
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use mind::abi::{CAP_KIND_ENDPOINT, SLOT_GPIO};
-use mind::idl::gpio as idl;
-use mind::ipc::Endpoint;
-use tool::{Command, Controller, Gpio, Pin, Pull, Refusal};
+use pins::service::Service;
+use pins::tool::{self, Command};
 
 mind::request!(REQUEST_CONSOLE | REQUEST_GPIO);
-
-struct Service(Endpoint);
-
-fn lost(error: mind::Error) -> Refusal { Refusal::Lost(alloc::format!("{:?}", error)) }
-fn refused(error: idl::Error) -> Refusal {
-    match error { idl::Error::NoController => Refusal::NoController, idl::Error::NoPin => Refusal::NoPin, idl::Error::Reserved => Refusal::Reserved, idl::Error::Denied => Refusal::Denied, idl::Error::Unsupported => Refusal::Unsupported }
-}
-fn pull_of(pull: idl::Pull) -> Pull { match pull { idl::Pull::None => Pull::None, idl::Pull::Up => Pull::Up, idl::Pull::Down => Pull::Down, idl::Pull::Unknown => Pull::Unknown } }
-fn pull_to(pull: Pull) -> idl::Pull { match pull { Pull::None => idl::Pull::None, Pull::Up => idl::Pull::Up, Pull::Down => idl::Pull::Down, Pull::Unknown => idl::Pull::Unknown } }
-
-impl Gpio for Service {
-    fn controllers(&mut self) -> Result<Vec<Controller>, Refusal> {
-        let list = idl::controllers(self.0).map_err(lost)?;
-        Ok(list.as_slice().iter().map(|c| Controller {
-            kind: String::from(match c.kind { idl::Kind::Bcm2711 => "bcm2711", idl::Kind::Pl061 => "pl061" }), pins: c.pins,
-            soc: String::from(c.soc.as_str()), board: String::from(c.board.as_str()),
-        }).collect())
-    }
-    fn pins(&mut self, controller: u8) -> Result<Vec<Pin>, Refusal> {
-        let list = idl::pins(self.0, controller).map_err(lost)?.map_err(refused)?;
-        Ok(list.as_slice().iter().map(|p| Pin { pin: p.pin, function: p.function, functions: p.functions, level: p.level, pull: pull_of(p.pull), reserved: p.reserved, position: p.position }).collect())
-    }
-    fn functions(&mut self, controller: u8, pin: u8) -> Result<Vec<String>, Refusal> {
-        let list = idl::functions(self.0, controller, pin).map_err(lost)?.map_err(refused)?;
-        Ok(list.as_slice().iter().map(|name| String::from(name.as_str())).collect())
-    }
-    fn set_function(&mut self, controller: u8, pin: u8, function: u8) -> Result<(), Refusal> { idl::set_function(self.0, controller, pin, function).map_err(lost)?.map_err(refused) }
-    fn write(&mut self, controller: u8, pin: u8, high: bool) -> Result<(), Refusal> { idl::write(self.0, controller, pin, high).map_err(lost)?.map_err(refused) }
-    fn set_pull(&mut self, controller: u8, pin: u8, pull: Pull) -> Result<(), Refusal> { idl::set_pull(self.0, controller, pin, pull_to(pull)).map_err(lost)?.map_err(refused) }
-}
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
@@ -53,7 +21,7 @@ fn main(_info: &'static mind::BootInfo) {
         mind::println!("pins: no client of the gpio service: it runs only where the firmware names a known pin controller (none on x86 and QEMU), and the shell lends it (start pins there)");
         mind::process::exit_with(1)
     }
-    let mut gpio = Service(Endpoint(SLOT_GPIO));
+    let mut gpio = Service::new();
     if let Command::Watch(list, seconds) = &options.command { watch(&mut gpio, options.controller, list, *seconds) }
     let mut out = String::new();
     let result = tool::run(&options, &mut gpio, &mut out);
