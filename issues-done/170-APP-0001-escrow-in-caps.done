@@ -1,0 +1,26 @@
+# 170-APP-0001 — `caps` and `top` name the escrow capability kind — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** G (monitors), C6 · **Constitution:** MC-3.4, MC-10.2
+
+## Problem
+
+Requested by the kernel track (`requests-APP.md`). Since issue 170 `init` keeps the privileges it grants in escrow: a capability kind of its own, `CAP_KIND_ESCROW` (15), whose `rights` field in `StatCap` is the kind of the privilege inside. `monitor/src/text.rs` `cap_kind` did not know it, so the `caps` tool showed init's escrowed privileges as `?` (and `top`'s capability summary counted them as `?`).
+
+## Plan
+
+- `cap_kind(15)` → `escrow`.
+- In `caps`, a privilege in escrow shows no rights (its `rights` field is not rights) and names the kind inside: `escrow ----  …  of control`.
+
+## Acceptance criteria
+
+The `caps` tool shows init's escrowed privileges by name; its tests check one.
+
+## Resolution
+
+- `monitor/src/text.rs`: `cap_kind` names `escrow`.
+- `monitor/src/caps.rs`: `describe` shows `----` for the rights of a privilege in escrow and `of <kind>` for what it holds.
+- `tests/monitor_host.rs` (`caps_tree_and_revoke`): init holds process control in escrow in slot 20; the tree view shows `init (PID 1)  slot 20  escrow   ----` with `of control`.
+
+## Related
+
+[170](170-supervisor-without-usable-privileges.done); the first task numbered the new way (TRACKS.md).

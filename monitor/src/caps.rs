@@ -102,15 +102,18 @@ impl Caps {
         }
     }
 
-    /// One capability as a line: slot, kind, rights, badge and what it names.
+    /// One capability as a line: slot, kind, rights, badge and what it names. A privilege in escrow (issue 170) has no
+    /// rights: its `rights` field is the kind of the privilege inside, which it names.
     pub fn describe(&self, e: &AuthorityEntry) -> String {
+        let escrow = e.kind as usize == CAP_KIND_ESCROW;
         let what = match e.kind as usize {
             CAP_KIND_ENDPOINT => format!("EP {}", e.endpoint),
             CAP_KIND_MEMORY | CAP_KIND_DMA | CAP_KIND_MMIO => text::size(e.size),
+            CAP_KIND_ESCROW => format!("of {}", text::cap_kind(e.rights)),
             _ => String::new(),
         };
         let badge = if e.badge == 0 { String::from("—") } else { format!("{:#x}", e.badge) };
-        format!("slot {:>2}  {:<8} {:<4}  badge {:<6} {}", e.slot, text::cap_kind(e.kind), rights(e.rights), badge, what)
+        format!("slot {:>2}  {:<8} {:<4}  badge {:<6} {}", e.slot, text::cap_kind(e.kind), if escrow { String::from("----") } else { rights(e.rights) }, badge, what)
     }
 
     fn step_task(&mut self, forward: bool) {

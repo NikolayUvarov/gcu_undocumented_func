@@ -30,7 +30,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-APP.md](requests-APP.md) (the escrow capability kind in `caps`; the new task numbers), [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively).
+Requests that wait for a track to number them: [requests-PRT.md](requests-PRT.md) (Apple Silicon Macs natively).
 
 
 ## Finished tasks (`issues-done/`)
@@ -151,6 +151,7 @@ Requests that wait for a track to number them: [requests-APP.md](requests-APP.md
 | [u013](../issues-done/u013-quit-from-menus-and-key-bars.done) | Quit in a program's menu and key bar: `edit` and `view` take the mouse, menus take clicks, F10 quits from edit's open menu | done (2026-10-06) |
 | [u014](../issues-done/u014-record-a-window.done) | `record -w` in wm's run line records the window in front alone: wm lends a read-only lease of its surface and marks its frame " ● REC " | done (2026-10-06) |
 | [u016](../issues-done/u016-clock-console-faces.done) | `clock --line`, `dzen-clock --line`: console programs whose line is written again with `\r`; `REQUEST_LINE` and `mind::process::console_run` | done (2026-10-06) |
+| [170-APP-0001](../issues-done/170-APP-0001-escrow-in-caps.done) | `caps` and `top` name the escrow capability kind (issue 170): `escrow ----  of control` | done (2026-10-06) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

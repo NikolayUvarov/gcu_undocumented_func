@@ -505,14 +505,16 @@ fn authority() -> Vec<AuthorityEntry> {
     vec![endpoint(100, 0, 1, 3, 9, 0), endpoint(101, 100, 5, 1, 9, 0), endpoint(102, 100, 7, 10, 9, 1), endpoint(103, 102, 13, 10, 9, 1),
          endpoint(110, 0, 1, 4, 10, 0), AuthorityEntry { node: 120, parent: 0, pid: 12, slot: 16, kind: CAP_KIND_MEMORY as u32, size: 8192, ..AuthorityEntry::default() },
          // A copy whose parent is gone (the holder exited): a root of its own.
-         endpoint(130, 999, 7, 11, 10, 0)]
+         endpoint(130, 999, 7, 11, 10, 0),
+         // init keeps the process-control privilege it grants in escrow (issue 170).
+         AuthorityEntry { node: 140, parent: 0, pid: 1, slot: 20, kind: CAP_KIND_ESCROW as u32, rights: CAP_KIND_CONTROL as u32, ..AuthorityEntry::default() }]
 }
 
 #[test]
 fn caps_tree_and_revoke() {
     let entries = authority();
     let order: Vec<(u64, usize)> = caps::forest(&entries).iter().map(|&(i, depth)| (entries[i].node, depth)).collect();
-    assert_eq!(order, [(100, 0), (101, 1), (102, 1), (103, 2), (110, 0), (130, 0), (120, 0)], "roots by PID and slot, children below");
+    assert_eq!(order, [(100, 0), (101, 1), (102, 1), (103, 2), (110, 0), (140, 0), (130, 0), (120, 0)], "roots by PID and slot, children below");
     let below: Vec<u64> = caps::subtree(&entries, 100).iter().map(|&(i, _)| entries[i].node).collect();
     assert_eq!(below, [101, 102, 103], "a revoke of init's original removes every copy");
     assert!(caps::subtree(&entries, 103).is_empty());
@@ -524,7 +526,7 @@ fn caps_tree_and_revoke() {
     source.authority = Some(entries);
     let mut tool = caps::Caps::new(7);
     tool.refresh(&mut source).unwrap();
-    assert!(tool.status().starts_with("VIEW=TASK PID=7 SLOTS=2 ENTRIES=7 ROOTS=4 SELECTED=7:10 KIND=endpoint REVOKE=- DENIED=0"), "{}", tool.status());
+    assert!(tool.status().starts_with("VIEW=TASK PID=7 SLOTS=2 ENTRIES=8 ROOTS=5 SELECTED=7:10 KIND=endpoint REVOKE=- DENIED=0"), "{}", tool.status());
     let screen = draw(&mut tool, 120, 20);
     assert!(screen.iter().any(|l| l.contains("shell (PID 7): 2 capabilities")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg-  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
@@ -548,6 +550,7 @@ fn caps_tree_and_revoke() {
     let screen = draw(&mut tool, 120, 20);
     assert!(screen.iter().any(|l| l.contains("    top (PID 13)  slot 10")), "two levels down: {:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("busy (PID 12)  slot 16  memory") && l.contains("8.0K")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("init (PID 1)  slot 20  escrow   ----") && l.contains("of control")), "a privilege in escrow: {:#?}", screen);
     assert_eq!(tool.key(chr('q'), &mut source), Flow::Quit);
 
     // Without the authority client: nothing but the notice.
