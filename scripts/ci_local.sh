@@ -1,24 +1,42 @@
 #!/bin/bash
 # Runs the CI's groups (.github/workflows/ci.yml) on this machine and prints a PASS/FAIL table.
-# Usage: scripts/ci_local.sh [--only host,x86,aarch64] [--tap] [--list]
+# Usage: scripts/ci_local.sh [WHAT] [--only host,x86,aarch64] [--tap] [--no-merge] [--keep] [--list]
+#   WHAT (default: the working tree as it is):
+#     --main         origin/main;
+#     --ref BRANCH   origin/BRANCH merged with origin/main (repeatable);
+#     --all          origin/main, then every other origin branch merged with origin/main.
+#   Branches are fetched and tested in temporary worktrees ($CI_LOCAL_WORK, default /tmp/mind-ci-work); this tree is not touched.
 #   --only  the parts to run (default: all three); --tap  also the netbench group over a tap interface (sudo);
-#   --list  print the groups and exit. Logs: $CI_LOCAL_LOGS (default /tmp/mind-ci-local), one file per group.
+#   --no-merge  test branches as they are; --keep  keep the worktrees; --list  print the groups and exit.
+# Logs: $CI_LOCAL_LOGS (default /tmp/mind-ci-local), one file per group, one directory per branch.
 # Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools,
 # rustup; the toolchain comes from rust-toolchain.toml. Keep the groups in step with ci.yml.
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 source "$HOME/.cargo/env" 2>/dev/null || true
 LOGS="${CI_LOCAL_LOGS:-/tmp/mind-ci-local}"
+WORK="${CI_LOCAL_WORK:-/tmp/mind-ci-work}"
 ONLY="host,x86,aarch64"
 TAP=0
 LIST=0
+MERGE=1
+KEEP=0
+TREE=""
+REFS=()
+ALL=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --only) ONLY="$2"; shift 2 ;;
         --tap) TAP=1; shift ;;
         --list) LIST=1; shift ;;
-        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
+        --main) REFS+=(main); shift ;;
+        --ref) REFS+=("${2#origin/}"); shift 2 ;;
+        --all) ALL=1; shift ;;
+        --no-merge) MERGE=0; shift ;;
+        --keep) KEEP=1; shift ;;
+        --tree) TREE="$2"; shift 2 ;; # internal: run the groups in this tree
+        -h|--help) sed -n '2,13p' "$SELF"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -96,6 +114,7 @@ if [[ $LIST == 1 ]]; then
     exit 0
 fi
 
+cd "${TREE:-$ROOT}" || exit 2
 # Missing tools are reported up front, not as a failure in the middle of the run.
 missing=()
 for tool in cargo rustup python3 mcopy mkfs.fat qemu-img; do command -v "$tool" >/dev/null || missing+=("$tool"); done
@@ -107,6 +126,46 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     exit 2
 fi
 rustup toolchain install >/dev/null || exit 2
+
+# Branches: each in its own worktree, merged with main unless --no-merge, then this script with --tree.
+safe() { tr -c 'A-Za-z0-9._\n-' '_' <<<"$1"; }
+if [[ ${#REFS[@]} -gt 0 || $ALL == 1 ]]; then
+    exec 9>"${TMPDIR:-/tmp}/mind-ci-local.lock"
+    flock -n 9 || { echo "Another ci_local.sh run is in progress." >&2; exit 3; }
+    git fetch origin --prune --quiet || { echo "git fetch failed" >&2; exit 2; }
+    if [[ $ALL == 1 ]]; then
+        REFS=(main)
+        while read -r ref; do [[ $ref != main && $ref != HEAD ]] && REFS+=("$ref"); done \
+            < <(git for-each-ref --sort=-committerdate --format='%(refname:lstrip=3)' refs/remotes/origin)
+    fi
+    rm -rf "$LOGS"; mkdir -p "$LOGS" "$WORK"
+    SUMMARY=(); FAILED=0
+    opts=(--only "$ONLY"); [[ $TAP == 1 ]] && opts+=(--tap)
+    for ref in "${REFS[@]}"; do
+        name=$(safe "$ref"); wt="$WORK/$name"
+        if ! git rev-parse -q --verify "origin/$ref^{commit}" >/dev/null; then
+            SUMMARY+=("FAIL  $ref (no origin/$ref)"); FAILED=1; continue
+        fi
+        git worktree remove --force "$wt" 2>/dev/null; rm -rf "$wt"; git worktree prune
+        git worktree add --detach --quiet "$wt" "origin/$ref" || { SUMMARY+=("FAIL  $ref (worktree)"); FAILED=1; continue; }
+        what="$ref @ $(git -C "$wt" rev-parse --short HEAD)"
+        if [[ $ref != main && $MERGE == 1 ]]; then
+            what+=" + main @ $(git rev-parse --short origin/main)"
+            if ! git -C "$wt" -c user.name=ci-local -c user.email=ci-local@localhost merge --no-edit origin/main \
+                >"$LOGS/$name-merge.log" 2>&1; then
+                SUMMARY+=("FAIL  $what: merge conflict with main ($LOGS/$name-merge.log)"); FAILED=1
+                [[ $KEEP == 1 ]] || git worktree remove --force "$wt"
+                continue
+            fi
+        fi
+        echo; echo "=== $what"
+        CI_LOCAL_LOGS="$LOGS/$name" "$SELF" --tree "$wt" "${opts[@]}"; status=$?
+        if [[ $status == 0 ]]; then SUMMARY+=("PASS  $what"); else SUMMARY+=("FAIL  $what (logs: $LOGS/$name)"); FAILED=1; fi
+        [[ $KEEP == 1 ]] || git worktree remove --force "$wt"
+    done
+    echo; echo "=== Summary"; printf '%s\n' "${SUMMARY[@]}" | tee "$LOGS/summary.txt"
+    exit $FAILED
+fi
 
 rm -rf "$LOGS"; mkdir -p "$LOGS"
 NAMES=(); RESULTS=(); TIMES=()
