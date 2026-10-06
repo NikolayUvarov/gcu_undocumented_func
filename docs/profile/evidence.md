@@ -23,7 +23,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Monotonic clock increases and has sub-millisecond resolution (calibrated TSC) | `services` suite (`clock` command) |
 | Private heaps are zeroed, quota-limited, page tables reclaimed, no stale TLB entries | `heap` suite |
 | Out-of-memory during spawn rolls back completely | `memory` suite |
-| With 6 GiB of RAM the frame pool holds the free RAM above 4 GiB (about 3 GiB of it), the highest range first, and a 144 MiB heap from it is written and read back; programs, screens, the network and the disks work on it (issue 171) | `normal`, `display`, `net`, `vfs` suites with `--memory 6G` (`ram_above_4g`) |
+| With 6 GiB of RAM the frame pool holds the free RAM above 4 GiB (about 3 GiB of it), the highest range first, and a 144 MiB heap from it is written and read back; programs, screens, the network and the disks work on it (issue 171, 171-KRN-0001) | `normal`, `display`, `net`, `vfs` suites with `--memory 6G` (`ram_above_4g`), x86 group "RAM above 4 GiB" and the aarch64 `highmem=on` group |
 | A program's image, stack, screen and kernel structure are charged to its spawner's memory quota and leave it at exit (issues 168, 171) | `memory` suite (`memory_charged_to_spawner`) |
 | Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
 | init holds the privileges it grants in escrow and no process control; services restarted from escrow get the privilege; init stops services and applications as their ancestor (issue 170) | `services` suite (`escrow_check`, `lifecycle_check`) |

@@ -28,10 +28,9 @@ static KERNEL_L1: [AtomicUsize; KERNEL_ENTRIES] = [const { AtomicUsize::new(0) }
 /// Root entries every space shares with the kernel: its identity map of the first TiB.
 pub const KERNEL_ENTRIES: usize = 2;
 pub const IDENTITY_END: u64 = (KERNEL_ENTRIES as u64) << 39;
-/// The end of RAM the kernel can map: all of it is in the identity map.
+/// RAM above IDENTITY_END is not mapped here: the identity map already covers the first TiB.
 pub const RAM_END: u64 = IDENTITY_END;
-/// The part of RAM [start, end) the identity map covers.
-pub fn mapped(start: u64, end: u64) -> (u64, u64) { (start, end.min(RAM_END)) }
+pub fn high_ram(_start: u64, _end: u64) -> Option<(u64, u64)> { None }
 /// Where a task's window starts: L0 entry 255, clear of the identity map.
 pub const USER_IMAGE: usize = 255 << 39;
 

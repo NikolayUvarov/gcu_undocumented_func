@@ -1,6 +1,6 @@
 # 171 — Limits from the hardware: no fixed caps on tasks, endpoints, CPUs, capability slots or RAM
 
-**Type:** kernel · **Owner:** kernel track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** K4 (accounted kernel objects: memory is still paid from the kernel heap), C1 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+**Type:** kernel (main task) · **Owner:** kernel track (`KRN`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** K4 (accounted kernel objects: memory is still paid from the kernel heap), C1 · **Constitution:** MC-1.7, MC-3.13, MC-5.1
 
 ## Problem
 
@@ -39,8 +39,19 @@ Each step is its own commit, with the docs/profile statements (kernel-objects.md
 
 ## Progress
 
-- **Step 1 — done (2026-10-06).**
-  - The x86-64 kernel maps the free RAM above 4 GiB in 2 MiB pages, up to 512 GiB (root entry 0; `mmu::RAM_END`), a page directory per gigabyte that has any. The frame pool takes the same pages (`mmu::mapped`, shared by both).
+Split into `KRN` tasks (TRACKS.md), one for each step of the plan:
+
+| Task | Step | Status |
+|---|---|---|
+| [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done) | 1. All RAM on x86-64 | done (2026-10-06) |
+| `171-KRN-0002` | 2. Task and endpoint tables from memory, paid from quotas; no `MAX_APPS`; STAT pages | done (2026-10-06) by the tools session; its tools side [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) |
+| `171-KRN-0003` | 3. As many CPUs as the firmware reports | planned |
+| `171-KRN-0004` | 4. Capability spaces that grow within the memory quota | planned |
+| `171-KRN-0005` | 5. Frame pool ranges that grow with the firmware map | planned |
+| `171-KRN-0006` | 6. A program's memory up to what the machine has | planned |
+
+- **Step 1 — done (2026-10-06), [171-KRN-0001](../issues-done/171-KRN-0001-ram-above-4g.done).** The tools session had done the same on its branch first; at the merge the kernel track's code was kept.
+  - The x86-64 kernel maps the free RAM above 4 GiB in 2 MiB pages, up to 512 GiB (root entry 0; `mmu::RAM_END`), a page directory per gigabyte that has any. The frame pool takes the same pages (`mmu::high_ram`).
   - The pool now serves the highest range first, so memory below 4 GiB stays free longest, and the identity map is built before the pool.
   - `03_run_qemu.sh`, `03_run_qemu_wsl.sh` and the Windows launchers take `MIND_MEMORY` (default `512M`).
   - Tested: QEMU x86-64 with 6 GiB: the pool has 6018 MiB, 3071 MiB of it above 4 GiB; `memtest` writes and reads back a 144 MiB heap; the `normal`, `display`, `net` and `vfs` suites pass. aarch64 with 6 GiB: 6033 MiB, 3044 MiB above 4 GiB. CI runs the x86 group "RAM above 4 GiB".
@@ -57,12 +68,12 @@ Each step is its own commit, with the docs/profile statements (kernel-objects.md
   - An endpoint named by a watch or a blocked IPC is not handed out again while they last.
   - Tested in QEMU with 4 CPUs and 512 MiB: 80 clocks with screens at once on x86-64, 171 on aarch64 (its screen is smaller); the next one is refused with `OUT OF MEMORY` and the system goes on; the arena and the frame pool come back. Also the `services`, `memory`, `heap`, `isolation` and `tools` suites on x86-64.
   - The tools side, [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done): `sysinfo.wit` 4.0 gives tasks and endpoints page by page, so `sysmon`, `top`, `ipc`, the console's `ps`, `netbench` and `logd`'s names see every task. Step 2 is done.
-- **Who does the rest.** Steps 1 and 2 were done by the tools session at the user's request, before TRACKS.md gave the kernel files to the kernel track alone. Steps 3–6 stay with the kernel track.
+- **Who does the rest.** Step 2 was done by the tools session at the user's request, before TRACKS.md gave the kernel files to the kernel track alone (commit "171 step 2" and 171-APP-0002); `171-KRN-0002` is therefore done. Steps 3–6 stay with the kernel track ([requests-KRN.md](requests-KRN.md)).
 
 ## Acceptance criteria
 
 - **QEMU x86-64, 6 GiB:** the frame pool reports the RAM above 4 GiB, and a program allocates there. *(Met by step 1.)*
-- **QEMU, both architectures:** more than 32 applications run at once (console programs; screens cost 4 MiB each). The limit comes only when memory runs out, as a clean refusal (`TASK LIMIT`/`NO MEMORY`) with the system left working, and the recovery reserve keeps the services restartable.
+- **QEMU, both architectures:** more than 32 applications run at once (console programs; screens cost 4 MiB each). The limit comes only when memory runs out, as a clean refusal (`TASK LIMIT`/`NO MEMORY`) with the system left working, and the recovery reserve keeps the services restartable. *(Met by step 2: 80 programs with screens on x86-64, 171 on aarch64.)*
 - **QEMU with 16 CPUs (x86, TCG):** all come online.
 - **Host and QEMU tests:** a task with more than 96 capabilities, and the STAT pages.
 

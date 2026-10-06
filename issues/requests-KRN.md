@@ -8,7 +8,7 @@ The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other 
 
 ### Problem
 
-Issue 171 (limits from the hardware) is a kernel main task. The tools session did steps 1 and 2 at the user's request before TRACKS.md gave the kernel files to the kernel track alone: all RAM on x86-64, and no task or endpoint limit but memory. Steps 3–6 are left: CPUs from the firmware (`cpu::MAX`), capability spaces that grow, the frame pool's ranges, and a program's memory (the heap window, `APP_MEMORY_MAX`, the block count, the global caps).
+Issue 171 (limits from the hardware) is a kernel main task. Step 1, all RAM on x86-64, is 171-KRN-0001. The tools session did step 2 at the user's request before TRACKS.md gave the kernel files to the kernel track alone: no task or endpoint limit but memory (`171-KRN-0002` in 171's table). Steps 3–6 are left: CPUs from the firmware (`cpu::MAX`), capability spaces that grow, the frame pool's ranges, and a program's memory (the heap window, `APP_MEMORY_MAX`, the block count, the global caps).
 
 ### Plan
 

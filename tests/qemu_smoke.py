@@ -483,8 +483,8 @@ def applications_until_memory_ends(vm):
 
 
 def ram_above_4g(vm):
-    """Issue 171: the frame pool takes the free RAM above 4 GiB too, the highest range first; a program's heap from
-    it is written and read back whole."""
+    """Issue 171 (171-KRN-0001): the frame pool takes the free RAM above 4 GiB too, the highest range first; a
+    program's heap from it is written and read back whole."""
     physmap = vm.command("physmap")
     high = sum(max(0, int(last, 16) + 1 - max(int(start, 16), 1 << 32))
                for start, last in re.findall(r"^0x([0-9a-f]+)-0x([0-9a-f]+) +\d+K free RAM$", physmap, re.M))

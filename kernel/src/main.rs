@@ -85,7 +85,7 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         init_serial();
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
-        // The identity map first: the frame pool's ranges above 4 GiB exist only in it (issue 171).
+        // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
