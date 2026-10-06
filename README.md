@@ -176,7 +176,7 @@ You will need [rustup](https://rustup.rs) and a virtual machine capable of UEFI 
 rustup toolchain install   # reads rust-toolchain.toml
 ```
 
-CI (`.github/workflows/ci.yml`) builds with the same toolchain on Ubuntu 24.04 and runs the host tests and all QEMU suites. The same groups run on a local machine: `scripts/ci_local.sh` (the working tree; `--main`, `--ref BRANCH` merged with main, `--all` branches, each in a temporary worktree; a PASS/FAIL table), and `scripts/ci_watch.sh` fetches origin every 10 minutes and runs it on each new commit of main and of the other branches (history in `~/.cache/mind-ci-watch/history.log`).
+CI (`.github/workflows/ci.yml`) builds with the same toolchain on Ubuntu 24.04 and runs the host tests and all QEMU suites. The same groups run on a local machine: `scripts/ci_local.sh` (the working tree; `--main`, `--ref BRANCH` merged with main, `--all` branches, each in a temporary worktree; a PASS/FAIL table), and `scripts/ci_watch.sh` fetches origin every 10 minutes and runs it on each new commit of main and of the other branches (history in `~/.cache/mind-ci-watch/history.log`). Contributors who work through coding agents, and the agents themselves, follow [AGENTS.md](AGENTS.md): tracks, issue ranges, branches, the gate to `main` and a brief to paste into a session.
 
 *Note: Ensure QEMU and the OVMF firmware (UEFI for QEMU) are installed on your host system.*
 

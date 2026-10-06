@@ -8,6 +8,7 @@ MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64
 - [issues/](issues/README.md): tasks scheduled now. Each task names its acceptance criteria. Pick one, or open a GitHub issue to propose a new one.
 - [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md): normative requirements (`MC-<article>.<clause>`); [docs/profile](docs/profile/README.md) says which of them the code meets and with what evidence.
 - [docs/api](docs/api/README.md): system calls, `libmind`, service interfaces.
+- [AGENTS.md](AGENTS.md): working through a coding agent — tracks and their issue ranges, branches, the gate to `main`, coordination between tracks.
 
 ## Build and test
 
@@ -17,6 +18,7 @@ MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests && /tmp/mind-core-runtime-tests
 python3 tests/idl_test.py    # generated MIND IDL bindings are up to date
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64   # QEMU suites (see README for the test ELFs)
+scripts/ci_local.sh          # every CI group on this machine, with a PASS/FAIL table
 ```
 
 A change is ready when the suites it touches pass; a kernel change runs all QEMU suites on 4 CPUs and the SMP, isolation, heap and services suites on 1 CPU.
