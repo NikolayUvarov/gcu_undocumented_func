@@ -10,9 +10,15 @@ use mind::ipc::Endpoint;
 const SECONDS: u8 = 0x00; const MINUTES: u8 = 0x02; const HOURS: u8 = 0x04; const DAY: u8 = 0x07; const MONTH: u8 = 0x08; const YEAR: u8 = 0x09;
 const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80;
 
+// The update window (UIP, up to about 2 ms once a second) can cover several quick tries: after QUICK of them the
+// reads wait a tick, so a later try lands after the update.
+const ATTEMPTS: usize = 8; const QUICK: usize = 4;
+fn settle(attempt: usize) { if attempt >= QUICK { mind::time::sleep(10); } }
+
 fn read_time(cmos: Ports) -> Option<usize> {
     let read = |reg: u8| -> u8 { cmos.out8(0x70, reg); cmos.in8(0x71) };
-    for _ in 0..8 {
+    for attempt in 0..ATTEMPTS {
+        settle(attempt);
         if read(STATUS_A) & UPDATE_IN_PROGRESS != 0 { continue; }
         let first = [read(SECONDS), read(MINUTES), read(HOURS), read(STATUS_B)];
         if read(STATUS_A) & UPDATE_IN_PROGRESS != 0 { continue; }
@@ -27,7 +33,8 @@ fn read_time(cmos: Ports) -> Option<usize> {
 // Days since 2000-01-01 from the CMOS date registers (two-digit year: 2000-2099).
 fn read_date(cmos: Ports) -> Option<u32> {
     let read = |reg: u8| -> u8 { cmos.out8(0x70, reg); cmos.in8(0x71) };
-    for _ in 0..8 {
+    for attempt in 0..ATTEMPTS {
+        settle(attempt);
         if read(STATUS_A) & UPDATE_IN_PROGRESS != 0 { continue; }
         let first = [read(DAY), read(MONTH), read(YEAR), read(STATUS_B)];
         if read(STATUS_A) & UPDATE_IN_PROGRESS != 0 { continue; }
