@@ -32,4 +32,4 @@ A task holds more than 96 and more than 255 capabilities. Revoke and stale-handl
   - `docs/api`, README.
 - **Not done:**
   - the table is paid from the kernel heap, not charged to the task's memory quota (it is bounded by 4095 slots, about 224 KiB a task);
-  - `top` and `memmap` still show `/95`, which the tools track was asked to change in [171-APP-0006](../issues/171-APP-0006-monitor-bounds.md).
+  - `top` and `memmap` still show `/95`, which the tools track was asked to change in [171-APP-0006](171-APP-0006-monitor-bounds.done).

@@ -42,5 +42,5 @@ The kernel used at most 8 CPUs (`cpu::MAX`). On x86 it took them from the bootlo
 - **Profile:** README "CPU configuration" and "Current scope"; `kernel-objects.md` (STAT); the aarch64 profile's CPUs row, its evidence and its threat model.
 - **Remaining:**
   - x2APIC (CPUs with IDs above 254) is not supported;
-  - `sysmon`'s samples (`idl/sysinfo.wit`) carry the load of the first 8 CPUs only, so `top`'s and the load monitor's per-CPU views show 8 — requested from the tools track ([171-APP-0007](../issues/171-APP-0007-sysinfo-every-cpu-and-capability.md));
+  - `sysmon`'s samples (`idl/sysinfo.wit`) carry the load of the first 8 CPUs only, so `top`'s and the load monitor's per-CPU views show 8 — requested from the tools track ([171-APP-0007](171-APP-0007-sysinfo-every-cpu-and-capability.done));
   - more than 16 CPUs were not tested.

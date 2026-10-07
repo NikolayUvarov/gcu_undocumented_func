@@ -1,0 +1,44 @@
+# 171-APP-0007 — `sysinfo`: every CPU and every capability — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Roadmap:** G (monitors) · **Constitution:** MC-10.2
+
+Requested by the kernel track in `requests-APP.md` (2026-10-06): "`sysinfo` and `sysmon` for any number of tasks, endpoints and CPUs". Tasks and endpoints are done in [171-APP-0002](171-APP-0002-sysinfo-pages.done); this is the rest.
+
+## Problem
+
+The kernel starts every CPU the firmware reports (171-KRN-0003: up to 255 on x86) and a task's capability table grows up to 4095 slots (171-KRN-0004). `idl/sysinfo.wit` 4.0 still caps:
+
+- `cpus` at 8;
+- `caps(pid)` at 64;
+- a load sample's busy share at 8 CPUs (`busy-low`, `busy-high`).
+
+So `top` and `load` show at most 8 CPUs, and `caps` and `top` at most 64 capabilities of a task.
+
+## Plan
+
+`sysinfo.wit` 4.0 has not reached `main` yet, so these changes go into it rather than into a 5.0:
+
+- `cpus(start)` returns a page of 64 CPUs from `start` on (the kernel starts up to 255 on x86, 256 on aarch64; 256 records in one reply would take 14 KiB of a program's stack once decoded).
+- `caps(pid, start)` returns a page of 64 from `start` on; `top`'s details ask page after page.
+- A sample keeps the busy share of CPUs 0–15 one by one (`busy`, as many as are online) and of every CPU as the mean (`busy-total`) and the busiest (`busy-max`). Sixteen graphs is what one screen holds beside the counters; keeping every CPU in every sample would make a reply of 150 samples 80 KiB, more than a program's 64 KiB stack holds once decoded.
+- `sysmon` reads every CPU (`mind::stat::each`) and keeps the counters of each.
+- `top` takes each CPU's share from its busy and idle time between two refreshes (`cpus`), for every CPU: two bars to a row, more for more CPUs while a bar keeps 24 cells, at most 8 rows, and a last row with the mean and the busiest of the CPUs that do not fit.
+- `load` draws a graph for each of the 16 a sample keeps and, with more CPUs, the mean and the busiest of all.
+- `uptime` reports the mean of every CPU.
+
+## Acceptance criteria
+
+- With 16 CPUs, `top` shows a bar and `load` a graph for each of the 16 (QEMU, groups "16 CPUs").
+- `top`'s details list every capability of init (QEMU, `tools` suite).
+- Host tests: 16 and 64 CPUs in `top`, 20 in `load`; shares since the last refresh; a list of 150 read in pages of 64.
+
+## Related
+
+[171-APP-0002](171-APP-0002-sysinfo-pages.done), [171-KRN-0003](171-KRN-0003-every-cpu.done), [171-KRN-0004](171-KRN-0004-growing-capability-tables.done), [081](081-caps-tool.done).
+
+## Resolution
+
+- `idl/sysinfo.wit` 4.0 (not yet on `main` before, so changed in place) and `libmind/src/idl/sysinfo.rs`: `cpus(start)` and `caps(pid, start)` in pages of 64; a sample's `busy` for CPUs 0–15 with `busy-total` and `busy-max` over every CPU.
+- `sysmon/src/main.rs`: reads every CPU (`mind::stat::each`) and keeps each one's counters; the sample rings are on the heap from the start (the larger sample overflowed the stack on its way into a box, and sysmon did not start).
+- `monitor/src/model.rs` `paged`: one paging loop for tasks, CPUs, capabilities and endpoints. `top` takes each CPU's share from its counters between refreshes and draws a bar for every CPU in at most 8 rows, the rest summed in a last row; its details page through a task's capabilities (`LISTED=` in its status). `load` draws 16 CPU graphs and, with more CPUs, the mean and the busiest. `uptime` gives the mean of every CPU.
+- **Tests:** host tests `every_cpu` (16 and 64 CPUs in `top`, 20 in `load`), `per_cpu_load_and_rates` (shares since the last refresh), `lists_page_by_page` (150 items in pages of 64, a full last page); QEMU: `monitors_every_cpu` in the `normal` suite with 16 CPUs on x86 and aarch64 (all 16 bars and graphs), and the `tools` suite compares `top`'s list of init's capabilities with STAT (51 there; pages past 64 are host-tested). CI and the full local run green on 73689c1 (on `main`).

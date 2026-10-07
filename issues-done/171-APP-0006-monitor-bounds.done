@@ -1,6 +1,6 @@
-# 171-APP-0006 — `top`, `memmap` and `load`: the bounds the kernel has now
+# 171-APP-0006 — `top`, `memmap` and `load`: the bounds the kernel has now — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [171](../issues-done/171-limits-from-the-hardware.done) · **Roadmap:** G (monitors) · **Constitution:** MC-10.2, MC-12.3
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Roadmap:** G (monitors) · **Constitution:** MC-10.2, MC-12.3
 
 Requested by the kernel track in `requests-APP.md` (2026-10-06): "the capability table grows" and "the task and endpoint limits are 65 535 now".
 
@@ -25,4 +25,11 @@ Issue 171 changed the bounds the monitors show:
 
 ## Related
 
-[171-KRN-0002](../issues-done/171-KRN-0002-task-and-endpoint-tables.done), [171-KRN-0004](../issues-done/171-KRN-0004-growing-capability-tables.done), [u012](../issues-done/u012-load-graphs-aligned.done).
+[171-KRN-0002](171-KRN-0002-task-and-endpoint-tables.done), [171-KRN-0004](171-KRN-0004-growing-capability-tables.done), [u012](u012-load-graphs-aligned.done).
+
+## Resolution
+
+- `monitor/src/top.rs`: a task's capabilities as `n/4095` (`CAP_SLOTS_MAX - 1`) in the details; the memory line gives the counts of tasks and endpoints alone; the EP column shows the use alone for a quota of five digits (init's 65 535, loader's 65 279), which ran over the column.
+- `monitor/src/memmap.rs`: capabilities as `n/4095` in the quota view, which keeps the quotas; the arena view gives the counts alone.
+- `monitor/src/load.rs`: the task graph is scaled to its own maximum (`tasks  N  max M`), no longer to the root quota.
+- **Tests:** host tests `task_graph_to_its_own_scale` (20 then 60 tasks against a fixture reporting 65 535) and `root_quota_in_the_endpoint_column`, and the new texts in the existing ones; the QEMU `tools` suite reads `Tasks n, endpoints` in memmap and `tasks  N  max` in load. CI and the full local run green on 73689c1 (on `main`).

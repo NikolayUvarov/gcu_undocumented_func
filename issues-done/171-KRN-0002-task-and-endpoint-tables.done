@@ -44,4 +44,4 @@ More than 32 applications and more than 127 endpoints exist at once, and the ker
 - **Not done:**
   - the task table's chunks are paid from the kernel heap, not charged to a memory quota;
   - STAT has no offset: a caller sees as many records as its buffer holds, with the total in the header — `171-KRN-0007`;
-  - the load monitor scales its task graph to `tasks_limit`, which is now 65 535 ([171-APP-0006](../issues/171-APP-0006-monitor-bounds.md)).
+  - the load monitor scales its task graph to `tasks_limit`, which is now 65 535 ([171-APP-0006](171-APP-0006-monitor-bounds.done)).

@@ -35,4 +35,4 @@ So `top`, `ipc`, the console's `ps`, `uptime`, `netbench` and the system log's s
 
 ## Related
 
-[171](171-limits-from-the-hardware.done), [171-KRN-0007](171-KRN-0007-stat-pages.done) (STAT pages), [171-APP-0007](../issues/171-APP-0007-sysinfo-every-cpu-and-capability.md) (CPUs and capabilities), [076](076-monitors-show-restored-stat-fields.done) (sysinfo 2.0).
+[171](171-limits-from-the-hardware.done), [171-KRN-0007](171-KRN-0007-stat-pages.done) (STAT pages), [171-APP-0007](171-APP-0007-sysinfo-every-cpu-and-capability.done) (CPUs and capabilities), [076](076-monitors-show-restored-stat-fields.done) (sysinfo 2.0).

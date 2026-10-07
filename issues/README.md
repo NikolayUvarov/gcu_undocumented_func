@@ -34,8 +34,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 | [158-APP-0005](158-APP-0005-camera-mark-on-ci.md) | The camera mark was missing once on CI (NVMe group); the check now reports what follows such a failure | `APP` | P2 | the next failure | tracks A, G |
-| [171-APP-0006](171-APP-0006-monitor-bounds.md) | `top`, `memmap`, `load`: capabilities as `n/4095`, task and endpoint counts without the root quota's 65535, the task graph to its own scale (requested by `KRN`) | `APP` | P2 | — | G |
-| [171-APP-0007](171-APP-0007-sysinfo-every-cpu-and-capability.md) | `sysinfo`: every CPU (up to 255) and every capability of a task, in `top`, `load` and `caps` (requested by `KRN`) | `APP` | P2 | — | G |
 
 Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host).
 
@@ -162,6 +160,8 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [000-APP-0004](../issues-done/000-APP-0004-pinmap-check-whole-line.done) | The `pinmap` check waits for the whole `[PINMAP] READY` line (the storage track's request) | done (2026-10-06) |
 | [000-APP-0003](../issues-done/000-APP-0003-svc-restart-loader-race.done) | `svc restart loader` could lose its own start: svc first makes one call to the loader, which then has answered the shell | done (2026-10-06) |
 | [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) | `sysinfo.wit` 4.0: tasks and endpoints page by page; `sysmon`, `top`, the console's `ps`, `logd` see every task (171) | done (2026-10-06) |
+| [171-APP-0006](../issues-done/171-APP-0006-monitor-bounds.done) | `top`, `memmap`, `load`: capabilities as `n/4095`, counts of tasks and endpoints without the root quota, the task graph to its own scale, the EP column fits 65 535 (requested by `KRN`) | done (2026-10-07) |
+| [171-APP-0007](../issues-done/171-APP-0007-sysinfo-every-cpu-and-capability.done) | `sysinfo`: every CPU and every capability in pages; `top` and `load` show 16 CPUs and more (requested by `KRN`) | done (2026-10-07) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
