@@ -1,4 +1,4 @@
-//! Rights of block store clients (issues 300-STO-0004, 302-STO-0001; Appendix B.6, MC-4.3, MC-4.7, MC-4.11): init
+//! Rights of block store clients (issues 300-STO-0004, 302-STO-0001, 303-STO-0001; Appendix B.6, MC-4.3, MC-4.7, MC-4.11): init
 //! mints each client's capability with a badge, and `blockstore` decides every request by it. No system calls:
 //! tests/blockstore_host.rs.
 
@@ -12,12 +12,13 @@ pub const BADGE_PUBLISH: u16 = 4;
 
 /// A request to the store, as its rights see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation { Put, Get, Has, Stat, Publish, Resolve }
+pub enum Operation { Put, Get, Has, Stat, Publish, Resolve, Collect }
 
 /// Whether a client whose capability carries `badge` may make `operation`; bits of later rights are ignored.
 pub fn allowed(badge: u16, operation: Operation) -> bool {
     match operation {
-        Operation::Put => badge & BADGE_PUT != 0,
+        // A collection frees only what nothing retains, as a put that finds no room does.
+        Operation::Put | Operation::Collect => badge & BADGE_PUT != 0,
         Operation::Get | Operation::Has | Operation::Resolve => badge & BADGE_GET != 0,
         Operation::Publish => badge & BADGE_PUBLISH != 0,
         Operation::Stat => badge & (BADGE_GET | BADGE_PUT | BADGE_PUBLISH) != 0,

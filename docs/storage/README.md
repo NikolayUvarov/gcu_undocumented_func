@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.3 (2026-10-07) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.4 (2026-10-07) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues/303-retention-and-collection.md) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -70,28 +70,26 @@ On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores a
 | 1 … | records, each starting on a sector. Name records are described under Names. A block record: `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes, padded with zeros to the sector |
 
 **Rules:**
-- **Append only.** A put writes only sectors after the last non-blank one and returns after the device's flush. Sectors of a failed write are never used again, so nothing stored is overwritten (MC-4.8).
+- **Only blank sectors are written.** A put writes its record into the first run of blank sectors that holds it, and returns after the device's flush. Sectors of a failed write are not used again until the next scan. Nothing stored is overwritten (MC-4.8); a collection makes freed records blank again (below).
 - **Mount.**
   - Only a wholly blank medium is formatted, and only if it is writable. A file system may leave its first sectors zero, so a blank sector 0 alone is not enough.
   - Anything else is refused and left as it is: another file system, a damaged superblock, another layout version (MC-4.13).
   - A store is scanned whole. Every record with a valid header is read and checked against its CID (and a node against the schema), and only intact blocks enter the index.
   - Non-blank sectors outside every record are counted as damaged. The scan resynchronizes at the next valid header, so a damaged header loses only its own record.
-- **Reading.** A get reads the record again and checks it against the CID. A block whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy after the log.
+- **Reading.** A get reads the record again and checks it against the CID. A block whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy elsewhere.
 - **Limits.**
   - A block is at most 16 KiB, and the index holds 4096 blocks (the service's static memory).
-  - A put beyond the medium or the index is refused with `full`, and a store with more blocks than the index holds is not mounted at all.
+  - A put that finds no room collects once (below); if there is still none, it is refused with `full`. A store with more blocks than the index holds is not mounted at all.
   - Bytes already held are not written again.
-  - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
+  - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`, `MIND-DEL`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
 - **Durability.** A put returns once the device has flushed the record. On the RAM disk that means until the next reset, nothing more.
 - **What is not provided:**
-  - deletion, retention and garbage collection (MC-4.5, 4.11);
   - copies on other media (MC-4.8, independence of copies);
-  - names and roots (MC-4.3);
 
 Evidence: `tests/blockstore_host.rs`.
 - Put and get, and blocks found again after a remount.
 - A flipped byte refused when mounting and when reading.
-- A damaged header and a torn write each lose only their own record, and no sector is written twice.
+- A damaged header and a torn write each lose only their own record, and a record is written only over blank sectors.
 - Full medium, full index, foreign medium, other layout, read-only medium and a failed write are each refused with their error.
 - A random sequence of puts, gets and remounts matches a model.
 
@@ -114,7 +112,7 @@ A **name** is a stable entity, its **versions** are the immutable roots it has p
 - **Compare-and-swap.** `publish(name, expected, root)` succeeds only if `expected` is the name's current version (0 for a new name), and returns the new version. Of two publishers that read the same version, the first wins and the second gets `conflict`. Nothing of the refused publication is written, and the loser decides what to do: read the new head, merge, try again. This is the declared protocol for concurrent updates.
 - **Only complete roots (MC-4.4).** Before a publication, the store checks with `dag::complete` that every block of the root's object is stored. Every node is read and checked against its CID and the shape, and every chunk is looked up. A missing block is refused with `incomplete` and a tree out of shape with `invalid`. A name therefore never points at data the store has not received.
 - **Durability.** Blocks are flushed when they are put, and the name record is flushed before the reply. The durability level is what the device's flush gives; on the RAM disk that lasts until the next reset.
-- **Record.** One sector in the log, written only after its last non-blank sector: `MIND-REF`, layout version, name length, version, root CID, the name padded with zeros, and the SHA-256 of these 120 bytes. When mounting, the latest valid version of each name is current.
+- **Record.** One sector, written only into a blank sector: `MIND-REF`, layout version, name length, version, root CID, the name padded with zeros, and the SHA-256 of these 120 bytes. When mounting, the latest valid version of each name is current; a collection frees the records of earlier versions (303-STO-0001).
 - **A damaged record.** If the latest record of a name is damaged, it is counted as damaged (`stat`) and the version before it is current. That loses a confirmed change on a damaged medium, but the loss is reported, not silent. Copies on other media are not provided yet (MC-4.8).
 - **Boundary (MC-4.10).** One name per publication. There is no transaction across names, and a reader of two names may see one published and the other not.
 - **Rights.** `publish` needs `BADGE_PUBLISH` and `resolve` needs `BADGE_GET`. A publication is logged with the name, version, root and the caller's PID.
@@ -130,6 +128,45 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 
 A damaged name record on the platform is not tested yet ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
 
+## Retention and collection — implemented, run on the platform (303-STO-0001)
+
+The policy (MC-4.5, Appendix B.3):
+- **A name's current version retains** everything its object reaches. Earlier versions retain nothing; their records and the blocks only they reached are collected. Explicit history is plan (303-STO-0003).
+- **A lease protects a write in progress.** A block no name retains is kept for 60 s after its last put. A put of bytes already held starts the lease again, and so does a mount, when it is done. A writer publishes the root of what it put within that time, or puts again. Leases live in the service's memory and are measured on the monotonic clock.
+- **Everything else is collected:**
+  - unretained blocks;
+  - other copies of a block, corrupt ones too;
+  - name records that are not current.
+- **A collection runs** when a put or a publication finds no room, and on `collect` (interface 1.1, `BADGE_PUT`). It cannot free what anything retains, so it needs no right beyond storing.
+
+A collection:
+- **Mark.** It walks every name's object (`dag::walk`): each node is read, checked against its CID and the shape, and marked, and each chunk is marked. If an object lacks a block or holds a corrupt node, the collection refuses (`incomplete`, `corrupt`) and frees nothing. A block the object still needs is never freed because another went missing.
+- **Sweep.** One pass over the medium frees what is not marked or leased. Each record is freed in a crash-safe order:
+  1. a one-sector marker over its header (`MIND-DEL`, the sectors it covers, a SHA-256), flushed;
+  2. zeros over its other sectors;
+  3. zeros over the marker, flushed.
+
+  A mount that finds a marker finishes the free. A stop in the middle never leaves a false report of damage.
+- **Room.** The freed sectors are blank, and later records go into them.
+
+Not provided yet:
+- **Pins:** retention with an owner, a term and a quota per owner (MC-4.11, B.3). Until then the only owners are names, and the only limit is the medium.
+- **History:** a name's earlier versions, with explicit links (MC-4.5).
+- **Removing a name** (MC-4.8).
+- **Obligations to consumers.**
+- **Leases across a restart:** they start again when the store mounts.
+
+Evidence: `tests/blockstore_host.rs`:
+- leases and collection, a put that renews its lease, room reused on a full medium;
+- nothing freed while a name's object is incomplete, a stopped collection finished by a mount;
+- a random model with collections and remounts;
+- every record written only over blank sectors.
+
+On the platform, the QEMU `store` suite (x86 and aarch64) checks:
+- right after a mount, a collection frees no block;
+- once the leases have ended, a fill of a full medium writes new blocks into the room its puts' collections free, and the unreferenced file is gone;
+- the named object stays whole, and the store mounts again with no damage.
+
 ## Authority — implemented; refusals not exercised on the platform yet (300-STO-0004)
 
 A client's rights come from the badge `init` mints into its capability (`mind::blockstore`), and the service decides every request by it:
@@ -137,12 +174,12 @@ A client's rights come from the badge `init` mints into its capability (`mind::b
 | Badge bit | Allows |
 |---|---|
 | `BADGE_GET` (1) | `get`, `has`, `resolve`, `stat` |
-| `BADGE_PUT` (2) | `put`, `stat` |
+| `BADGE_PUT` (2) | `put`, `collect`, `stat` |
 | `BADGE_PUBLISH` (4) | `publish`, `stat` |
 
 - A client with neither bit may do nothing, and bits this version does not know grant nothing. A refusal is answered `rights` and logged with the caller's PID and badge.
 - **A CID grants nothing (MC-4.7).** A hash names a representation. It does not permit reading: a get needs `BADGE_GET`, whoever knows the CID.
-- **Storing is not reading (MC-4.11).** A put creates retention, because the store keeps every block and has no deletion yet. That is a separate right from reading. There is no per-client quota on it yet: the medium and the index are the only limits, and a full store refuses every put. Retention with an owner, a term and a quota is a later task of track B.
+- **Storing is not reading (MC-4.11).** A put creates a lease, and a publication makes a name retain an object; both are rights apart from reading. There is no per-client quota on them yet: the medium and the index are the only limits. Pins with an owner, a term and a quota are 303-STO-0002.
 - **Deduplication (MC-4.7).** Bytes already held are not written again. A client with `BADGE_PUT` can therefore learn whether some bytes are already stored: `stat` does not change and the put is faster. The store treats all its clients as one confidentiality domain. Clients that must not learn of each other's data need separate stores (or a store without deduplication), and none exists yet.
 
 The rule is host-tested (`rights_come_from_the_badge` in `tests/blockstore_host.rs`). On the platform the only client is the shell's, with every right (badge 7), so no refusal can be provoked there yet. A client with fewer rights is requested from the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)).

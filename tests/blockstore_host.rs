@@ -17,7 +17,7 @@ mod rights;
 
 use cid::{Cid, Codec};
 use std::collections::HashMap;
-use store::{record_sectors, Device, Entry, Error, Head, Stats, Store, BLOCK_MAX, BUFFER, HEADER, NAME_MAX, SECTOR};
+use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Stats, Store, BLOCK_MAX, BUFFER, HEADER, LEASE_NS, NAME_MAX, SECTOR};
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
@@ -39,6 +39,10 @@ impl Device for &mut Memory {
         assert!(self.writable && data.len() % SECTOR == 0 && data.len() <= BUFFER);
         if self.fail_write { return false; }
         let at = lba as usize * SECTOR;
+        // A block or name record goes only into blank sectors: nothing stored is overwritten.
+        if data.starts_with(b"MIND-BLK") || data.starts_with(b"MIND-REF") {
+            assert!(self.data[at..at + data.len()].iter().all(|&b| b == 0), "a record written over sectors that are not blank at {lba}");
+        }
         self.data[at..at + data.len()].copy_from_slice(data);
         for s in 0..data.len() / SECTOR { self.writes[lba as usize + s] += 1; }
         true
@@ -46,14 +50,17 @@ impl Device for &mut Memory {
     fn flush(&mut self) -> bool { self.flushes += 1; true }
 }
 
-struct Room { index: Vec<Entry>, heads: Vec<Head>, buffer: Box<[u8; BUFFER]> }
+struct Room { index: Vec<Entry>, heads: Vec<Head>, holes: Vec<Extent>, buffer: Box<[u8; BUFFER]>, scratch: Box<[u8; dag::CHUNK]>, now: u64 }
 impl Room {
     fn new(capacity: usize) -> Self { Self::with_names(capacity, 8) }
-    fn with_names(capacity: usize, names: usize) -> Self { Self { index: vec![Entry::EMPTY; capacity], heads: vec![Head::EMPTY; names], buffer: Box::new([0; BUFFER]) } }
+    fn with_names(capacity: usize, names: usize) -> Self {
+        Self { index: vec![Entry::EMPTY; capacity], heads: vec![Head::EMPTY; names], holes: vec![Extent::EMPTY; 64], buffer: Box::new([0; BUFFER]), scratch: Box::new([0; dag::CHUNK]), now: 0 }
+    }
+    fn at(mut self, now: u64) -> Self { self.now = now; self }
 }
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Result<Store<'a, &'a mut Memory>, Error> {
-    Store::mount(medium, &mut room.index, &mut room.heads, &mut room.buffer)
+    Store::mount(medium, &mut room.index, &mut room.heads, &mut room.holes, &mut room.buffer, &mut room.scratch, room.now)
 }
 
 fn block(seed: usize, len: usize) -> Vec<u8> { (0..len).map(|i| (i * 31 + seed * 7 + 1) as u8).collect() }
@@ -84,7 +91,7 @@ fn put_and_get_by_content() {
     let mut small = [0u8; 4];
     assert_eq!(store.get(&a, &mut small), Err(Error::TooLarge));
     let used = 1 + record_sectors(11) + record_sectors(0) + record_sectors(BLOCK_MAX);
-    assert_eq!(store.stats(), Stats { blocks: 3, bytes: 11 + BLOCK_MAX as u64, used: used as u64, sectors: 256, corrupt: 0, damaged: 0, capacity: 64, names: 0 });
+    assert_eq!(store.stats(), Stats { blocks: 3, bytes: 11 + BLOCK_MAX as u64, used: used as u64, sectors: 256, corrupt: 0, damaged: 0, capacity: 64, names: 0, free: 256 - used as u64 });
 }
 
 #[test]
@@ -361,6 +368,8 @@ fn rights_come_from_the_badge() {
     ] {
         let got = [allowed(badge, Put), allowed(badge, Get), allowed(badge, Has), allowed(badge, Stat), allowed(badge, Publish), allowed(badge, Resolve)];
         assert_eq!(got, [put, get, has, stat, publish, resolve], "badge {badge:#x}");
+        // A collection frees only what nothing retains, as a put that finds no room does: the put right.
+        assert_eq!(allowed(badge, Collect), put, "badge {badge:#x}");
     }
 }
 
@@ -412,8 +421,6 @@ fn a_record_typed_as_a_node_that_does_not_decode_is_corrupt() {
     assert!(!store.has(&Cid::of(Codec::DagCbor, b"not a node")));
 }
 
-fn scratch() -> Box<[u8; dag::CHUNK]> { Box::new([0; dag::CHUNK]) }
-
 #[test]
 fn a_name_changes_only_from_the_version_expected() {
     let mut medium = Memory::new(256);
@@ -421,16 +428,16 @@ fn a_name_changes_only_from_the_version_expected() {
     let mut store = mount(&mut medium, &mut room).unwrap();
     let (a, b) = (store.put(Codec::Raw, b"first").unwrap(), store.put(Codec::Raw, b"second").unwrap());
     assert_eq!(store.resolve(b"notes"), Err(Error::NotFound));
-    assert_eq!(store.publish(b"notes", 0, &a, &mut scratch()), Ok(1));
+    assert_eq!(store.publish(b"notes", 0, &a), Ok(1));
     assert_eq!(store.resolve(b"notes"), Ok((1, a)));
     // Two writers that both read version 1: the first wins, the second learns it and nothing of it is published.
-    assert_eq!(store.publish(b"notes", 1, &b, &mut scratch()), Ok(2));
+    assert_eq!(store.publish(b"notes", 1, &b), Ok(2));
     let used = store.stats().used;
-    assert_eq!(store.publish(b"notes", 1, &a, &mut scratch()), Err(Error::Conflict));
-    assert_eq!(store.publish(b"notes", 0, &a, &mut scratch()), Err(Error::Conflict));
+    assert_eq!(store.publish(b"notes", 1, &a), Err(Error::Conflict));
+    assert_eq!(store.publish(b"notes", 0, &a), Err(Error::Conflict));
     assert_eq!((store.resolve(b"notes"), store.stats().used), (Ok((2, b)), used));
     // Another name is independent; the same root may be named twice.
-    assert_eq!(store.publish(b"docs/a.txt", 0, &b, &mut scratch()), Ok(1));
+    assert_eq!(store.publish(b"docs/a.txt", 0, &b), Ok(1));
     assert_eq!(store.stats().names, 2);
 }
 
@@ -445,11 +452,11 @@ fn a_root_is_published_only_with_every_block_stored() {
     builder.write(&mut store, &data).unwrap();
     let (root, size) = builder.finish(&mut store).unwrap();
     assert_eq!((root.codec(), size), (Codec::DagCbor, 40_000));
-    assert_eq!(store.publish(b"object", 0, &root, &mut scratch()), Ok(1));
+    assert_eq!(store.publish(b"object", 0, &root), Ok(1));
     let (_, named) = store.resolve(b"object").unwrap();
     let mut out = vec![0u8; data.len()];
     let mut done = 0;
-    while done < data.len() { done += dag::read_at(&mut store, &named, done as u64, &mut out[done..], &mut scratch()).unwrap(); }
+    while done < data.len() { done += dag::read_at(&mut store, &named, done as u64, &mut out[done..], &mut Box::new([0u8; dag::CHUNK])).unwrap(); }
     assert_eq!(out, data);
     // A root whose blocks are not all stored: here a node over a chunk never put.
     let mut node = [0u8; dag::NODE_MAX];
@@ -457,12 +464,12 @@ fn a_root_is_published_only_with_every_block_stored() {
     let len = dag::encode(dag::CHUNK as u64 + 1, &[missing, Cid::raw(b"x")], &mut node);
     let partial = store.put(Codec::DagCbor, &node[..len]).unwrap();
     let used = store.stats().used;
-    assert_eq!(store.publish(b"partial", 0, &partial, &mut scratch()), Err(Error::Incomplete));
-    assert_eq!(store.publish(b"partial", 0, &Cid::raw(b"never stored"), &mut scratch()), Err(Error::Incomplete));
+    assert_eq!(store.publish(b"partial", 0, &partial), Err(Error::Incomplete));
+    assert_eq!(store.publish(b"partial", 0, &Cid::raw(b"never stored")), Err(Error::Incomplete));
     // A node out of shape is no root.
     let len = dag::encode(5, &[Cid::raw(b"x")], &mut node);
     let small = store.put(Codec::DagCbor, &node[..len]).unwrap();
-    assert_eq!(store.publish(b"partial", 0, &small, &mut scratch()), Err(Error::Invalid));
+    assert_eq!(store.publish(b"partial", 0, &small), Err(Error::Invalid));
     assert_eq!((store.stats().used, store.resolve(b"partial")), (used + record_sectors(len) as u64, Err(Error::NotFound)));
 }
 
@@ -475,13 +482,13 @@ fn names_are_found_again_after_a_remount() {
         let mut store = mount(&mut medium, &mut room).unwrap();
         a = store.put(Codec::Raw, b"a").unwrap();
         b = store.put(Codec::Raw, b"b").unwrap();
-        for (i, root) in [a, b, a, b, a].iter().enumerate() { assert_eq!(store.publish(b"head", i as u64, root, &mut scratch()), Ok(i as u64 + 1)); }
-        store.publish(b"other", 0, &b, &mut scratch()).unwrap();
+        for (i, root) in [a, b, a, b, a].iter().enumerate() { assert_eq!(store.publish(b"head", i as u64, root), Ok(i as u64 + 1)); }
+        store.publish(b"other", 0, &b).unwrap();
     }
     let mut room = Room::new(16);
     let mut store = mount(&mut medium, &mut room).unwrap();
     assert_eq!((store.resolve(b"head"), store.resolve(b"other")), (Ok((5, a)), Ok((1, b))));
-    assert_eq!(store.publish(b"head", 5, &b, &mut scratch()), Ok(6));
+    assert_eq!(store.publish(b"head", 5, &b), Ok(6));
     assert!(store.device().writes.iter().all(|&w| w <= 1), "no sector is written twice");
 }
 
@@ -494,8 +501,8 @@ fn a_damaged_name_record_is_reported_and_the_version_before_stands() {
         let mut store = mount(&mut medium, &mut room).unwrap();
         a = store.put(Codec::Raw, b"a").unwrap();
         b = store.put(Codec::Raw, b"b").unwrap();
-        store.publish(b"head", 0, &a, &mut scratch()).unwrap();
-        store.publish(b"head", 1, &b, &mut scratch()).unwrap();
+        store.publish(b"head", 0, &a).unwrap();
+        store.publish(b"head", 1, &b).unwrap();
     }
     // The last record is version 2's: two block records of one sector each, then versions 1 and 2.
     medium.flip(4, 30);
@@ -504,7 +511,7 @@ fn a_damaged_name_record_is_reported_and_the_version_before_stands() {
     assert_eq!(store.resolve(b"head"), Ok((1, a)));
     assert_eq!(store.stats().damaged, 1);
     // The next publication still goes after the damaged sector and takes the next version of what is current.
-    assert_eq!(store.publish(b"head", 1, &b, &mut scratch()), Ok(2));
+    assert_eq!(store.publish(b"head", 1, &b), Ok(2));
 }
 
 #[test]
@@ -515,18 +522,18 @@ fn names_are_checked_and_bounded() {
     let a = store.put(Codec::Raw, b"a").unwrap();
     let long = [b'n'; NAME_MAX + 1];
     for name in [&b""[..], &long[..], b"with space", b"a\\b", "имя".as_bytes(), b"a:b"] {
-        assert_eq!(store.publish(name, 0, &a, &mut scratch()), Err(Error::Invalid), "{name:?}");
+        assert_eq!(store.publish(name, 0, &a), Err(Error::Invalid), "{name:?}");
         assert_eq!(store.resolve(name), Err(Error::Invalid));
     }
-    assert_eq!(store.publish(&long[..NAME_MAX], 0, &a, &mut scratch()), Ok(1));
-    assert_eq!(store.publish(b"A-z_0.9/x", 0, &a, &mut scratch()), Ok(1));
-    assert_eq!(store.publish(b"third", 0, &a, &mut scratch()), Err(Error::Full));
-    assert_eq!(store.publish(b"A-z_0.9/x", 1, &a, &mut scratch()), Ok(2));
+    assert_eq!(store.publish(&long[..NAME_MAX], 0, &a), Ok(1));
+    assert_eq!(store.publish(b"A-z_0.9/x", 0, &a), Ok(1));
+    assert_eq!(store.publish(b"third", 0, &a), Err(Error::Full));
+    assert_eq!(store.publish(b"A-z_0.9/x", 1, &a), Ok(2));
     drop(store);
     medium.writable = false;
     let mut room = Room::with_names(8, 2);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    assert_eq!(store.publish(b"A-z_0.9/x", 2, &a, &mut scratch()), Err(Error::ReadOnly));
+    assert_eq!(store.publish(b"A-z_0.9/x", 2, &a), Err(Error::ReadOnly));
     // A medium with more names than the table holds is not mounted with some missing.
     medium.writable = true;
     assert_eq!(mount(&mut medium, &mut Room::with_names(8, 1)).err(), Some(Error::Full));
@@ -552,4 +559,226 @@ fn a_block_cannot_plant_a_record_for_a_scan_after_damage() {
         assert!(store.put(Codec::Raw, &data).is_ok());
     }
     assert_eq!(store.stats().used, 1 + 2 * record_sectors(at + 2 * SECTOR) as u64);
+}
+
+// An object of `len` bytes written into the store; its root.
+fn object(store: &mut Store<&mut Memory>, seed: usize, len: usize) -> Cid {
+    let mut builder = Box::new(dag::Builder::new());
+    builder.write(store, &block(seed, len)).unwrap();
+    builder.finish(store).unwrap().0
+}
+
+fn read_object(store: &mut Store<&mut Memory>, root: &Cid) -> Vec<u8> {
+    let mut buffer = Box::new([0u8; dag::CHUNK]);
+    let size = dag::size(store, root, &mut buffer).unwrap() as usize;
+    let mut out = vec![0u8; size];
+    let mut done = 0;
+    while done < size { done += dag::read_at(store, root, done as u64, &mut out[done..], &mut buffer).unwrap(); }
+    out
+}
+
+#[test]
+fn a_collection_frees_what_no_name_retains_once_its_lease_ends() {
+    let mut medium = Memory::new(1024);
+    let mut room = Room::new(256);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let (a, b) = (store.put(Codec::Raw, &block(1, 3000)).unwrap(), store.put(Codec::Raw, b"b").unwrap());
+    let kept = object(&mut store, 2, 40_000);
+    assert_eq!(store.publish(b"keep", 0, &kept), Ok(1));
+    let before = store.stats();
+    // Leases still run: nothing goes.
+    store.set_time(LEASE_NS - 1);
+    assert_eq!(store.collect(), Ok(Collected { blocks: 0, names: 0, sectors: 0, free: before.free }));
+    // They have ended: what no name retains goes, the object stays whole.
+    store.set_time(LEASE_NS);
+    let freed = (record_sectors(3000) + record_sectors(1)) as u64;
+    assert_eq!(store.collect(), Ok(Collected { blocks: 2, names: 0, sectors: freed, free: before.free + freed }));
+    assert!(!store.has(&a) && !store.has(&b));
+    assert_eq!(read_object(&mut store, &kept), block(2, 40_000));
+    assert_eq!(store.stats().blocks, before.blocks - 2);
+    // A new version: the first one's record and the blocks only it held go once their leases end.
+    let next = object(&mut store, 3, 20_000);
+    assert_eq!(store.publish(b"keep", 1, &next), Ok(2));
+    store.set_time(2 * LEASE_NS);
+    let collected = store.collect().unwrap();
+    // The 40 KB object's node and its chunks: its first two chunks are the same bytes (block() repeats every 256), one block.
+    assert_eq!((collected.names, collected.blocks), (1, 3));
+    assert_eq!(store.resolve(b"keep"), Ok((2, next)));
+    assert_eq!(read_object(&mut store, &next), block(3, 20_000));
+    assert!(!store.has(&kept));
+    drop(store);
+    // A mount finds the same.
+    let mut room = Room::new(256).at(2 * LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.resolve(b"keep"), Ok((2, next)));
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+    assert_eq!(read_object(&mut store, &next), block(3, 20_000));
+}
+
+#[test]
+fn a_put_starts_the_lease_again() {
+    let mut medium = Memory::new(64);
+    let mut room = Room::new(16);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let a = store.put(Codec::Raw, b"a").unwrap();
+    store.set_time(LEASE_NS - 1);
+    assert_eq!(store.put(Codec::Raw, b"a"), Ok(a));
+    store.set_time(LEASE_NS + 5);
+    assert_eq!(store.collect().unwrap().blocks, 0);
+    store.set_time(2 * LEASE_NS - 1);
+    assert_eq!(store.collect().unwrap().blocks, 1);
+    assert!(!store.has(&a));
+}
+
+#[test]
+fn freed_room_is_written_again_when_the_medium_is_full() {
+    let mut medium = Memory::new(1 + 6 * record_sectors(4000));
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let kept = store.put(Codec::Raw, &block(0, 4000)).unwrap();
+    store.publish(b"kept", 0, &kept).unwrap();
+    for i in 1..5 { store.put(Codec::Raw, &block(i, 4000)).unwrap(); }
+    // Full while every lease runs: a collection frees nothing, the put is refused.
+    assert_eq!(store.put(Codec::Raw, &block(9, 4000)), Err(Error::Full));
+    // Later the put finds the room a collection frees, between records that stay.
+    store.set_time(LEASE_NS);
+    let fresh = store.put(Codec::Raw, &block(9, 4000)).unwrap();
+    assert_eq!(store.stats().blocks, 2);
+    for i in 10..13 { store.put(Codec::Raw, &block(i, 4000)).unwrap(); }
+    drop(store);
+    let mut room = Room::new(64).at(LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(get(&mut store, &kept).unwrap(), block(0, 4000));
+    assert_eq!(get(&mut store, &fresh).unwrap(), block(9, 4000));
+    assert_eq!((store.stats().blocks, store.stats().corrupt, store.stats().damaged), (5, 0, 0));
+}
+
+#[test]
+fn nothing_is_collected_while_a_name_lacks_a_block() {
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let loose = store.put(Codec::Raw, b"loose").unwrap();
+    let root = object(&mut store, 4, 40_000);
+    store.publish(b"obj", 0, &root).unwrap();
+    // A chunk of the object found corrupt leaves the index.
+    let chunk = Cid::raw(&block(4, 40_000)[16384..32768]);
+    let lba = (1..512u64).find(|&s| { let at = s as usize * SECTOR; store.device().data[at..at + 8] == *b"MIND-BLK" && store.device().data[at + 16..at + 52] == chunk.to_bytes() }).unwrap();
+    store.device().flip(lba + 3, 7);
+    assert_eq!(get(&mut store, &chunk), Err(Error::Corrupt));
+    store.set_time(LEASE_NS);
+    let before = store.stats();
+    assert_eq!(store.collect(), Err(Error::Incomplete));
+    assert!(store.has(&loose));
+    assert_eq!(store.stats(), before);
+    // The chunk put again: the collection goes ahead, and frees the corrupt copy too.
+    store.put(Codec::Raw, &block(4, 40_000)[16384..32768]).unwrap();
+    let collected = store.collect().unwrap();
+    assert_eq!(collected.blocks, 2);
+    assert_eq!((store.has(&loose), store.stats().corrupt), (false, 0));
+    assert_eq!(read_object(&mut store, &root), block(4, 40_000));
+}
+
+#[test]
+fn a_collection_stopped_in_the_middle_is_finished_by_the_next_mount() {
+    let mut medium = Memory::new(64);
+    let x;
+    {
+        let mut room = Room::new(8);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        store.put(Codec::Raw, b"first").unwrap();
+        x = store.put(Codec::Raw, &block(5, 2000)).unwrap();
+        store.put(Codec::Raw, b"last").unwrap();
+    }
+    // Stopped after the marker over x's record: its data is still there.
+    let n = record_sectors(2000) as u32;
+    let at = 2 * SECTOR;
+    let mut marker = [0u8; SECTOR];
+    marker[..8].copy_from_slice(b"MIND-DEL");
+    marker[8] = 1;
+    marker[12..16].copy_from_slice(&n.to_le_bytes());
+    let check = sha256::digest(&marker[..16]);
+    marker[16..48].copy_from_slice(&check);
+    medium.data[at..at + SECTOR].copy_from_slice(&marker);
+    let mut room = Room::new(8);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert!(!store.has(&x));
+    assert_eq!((store.stats().blocks, store.stats().corrupt, store.stats().damaged), (2, 0, 0));
+    drop(store);
+    assert!(medium.data[at..at + n as usize * SECTOR].iter().all(|&b| b == 0), "the freed sectors are blank");
+}
+
+#[test]
+fn random_puts_names_collections_and_remounts_match_a_model() {
+    let mut medium = Memory::new(768);
+    let mut seed = 0x9e3779b97f4a7c15u64;
+    let mut next = |bound: u64| { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed % bound };
+    // Every block put: its bytes and when its lease began; names and the block each points at.
+    let mut blocks: HashMap<Cid, (Vec<u8>, u64)> = HashMap::new();
+    let mut names: HashMap<Vec<u8>, (u64, Cid)> = HashMap::new();
+    let mut now = 0u64;
+    for round in 0..6 {
+        let mut room = Room::new(128).at(now);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        for (_, lease) in blocks.values_mut() { *lease = now; }
+        for _ in 0..60 {
+            now += next(LEASE_NS / 8);
+            store.set_time(now);
+            let retained = |blocks: &HashMap<Cid, (Vec<u8>, u64)>, names: &HashMap<Vec<u8>, (u64, Cid)>, cid: &Cid| {
+                names.values().any(|(_, r)| r == cid) || now < blocks[cid].1 + LEASE_NS
+            };
+            match next(5) {
+                0 | 1 => {
+                    let data = block(next(40) as usize, [1, 600, 3000, 9000][next(4) as usize]);
+                    match store.put(Codec::Raw, &data) {
+                        Ok(cid) => { blocks.insert(cid, (data, now)); }
+                        Err(e) => assert_eq!(e, Error::Full, "round {round}"),
+                    }
+                }
+                2 if !blocks.is_empty() => {
+                    let cid = *blocks.keys().nth(next(blocks.len() as u64) as usize).unwrap();
+                    let name = vec![b'n', b'0' + next(3) as u8];
+                    let version = names.get(&name).map_or(0, |h| h.0);
+                    match store.publish(&name, version, &cid) {
+                        Ok(v) => { assert_eq!(v, version + 1); names.insert(name, (v, cid)); }
+                        Err(Error::Incomplete) => assert!(!store.has(&cid)),
+                        Err(e) => assert_eq!(e, Error::Full),
+                    }
+                }
+                3 => {
+                    store.collect().unwrap();
+                    for cid in blocks.keys() { assert_eq!(store.has(cid), retained(&blocks, &names, cid), "round {round}"); }
+                }
+                _ => {}
+            }
+            // What is retained is always there and whole, whatever collections the puts started.
+            let keys: Vec<Cid> = blocks.keys().copied().collect();
+            for cid in keys.iter().filter(|c| retained(&blocks, &names, c)) {
+                assert_eq!(get(&mut store, cid).unwrap(), blocks[cid].0, "round {round}");
+            }
+            blocks.retain(|cid, _| store.has(cid));
+            for (name, (version, root)) in &names { assert_eq!(store.resolve(name), Ok((*version, *root))); }
+        }
+        assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+    }
+}
+
+#[test]
+fn leases_start_again_when_a_mount_is_done() {
+    let mut medium = Memory::new(64);
+    let a;
+    {
+        let mut room = Room::new(8);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        a = store.put(Codec::Raw, b"a").unwrap();
+    }
+    // The mount began at 0 and took longer than a lease: the leases run from when it is done.
+    let mut room = Room::new(8);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    store.renew(3 * LEASE_NS);
+    store.set_time(4 * LEASE_NS - 1);
+    assert_eq!(store.collect().unwrap().blocks, 0);
+    store.set_time(4 * LEASE_NS);
+    assert_eq!(store.collect().unwrap().blocks, 1);
+    assert!(!store.has(&a));
 }

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // blocks: the block store from the shell (300-STO-0003, docs/storage). Puts a file or a test pattern as an object
-// (mind::dag), reads one back with every block checked, publishes and resolves names, fills the store. A console
+// (mind::dag), reads one back with every block checked, publishes and resolves names, collects, fills the store. A console
 // program: it asks the shell for the store's client (REQUEST_BLOCKSTORE) and the user's files (REQUEST_FILES).
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::cid::{Cid, Codec};
@@ -59,7 +59,7 @@ fn cid(text: &str) -> Option<Cid> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | fill");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | collect | fill");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -139,18 +139,25 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(e)) => mind::println!("blocks: resolve {}: {:?}", name, e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
+        (Some("collect"), None, ..) => match blockstore::collect(STORE) {
+            Ok(Ok(c)) => mind::println!("COLLECTED {} BLOCKS {} NAMES {} SECTORS, {} FREE", c.blocks, c.names, c.sectors, c.free),
+            Ok(Err(e)) => mind::println!("blocks: collect: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
         (Some("fill"), None, ..) => {
-            // Distinct blocks of CHUNK bytes until the store refuses one: what a full medium answers.
-            let mut count = 0u64;
+            // Distinct blocks of CHUNK bytes until the store refuses one: what a full medium answers. The time makes
+            // them new on every run, so a second fill does not just find the first one's blocks.
+            let (mut count, start) = (0u64, mind::time::monotonic_ns());
             loop {
                 data.fill(0xA5);
                 data[..8].copy_from_slice(&count.to_le_bytes());
+                data[8..16].copy_from_slice(&start.to_le_bytes());
                 match remote.put(Codec::Raw, data) {
                     Ok(_) => count += 1,
                     Err(e) => { mind::println!("FILLED {} BLOCKS, THEN {:?} ({:?})", count, e, remote.last); break; }
                 }
             }
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | fill"),
+        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | collect | fill"),
     }
 }

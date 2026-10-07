@@ -1,12 +1,14 @@
-//! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002, 302-STO-0001; MC-4.2, 4.3, 4.4, 4.8):
-//! immutable blocks named by their CID, and names whose current version points at a root, in an append-only log of
-//! records on a block device. Nothing here depends on the kernel: the host tests build it too.
+//! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002, 302-STO-0001, 303-STO-0001; MC-4.2, 4.3,
+//! 4.4, 4.5, 4.8): immutable blocks named by their CID, and names whose current version points at a root, as records on
+//! a block device; what no name retains and no lease protects is collected. Nothing here depends on the kernel: the
+//! host tests build it too.
 //!
 //! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector. A block record is a header
 //! (magic, layout version, length, the block's CID, a digest of the header) and the block's bytes, padded to the
 //! sector; a `dag-cbor` block must be a node of `dag`. A name record is one sector: the name, its version and root,
-//! and a digest. Writes go only after the last non-blank sector, so nothing stored is ever overwritten; every block
-//! read is checked against its CID, and one that does not match is reported corrupt, never returned.
+//! and a digest. Records are written only into blank sectors, so nothing stored is overwritten; a collection makes the
+//! sectors of what it frees blank again. Every block read is checked against its CID, and one that does not match is
+//! reported corrupt, never returned.
 use crate::cid::{self, Cid, Codec};
 use crate::dag;
 use crate::sha256;
@@ -24,6 +26,11 @@ pub const LAYOUT: u16 = 1;
 const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
 const RECORD_MAGIC: &[u8; 8] = b"MIND-BLK";
 const NAME_MAGIC: &[u8; 8] = b"MIND-REF";
+// A record being freed: magic, layout, zero, the sectors it covers (u32), and the SHA-256 of these 16 bytes.
+const FREE_MAGIC: &[u8; 8] = b"MIND-DEL";
+/// How long a block no name retains is kept after its last put (or after a mount): the time a writer has to publish
+/// the root of what it is putting (MC-4.5: operations in progress).
+pub const LEASE_NS: u64 = 60_000_000_000;
 /// Bytes of a name at most; a name is 1 to NAME_MAX of `A-Z a-z 0-9 . _ / -`.
 pub const NAME_MAX: usize = 64;
 // A name record: magic, layout, name length (u16), version (u64), root CID, name (padded with zeros), digest.
@@ -65,7 +72,8 @@ pub enum Error {
     Invalid,
     /// The name's current version is not the one the publisher expected (MC-4.3): nothing was published.
     Conflict,
-    /// A block of the root's object is not stored (MC-4.4): nothing was published.
+    /// A block of the root's object is not stored (MC-4.4): nothing was published; or a name's object lacks one, so
+    /// nothing was collected.
     Incomplete,
 }
 
@@ -86,12 +94,25 @@ pub struct Stats {
     pub capacity: u32,
     /// Names published.
     pub names: u32,
+    /// Blank sectors the store can write.
+    pub free: u64,
 }
 
-/// An index entry: the CID's binary form (their order is the CIDs' order) and where its record starts.
+/// What a collection freed: block records (unretained, duplicate or corrupt copies), superseded name records, their
+/// sectors; and the blank sectors after it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Collected { pub blocks: u32, pub names: u32, pub sectors: u64, pub free: u64 }
+
+/// An index entry: the CID's binary form (their order is the CIDs' order), where its record starts, when its lease
+/// began, and whether the last collection found a name that retains it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry { key: [u8; cid::BYTES], lba: u64, len: u32 }
-impl Entry { pub const EMPTY: Entry = Entry { key: [0; cid::BYTES], lba: 0, len: 0 }; }
+pub struct Entry { key: [u8; cid::BYTES], lba: u64, len: u32, lease: u64, live: bool }
+impl Entry { pub const EMPTY: Entry = Entry { key: [0; cid::BYTES], lba: 0, len: 0, lease: 0, live: false }; }
+
+/// A run of blank sectors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extent { start: u64, len: u64 }
+impl Extent { pub const EMPTY: Extent = Extent { start: 0, len: 0 }; }
 
 /// A name's current version and root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,11 +158,35 @@ pub struct Store<'a, D: Device> {
     count: usize,
     heads: &'a mut [Head],
     names: usize,
+    // Blank runs, sorted; runs past its length are not used until the next scan.
+    holes: &'a mut [Extent],
+    runs: usize,
     buffer: &'a mut [u8; BUFFER],
+    // For walks of objects (publish, collect); taken while one runs, since the walk reads through the store itself.
+    scratch: Option<&'a mut [u8; dag::CHUNK]>,
+    now: u64,
     end: u64,
     bytes: u64,
     corrupt: u32,
     damaged: u64,
+}
+
+fn free_marker(sectors: u64) -> [u8; SECTOR] {
+    let mut r = [0u8; SECTOR];
+    r[..8].copy_from_slice(FREE_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[12..16].copy_from_slice(&(sectors as u32).to_le_bytes());
+    let check = sha256::digest(&r[..16]);
+    r[16..48].copy_from_slice(&check);
+    r
+}
+
+/// The sectors a free marker covers, if the sector is one.
+fn parse_free(sector: &[u8]) -> Option<u64> {
+    if &sector[..8] != FREE_MAGIC || sector[16..48] != sha256::digest(&sector[..16]) || sector[48..].iter().any(|&b| b != 0) { return None; }
+    if u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[10..12] != [0, 0] { return None; }
+    let n = u32::from_le_bytes(sector[12..16].try_into().unwrap()) as u64;
+    (n >= 1).then_some(n)
 }
 
 // Whether `data` is what its type says: any bytes are raw, a node must decode.
@@ -194,9 +239,11 @@ fn superblock() -> [u8; SECTOR] {
 }
 
 impl<'a, D: Device> Store<'a, D> {
-    /// Mounts the store on `dev`: a blank medium is formatted (if writable), a store is scanned and its blocks
-    /// verified; anything else is refused. `index` bounds how many blocks it can hold, `heads` how many names.
-    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], buffer: &'a mut [u8; BUFFER]) -> Result<Self, Error> {
+    /// Mounts the store on `dev` at time `now` (ns): a blank medium is formatted (if writable), a store is scanned and
+    /// its blocks verified; anything else is refused. `index` bounds how many blocks it can hold, `heads` how many
+    /// names, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
+    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], holes: &'a mut [Extent], buffer: &'a mut [u8; BUFFER],
+                 scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
         if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
         if buffer[..SECTOR].iter().all(|&b| b == 0) {
@@ -209,50 +256,144 @@ impl<'a, D: Device> Store<'a, D> {
         } else if buffer[..16] != superblock()[..16] {
             return Err(Error::Layout);
         }
-        let mut store = Store { dev, index, count: 0, heads, names: 0, buffer, end: 1, bytes: 0, corrupt: 0, damaged: 0 };
-        store.scan()?;
+        let mut store = Store { dev, index, count: 0, heads, names: 0, holes, runs: 0, buffer, scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0 };
+        store.pass(false)?;
         Ok(store)
     }
 
-    // Reads the log in windows of RECORD_SECTORS; each valid header's record is read whole and verified.
-    fn scan(&mut self) -> Result<(), Error> {
+    /// The time (ns, monotonic) the next requests happen at: leases are measured with it.
+    pub fn set_time(&mut self, now: u64) { self.now = now; }
+
+    /// Starts every block's lease at `now`: called when a mount is done, since verifying a whole medium can take longer
+    /// than a lease, and a restart must not shorten the time a writer has.
+    pub fn renew(&mut self, now: u64) {
+        self.now = now;
+        for e in self.index[..self.count].iter_mut() { e.lease = now; }
+    }
+
+    // Reads the medium in windows of RECORD_SECTORS and finds the runs of blank sectors. Mounting (`sweep` false)
+    // reads every record whole, verifies it and builds the index and the names. A sweep frees the block records the
+    // index does not retain at that place and the name records that are not current; nothing else is written.
+    fn pass(&mut self, sweep: bool) -> Result<Collected, Error> {
         let sectors = self.dev.sectors();
-        let mut lba = 1;
+        let mut freed = Collected::default();
+        let (mut lba, mut run) = (1u64, None::<u64>);
+        (self.runs, self.end, self.damaged) = (0, 1, 0);
+        if sweep { self.corrupt = 0; }
         while lba < sectors {
             let window = (sectors - lba).min(RECORD_SECTORS as u64) as usize;
             if !self.dev.read(lba, &mut self.buffer[..window * SECTOR]) { return Err(Error::Device); }
             let mut at = 0;
+            let mut next = lba + window as u64;
             while at < window {
-                let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
                 let here = lba + at as u64;
-                if let Some((cid, len)) = parse_header(sector) {
+                let sector = &self.buffer[at * SECTOR..(at + 1) * SECTOR];
+                if let Some((cid, len)) = parse_header(sector).filter(|&(_, len)| here + record_sectors(len) as u64 <= sectors) {
                     let n = record_sectors(len) as u64;
-                    if here + n <= sectors {
-                        self.end = here + n;
+                    let keep = if sweep {
+                        self.position(&cid.to_bytes()).is_ok_and(|i| self.index[i].lba == here && self.retained(i))
+                    } else {
                         if self.verify(here, &cid, len)? && !self.contains(&cid) {
                             if self.count == self.index.len() { return Err(Error::Full); }
                             self.insert(cid.to_bytes(), here, len);
                         }
-                        lba = here + n;
-                        break;
-                    }
+                        true
+                    };
+                    if keep { self.occupied(&mut run, here, n); } else { self.erase(here, n)?; run.get_or_insert(here); freed.blocks += 1; freed.sectors += n; }
+                    next = here + n;
+                    break;
                 }
                 if let Some(head) = parse_name(sector) {
-                    // The latest version of a name is current.
-                    self.end = here + 1;
-                    match self.find(head.name()) {
-                        Ok(i) => if head.version > self.heads[i].version { self.heads[i] = head; },
-                        Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, head); }
+                    let current = self.find(head.name()).map(|i| self.heads[i].version);
+                    if !sweep {
+                        // The latest version of a name is current.
+                        match current {
+                            Ok(version) => if head.version > version { let i = self.find(head.name()).unwrap(); self.heads[i] = head; },
+                            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, head); }
+                        }
+                    } else if current != Ok(head.version) {
+                        self.erase(here, 1)?;
+                        run.get_or_insert(here);
+                        freed.names += 1;
+                        freed.sectors += 1;
+                        next = here + 1;
+                        break;
                     }
+                    self.occupied(&mut run, here, 1);
                     at += 1;
                     continue;
                 }
-                if sector.iter().any(|&b| b != 0) { self.damaged += 1; self.end = here + 1; }
+                if let Some(n) = parse_free(sector).filter(|&n| here + n <= sectors) {
+                    // A collection stopped in the middle of freeing this: finish it.
+                    if self.dev.writable() { self.erase(here, n)?; run.get_or_insert(here); } else { self.occupied(&mut run, here, n); }
+                    next = here + n;
+                    break;
+                }
+                if sector.iter().any(|&b| b != 0) {
+                    self.damaged += 1;
+                    self.occupied(&mut run, here, 1);
+                } else {
+                    run.get_or_insert(here);
+                }
                 at += 1;
             }
-            if at == window { lba += window as u64; }
+            lba = next;
         }
+        if let Some(start) = run { self.hole(start, sectors - start); }
+        if sweep {
+            // What the sweep freed leaves the index.
+            let mut k = 0;
+            for i in 0..self.count {
+                if self.retained(i) { self.index[k] = self.index[i]; k += 1; } else { self.bytes -= self.index[i].len as u64; }
+            }
+            self.count = k;
+        }
+        freed.free = self.holes[..self.runs].iter().map(|h| h.len).sum();
+        Ok(freed)
+    }
+
+    // A record or damaged sector at `here`: the blank run before it ends.
+    fn occupied(&mut self, run: &mut Option<u64>, here: u64, n: u64) {
+        if let Some(start) = run.take() { self.hole(start, here - start); }
+        self.end = self.end.max(here + n);
+    }
+
+    fn hole(&mut self, start: u64, len: u64) {
+        if len > 0 && self.runs < self.holes.len() { self.holes[self.runs] = Extent { start, len }; self.runs += 1; }
+    }
+
+    // Frees `n` sectors at `lba`: a marker first, so a scan after a stop in the middle finishes it, then zeros.
+    fn erase(&mut self, lba: u64, n: u64) -> Result<(), Error> {
+        if !self.dev.write(lba, &free_marker(n)) || !self.dev.flush() { return Err(Error::Device); }
+        self.buffer.fill(0);
+        let mut at = lba + 1;
+        while at < lba + n {
+            let k = (lba + n - at).min(RECORD_SECTORS as u64) as usize;
+            if !self.dev.write(at, &self.buffer[..k * SECTOR]) { return Err(Error::Device); }
+            at += k as u64;
+        }
+        if !self.dev.flush() || !self.dev.write(lba, &self.buffer[..SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
         Ok(())
+    }
+
+    // The first run of blank sectors that holds `n`.
+    fn find_room(&self, n: u64) -> Option<u64> { self.holes[..self.runs].iter().find(|h| h.len >= n).map(|h| h.start) }
+
+    // Takes `n` sectors at `lba`, the start of a run.
+    fn claim(&mut self, lba: u64, n: u64) {
+        if let Some(i) = self.holes[..self.runs].iter().position(|h| h.start == lba) {
+            self.holes[i].start += n;
+            self.holes[i].len -= n;
+            if self.holes[i].len == 0 { self.holes.copy_within(i + 1..self.runs, i); self.runs -= 1; }
+        }
+        self.end = self.end.max(lba + n);
+    }
+
+    // Room for `n` sectors, after a collection if there is none.
+    fn room(&mut self, n: u64) -> Result<u64, Error> {
+        if let Some(lba) = self.find_room(n) { return Ok(lba); }
+        self.collect()?;
+        self.find_room(n).ok_or(Error::Full)
     }
 
     // Reads the record at `lba` into the buffer; whether its header names `cid` and `len` and its bytes match.
@@ -267,11 +408,13 @@ impl<'a, D: Device> Store<'a, D> {
 
     fn position(&self, key: &[u8; cid::BYTES]) -> Result<usize, usize> { self.index[..self.count].binary_search_by(|e| e.key.cmp(key)) }
     fn contains(&self, cid: &Cid) -> bool { self.position(&cid.to_bytes()).is_ok() }
+    // Whether a collection keeps the block: a name retains it, or its lease runs.
+    fn retained(&self, i: usize) -> bool { self.index[i].live || self.now < self.index[i].lease.saturating_add(LEASE_NS) }
 
     fn insert(&mut self, key: [u8; cid::BYTES], lba: u64, len: usize) {
         let at = self.position(&key).unwrap_err();
         self.index.copy_within(at..self.count, at + 1);
-        self.index[at] = Entry { key, lba, len: len as u32 };
+        self.index[at] = Entry { key, lba, len: len as u32, lease: self.now, live: false };
         self.count += 1;
         self.bytes += len as u64;
     }
@@ -299,54 +442,77 @@ impl<'a, D: Device> Store<'a, D> {
         Ok((head.version, head.root()))
     }
 
+    // Walks the object `root` through the store; `visit` sees the store and each block's CID.
+    fn walk(&mut self, root: &Cid, visit: impl FnMut(&mut Self, &Cid) -> Result<(), dag::Error>) -> Result<u64, Error> {
+        let scratch = self.scratch.take().ok_or(Error::Device)?;
+        let walked = dag::walk(self, root, scratch, visit);
+        self.scratch = Some(scratch);
+        walked.map_err(|e| match e {
+            dag::Error::NotFound => Error::Incomplete,
+            dag::Error::Corrupt => Error::Corrupt,
+            dag::Error::Store => Error::Device,
+            _ => Error::Invalid,
+        })
+    }
+
     /// Publishes `root` as the next version of `name` if `expected` is its current version (0: a new name), once
     /// every block of the object `root` names is stored (MC-4.3, 4.4); returns the new version after the device has
-    /// flushed it. `scratch` holds the blocks read on the way.
-    pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid, scratch: &mut [u8; dag::CHUNK]) -> Result<u64, Error> {
+    /// flushed it.
+    pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid) -> Result<u64, Error> {
         if !valid_name(name) { return Err(Error::Invalid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
-        let found = self.find(name);
-        let current = found.map_or(0, |i| self.heads[i].version);
+        let current = self.find(name).map_or(0, |i| self.heads[i].version);
         if expected != current { return Err(Error::Conflict); }
-        match dag::complete(self, root, scratch) {
-            Ok(_) => {}
-            Err(dag::Error::NotFound) => return Err(Error::Incomplete),
-            Err(dag::Error::Corrupt) => return Err(Error::Corrupt),
-            Err(dag::Error::Store) => return Err(Error::Device),
-            Err(_) => return Err(Error::Invalid),
-        }
-        if found.is_err() && self.names == self.heads.len() { return Err(Error::Full); }
-        if self.end + 1 > self.dev.sectors() { return Err(Error::Full); }
+        if self.find(name).is_err() && self.names == self.heads.len() { return Err(Error::Full); }
+        // Room first: a collection it starts may free blocks of `root` whose lease ended, and the check below sees it.
+        let lba = self.room(1)?;
+        self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
         let mut head = Head { name: [0; NAME_MAX], len: name.len() as u8, version: current + 1, root: root.to_bytes() };
         head.name[..name.len()].copy_from_slice(name);
-        let lba = self.end;
-        self.end += 1;
+        self.claim(lba, 1);
         if !self.dev.write(lba, &name_record(&head)) || !self.dev.flush() { return Err(Error::Device); }
-        match found { Ok(i) => self.heads[i] = head, Err(i) => self.add(i, head) }
+        match self.find(name) { Ok(i) => self.heads[i] = head, Err(i) => self.add(i, head) }
         Ok(head.version)
     }
 
+    /// Frees what no name retains and no lease protects: unretained blocks, other copies of a block (corrupt ones
+    /// too), and name records that are not current (MC-4.5). Every name's object is walked first, every node read and
+    /// checked; if one lacks a block or holds a corrupt node, nothing is freed.
+    pub fn collect(&mut self) -> Result<Collected, Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        for e in self.index[..self.count].iter_mut() { e.live = false; }
+        for i in 0..self.names {
+            let root = self.heads[i].root();
+            self.walk(&root, |s, cid| match s.position(&cid.to_bytes()) {
+                Ok(k) => { s.index[k].live = true; Ok(()) }
+                Err(_) => Err(dag::Error::NotFound),
+            })?;
+        }
+        self.pass(true)
+    }
+
     /// Stores `data` as a block of type `codec` and returns its CID, once the device has flushed it. A node must decode
-    /// first; a block already held is not written again.
+    /// first; a block already held is not written again, and its lease starts again. Without room a collection runs.
     pub fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> {
         if data.len() > BLOCK_MAX { return Err(Error::TooLarge); }
         if !typed(codec, data) { return Err(Error::Invalid); }
         let cid = Cid::of(codec, data);
-        if self.contains(&cid) { return Ok(cid); }
+        if let Ok(i) = self.position(&cid.to_bytes()) { self.index[i].lease = self.now; return Ok(cid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
-        let n = record_sectors(data.len());
-        if self.count == self.index.len() || self.end + n as u64 > self.dev.sectors() { return Err(Error::Full); }
-        let record = &mut self.buffer[..n * SECTOR];
+        let n = record_sectors(data.len()) as u64;
+        if self.count == self.index.len() { self.collect()?; }
+        if self.count == self.index.len() { return Err(Error::Full); }
+        let lba = self.room(n)?;
+        let record = &mut self.buffer[..n as usize * SECTOR];
         record.fill(0);
         record[..HEADER].copy_from_slice(&header(&cid, data.len()));
         record[HEADER..HEADER + data.len()].copy_from_slice(data);
         // Only a header sector starts with a record's magic, so a scan that resumes after a damaged sector cannot take
-        // a client's bytes for a name or a block record.
-        if record.chunks(SECTOR).skip(1).any(|s| &s[..8] == RECORD_MAGIC || &s[..8] == NAME_MAGIC) { return Err(Error::Invalid); }
-        let lba = self.end;
-        // The sectors are taken even if the write fails: they may hold part of it now, and are never written again.
-        self.end += n as u64;
-        if !self.dev.write(lba, &self.buffer[..n * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
+        // a client's bytes for a name, a block or a free record.
+        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
+        // The sectors are taken even if the write fails: they may hold part of it now, and are not written again.
+        self.claim(lba, n);
+        if !self.dev.write(lba, &self.buffer[..n as usize * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
         self.insert(cid.to_bytes(), lba, data.len());
         Ok(cid)
     }
@@ -367,6 +533,7 @@ impl<'a, D: Device> Store<'a, D> {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
             corrupt: self.corrupt, damaged: self.damaged, capacity: self.index.len() as u32, names: self.names as u32,
+            free: self.holes[..self.runs].iter().map(|h| h.len).sum(),
         }
     }
 

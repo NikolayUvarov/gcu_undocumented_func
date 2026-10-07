@@ -11,7 +11,7 @@ mod cid;
 mod dag;
 
 use cid::{Cid, Codec};
-use dag::{complete, decode, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
+use dag::{complete, decode, walk, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
 use std::collections::HashMap;
 
 /// Blocks in memory; `replace` makes the store answer a CID with other bytes.
@@ -63,6 +63,7 @@ fn roots_match_the_reference() {
         (CHUNK, "bafkreihgjfginakjmotvr5m37azopdpsn6cbkzl435sl2lvrupqyoin4ze", 0),
         (CHUNK + 1, "bafyreic3uhxyfv2fegq3ncxks5gjozd3eie5gd2mg2jx47imdt7kpoqnly", 1),
         (3 * CHUNK + 5, "bafyreihehmzwxjgnykqujlwp5t4hrhfjbizf46efitagjxwcyeriurb5qu", 1),
+        (100_000, "bafyreiaatjv3tf4ncvx6eeupemzvs5lz5zepknmtfeqlxdcibwwc5ae4ru", 1),
         (CHUNK * FANOUT, "bafyreidstuayugxp2x5xz4jfklg3t3lcc4lncadi3ygvz6tzodmhxpnszq", 1),
         (CHUNK * FANOUT + 1, "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai", 3),
         (CHUNK * (FANOUT + 3) + 100, "bafyreihsnvgycs2hpzkpxbh5irol2xzig37dbgph5xp4bvpv7hdwvsr6ym", 3),
@@ -237,4 +238,18 @@ fn an_object_is_complete_only_with_every_block() {
     let small = blocks.put(Codec::Raw, b"small").unwrap();
     assert_eq!(complete(&mut blocks, &small, &mut buffer), Ok(5));
     assert_eq!(complete(&mut Memory::default(), &small, &mut buffer), Err(Error::NotFound));
+}
+
+#[test]
+fn a_walk_names_every_block_of_the_object() {
+    let data = pattern(CHUNK * FANOUT + 3 * CHUNK + 11);
+    let mut blocks = Memory::default();
+    let (root, _) = store(&mut blocks, &data, 65536);
+    let mut seen = std::collections::HashSet::new();
+    let mut buffer = Box::new([0u8; CHUNK]);
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, cid| { seen.insert(*cid); Ok(()) }), Ok(data.len() as u64));
+    // Every block the builder stored, and nothing else.
+    assert_eq!(seen, blocks.blocks.keys().copied().collect());
+    // A visit that refuses stops the walk with its error.
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Err(Error::Full)), Err(Error::Full));
 }

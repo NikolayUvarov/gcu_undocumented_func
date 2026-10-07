@@ -4,6 +4,7 @@
 //! CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
 //! What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
 //! A name's current version points at the root of an object and changes only by compare-and-swap (302-STO-0001).
+//! What no name retains and no lease protects is collected (303-STO-0001, 1.1).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,11 +14,11 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-/// (`mind::blockstore`: put needs BADGE_PUT, get, has and resolve BADGE_GET, publish BADGE_PUBLISH, stat any).
+/// (`mind::blockstore`: put and collect need BADGE_PUT, get, has and resolve BADGE_GET, publish BADGE_PUBLISH, stat any).
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
 /// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything.
@@ -66,6 +67,16 @@ impl Wire for Head {
     const MAX: usize = <u64 as Wire>::MAX + <List<u8, 36> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.root.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, root: Wire::decode(r)? }) }
+}
+
+/// What a collection freed: block records (unretained, duplicate or corrupt copies), superseded name records, their
+/// sectors; and the blank sectors after it (1.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Collected { pub blocks: u32, pub names: u32, pub sectors: u64, pub free: u64 }
+impl Wire for Collected {
+    const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.names.encode(w)?; self.sectors.encode(w)?; self.free.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, names: Wire::decode(r)?, sectors: Wire::decode(r)?, free: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -163,6 +174,22 @@ pub fn resolve(endpoint: Endpoint, name: &str) -> Result<core::result::Result<He
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Head as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Frees what no name's current version retains and no lease protects (a block is leased for 60 s after its last
+/// put, and after the store mounts). Every name's object is walked first; if one lacks a block or holds a corrupt
+/// node, nothing is freed (incomplete, corrupt). A put that finds no room runs one too (1.1).
+pub fn collect(endpoint: Endpoint) -> Result<core::result::Result<Collected, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 24, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Collected as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16387;
 
@@ -175,6 +202,7 @@ pub enum Request<'a> {
     Stat,
     Publish { name: Text<64>, expected: u64, root: &'a [u8] },
     Resolve { name: Text<64> },
+    Collect,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -235,6 +263,13 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Resolve { name }, call))
         }
+        7 => {
+            let (call, length) = wire::take_buffer(request, cap, 24, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Collect, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -260,6 +295,10 @@ pub fn reply_publish(call: Call, value: core::result::Result<u64, Error>) -> Res
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_resolve(call: Call, value: core::result::Result<&Head, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_collect(call: Call, value: core::result::Result<&Collected, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
