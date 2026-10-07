@@ -33,7 +33,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
-| [158-APP-0005](158-APP-0005-camera-mark-on-ci.md) | The camera mark was missing once on CI (NVMe group); the check now reports what follows such a failure | `APP` | P2 | the next failure | tracks A, G |
 
 Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host).
 
@@ -162,6 +161,8 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) | `sysinfo.wit` 4.0: tasks and endpoints page by page; `sysmon`, `top`, the console's `ps`, `logd` see every task (171) | done (2026-10-06) |
 | [171-APP-0006](../issues-done/171-APP-0006-monitor-bounds.done) | `top`, `memmap`, `load`: capabilities as `n/4095`, counts of tasks and endpoints without the root quota, the task graph to its own scale, the EP column fits 65 535 (requested by `KRN`) | done (2026-10-07) |
 | [171-APP-0007](../issues-done/171-APP-0007-sysinfo-every-cpu-and-capability.done) | `sysinfo`: every CPU and every capability in pages; `top` and `load` show 16 CPUs and more (requested by `KRN`) | done (2026-10-07) |
+| [158-APP-0005](../issues-done/158-APP-0005-camera-mark-on-ci.done) | The camera mark was missing on CI: `video_gw` could sleep a minute (fixed in 158-DRV-0001); the check reports a stall with `ps` and `stat` | done (2026-10-07) |
+| [158-DRV-0001](../issues-done/158-DRV-0001-video-gw-frame-wait.done) | `video_gw`: a frame wait read the clock twice and could sleep 60 s (done by `APP` for 158-APP-0005, open track) | done (2026-10-07) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

@@ -1,0 +1,34 @@
+# 158-DRV-0001 — `video_gw`: a frame wait that could sleep a minute — done
+
+**Type:** drivers (service) · **Owner:** drivers track (`DRV`, open); done by the tools track for [158-APP-0005](158-APP-0005-camera-mark-on-ci.done) · **Priority:** P1 · **Status:** done (2026-10-07) · **Blocked by:** — · **Main task:** [158](../issues/158-video-capture.md) · **Roadmap:** track A · **Constitution:** MC-11.4 (the camera mark shows a sensor of the user's surroundings in use)
+
+## Problem
+
+`video_gw` hands out frames at the stream's rate. `Stream::next` waited for the next one with
+
+```rust
+while mind::time::monotonic_ns() < due { let _ = mind::time::sleep(((due - mind::time::monotonic_ns()) / 1_000_000) as usize + 1); }
+```
+
+The clock was read twice. When the frame came due between the two readings, as when the task is preempted between them on a busy CPU, `due - now` wrapped around (`u64` in a release build). The sleep asked for was then huge, and the kernel caps a sleep at 60 s. `video_gw` slept up to a minute in the middle of a stream. Meanwhile it sent no frames, and none of the heartbeats that keep the camera mark lit, which it sends from its main loop. So the mark went dark while a stream stayed open.
+
+On CI it showed as the tools track's camera check failing in about half of the runs: a mark missing at once, recordings of 3 s that did not end within a minute, a stream held open for about 60 s ([158-APP-0005](158-APP-0005-camera-mark-on-ci.done)).
+
+## Plan
+
+Read the clock once a pass: break when it has reached `due`, else sleep the rest.
+
+## Acceptance criteria
+
+- The wait never asks for more than the time left to the frame.
+- The camera check (`vfs` suite) passes on x86 with the ATA and the NVMe disk and on aarch64, and on CI.
+
+## Resolution
+
+- `video_gw/src/main.rs`, `Stream::next`: one reading of the clock a pass. No other program waits this way (searched for the pattern).
+- **Tested:** the `vfs` suite on x86 with the ATA and the NVMe disk and on aarch64; CI green on 885c071.
+- Done by the tools track because its own task needed it and the drivers track has no owner (AGENTS.md, section 5). Whoever takes the drivers track owns this task too.
+
+## Related
+
+[158](../issues/158-video-capture.md), [158-APP-0005](158-APP-0005-camera-mark-on-ci.done).

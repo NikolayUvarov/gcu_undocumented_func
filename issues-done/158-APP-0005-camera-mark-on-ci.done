@@ -1,6 +1,6 @@
-# 158-APP-0005 — The camera mark was missing once on CI
+# 158-APP-0005 — The camera mark was missing on CI — done
 
-**Type:** tools (test) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** the next failure on CI · **Main task:** [158](158-video-capture.md) · **Roadmap:** tracks A, G · **Constitution:** MC-11.4, MC-12.2
+**Type:** tools (test) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — · **Main task:** [158](../issues/158-video-capture.md) · **Roadmap:** tracks A, G · **Constitution:** MC-11.4, MC-12.2
 
 ## Problem
 
@@ -45,7 +45,7 @@ The check now also reports how much of the screenshot is black. On a stall, miss
 - The clocks agree: `logd`'s `AGE_MS` (52.7 s, TSC-based) matches the job's wall clock, so the TSC calibration is not off.
 - `ata` (on `video_gw`'s CPU 1) had done 503 265 system calls, its port I/O, and was idle at the moment of the report.
 
-Two things are wrong and not yet explained: `video_gw` sleeps far longer than the frame period, and no heartbeat lit the mark although `video_gw` sent some. Both are in `video_gw` and the compositor, not in the tools track's files: `video_gw` belongs to the drivers track (`DRV`, open, no owner), and the compositor to none listed in TRACKS.md. Logging there (a heartbeat the compositor refused; the mark switched on and off) would tell the rest.
+Left to explain at that point: why `video_gw` slept far longer than the frame period, and why the heartbeats it had sent did not keep the mark lit.
 
 **The cause.** `video_gw`'s `Stream::next` waited for a frame with
 
@@ -59,7 +59,7 @@ It read the clock twice. When the frame came due between the two readings (the t
 - no heartbeats, which `video_gw` sends from its main loop: the mark went dark while the stream stayed open, the privacy failure the check is there to catch;
 - `video_gw` asleep with almost no CPU time in the stall report.
 
-**The fix** reads the clock once a pass (`video_gw/src/main.rs`). No other program waits this way (searched for the pattern). `video_gw` is in the drivers track's directories; that track has no owner, so the tools track made the one-line fix itself and says so here and in its commit.
+**The fix** reads the clock once a pass (`video_gw/src/main.rs`). No other program waits this way (searched for the pattern). `video_gw` is in the drivers track's directories, and that track has no owner: the fix is the drivers track's task [158-DRV-0001](158-DRV-0001-video-gw-frame-wait.done), done by the tools track for this one. The maintainer approved it and made that the rule for open tracks (AGENTS.md, section 5).
 
 ## Plan
 
@@ -74,4 +74,10 @@ It read the clock twice. When the frame came due between the two readings (the t
 
 ## Related
 
-[158](158-video-capture.md), [164](../issues-done/164-usb-hid-keyboard-and-mouse.done) (the recording dot of the compositor).
+[158](../issues/158-video-capture.md), [158-DRV-0001](158-DRV-0001-video-gw-frame-wait.done) (the fix), [164](164-usb-hid-keyboard-and-mouse.done) (the recording dot of the compositor).
+
+## Resolution
+
+- **The cause** was in `video_gw`, not in the check: a frame wait that read the clock twice could sleep up to 60 s in the middle of a stream, with neither frames nor the mark's heartbeats meanwhile. Fixed in [158-DRV-0001](158-DRV-0001-video-gw-frame-wait.done).
+- **The check** is not weakened: it still fails when the mark is missing while a stream is open, or when a recording does not end, and on a stall it now reports what every task on the camera's path waits for (`tests/qemu_smoke.py`, `camera_check`).
+- **Tested:** the `vfs` suite (camera check) on x86 with the ATA and the NVMe disk and on aarch64; CI green on 885c071, the first commit with the fix.

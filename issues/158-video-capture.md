@@ -53,6 +53,7 @@ Steps 3–5 are done on the synthetic source; step 2 (UVC with isochronous trans
 - **Fixed on the way:**
   - **The loader's slots:** the loader's list of slots a launcher may fill lacked `SLOT_GPIO` (207) and now `SLOT_CAMERA`; both are allowed.
   - **A program that ends at once:** a screen program that ended before the shell's `FOCUS` (`camera` without a camera, on aarch64) lost its output and its exit notice. The shell now starts foreground programs in front with `commit-in-front` (issue 160), so the kernel's foreground exit path keeps both.
+  - **A frame wait of a minute** ([158-DRV-0001](../issues-done/158-DRV-0001-video-gw-frame-wait.done), 2026-10-07): `video_gw` read the clock twice. A frame that came due between the reads wrapped the wait into the kernel's 60 s cap, which left no frames and no camera mark. The gateway now reads the clock once a pass.
 - **Camera time:** a reader slower than the rate (MJPEG under TCG on aarch64) gets the latest frame. `camera -t` keeps camera time: each number it did not get repeats the picture before it, as `record` keeps screen time. Every timestamp lies on the rate's grid.
 - **Changed — "a program without it gets `ERR_RIGHTS`":** a program without `REQUEST_CAMERA`, or one the user refused, holds no capability to the gateway at all. Nothing in its capability space names the gateway, which is a stronger property than a refusal by the gateway. The test checks the refused program.
 - **Open:**
@@ -73,4 +74,4 @@ Steps 3–5 are done on the synthetic source; step 2 (UVC with isochronous trans
 
 ## Related
 
-[093](093-screen-recording.md), [088](../issues-done/088-text-window-manager.done), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).
+[093](../issues-done/093-screen-recording.done), [088](../issues-done/088-text-window-manager.done), [107](../issues-done/107-batched-frame-path.done), [docs/voice](../docs/voice/README.md), [docs/legacy.md](../docs/legacy.md).
