@@ -88,6 +88,18 @@ pub struct Sample { pub busy: [u16; CPUS_KEPT], pub busy_total: u16, pub busy_ma
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Load { pub one: u32, pub five: u32, pub fifteen: u32, pub uptime_ms: u64, pub fast_ms: u32, pub slow_ms: u32, pub fast_count: u32, pub slow_count: u32 }
 
+/// Every item of a list sysmon gives page by page from a position on (sysinfo.wit 4.0): `fetch(start)` returns one page
+/// of at most `page` items, and a shorter one is the last.
+pub fn paged<T>(page: usize, mut fetch: impl FnMut(u32) -> Result<Vec<T>, Problem>) -> Result<Vec<T>, Problem> {
+    let mut items = Vec::new();
+    loop {
+        let more = fetch(items.len() as u32)?;
+        let last = more.len() < page;
+        items.extend(more);
+        if last { return Ok(items); }
+    }
+}
+
 /// Why data could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Problem {

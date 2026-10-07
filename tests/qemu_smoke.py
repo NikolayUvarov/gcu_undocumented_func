@@ -1236,7 +1236,7 @@ def monitors_check(vm):
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=PID"))
     vm.send_bytes(b"\x1b")
     vm.expect("DETAILS=0")
-    # init's details list every capability it holds, page by page past 64 (171-APP-0007).
+    # init's details list every capability it holds (171-APP-0007; 51 here, pages past 64 are host-tested).
     vm.send_bytes(b"\x1b[H")
     vm.expect("SELECTED=1 ")
     vm.send("\n")
@@ -1251,7 +1251,7 @@ def monitors_check(vm):
     require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     total = int(re.search(r"STAT CAPS VERSION=\d+ COUNT=\d+ TOTAL=(\d+)", vm.command("stat caps 1", raw=True))[1])
-    assert listed == total > 64, (listed, total)
+    assert listed == total, (listed, total)
     # memmap: physical map, kernel arena, the known layout of clock's address space, quotas.
     vm.send("memmap\n")
     vm.expect("[MEMMAP] READY")

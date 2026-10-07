@@ -427,6 +427,20 @@ fn task_graph_to_its_own_scale() {
 }
 
 #[test]
+fn lists_page_by_page() {
+    // 171-APP-0007: a list longer than a page (a task's 150 capabilities, 64 a page) is read whole; a full last page
+    // takes one more call, which comes back empty.
+    let items: Vec<u32> = (0..150).collect();
+    let mut starts = Vec::new();
+    let all = paged(64, |start| { starts.push(start); Ok(items.iter().copied().skip(start as usize).take(64).collect()) }).unwrap();
+    assert_eq!((all, starts), (items.clone(), vec![0, 64, 128]));
+    let mut starts = Vec::new();
+    let all = paged(64, |start| { starts.push(start); Ok(items[..128].iter().copied().skip(start as usize).take(64).collect()) }).unwrap();
+    assert_eq!((all.len(), starts), (128, vec![0, 64, 128]));
+    assert_eq!(paged::<u32>(64, |_| Err(Problem::Busy)), Err(Problem::Busy));
+}
+
+#[test]
 fn root_quota_in_the_endpoint_column() {
     // 171-APP-0006: init holds the root quota (65 535) and lends loader 65 279: their use alone fits the EP column.
     let mut source = system();

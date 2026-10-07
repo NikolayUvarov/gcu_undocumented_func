@@ -29,8 +29,8 @@ So `top` and `load` show at most 8 CPUs, and `caps` and `top` at most 64 capabil
 ## Acceptance criteria
 
 - With 16 CPUs, `top` shows a bar and `load` a graph for each of the 16 (QEMU, groups "16 CPUs").
-- `top`'s details list every capability of init, more than 64 (QEMU, `tools` suite).
-- Host tests: 16 and 64 CPUs in `top`, 20 in `load`; shares since the last refresh.
+- `top`'s details list every capability of init (QEMU, `tools` suite).
+- Host tests: 16 and 64 CPUs in `top`, 20 in `load`; shares since the last refresh; a list of 150 read in pages of 64.
 
 ## Related
 
