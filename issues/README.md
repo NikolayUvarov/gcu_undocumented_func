@@ -33,7 +33,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (`applications_until_memory_ends` with more than 8 CPUs).
 
 
 ## Finished tasks (`issues-done/`)
@@ -206,6 +206,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-KRN-0004](../issues-done/171-KRN-0004-growing-capability-tables.done) | Capability tables that grow on demand up to 4095 slots (171, step 4) | done (2026-10-06) |
 | [171-KRN-0002](../issues-done/171-KRN-0002-task-and-endpoint-tables.done) | No fixed count of tasks, applications or endpoints; root quota 65 535 (171, step 2) | done (2026-10-06) |
 | [171-KRN-0007](../issues-done/171-KRN-0007-stat-pages.done) | STAT from a given record on: callers page through any number of records (171) | done (2026-10-06) |
+| [171-KRN-0008](../issues-done/171-KRN-0008-wake-ipis-with-many-cpus.done) | Wake IPIs with many CPUs: one per idle period, one pass over the tasks; the 16-CPU stall (171) | done (2026-10-07) |
 | [172](../issues-done/172-64-bit-handles-and-abi-version.done) | 64-bit capability handles (32-bit generation), the IPC timeout in `arg2`, 16-byte grants, ABI version 2 checked at program start | done (2026-10-07) |
 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) | The block store starts at boot over `ramdisk#1`; the shell's client in slot 25; `REQUEST_BLOCKSTORE` (requested by STO) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |

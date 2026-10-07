@@ -124,7 +124,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize); EXIT_STATUSES], ended_next: usize, // (PID, reason) of the last tasks that ended (EXIT_STATUS)
-    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX],
+    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], // woken: a wake IPI is on its way to that CPU
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -140,7 +140,7 @@ struct Scheduler {
 static mut SCHEDULER: Option<Scheduler> = None;
 static LOCK: AtomicBool = AtomicBool::new(false);
 struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.store(false, Ordering::Release); } }
-fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { core::hint::spin_loop(); } let _guard = Guard; f() }) }
+fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { while LOCK.load(Ordering::Relaxed) { core::hint::spin_loop(); } } let _guard = Guard; f() }) }
 
 unsafe fn scheduler() -> &'static mut Scheduler { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap() }
 
@@ -163,7 +163,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -175,7 +175,7 @@ impl Scheduler {
         self.tasks[slot].as_ref().is_some_and(|t| t.cpu == cpu && t.band == band && (t.budget_ns == 0 || t.consumed < t.budget_ns) && t.state == State::Ready)
     }
     fn select(&mut self, sp: usize, cpu: usize) -> usize {
-        let current = self.current[cpu];
+        let current = self.current[cpu]; self.woken[cpu] = false;
         // Every select reloads CR3, which completes a pending TLB flush of this CPU.
         if core::mem::take(&mut self.flush[cpu]) && !self.flush.iter().any(|&f| f) {
             for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; } }
@@ -202,9 +202,19 @@ impl Scheduler {
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI.
-    fn wake_idle(&self, this: usize) {
-        for other in 0..cpu::COUNT.load(Ordering::Acquire) {
-            if other != this && self.current[other] == 0 && self.tasks.iter().flatten().any(|t| t.cpu == other && t.state == State::Ready) { unsafe { cpu::wake(other); } }
+    // One IPI until that CPU selects again, and one pass over the tasks for all CPUs: every event on every CPU calls
+    // this under the lock, and with 16 CPUs repeated IPIs and a pass per CPU starved them all (requests-KRN.md).
+    fn wake_idle(&mut self, this: usize) {
+        let count = cpu::COUNT.load(Ordering::Acquire);
+        let waiting = |s: &Self, other: usize| other != this && s.current[other] == 0 && !s.woken[other];
+        if !(0..count).any(|other| waiting(self, other)) { return; }
+        let mut ready = [0u64; cpu::MAX.div_ceil(64)];
+        // A task out of budget counts once its period ends: select refills it, and an idle CPU has no tick to.
+        let now = crate::clock::now_ns();
+        let runnable = |t: &&Task| t.state == State::Ready && t.cpu < count && (t.budget_ns == 0 || t.consumed < t.budget_ns || now >= t.period_start + t.period_ns);
+        for t in self.tasks.iter().flatten().filter(runnable) { ready[t.cpu / 64] |= 1 << (t.cpu % 64); }
+        for other in 0..count {
+            if waiting(self, other) && ready[other / 64] & 1 << (other % 64) != 0 { self.woken[other] = true; unsafe { cpu::wake(other); } }
         }
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
@@ -1275,9 +1285,10 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             let next = (|| match event {
                 Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
                 Event::Tick => {
-                    cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); }
-                    // Idle CPUs get no tick: the one that ticks wakes those with a task ready (issue 171).
-                    s.expire(now); s.wake_idle(cpu);
+                    cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
+                    // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
+                    // tasks that makes ready get a wake IPI below (issue 171).
+                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }

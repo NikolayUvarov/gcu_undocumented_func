@@ -1,0 +1,34 @@
+# 171-KRN-0008 — Wake IPIs with many CPUs: one per idle period, one pass over the tasks — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-07) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-1.7, MC-5.1
+
+## Problem
+
+Recorded by the tools track in `requests-KRN.md`: with 16 CPUs (TCG, 4 host cores) the shell stopped answering after about 25 `run clock &`, and `main`'s own check of 40 applications stalled on a slower host.
+
+Since 171-KRN-0003 an idle CPU gets no tick and sleeps until a wake IPI. `wake_idle` runs under the scheduler lock after every event on every CPU. For each idle CPU it scanned the whole task table, and it sent the IPI again on every event until that CPU selected. A sample of every CPU at the stall showed CPU 0 in `cpu::wake`, waiting for the LAPIC to deliver, while it held the lock, and most others in `scheduler::interrupt`, spinning on that lock. With 16 CPUs the IPIs sent under the lock starved them all.
+
+## Plan
+
+- `Scheduler.woken`: one wake IPI per idle period of a CPU. `select` clears the flag.
+- One pass over the tasks for all idle CPUs, made only when some CPU is idle and not yet woken.
+- Only tasks that can run count. A task out of budget counts once its period ends, because only `select` refills it and an idle CPU has no tick.
+- Sleeps and IPC deadlines end on the boot CPU's tick, which drives every other CPU's tick. Before, every busy CPU's tick scanned all tasks twice.
+- The lock waits by reading (test and test-and-set) rather than by repeated `cmpxchg`.
+
+## Acceptance criteria
+
+With 16 CPUs, clocks start until the frame pool refuses one, and the shell answers throughout.
+
+## Resolution
+
+- **Code:** `kernel/src/scheduler.rs` (`wake_idle`, `woken`, the tick handler, `locked`).
+- **Measured on x86, 16 CPUs (TCG, 4 host cores).** Commands were sent with no time limit.
+  - Before: the stall came after 28 clocks.
+  - After: 78 clocks started, and the 79th got `OUT OF MEMORY`. With 4 CPUs the count is 79.
+  - The `normal` suite with `--cpus 16`, which includes `main`'s check of 40 applications, passed in 2 runs of 2.
+- **Gate:** the full local run passed, including the "16 CPUs" groups on x86 and aarch64.
+- **Not done.** With 78 clocks drawing, 16 emulated CPUs on 4 host cores answer slowly:
+  - `ps` took 8.9 s, `uptime` 4.9 s and `date` 1.0 s. With 4 CPUs they took 0.5 s, 0.6 s and 0.1 s.
+  - A sample of every CPU at 60 clocks found 345 of 400 samples in `hlt`. The guest is not saturated. The delay is in waking emulated CPUs on a busy host.
+  - The tools track's `applications_until_memory_ends` waits 8 s for a prompt, so it stays limited to 8 CPUs. Passed on in `requests-APP.md`.
