@@ -52,7 +52,7 @@ impl Endpoint {
 
     /// `send` that fails with `ERR_TIMEOUT` after `ms` milliseconds (0: no limit).
     pub fn send_timeout(&self, message: &Message, ms: u32) -> Result<()> {
-        check(queued(SYSCALL_IPC_SEND, self.word(ms), 0, message).result).map(drop)
+        check(queued(SYSCALL_IPC_SEND, self.0, 0, ms, message).result).map(drop)
     }
 
     /// Sends and waits for the server's reply; a capability in the reply lands in slot `receive` (0 means don't accept).
@@ -60,7 +60,7 @@ impl Endpoint {
 
     /// `call` that gives up after `ms` milliseconds (0: no limit); a later reply from the server is discarded.
     pub fn call_timeout(&self, message: &Message, receive: usize, ms: u32) -> Result<Received> {
-        let raw = queued(SYSCALL_IPC_CALL, self.word(ms), receive, message);
+        let raw = queued(SYSCALL_IPC_CALL, self.0, receive, ms, message);
         check(raw.result).map(|_| received(raw))
     }
 
@@ -69,22 +69,22 @@ impl Endpoint {
 
     /// `recv` that fails with `ERR_TIMEOUT` after `ms` milliseconds (0: no limit).
     pub fn recv_timeout(&self, receive: usize, ms: u32) -> Result<Received> {
-        let raw = syscall(SYSCALL_IPC_RECV, self.word(ms), receive, [0; 4]);
+        let raw = syscall(SYSCALL_IPC_RECV, self.0, receive | (ms as usize) << IPC_TIMEOUT_SHIFT, [0; 4]);
         check(raw.result).map(|_| received(raw))
     }
 
-    fn word(&self, ms: u32) -> usize { self.0 | (ms as usize) << IPC_TIMEOUT_SHIFT }
 }
 
 // A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again, within the caller's timeout.
-fn queued(number: usize, word: usize, receive: usize, message: &Message) -> crate::sys::Raw {
-    let (handle, ms) = (word & ((1 << IPC_TIMEOUT_SHIFT) - 1), word >> IPC_TIMEOUT_SHIFT);
+// The timeout rides above the receive slot in arg2 (issue 172: handles are 64 bits).
+fn queued(number: usize, handle: usize, receive: usize, ms: u32, message: &Message) -> crate::sys::Raw {
+    let ms = ms as usize;
     let start = call(SYSCALL_UPTIME, 0, 0);
     loop {
         let elapsed = call(SYSCALL_UPTIME, 0, 0).wrapping_sub(start);
         if ms != 0 && elapsed >= ms { return crate::sys::Raw { result: ERR_TIMEOUT, arg1: 0, arg2: 0, msg: [0; 4] }; }
         let left = if ms == 0 { 0 } else { ms - elapsed };
-        let raw = syscall(number, handle | left << IPC_TIMEOUT_SHIFT, receive, [message.cap, message.mask(), message.data[0], message.data[1]]);
+        let raw = syscall(number, handle, receive | left << IPC_TIMEOUT_SHIFT, [message.cap, message.mask(), message.data[0], message.data[1]]);
         if raw.result != ERR_BUSY { return raw; }
         call(SYSCALL_WAIT, 10, 0);
     }

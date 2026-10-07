@@ -11,6 +11,7 @@ linked_list_allocator = "0.10.5"
 [features]
 # Test-only kernel: panics on the first LOG system call (inside the scheduler lock) to check the panic report.
 panic-test = []
+abi-test = [] # tasks see ABI_VERSION + 1 (issue 172): init must refuse to run
 
 [profile.release]
 panic = "abort"

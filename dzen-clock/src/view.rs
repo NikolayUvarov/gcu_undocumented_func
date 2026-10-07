@@ -51,6 +51,7 @@ mod tests {
             pixel_masks: [0; 3],
             acpi_rsdp: 0,
             cpu_features: 0,
+            abi_version: crate::abi::ABI_VERSION,
         }
     }
 

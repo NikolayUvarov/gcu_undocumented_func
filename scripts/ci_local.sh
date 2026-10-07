@@ -46,7 +46,7 @@ OVMF=/usr/share/ovmf/OVMF.fd
 X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
  --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
- --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel"
+ --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
 # Group name | command; a failed "build" step skips the rest of its part.
@@ -102,6 +102,7 @@ x86_fixtures() {
             "tests/$f.rs" -o "/tmp/mind-core-$f.elf" || return 1
     done
     (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
+    (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
 }
 tap_bench() {
     ip link show mindtap0 >/dev/null 2>&1 || {

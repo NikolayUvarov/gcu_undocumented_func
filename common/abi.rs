@@ -32,7 +32,10 @@ const fn channel(value: u32, mask: u32) -> u32 {
     let scaled = if width >= 8 { value << (width - 8) } else { value >> (8 - width) };
     (scaled << shift) & mask
 }
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, }
+// The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles; the kernel writes it into every task's
+// BootInfo and libmind refuses to run a program built for another one.
+pub const ABI_VERSION: u32 = 2;
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32, }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
@@ -177,9 +180,10 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
-// Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX, what a handle can name (issue 171).
+// Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
+// kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
 pub const CAP_SLOTS: usize = 96;
-pub const CAP_SLOTS_MAX: usize = HANDLE_SLOT_MASK + 1;
+pub const CAP_SLOTS_MAX: usize = 4096;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;
@@ -250,12 +254,11 @@ pub const SLOT_BLOCKSTORE: usize = 25;
 pub const SLOT_DYNAMIC: usize = 26;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
-// Received capabilities and the compositor's screen are placed only in fixed slots. A handle fits in 32 bits (grants,
-// IPC timeouts above it): 12 bits name up to 4095 slots, 20 bits the generation, which wraps after 1 048 575 reuses of
-// one slot (issue 171; before: 8 and 24 bits).
-pub const HANDLE_SLOT_MASK: usize = 0xFFF;
-pub const HANDLE_GENERATION_SHIFT: usize = 12;
-pub const HANDLE_GENERATION_MAX: usize = 0xF_FFFF;
+// Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
+// 24 bits of slot and 32 of generation, which wraps after 4 294 967 295 reuses of one slot.
+pub const HANDLE_SLOT_MASK: usize = 0xFF_FFFF;
+pub const HANDLE_GENERATION_SHIFT: usize = 24;
+pub const HANDLE_GENERATION_MAX: usize = 0xFFFF_FFFF;
 
 // Endpoints have no global names: every one is created by ENDPOINT_CREATE (init's own by the kernel) and reached only
 // through capabilities (MC-3.3).
@@ -270,8 +273,8 @@ pub const BLOCK_KIND_NVME: usize = 6;
 // The mask narrows endpoint rights only; other capabilities keep their rights (narrow memory with CAP_MINT first).
 // A transfer is a copy (a child the sender can revoke) unless CAP_TRANSFER_MOVE moves it out of the sender's table.
 pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
-// IPC_SEND, IPC_CALL, IPC_RECV: arg1 = endpoint handle | timeout in milliseconds << IPC_TIMEOUT_SHIFT (0: wait without
-// limit; 10 ms granularity). On expiry the call fails with ERR_TIMEOUT: a waiting send leaves the queue with its
+// IPC_SEND, IPC_CALL, IPC_RECV: arg1 = endpoint handle, arg2 = receive slot | timeout in milliseconds << IPC_TIMEOUT_SHIFT
+// (0: wait without limit; 10 ms granularity; issue 172: before, the timeout was in arg1). On expiry the call fails with ERR_TIMEOUT: a waiting send leaves the queue with its
 // capability, a caller stops waiting and the server's later reply fails with ERR_PEER.
 pub const IPC_TIMEOUT_SHIFT: usize = 32;
 // Senders waiting on one endpoint; one more fails with ERR_BUSY at once (back-pressure).
@@ -313,7 +316,8 @@ pub const SPAWN_GRANTS_MAX: usize = 24;
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;
 pub const ARGS_MAX: usize = 1024;
-#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub own: u32, pub child: u8, pub rights: u8, pub flags: u16 }
+// 16 bytes (issue 172): the spawner's handle, the child's slot, rights and flags.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct Grant { pub own: u64, pub child: u8, pub rights: u8, pub flags: u16, pub reserved: u32 }
 pub const GRANT_MOVE: u16 = 1; // move the capability into the child instead of copying it
 
 // PLATFORM_CAP: arg1 = kind, arg2 and msg[0] = arguments; result = new slot. The kernel validates every resource.

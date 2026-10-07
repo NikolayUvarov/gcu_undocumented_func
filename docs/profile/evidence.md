@@ -27,6 +27,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | The frame pool is every free range of the firmware map (issue 171) | `normal` suite (`pool_covers_free_ram`), at 512 MiB and 6 GiB |
 | The frame pool holds the RAM above 4 GiB, and a program's heap there is written and read back; programs, screens, the network and the disks work on it (issue 171) | `normal` suite with `--memory 6G` (`ram_above_4g`); the x86 group "RAM above 4 GiB" also runs `display`, `net` and `vfs`; the aarch64 `highmem=on` group |
 | A program's image, stack and screen are charged to its spawner's memory quota and leave it at exit (issue 168) | `memory` suite (`memory_charged_to_spawner`) |
+| A program built for another ABI version does not run; init stopping halts the system with the reason (issue 172) | `boot` suite (`--abi-kernel`, a kernel built with `abi-test`) |
 | Applications cannot take the system band's recovery reserve of the frame pool; a service restarts while they hold all they can (issue 169); `MEMORY_RESERVE` needs the platform privilege | `memory` suite (`recovery_reserve`), `isolation` case `k` |
 | init holds the privileges it grants in escrow and no process control; services restarted from escrow get the privilege; init stops services and applications as their ancestor (issue 170) | `services` suite (`escrow_check`, `lifecycle_check`) |
 | Independent instances, focus, Ctrl+Z over UART and PS/2, Esc, kill, logs, task limit | `normal` suite |

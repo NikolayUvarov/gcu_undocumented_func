@@ -29,7 +29,7 @@ unsafe fn sleep(mb: *mut SyscallMailbox, ms: usize) {
         call(mb, abi::SYSCALL_WAIT, ms - elapsed, 0);
     }
 }
-const SECONDS: usize = 1000 << abi::IPC_TIMEOUT_SHIFT;
+const SECONDS: usize = 1000 << abi::IPC_TIMEOUT_SHIFT; // a timeout in IPC's arg2 (issue 172)
 // Starts a copy of this program through loader with `endpoint` (write/grant) in its INIT slot: a launch session of
 // idl/loader.wit 1.1, encoded by hand (begin(name, args) in a buffer, grant(session, slot, cap), commit(session)).
 unsafe fn spawn_child(mb: *mut SyscallMailbox, endpoint: usize) {
@@ -55,13 +55,13 @@ unsafe fn child(mb: *mut SyscallMailbox) {
     if hello != 0 { fail(); }
     let (mode, got_cap) = ((*mb).msg[2], (*mb).msg[0]);
     match mode {
-        1 => match ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT | 3 * SECONDS, 0, [0, 0, 1, 0]) {
+        1 => match ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 3 * SECONDS, [0, 0, 1, 0]) {
             0 => {}
             abi::ERR_BUSY => { sleep(mb, 1000); if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 2, 0]) != 0 { fail(); } }
             _ => fail(),
         },
         2 => {
-            if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT | 200 << abi::IPC_TIMEOUT_SHIFT, 0, [0, 0, 3, 0]) != abi::ERR_TIMEOUT { fail(); }
+            if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 200 << abi::IPC_TIMEOUT_SHIFT, [0, 0, 3, 0]) != abi::ERR_TIMEOUT { fail(); }
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 4, 0]) != 0 { fail(); }
         }
         3 | 5 => {
@@ -81,7 +81,7 @@ unsafe fn child(mb: *mut SyscallMailbox) {
 }
 // Receives one hello call and replies with the mode and an optional capability.
 unsafe fn greet(mb: *mut SyscallMailbox, endpoint: usize, mode: usize, cap: usize, mask: usize) {
-    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[1] & abi::MSG_FLAG_CALL == 0 { fail(); }
+    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[1] & abi::MSG_FLAG_CALL == 0 { fail(); }
     if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [cap, mask, mode, 0]) != 0 { fail(); }
 }
 unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
@@ -322,12 +322,12 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 }
                 if call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0) != abi::ERR_LIMIT { asm!("ud2", options(noreturn)); }
                 // Deadlines: send, call and receive on an endpoint nobody serves time out and leave nothing queued.
-                let timed = |handle: usize| handle | 30 << abi::IPC_TIMEOUT_SHIFT;
+                let timeout = 30 << abi::IPC_TIMEOUT_SHIFT; // in arg2 above the receive slot (issue 172)
                 let start = call(mb, abi::SYSCALL_UPTIME, 0, 0);
                 let raw = mb; (*raw).msg = [0, 0, 7, 7];
-                if call(mb, abi::SYSCALL_IPC_SEND, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
-                    || call(mb, abi::SYSCALL_IPC_CALL, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
-                    || call(mb, abi::SYSCALL_IPC_RECV, timed(endpoints[1]), 0) != abi::ERR_TIMEOUT
+                if call(mb, abi::SYSCALL_IPC_SEND, endpoints[1], timeout) != abi::ERR_TIMEOUT
+                    || call(mb, abi::SYSCALL_IPC_CALL, endpoints[1], timeout) != abi::ERR_TIMEOUT
+                    || call(mb, abi::SYSCALL_IPC_RECV, endpoints[1], timeout) != abi::ERR_TIMEOUT
                     || call(mb, abi::SYSCALL_UPTIME, 0, 0) - start < 90 {
                     asm!("ud2", options(noreturn));
                 }
@@ -395,14 +395,14 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 for _ in 0..5 { spawn_child(mb, endpoint); }
                 let mut replies = [0usize; 5];
                 for reply in replies.iter_mut() {
-                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 { fail(); }
+                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 { fail(); }
                     *reply = call(mb, abi::SYSCALL_IPC_SAVE_REPLY, 0, 0);
                 }
                 for reply in replies { if ipc(mb, abi::SYSCALL_IPC_REPLY, reply, 0, [0, 0, 1, 0]) != 0 { fail(); } }
                 sleep(mb, 600);
                 let mut queued = 0;
                 loop {
-                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 { fail(); }
+                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 { fail(); }
                     match (*mb).msg[2] { 1 => queued += 1, 2 => break, _ => fail() }
                 }
                 if queued != abi::ENDPOINT_QUEUE { fail(); }
@@ -414,10 +414,10 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 2, 0, 0);
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 3 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 3 { fail(); }
                 sleep(mb, 400);
                 if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 9, 0]) != abi::ERR_PEER { fail(); }
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 4 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 4 { fail(); }
                 print(mb, b"LATE REPLY OK\r\n");
                 return;
             }
@@ -432,14 +432,14 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if mapped >= abi::ERR_FIRST { fail(); }
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 7, object, abi::CAP_TRANSFER_MOVE);
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 100 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 100 { fail(); }
                 if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_MEMORY { fail(); }
                 // Unmapped, it moves.
                 if call(mb, abi::SYSCALL_FREE, mapped, 0) != 0 { fail(); }
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 3, object, abi::CAP_TRANSFER_MOVE);
                 if call(mb, abi::SYSCALL_CAP_INFO, object, 0) != abi::CAP_KIND_NONE { fail(); }
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 0x0B1EC7 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 0x0B1EC7 { fail(); }
                 print(mb, b"MOVE OK\r\n");
                 return;
             }
@@ -453,7 +453,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let badge = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0); (*mb).arg2 };
                 if again != abi::ERR_INVALID || badge(kept) != 0x42 || badge(endpoint) != 0 { fail(); }
                 spawn_child(mb, badged);
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).arg2 != 0x42 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).arg2 != 0x42 { fail(); }
                 if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 6, 0]) != 0 { fail(); }
                 print(mb, b"BADGE OK\r\n");
                 return;
@@ -466,7 +466,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 greet(mb, endpoint, 4, 0, 0);
                 sleep(mb, 300);
                 if call(mb, abi::SYSCALL_CAP_REVOKE, endpoint, 0) != 2 { fail(); }
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 3, [0; 4]) != 0 || (*mb).msg[2] != 5 || (*mb).msg[0] != 0 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 | 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 5 || (*mb).msg[0] != 0 { fail(); }
                 print(mb, b"REVOKE PENDING OK\r\n");
                 return;
             }
@@ -476,7 +476,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 spawn_child(mb, endpoint);
                 greet(mb, endpoint, 5, memory, 0);
-                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint | 3 * SECONDS, 0, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
                 sleep(mb, 100);
                 if call(mb, abi::SYSCALL_CAP_REVOKE, memory, 0) != 1 { fail(); }
                 sleep(mb, 300);

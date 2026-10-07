@@ -28,6 +28,17 @@ pub fn log(bytes: &[u8]) {
     crate::output::send(bytes);
 }
 
+/// Exit code of a program that does not match the kernel's ABI.
+pub const ABI_MISMATCH_EXIT: u32 = 126;
+/// Stops a program built for another system-call ABI than the kernel's (MC-11.1, issue 172): it says so and exits.
+pub fn check_abi(info: &BootInfo) {
+    if info.abi_version == ABI_VERSION { return; }
+    let mut line = crate::line::Line::new(log);
+    let _ = core::fmt::Write::write_fmt(&mut line, format_args!("ABI MISMATCH: PROGRAM {} KERNEL {}\n", ABI_VERSION, info.abi_version));
+    drop(line);
+    exit_with(ABI_MISMATCH_EXIT);
+}
+
 /// One line for `println!`: formatted, then written whole with its newline (issue 209).
 pub fn log_line(args: core::fmt::Arguments) {
     let mut line = crate::line::Line::new(log);
@@ -91,10 +102,10 @@ pub enum Image {
 
 /// Grant for SPAWN: the child's fixed slot `child` gets a copy of the caller's capability `own` (a handle),
 /// endpoints narrowed by `rights`.
-pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, flags: 0 } }
+pub const fn grant(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u64, child: child as u8, rights, flags: 0, reserved: 0 } }
 
 /// Same, but the capability is moved into the child (the caller's handle becomes invalid once the child exists).
-pub const fn grant_moved(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u32, child: child as u8, rights, flags: GRANT_MOVE } }
+pub const fn grant_moved(child: usize, own: usize, rights: u8) -> Grant { Grant { own: own as u64, child: child as u8, rights, flags: GRANT_MOVE, reserved: 0 } }
 
 /// Quotas delegated to a child at SPAWN, taken from the spawner's own: live child tasks and endpoints, and private
 /// memory in MiB (0: the default HEAP_MAX_BYTES, SPAWN_MEMORY_ALL: the spawner's whole quota; issue 150).
