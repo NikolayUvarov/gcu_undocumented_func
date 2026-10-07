@@ -37,6 +37,16 @@ A black pixel (`000000`) is neither the mark nor the background, so the screendu
 
 The check now also reports how much of the screenshot is black. On a stall, missing mark or a recording that does not end, it presses Ctrl+Z, which gives the shell back while the program runs on, and reports `ps` and `stat` of every task on the camera's path: what each one waits for during the stall.
 
+**Fourth failure, with the stall report** (CI, 82bb9c6, "files and block writes", 2026-10-07; `main`'s CI on the same code, 73689c1, passed). Taken 5.8 s after the program started (`AGE_MS=5834`):
+
+- The mark pixel black at 1.0–4.4 s, and 93% of the screen black: the camera's own screen, a 320×240 preview on black, so the compositor was compositing it. The compositor was in its receive (`RECV`), alive, 2 704 runs since boot.
+- `camera`: `STATE=CALL WAIT=14`, waiting on `video_gw` for a frame; 61 ms of CPU.
+- `video_gw`: `STATE=SLEEP`, 36 runs and 31 ms of CPU since boot, 18 messages received, 11 sent. It sleeps in `Stream::next` until a frame is due; at about 14 requests in 5.8 s it gave a frame every ~800 ms instead of every 100 ms.
+- The clocks agree: `logd`'s `AGE_MS` (52.7 s, TSC-based) matches the job's wall clock, so the TSC calibration is not off.
+- `ata` (on `video_gw`'s CPU 1) had done 503 265 system calls, its port I/O, and was idle at the moment of the report.
+
+Two things are wrong and not yet explained: `video_gw` sleeps far longer than the frame period, and no heartbeat lit the mark although `video_gw` sent some. Both are in `video_gw` and the compositor, not in the tools track's files: `video_gw` belongs to the drivers track (`DRV`, open, no owner), and the compositor to none listed in TRACKS.md. Logging there (a heartbeat the compositor refused; the mark switched on and off) would tell the rest.
+
 ## Plan
 
 1. The check keeps failing in that case, and says more when it does (done with this issue): four more samples of the pixel 0.3 s apart with their time since `OPENED`, the camera program's own output to its end, and the gateway's log.
