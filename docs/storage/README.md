@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.2 (2026-10-06) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues/301-objects-as-merkle-dags.md), [302](../../issues/302-names-and-current-roots.md) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.3 (2026-10-07) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -34,7 +34,7 @@ A new hash algorithm or content type gets its own code. Identifiers that already
 
 Until it exists, the store accepts only `sha2-256`.
 
-## Objects — implemented (301-STO-0001)
+## Objects — implemented, run on the platform (301)
 
 An object larger than a block is a Merkle-DAG named by one root CID (`libmind/src/dag.rs`, Appendix B.3).
 
@@ -56,9 +56,11 @@ Evidence: `tests/dag_host.rs`.
 - The roots and node bytes equal those of an independent reference: the tree built by its shape rule in Python, with the `dag-cbor` and `multiformats` libraries, for sizes around every boundary of the shape.
 - Non-canonical nodes, trees out of shape and forged blocks are refused.
 
-## The block store — implemented, not started yet (300-STO-0002)
+On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores an object of 4 MiB + 1 byte through the running store with `blocks pattern`. It gets the reference's root and reads back equal. A damaged chunk refused on the platform is not tested yet ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
 
-`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.0 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. The service builds for x86-64 and aarch64, but `init` does not start it yet: that is a request to the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)), and the store runs on the host tests' medium only.
+## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
+
+`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.0 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
 
 **Layout (version 1):**
 
@@ -93,9 +95,16 @@ Evidence: `tests/blockstore_host.rs`.
 - Full medium, full index, foreign medium, other layout, read-only medium and a failed write are each refused with their error.
 - A random sequence of puts, gets and remounts matches a model.
 
-These are host tests of the logic on a simulated medium, not of the service on the platform.
+These are host tests of the logic on a simulated medium.
 
-## Names — implemented, not exercised on the platform yet (302-STO-0001)
+On the platform, the QEMU `store` suite (x86 and aarch64) checks:
+- put and get, of objects and of a file;
+- a full medium refused with `full` while what it holds stays readable;
+- a restarted instance mounting the same medium with every block verified again.
+
+Damage on the platform is not tested yet: no program can change the store's medium ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
+
+## Names — run on the platform (302)
 
 A **name** is a stable entity, its **versions** are the immutable roots it has pointed at, and its **head** is the current one (MC-4.3). The three are kept distinct:
 - the root is a CID, immutable;
@@ -113,7 +122,15 @@ A **name** is a stable entity, its **versions** are the immutable roots it has p
 
 Evidence: `tests/blockstore_host.rs` (`a_name_changes_only_from_the_version_expected`, `a_root_is_published_only_with_every_block_stored`, `names_are_found_again_after_a_remount`, `a_damaged_name_record_is_reported_and_the_version_before_stands`, `names_are_checked_and_bounded`) and `tests/dag_host.rs` (`an_object_is_complete_only_with_every_block`).
 
-## Authority — implemented, not exercised on the platform yet (300-STO-0004)
+On the platform, the QEMU `store` suite (x86 and aarch64) checks:
+- `conflict` for a stale version;
+- `incomplete` for a root never stored, with no name created;
+- each publication in the store's log;
+- the latest version found again after a restart of the service.
+
+A damaged name record on the platform is not tested yet ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
+
+## Authority — implemented; refusals not exercised on the platform yet (300-STO-0004)
 
 A client's rights come from the badge `init` mints into its capability (`mind::blockstore`), and the service decides every request by it:
 
@@ -128,4 +145,4 @@ A client's rights come from the badge `init` mints into its capability (`mind::b
 - **Storing is not reading (MC-4.11).** A put creates retention, because the store keeps every block and has no deletion yet. That is a separate right from reading. There is no per-client quota on it yet: the medium and the index are the only limits, and a full store refuses every put. Retention with an owner, a term and a quota is a later task of track B.
 - **Deduplication (MC-4.7).** Bytes already held are not written again. A client with `BADGE_PUT` can therefore learn whether some bytes are already stored: `stat` does not change and the put is faster. The store treats all its clients as one confidentiality domain. Clients that must not learn of each other's data need separate stores (or a store without deduplication), and none exists yet.
 
-The rule is host-tested (`rights_come_from_the_badge` in `tests/blockstore_host.rs`). The clients are minted with these badges only once the kernel track starts the service ([requests-KRN.md](../../issues/requests-KRN.md)).
+The rule is host-tested (`rights_come_from_the_badge` in `tests/blockstore_host.rs`). On the platform the only client is the shell's, with every right (badge 7), so no refusal can be provoked there yet. A client with fewer rights is requested from the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)).

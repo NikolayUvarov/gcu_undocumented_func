@@ -18,12 +18,16 @@ The tasks below are planned; the `STO` track numbers them itself and may change 
   - `KRN`: `init` starts the service and grants its block client ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done), done).
   - `DRV`: a durable block path for after the RAM disk.
 
-## Progress (2026-10-06)
+## Progress (2026-10-07)
 
-- **Done — `300-STO-0001`** ([record](../issues-done/300-STO-0001-content-identifiers.done)): CIDv1 identifiers (`raw`, SHA-256) and SHA-256 in `libmind` (`cid`, `sha256`); host tests against the FIPS examples and the reference `multiformats` library; [docs/storage](../docs/storage/README.md).
-- **In progress — [`300-STO-0004`](300-STO-0004-rights-by-badge.md)**: put and get rights by badge; the rule, the service's checks and a host test are done, the clients' badges are requested from the kernel track.
-- **Changed split:** the on-disk layout, the corruption and exhaustion cases of `300-STO-0003` went into `300-STO-0002` as host tests. `300-STO-0003` is now the test tool and the QEMU suite of the acceptance criteria below, and it starts when the service runs.
-- **In progress — [`300-STO-0002`](300-STO-0002-blockstore-service.md)**: the `blockstore` service and `idl/blockstore.wit` 1.0 are built and host-tested; starting it at boot with a RAM disk of its own is requested from the kernel track ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done)), and the QEMU suite waits for it.
+- **Done:**
+  - [`300-STO-0001`](../issues-done/300-STO-0001-content-identifiers.done): CIDv1 and SHA-256 in `libmind`.
+  - [`300-STO-0002`](../issues-done/300-STO-0002-blockstore-service.done): the `blockstore` service, started at boot over `ramdisk#1` by [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done).
+  - [`300-STO-0003`](../issues-done/300-STO-0003-blocks-tool-and-store-suite.done): the `blocks` tool and the `store` suite on x86 and aarch64, covering put and get and a full store refused.
+  - The profile's Article 4 row says what is met and what is not.
+- **Open:**
+  - [`300-STO-0004`](300-STO-0004-rights-by-badge.md): rights by badge. The rule and the service's checks are done; the refusals on the platform wait for a client with fewer rights.
+  - [`300-STO-0005`](300-STO-0005-corruption-on-the-platform.md): a corrupt block refused on the platform. It waits for a medium a test can change.
 
 ## Acceptance criteria
 

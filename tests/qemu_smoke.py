@@ -2367,6 +2367,62 @@ def blockstore_check(vm):
     print("PASS: the block store runs over ramdisk#1 (empty, 8 MiB); the shell holds its client with get, put and publish", flush=True)
 
 
+def cid_raw(data):
+    """The CIDv1 text of raw content (multiformats: version 1, raw 0x55, sha2-256 0x12, 32 bytes), computed here
+    independently of libmind's cid.rs."""
+    import base64, hashlib
+    return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
+
+
+def store_suite(vm):
+    """Main tasks 300-302 (storage track): the block store through the `blocks` tool and the shell's client (badge
+    get, put and publish). An object of 4 MiB + 1 byte (the pattern of tests/dag_host.rs) gets the root an independent
+    reference computed (tests/dag_host.rs, Python dag-cbor), and reads back equal; a file round trip; names change only
+    from the version expected and only to complete roots; a full store refuses with full and keeps what it holds; a
+    restarted store finds its blocks and names again on its medium."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
+    require(vm.service_logs("blockstore", ready), ready)
+    require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
+    # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
+    root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
+    require(blocks("pattern 4194305"), f"PUT {root} SIZE 4194305")
+    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    # A file: its CID is the raw CID of its bytes, and it comes back the same.
+    require(vm.command("write ram:note.txt hello store"), "WROTE 12 BYTES")
+    note = cid_raw(b"hello store\n")
+    require(blocks("put ram:note.txt"), f"PUT {note} SIZE 12")
+    require(blocks(f"get {note} ram:copy.txt"), "GOT 12 BYTES")
+    require(vm.command("cat ram:copy.txt"), "hello store")
+    # Names: compare-and-swap on the version; only roots whose blocks are all stored.
+    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
+    require(blocks(f"publish obj {note}"), "blocks: publish obj: Conflict")
+    require(blocks(f"publish obj {note} 1"), "PUBLISHED obj VERSION 2")
+    require(blocks(f"resolve obj"), f"obj VERSION 2 ROOT {note}")
+    require(blocks(f"publish ghost {cid_raw(b'never stored')}"), "blocks: publish ghost: Incomplete")
+    require(blocks("resolve ghost"), "blocks: resolve ghost: NotFound")
+    require(blocks("resolve a:b"), "blocks: resolve a:b: Invalid")
+    require(blocks(f"publish obj {root} 2"), "PUBLISHED obj VERSION 3")
+    published = "[BLOCKSTORE] PUBLISHED obj VERSION 3 ROOT " + root
+    require(vm.service_logs("blockstore", published), published)
+    # The medium runs out: a defined refusal, and what is stored stays readable.
+    filled = re.search(r"FILLED (\d+) BLOCKS, THEN Full \(Some\(Full\)\)", blocks("fill", timeout=600))
+    assert filled and int(filled[1]) > 100, filled
+    stat = re.search(r"BLOCKS=(\d+) NAMES=1 BYTES=\d+ SECTORS=(\d+)/16384 CORRUPT=0 DAMAGED=0", blocks("stat"))
+    assert stat and int(stat[2]) > 16384 - 33, stat
+    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    # A new instance mounts the same medium: every block verified again, the names' latest versions current.
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    again = f"[BLOCKSTORE] READY BLOCKS={stat[1]} NAMES=1 SECTORS={stat[2]}/16384 CORRUPT=0 DAMAGED=0"
+    require(vm.service_logs("blockstore", again), again)
+    require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
+    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; names by "
+          "compare-and-swap, only complete roots; a full medium refused; a restarted store finds blocks and names again", flush=True)
+
+
 def escrow_check(vm):
     """Issue 170: init keeps the privileges it grants in escrow and holds no process control: it can pass them to a
     service it starts but not use them. Services restarted from escrow get the privilege itself."""
@@ -4714,7 +4770,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -4731,7 +4787,7 @@ def main():
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -4739,7 +4795,7 @@ def main():
     if args.block_elf:
         suites.append("block")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "vfs", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "vfs", "store", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -4829,7 +4885,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

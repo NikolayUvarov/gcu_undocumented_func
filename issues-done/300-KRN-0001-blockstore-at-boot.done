@@ -6,7 +6,7 @@ Requested by the storage track (STO) in `issues/requests-KRN.md`, 2026-10-06.
 
 ## Problem
 
-The block store ([300-STO-0002](300-STO-0002-blockstore-service.md)) was built for both architectures and tested on the host, but nothing started it. It needs a block client of its own: `block::serve` keeps one transfer buffer for all its clients, so it cannot share vfs_server's RAM disk. Starting it touches the kernel track's files: `common/abi.rs`, `init`, the shell's lending and loader's list of slots.
+The block store ([300-STO-0002](300-STO-0002-blockstore-service.done)) was built for both architectures and tested on the host, but nothing started it. It needs a block client of its own: `block::serve` keeps one transfer buffer for all its clients, so it cannot share vfs_server's RAM disk. Starting it touches the kernel track's files: `common/abi.rs`, `init`, the shell's lending and loader's list of slots.
 
 ## Plan
 

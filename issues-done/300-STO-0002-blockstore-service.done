@@ -1,12 +1,12 @@
-# 300-STO-0002 — The `blockstore` service: put and get by CID over a block client
+# 300-STO-0002 — The `blockstore` service: put and get by CID over a block client — done
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) (start at boot, a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) started it at boot over a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
 
-Part of main task [300](300-checksummed-block-store.md).
+Part of main task [300](../issues/300-checksummed-block-store.md).
 
 ## Problem
 
-Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done)), but nothing stores blocks by them. MC-4.2 asks that a published object is immutable and verifiable by content. MC-4.8 asks for corruption detection and a defined outcome when the medium is exhausted.
+Content identifiers exist ([300-STO-0001](300-STO-0001-content-identifiers.done)), but nothing stores blocks by them. MC-4.2 asks that a published object is immutable and verifiable by content. MC-4.8 asks for corruption detection and a defined outcome when the medium is exhausted.
 
 ## Plan
 
@@ -21,7 +21,7 @@ Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-id
 - **Mounting:** a blank medium is formatted, and a store is scanned with every block verified. A foreign medium is refused and not touched, and so is a store of another layout version.
 - **Reading:** every block read is checked against its CID. A corrupt one is reported and never returned, and it leaves the index, so putting the same bytes stores them again.
 - **Refusals:** a full medium, a full index and a block larger than 16 KiB are refused with defined errors.
-- **The service:** `blockstore`, over a block client in slot 2. Starting it at boot with a RAM disk of its own is the kernel track's part ([300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done)).
+- **The service:** `blockstore`, over a block client in slot 2. Starting it at boot with a RAM disk of its own is the kernel track's part ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) (done)).
 
 ## Acceptance criteria
 
@@ -34,7 +34,7 @@ Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-id
   - full, foreign, layout and read-only refusals;
   - a random sequence checked against a model.
 - The service builds for x86-64 and aarch64 in CI.
-- **Blocked:** a QEMU suite on the RAM disk covering put and get, a corrupt block refused and a full store refused. It needs the service started at boot and a client for a test program.
+- A QEMU suite on the RAM disk covering put and get, a corrupt block refused and a full store refused.
 
 ## Progress (2026-10-06)
 
@@ -49,3 +49,9 @@ Content identifiers exist ([300-STO-0001](../issues-done/300-STO-0001-content-id
 ## Related
 
 [docs/storage](../docs/storage/README.md); `idl/block.wit`, `libmind/src/block.rs`; Constitution Article 4.
+
+## Resolution
+
+- **The service** runs on x86 and aarch64 over `ramdisk#1`, started by `init` ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done)).
+- **Put and get, and a full store refused,** are checked in QEMU by the `store` suite of [300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done).
+- **A corrupt block refused** is checked by the host tests only. No program can change the store's medium, because only `blockstore` holds the client of `ramdisk#1`. That part is split off into [300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md).

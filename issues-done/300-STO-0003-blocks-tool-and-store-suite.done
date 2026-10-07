@@ -1,0 +1,51 @@
+# 300-STO-0003 — The `blocks` tool and the `store` suite: the block store, objects and names on the platform — done
+
+**Type:** tool and tests (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) started the store at boot and gave the shell its client) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.3, MC-4.4, MC-4.8, MC-12.1
+
+Part of main task [300](../issues/300-checksummed-block-store.md). It also does the service parts of 301 (`301-STO-0003`) and 302 (`302-STO-0002`).
+
+## Problem
+
+The block store, objects and names had host tests only. The acceptance criteria of 300, 301 and 302 ask for the same behaviour through the running service on the platform (MC-12.1: evidence belongs to a configuration).
+
+## Plan
+
+- **A console tool `blocks`** (`REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE`) that uses the shell's client: `stat`, `put <file>`, `pattern <bytes>`, `get <cid> <file>`, `check <cid> [pattern]`, `publish <name> <cid> [expected]`, `resolve <name>`, `fill`. Objects go through `mind::dag` over the store's client.
+- **A QEMU suite `store`**, on x86 and aarch64.
+
+## Acceptance criteria
+
+- The root of a pattern object computed on the platform equals the independent reference's.
+- Objects and files go in and come back equal.
+- Names follow compare-and-swap, and only complete roots can be published.
+- A full medium is refused, and what it holds stays readable.
+- A restarted store finds its blocks and names again.
+- All on x86 and aarch64, in the CI groups.
+
+## Related
+
+[300-STO-0002](300-STO-0002-blockstore-service.done), [301](301-objects-as-merkle-dags.done), [302](302-names-and-current-roots.done), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+- **`blocks/`** (`blocks.elf`, in `02_build.sh`):
+  - the subcommands above;
+  - `Remote`, the store's client as `mind::dag::Blocks`;
+  - its builder and buffers live in statics;
+  - `pattern` writes the reference pattern of `tests/dag_host.rs` (byte i is (31 i + 7) mod 251).
+- **`tests/qemu_smoke.py` `store_suite`**, in the CI groups "files and block writes" (x86) and "files, network and TLS" (aarch64), and their `ci_local.sh` counterparts. It checks:
+  - **The reference root.** An object of 4 194 305 bytes (height 2) gets the root `bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai` that the Python reference computed, and it is checked whole against the pattern.
+  - **A file round trip.** `ram:note.txt` gets the raw CID the harness computes with Python's `hashlib`, and `get` writes it back unchanged.
+  - **Names.** `publish` from version 0 a second time gets `Conflict`; from the current version it gets the next one; a root never stored gets `Incomplete` and creates no name. `resolve` refuses a bad name. The publication is in blockstore's log.
+  - **A full medium.** `fill` puts distinct 16 KiB blocks until the store answers `Full`, after more than 100 of them. The object is still checked whole afterwards.
+  - **A restart.** `svc restart blockstore`: the new instance mounts the same medium, verifies every block again (the same counts, `CORRUPT=0 DAMAGED=0`), and the name is at its latest version.
+  - **Runs:** x86 (TCG, 4 CPUs) in 2 min 49 s; aarch64 (`virt`, 4 CPUs) in 3 min 58 s.
+- **Found on the platform:** `blockstore` overflowed its 64 KiB stack in `publish`. `dag::complete` kept decoded nodes on the stack, each with its 256 links copied (9 KiB), and `decode` held a 10 KiB buffer for the canonical check.
+  - Now `dag::Node` borrows the node's bytes and reads a link only when asked for it.
+  - `decode` compares the re-encoding byte by byte without a buffer.
+  - `Builder::new` is `const`, so a program keeps its builder (110 KiB) in a static.
+  - The host tests (`dag` 9, `blockstore` 22) pass unchanged.
+- **CI:** the standalone build steps for `blockstore` are gone; `02_build.sh` builds it for both architectures (300-KRN-0001).
+- **Not covered on the platform:**
+  - a corrupt block, chunk or name record ([300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md));
+  - refusals by badge, because the shell's client holds every right ([300-STO-0004](../issues/300-STO-0004-rights-by-badge.md)).
