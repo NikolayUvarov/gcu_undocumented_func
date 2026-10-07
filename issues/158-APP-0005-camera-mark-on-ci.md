@@ -24,6 +24,17 @@ Reading the code found no path that leaves the mark out:
 
 A black pixel (`000000`) is neither the mark nor the background, so the screendump may have been taken while the screen was being drawn, or before the camera's screen was shown at all.
 
+## Progress
+
+**Second failure, with the diagnostics** (CI, dc914bc, the same group, 2026-10-07):
+
+- The pixel stayed `000000` at 1.0, 1.9, 2.7, 3.5 and 4.3 s after `OPENED`: the mark never came; it did not come late or blink. Black is not the camera program's background either (`1e1e2e` in a local run).
+- The program wrote `30 FRAMES (4 PICTURES) … SEQUENCE 1..30`: it read every frame on time and encoded 4 of 30 pictures (9 locally).
+- `video_gw` logged `CLOSED AFTER 604 FRAMES` (34 locally): the stream stayed open about 60 s, not about 3.5. `ps` afterwards: `video_gw` had run 39 times in all; `vfs_server` 28 149, `ramdisk` 15 760, `nvme` 9 487, `rtc` 1 447.
+- So the program spent about a minute after its last frame, most likely writing the file; meanwhile `video_gw` hardly ran. Yet the heartbeat sent at the opening alone should have lit the mark for 1.5 s, and it was dark at 1.0 s. Either the compositor did not run in those seconds, or its calls failed.
+
+The check now also reports how much of the screenshot is black (nothing composited at all) and `ps` at the end.
+
 ## Plan
 
 1. The check keeps failing in that case, and says more when it does (done with this issue): four more samples of the pixel 0.3 s apart with their time since `OPENED`, the camera program's own output to its end, and the gateway's log.

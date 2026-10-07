@@ -2825,10 +2825,13 @@ def camera_check(vm):
             time.sleep(.3)
             later.append((round(time.monotonic() - opened, 2), vm.screenshot().split(b"\n", 3)[3][mark:mark + 3].hex()))
         vm.serial(enter=False)
+        # How much of the screen is drawn at all: black everywhere would mean nothing reached the framebuffer.
+        pixels = len(during) // 3
+        black = sum(1 for i in range(0, pixels * 3, 3 * 97) if during[i:i + 3] == b"\0\0\0") * 97 * 100 // pixels
         # The program's own lines first (its 3 s end the stream), then the gateway's log: when it opened and closed.
         camera = vm.expect("SHELL RESUMED.", timeout=60)
-        raise AssertionError(("the camera mark while the stream is open", during[mark:mark + 3], "later:", later, camera,
-                              vm.service_logs("video_gw", "CLOSED AFTER")))
+        raise AssertionError(("the camera mark while the stream is open", during[mark:mark + 3], f"{black}% of the screen black",
+                              "later:", later, camera, vm.service_logs("video_gw", "CLOSED AFTER"), vm.command("ps", raw=True)))
     vm.serial(enter=False)
     # 30 frames of camera time; a slow encoder (aarch64 under TCG) gets fewer pictures and repeats the last one.
     video = re.search(r"\[CAMERA\] VIDEO data/cam.avi: 30 FRAMES \((\d+) PICTURES\) 320X240 AT 10/S, SEQUENCE (\d+)\.\.(\d+), TIMESTAMPS ON THE RATE, (\d+) BYTES",
