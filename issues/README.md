@@ -206,6 +206,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-KRN-0004](../issues-done/171-KRN-0004-growing-capability-tables.done) | Capability tables that grow on demand up to 4095 slots (171, step 4) | done (2026-10-06) |
 | [171-KRN-0002](../issues-done/171-KRN-0002-task-and-endpoint-tables.done) | No fixed count of tasks, applications or endpoints; root quota 65 535 (171, step 2) | done (2026-10-06) |
 | [171-KRN-0007](../issues-done/171-KRN-0007-stat-pages.done) | STAT from a given record on: callers page through any number of records (171) | done (2026-10-06) |
+| [172](../issues-done/172-64-bit-handles-and-abi-version.done) | 64-bit capability handles (32-bit generation), the IPC timeout in `arg2`, 16-byte grants, ABI version 2 checked at program start | done (2026-10-07) |
 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) | The block store starts at boot over `ramdisk#1`; the shell's client in slot 25; `REQUEST_BLOCKSTORE` (requested by STO) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |
 | [301-STO-0001](../issues-done/301-STO-0001-object-format.done) | The object format: 16 KiB chunks and DAG-CBOR nodes with a shape fixed by the size, a builder and a checking reader (`mind::dag`) | done (2026-10-06) |

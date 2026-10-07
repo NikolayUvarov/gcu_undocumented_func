@@ -13,7 +13,8 @@ const ENDPOINTS: usize = 128; // the endpoint table's first size; it grows on de
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
 const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
-const HANDLE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1;
+const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
+const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
@@ -296,7 +297,7 @@ impl Scheduler {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None; task.exit_reason = reason;
         self.ended[self.ended_next] = (pid, reason); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
-        if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
+        if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED (REASON=" { unsafe { serial_write_byte(b); } } unsafe { serial_hex(reason as u64); } for &b in b")\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
         for other in 1..self.tasks.len() {
@@ -549,7 +550,7 @@ impl Scheduler {
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
-        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); // which images exist, not where info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8];
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; // which images exist, not where; no CPU addresses
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -665,7 +666,7 @@ impl Scheduler {
         let (from_mb, to_mb) = (self.mailbox(from), self.mailbox(to));
         let sender = self.tasks[from].as_mut().unwrap(); let (pid, call, cap, badge) = (sender.pid, sender.pending_call, sender.pending_cap.take(), sender.pending_badge);
         (*to_mb).msg[2] = (*from_mb).msg[2]; (*to_mb).msg[3] = (*from_mb).msg[3]; (*to_mb).arg1 = pid as usize; (*to_mb).msg[1] = if call { MSG_FLAG_CALL } else { 0 };
-        let receive = (*to_mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
+        let receive = (*to_mb).arg2 & RECEIVE_MASK; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
         (*to_mb).arg2 = badge as usize; // the badge of the capability the sender used
         if let (true, Some(pending)) = (delivered, cap) { self.place(from, to, receive, pending); }
         let receiver = self.tasks[to].as_mut().unwrap();
@@ -714,7 +715,7 @@ impl Scheduler {
 
     // Ok(Some(sp)): caller is blocked, switch; Ok(None): return 0 immediately.
     unsafe fn ipc_send(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox, call: bool) -> Result<Option<usize>, usize> {
-        let Some(Capability::Endpoint(ep, rights, badge)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
+        let Some(Capability::Endpoint(ep, rights, badge)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
         if rights & CAP_WRITE == 0 { return Err(ERR_RIGHTS); }
         let receiver = self.blocked(State::BlockedRecv(ep));
         if receiver.is_none() && !self.receivable(ep) { return Err(ERR_PEER); }
@@ -723,7 +724,7 @@ impl Scheduler {
         self.accounting.endpoint[ep].messages += 1;
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
         self.send_seq += 1; let seq = self.send_seq;
-        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = Self::deadline(request.arg1);
+        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = Self::deadline(request.arg2);
         if let Some(receiver) = receiver {
             self.deliver(slot, receiver);
             if !call { return Ok(None); }
@@ -734,14 +735,14 @@ impl Scheduler {
         Ok(Some(self.select(sp, cpu)))
     }
     unsafe fn ipc_recv(&mut self, slot: usize, sp: usize, cpu: usize, request: &SyscallMailbox) -> Result<Option<usize>, usize> {
-        let Some(Capability::Endpoint(ep, rights, _)) = self.cap(slot, request.arg1 & HANDLE_MASK) else { return Err(ERR_INVALID); };
+        let Some(Capability::Endpoint(ep, rights, _)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
         if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
-        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg1);
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg2);
         Ok(Some(self.select(sp, cpu)))
     }
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
@@ -754,7 +755,7 @@ impl Scheduler {
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
         let cap = self.transfer(slot, request.msg[0], request.msg[1]); let mb = self.mailbox(caller);
         (*mb).msg[2] = request.msg[2]; (*mb).msg[3] = request.msg[3]; (*mb).arg1 = self.tasks[slot].as_ref().unwrap().pid as usize;
-        let receive = (*mb).arg2; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
+        let receive = (*mb).arg2 & RECEIVE_MASK; let delivered = cap.is_some() && (1..SLOT_DYNAMIC).contains(&receive); // fixed slots only
         (*mb).arg2 = 0; // replies carry no badge
         if let (true, Some(pending)) = (delivered, cap) { self.place(slot, caller, receive, pending); }
         let task = self.tasks[caller].as_mut().unwrap();
@@ -790,7 +791,7 @@ impl Scheduler {
             if owner != self.foreground || !self.live(owner) { return Err(ERR_FOCUS); }
             Some((owner, self.tasks[owner].as_ref().unwrap().pid))
         } else { None };
-        let grant_bytes = count * core::mem::size_of::<Grant>(); // 8 bytes: own handle u32, child u8, rights u8
+        let grant_bytes = count * GRANT_BYTES; // 16 bytes: own handle u64, child u8, rights u8, flags u16 (issue 172)
         if count > 0 && !task.space.validate_read(request.msg[2], grant_bytes) { return Err(ERR_INVALID); }
         // `name\0arguments`
         let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
@@ -798,14 +799,14 @@ impl Scheduler {
         let name_len = text[..length].iter().position(|&b| b == 0).unwrap_or(length);
         if name_len == 0 || name_len > NAME_MAX { return Err(ERR_INVALID); }
         let args = if name_len < length { &text[name_len + 1..length] } else { &[][..] };
-        let mut raw = [0u8; SPAWN_GRANTS_MAX * 8];
+        let mut raw = [0u8; SPAWN_GRANTS_MAX * GRANT_BYTES];
         for (i, byte) in raw[..grant_bytes].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[2] + i).unwrap() as *const u8); }
         let (mut caps, mut nodes, mut moves) = ([None; SLOT_DYNAMIC], [Node::default(); SLOT_DYNAMIC], [None; SPAWN_GRANTS_MAX]);
-        for (n, grant) in raw[..grant_bytes].chunks(8).enumerate() {
-            let (own, child, rights, flags) = (u32::from_le_bytes([grant[0], grant[1], grant[2], grant[3]]) as usize, grant[4] as usize, grant[5] as usize, u16::from_le_bytes([grant[6], grant[7]]));
+        for (n, grant) in raw[..grant_bytes].chunks(GRANT_BYTES).enumerate() {
+            let (own, child, rights, flags) = (u64::from_le_bytes(grant[..8].try_into().unwrap()) as usize, grant[8] as usize, grant[9] as usize, u16::from_le_bytes([grant[10], grant[11]]));
             if !(1..SLOT_DYNAMIC).contains(&child) { return Err(ERR_INVALID); }
             // A moved handle may appear once: two slots must never share one node.
-            if raw[..grant_bytes].chunks(8).enumerate().any(|(m, other)| m != n && other[..4] == grant[..4] && (flags | u16::from_le_bytes([other[6], other[7]])) & GRANT_MOVE != 0) { return Err(ERR_INVALID); }
+            if raw[..grant_bytes].chunks(GRANT_BYTES).enumerate().any(|(m, other)| m != n && other[..8] == grant[..8] && (flags | u16::from_le_bytes([other[10], other[11]])) & GRANT_MOVE != 0) { return Err(ERR_INVALID); }
             let mut pending = self.transfer(slot, own, rights | if flags & GRANT_MOVE != 0 { CAP_TRANSFER_MOVE } else { 0 }).ok_or(ERR_INVALID)?;
             // An escrowed privilege becomes the privilege only in a service the spawner may start (issue 170).
             if let Capability::Escrow(kind) = pending.cap { if !service { return Err(ERR_INVALID); } pending.cap = Capability::privilege(kind as usize).ok_or(ERR_INVALID)?; }

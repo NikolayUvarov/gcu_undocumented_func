@@ -1,0 +1,60 @@
+# 172 — 64-bit capability handles and an ABI version — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-07) · **Blocked by:** — · **Roadmap:** stage II (3.2), K-ABI · **Constitution:** MC-3.1, MC-3.2, MC-3.6, MC-11.1, MC-12.4, MC-12.7
+
+## Problem
+
+A capability handle had to fit in 32 bits. IPC calls carried a timeout above bit 32 of the same word, and a grant at `SPAWN` held the handle in a `u32`. 171-KRN-0004 therefore split the 32 bits as 12 bits of slot and 20 of generation, so a generation now wraps after 1 048 575 reuses of one slot: a weaker stale-handle defence (MC-3.2, 3.6) than the 24-bit generation before it. The ABI also has no version (MC-11.1 partial), so a change like this cannot be told from a mismatch.
+
+## Plan
+
+- **Handles.** A handle is 64 bits: 24 bits of slot and 32 of generation, so a generation wraps after 4 294 967 295 reuses. The table stays bounded by `CAP_SLOTS_MAX` = 4095, a kernel heap policy now and no longer the encoding's limit.
+- **IPC timeout.** It moves from `arg1` to `arg2`: `arg2 = receive slot | timeout ms << IPC_TIMEOUT_SHIFT`. The receive slot is always a fixed slot. `arg1` is the endpoint handle alone.
+- **Grants.** A `Grant` record is 16 bytes: `own: u64`, `child: u8`, `rights: u8`, `flags: u16`, padding.
+- **ABI version.** `ABI_VERSION` = 2 in `common/abi.rs`, where version 1 is everything before. The kernel writes it into every task's `BootInfo` (`abi_version`, a new last field), and `libmind`'s entry refuses to run a program built for another version: it logs it and exits.
+- **Users.** `libmind` (`ipc`, `process`), the tests' raw system calls, the API docs and the profile.
+
+## Acceptance criteria
+
+- All suites pass on x86 and aarch64; the full local gate passes.
+- `isolation`: a handle with a slot beyond 255 works, a stale handle is refused, and timeouts work in `arg2`.
+- A program whose `BootInfo` carries another ABI version stops with a message.
+
+## Related
+
+171-KRN-0004 ([171](171-limits-from-the-hardware.done)), 150 (BootInfo), MC-11.1 in `docs/profile`.
+
+## Resolution
+
+- **ABI** (`common/abi.rs`):
+  - `HANDLE_SLOT_MASK` 0xFF_FFFF, `HANDLE_GENERATION_SHIFT` 24, `HANDLE_GENERATION_MAX` 0xFFFF_FFFF;
+  - `CAP_SLOTS_MAX` 4096, a kernel heap bound now;
+  - the IPC timeout in `arg2`;
+  - `Grant` is 16 bytes with `own: u64`;
+  - `ABI_VERSION` 2 and `BootInfo.abi_version`, the last field.
+- **Kernel** (`kernel/src/scheduler.rs`):
+  - IPC takes the handle whole in `arg1` and the deadline from `arg2`;
+  - delivery masks the receive slot (`RECEIVE_MASK`);
+  - grants are parsed in 16-byte records (`GRANT_BYTES`);
+  - generations wrap at `HANDLE_GENERATION_MAX`;
+  - `abi_version` goes into every task's `BootInfo`;
+  - init's exit prints its reason (`INIT EXITED: SYSTEM HALTED (REASON=…)`).
+  - In the same function, the zeroing of `ap_trampoline`, `cpu_count` and `apic_ids` had been inside a comment since an earlier edit. It is code again, so tasks no longer see the CPUs' APIC IDs.
+- **Test kernel:** `abi-test` reports `ABI_VERSION + 1`.
+- **libmind:**
+  - `ipc` puts the timeout above the receive slot;
+  - `process::grant` writes the 16-byte record;
+  - `process::check_abi`, called by `entry!` before `main`, logs `ABI MISMATCH: PROGRAM n KERNEL m` and exits with 126.
+- **Bootloader:** writes `abi_version`.
+- **Fixtures:** `dzen-clock`'s test `BootInfo` has the field.
+- **Tests** (all passed on x86):
+  - `isolation` (timeouts moved to `arg2` in `tests/isolation_app.rs`; slots beyond 255; stale handles), `normal`, `heap`, `busy`, `smp`, `services`;
+  - `boot`, with a new check: with the `abi-test` kernel, init refuses to run and the system halts with `REASON=0000000000007E00` (exit 126). CI and `scripts/ci_local.sh` build that kernel next to the panic-test one.
+- **Tests on aarch64:** smoke, `normal`, `shell`.
+- **Docs:**
+  - `docs/api` (handles, IPC rows, SPAWN grants, ABI version);
+  - the profile: MC-3.1/3.2 and MC-11.1 rows, `kernel-objects.md`, `evidence.md`;
+  - README.
+- **Not done:**
+  - no compatibility with ABI version 1 programs: a mismatch only refuses;
+  - programs that do not use `libmind` (the test fixtures) are not checked.

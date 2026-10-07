@@ -106,6 +106,7 @@ macro_rules! entry {
         #[link_section = ".text._start"]
         pub extern "C" fn _start(info: &'static $crate::abi::BootInfo, mailbox: *mut $crate::abi::SyscallMailbox) -> ! {
             unsafe { $crate::sys::init(mailbox) };
+            $crate::process::check_abi(info);
             $crate::log::prepare();
             $crate::output::prepare();
             let main: fn(&'static $crate::abi::BootInfo) = $main;

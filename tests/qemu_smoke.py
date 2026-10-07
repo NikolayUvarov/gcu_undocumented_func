@@ -4780,6 +4780,17 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(kernel)
         print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
+    if args.abi_kernel:
+        # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
+        target = disk / "kernel.elf"
+        target.write_bytes(Path(args.abi_kernel).read_bytes())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            vm.expect("INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)", timeout=60)
+        finally:
+            vm.close()
+        target.write_bytes(kernel)
+        print("PASS: a kernel of another ABI version: init refuses to run (ABI MISMATCH, exit 126) and the system halts", flush=True)
 
 
 def main():
@@ -4799,6 +4810,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
+    parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")

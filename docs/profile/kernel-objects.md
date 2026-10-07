@@ -4,7 +4,7 @@
 |---|---|---|---|
 | Task (address space, stack 64 KiB, context, mailbox, exit page) | No fixed number (issue 171): the task table grows by 32 slots at a time and gives back empty ones; the kernel heap (64 MiB) and memory bound it. Per owner: the spawner's task quota (each live child reserves 1 + its own task quota) | `SPAWN` (spawn privilege; services and boot images need the platform privilege) | Counted against the spawner's task quota; image and stack from the frame pool, charged to the spawner's memory quota and every payer above it (issue 168); context, mailbox, exit page and page tables from the kernel heap (64 MiB, global) |
 | Screen buffer | One per task spawned with `SPAWN_SCREEN` (about 4 MiB at 1280×800) | `SPAWN` | Frame pool; charged to the spawner's memory quota and every payer above it (issue 168) |
-| Capability slot | 96 when a task starts, doubling on demand up to 4095 (what a handle's 12 bits name; issue 171): slots 1–25 fixed by convention (generation 0; receive and compositor targets), from 26 handed out by the kernel with a 20-bit generation | Grants, `IPC` transfer, `ENDPOINT_CREATE`, `MEM_SHARE`, `PLATFORM_CAP`, `IPC_SAVE_REPLY` | Kernel heap (about 56 bytes a slot, counted in the task's `kernel_bytes`; not charged to the memory quota) |
+| Capability slot | 96 when a task starts, doubling on demand up to 4096 (issue 171; a bound on the kernel heap a table takes, not on what a handle names: 24 bits of slot, issue 172): slots 1–25 fixed by convention (generation 0; receive and compositor targets), from 26 handed out by the kernel with a 32-bit generation | Grants, `IPC` transfer, `ENDPOINT_CREATE`, `MEM_SHARE`, `PLATFORM_CAP`, `IPC_SAVE_REPLY` | Kernel heap (about 56 bytes a slot, counted in the task's `kernel_bytes`; not charged to the memory quota) |
 | Endpoint | No fixed number (issue 171): the table starts at 127 and doubles when full, giving back unused ones at its end; created on demand and recycled when no capability refers to them; no endpoint has a number visible to tasks | `ENDPOINT_CREATE` (init's own: the kernel at boot) | The creator's endpoint quota (endpoints it created and still exist plus quotas delegated to its live children) |
 | Private heap block | 64 blocks per task (with mappings); bytes: the memory quota | `ALLOC` | Frame pool; charged to the task's memory quota and to every payer above it |
 | Shared mapping | 256 MiB per task | `MEM_MAP` | Mapping limit per task; the memory belongs to its owner and is retained while referenced |
@@ -30,7 +30,7 @@ Every task has a task quota and an endpoint quota, delegated by its spawner at `
 ## Gaps
 
 - The memory quota covers task memory from the frame pool: private memory, and since issue 168 images, stacks and screens (charged to the spawner). DMA regions are bounded by their global limit, page tables and kernel structures by the arena; `init`'s own image and stack, which the kernel spawns, are charged to nobody. Memory quotas are limits, not reservations: siblings share their payer's quota first come, first served.
-- Capability tables grow to at most 4095 slots a task (the handle's slot bits) and are paid from the kernel heap, not from the task's memory quota.
+- Capability tables grow to at most 4096 slots a task (a kernel heap bound) and are paid from the kernel heap, not from the task's memory quota.
 - No CPU budgets or scheduling contexts (roadmap C7).
 
 ## Statistics
