@@ -77,7 +77,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | MC-5.6 explicit clocks | met (measurement) | The generic timer's virtual count; calendar time from the PL031 (`rtc`), seconds since 1970 in UTC. |
 | MC-6.1, 6.2 fault containment | met (EL0) | A task's synchronous exception (any exception class from EL0) ends only it; evidence: `aarch64_smoke.py` (kernel read, code write, stack execution, undefined instruction). A kernel exception halts the system. |
 | MC-10.5 side channels | not claimed | As on x86; no speculation barriers, no PAN (the kernel reaches task memory through its identity map only). |
-| Article 4 storage | partial | As on x86: the block store runs at boot over `ramdisk#1`. Evidence: `store` suite on `virt`. |
+| Article 4 storage | partial | As on x86: the block store runs at boot over `ramdisk#1`, with collection by reachability. Evidence: `store` suite on `virt`. |
 | Article 9 boot and update | not met — declared | As on x86: boot images are not signed or measured. |
 | FP/SIMD state | not provided | Programs are built soft-float; `CPACR_EL1` traps FP/SIMD, and no FP state is saved. |
 | Legacy devices | none | No port I/O, no ISA devices, no legacy VirtIO interface: `ata`, `ps2_kbd` and `audio_gw` are not built; `docs/legacy.md` lists nothing for this platform. |

@@ -2419,15 +2419,37 @@ def store_suite(vm):
     assert filled and int(filled[1]) > 100, filled
     stat = re.search(r"BLOCKS=(\d+) NAMES=1 BYTES=\d+ SECTORS=(\d+)/16384 CORRUPT=0 DAMAGED=0", blocks("stat"))
     assert stat and int(stat[2]) > 16384 - 33, stat
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
-    # A new instance mounts the same medium: every block verified again, the names' latest versions current.
+    # A new instance mounts the same medium: every block verified again, the names' latest versions current; the object
+    # is checked whole after each restart (a check takes over a minute under TCG on aarch64).
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     again = f"[BLOCKSTORE] READY BLOCKS={stat[1]} NAMES=1 SECTORS={stat[2]}/16384 CORRUPT=0 DAMAGED=0"
     require(vm.service_logs("blockstore", again), again)
+    # 303-STO-0001: right after a mount every block's lease runs (60 s): no block goes; the earlier versions' name
+    # records may. Before the long check below, which takes more than a lease under TCG on aarch64.
+    first = blocks("collect")
+    assert re.search(r"COLLECTED 0 BLOCKS [0-2] NAMES [0-2] SECTORS", first), first
     require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; names by "
           "compare-and-swap, only complete roots; a full medium refused; a restarted store finds blocks and names again", flush=True)
+    # What no name retains goes once its lease (60 s after the last put or the mount) has ended.
+    time.sleep(61)
+    # The medium is full of blocks whose leases have ended: new ones get room from the collection the first put starts.
+    filled = re.search(r"FILLED (\d+) BLOCKS, THEN Full \(Some\(Full\)\)", blocks("fill", timeout=600))
+    assert filled and int(filled[1]) > 100, filled
+    # The new blocks' leases run: an explicit collection right after frees no block (before the long check below).
+    collected = blocks("collect")
+    assert re.search(r"COLLECTED 0 BLOCKS \d+ NAMES \d+ SECTORS, \d+ FREE", collected), collected
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] COLLECTED 0 BLOCKS"), "[BLOCKSTORE] COLLECTED 0 BLOCKS")
+    require(blocks(f"get {note} ram:gone.txt"), "blocks: get: NotFound")
+    require(blocks(f"publish copy {root}"), "PUBLISHED copy VERSION 1")
+    # What the collections left mounts again whole.
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NAMES=2 SECTORS="), "CORRUPT=0 DAMAGED=0")
+    require(blocks("resolve copy"), f"copy VERSION 1 ROOT {root}")
+    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    print("PASS: block store collection: once leases end, a put that needs room frees what no name retains and the room "
+          "is written again; named objects stay whole and mount again", flush=True)
 
 
 def escrow_check(vm):

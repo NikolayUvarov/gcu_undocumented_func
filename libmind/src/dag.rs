@@ -248,12 +248,13 @@ pub fn read_at<B: Blocks>(blocks: &mut B, root: &Cid, offset: u64, out: &mut [u8
     Ok(done)
 }
 
-/// Whether every block of the object `root` is stored: every node is read and checked against its CID and the shape,
-/// every chunk is asked for with `has`. Returns the object's size; Err(NotFound) names nothing, only that one is missing.
-/// It descends from the root again for each node of height 1, so it needs no stack of nodes.
-pub fn complete<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK]) -> Result<u64, Error> {
-    if root.codec() == Codec::Raw { return if blocks.has(root)? { size(blocks, root, buffer) } else { Err(Error::NotFound) }; }
+/// Visits every block of the object `root`: each node (then read and checked against its CID and the shape) and each
+/// chunk (named, not read). It descends from the root again for each node of height 1, so it needs no stack of nodes,
+/// and a node above height 1 is visited once for each node of height 1 under it. Returns the object's size.
+pub fn walk<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], mut visit: impl FnMut(&mut B, &Cid) -> Result<(), Error>) -> Result<u64, Error> {
+    visit(blocks, root)?;
     let total = size(blocks, root, buffer)?;
+    if root.codec() == Codec::Raw { return Ok(total); }
     let span = capacity(1) as u64;
     for leaf in 0..total.div_ceil(span) {
         let (mut cid, mut h, mut held, mut within) = (*root, height(total), total, leaf * span);
@@ -261,18 +262,25 @@ pub fn complete<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK])
             let n = node(blocks, &cid, buffer)?;
             n.check(h, held)?;
             if h == 1 {
-                for i in 0..n.len() { if !blocks.has(&n.link(i))? { return Err(Error::NotFound); } }
+                for i in 0..n.len() { visit(blocks, &n.link(i))?; }
                 break;
             }
             let capacity = capacity(h) as u64;
             let child = (within / capacity) as usize;
             cid = n.link(child);
+            visit(blocks, &cid)?;
             held = capacity.min(held - child as u64 * capacity);
             within -= child as u64 * capacity;
             h -= 1;
         }
     }
     Ok(total)
+}
+
+/// Whether every block of the object `root` is stored: `walk` with every chunk asked for with `has`. Returns the
+/// object's size; Err(NotFound) names nothing, only that one is missing.
+pub fn complete<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK]) -> Result<u64, Error> {
+    walk(blocks, root, buffer, |b, cid| if b.has(cid)? { Ok(()) } else { Err(Error::NotFound) })
 }
 
 #[derive(Clone, Copy)]

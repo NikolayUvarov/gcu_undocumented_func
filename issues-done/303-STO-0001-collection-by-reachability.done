@@ -1,0 +1,58 @@
+# 303-STO-0001 — Collection by reachability: names retain, leases protect writes in progress, room is reused — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.5, MC-4.8, MC-4.11, Appendix B.3
+
+Part of main task [303](../issues/303-retention-and-collection.md).
+
+## Problem
+
+The store's log only grew, so a full medium refused every put for good. MC-4.5 asks that the collector takes published roots and operations in progress into account.
+
+## Plan
+
+- **Roots:** the current version of every name. **Leases:** a block is kept for `LEASE_NS` (60 s) after its last put; a put of bytes already held starts the lease again, and every lease starts again when a mount is done.
+- **A collection:**
+  - marks what every name's object reaches (`dag::walk`, every node read and checked); if one lacks a block or holds a corrupt node, it refuses and frees nothing;
+  - in one pass over the medium, frees the block records the index does not retain at that place (unretained, duplicate or corrupt copies) and the name records that are not current;
+  - frees each record crash-safely: a `MIND-DEL` marker first, then zeros, then the marker's sector zeroed. A mount finishes a free that stopped in the middle.
+- **Room:** records go into the first run of blank sectors that holds them. A put or publication that finds none collects once.
+- **The interface:** `collect` in `idl/blockstore.wit` 1.1 (minor: added at the end), for `BADGE_PUT`.
+
+## Acceptance criteria
+
+- Host tests:
+  - leases and the collection;
+  - room reused when the medium is full;
+  - nothing freed while a name's object is incomplete;
+  - a stopped collection finished by a mount;
+  - a random model with collections and remounts;
+  - every record written only into blank sectors.
+- QEMU `store` suite, x86 and aarch64: once the leases have ended, a fill on a full medium gets room from the collection its put starts, and the named object stays whole across a restart.
+
+## Related
+
+[302](302-names-and-current-roots.done), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+- **`libmind/src/dag.rs`:** `walk(blocks, root, buffer, visit)` visits every node (read and checked) and every chunk; `complete` is a walk.
+- **`blockstore/src/store.rs`:**
+  - `Entry` gets `lease` and `live`; `Extent` lists the runs of blank sectors;
+  - `pass` is one scan for mount and sweep; `erase` frees with the marker, `find_room` and `claim` allocate;
+  - `collect`, `renew` and `set_time`; `Collected`; `Stats::free`.
+  - `publish` finds room before its completeness check, so a collection it starts cannot leave a name on freed blocks.
+  - Blocks with `MIND-DEL` at a later sector's start are refused like the other magics.
+- **`blockstore/src/main.rs`:**
+  - the clock is set before each request, and the leases are renewed when the mount is done;
+  - `collect` is answered and logged.
+- **`blocks collect`;** `blocks fill` stamps its blocks with the time, so a second fill writes new blocks.
+- **Tests:**
+  - `tests/blockstore_host.rs` (29):
+    - `a_collection_frees_what_no_name_retains_once_its_lease_ends`, `a_put_starts_the_lease_again`, `freed_room_is_written_again_when_the_medium_is_full`;
+    - `nothing_is_collected_while_a_name_lacks_a_block`, `a_collection_stopped_in_the_middle_is_finished_by_the_next_mount`, `leases_start_again_when_a_mount_is_done`;
+    - `random_puts_names_collections_and_remounts_match_a_model`;
+    - the medium in the tests asserts that a block or name record is written only over blank sectors.
+  - `tests/dag_host.rs`: `a_walk_names_every_block_of_the_object`, and a reference root for 100 000 bytes.
+  - QEMU `store` suite: after a restart, a collection frees no block. 61 s later, a fill on the full medium writes more than 100 new blocks into the room its puts' collections free; the unreferenced file is gone. The name's object stays whole, and the store mounts again with `CORRUPT=0 DAMAGED=0`. x86 5 min 17 s; aarch64 within 10 min.
+- **Found on the platform:** checking a 4 MiB object whole takes more than a lease under TCG on aarch64, so the suite collects right after the steps whose leases it relies on. The mount itself now renews leases when it is done.
+- **Not done here:** pins with owners and quotas, version history, removing a name, obligations to consumers. These are 303-STO-0002 to 0004.
