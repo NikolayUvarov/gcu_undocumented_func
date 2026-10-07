@@ -64,12 +64,15 @@ pub fn height(size: u64) -> u32 {
 fn capacity(h: u32) -> u128 { CHUNK as u128 * (FANOUT as u128).pow(h - 1) }
 
 /// A decoded node: its size and its links' binary forms.
-pub struct Node { pub size: u64, links: [[u8; cid::BYTES]; FANOUT], count: usize }
+/// A decoded node: its size, and its links read from the node's own bytes when asked for, so a node takes no room on
+/// the stack (a program's stack is 64 KiB).
+pub struct Node<'a> { pub size: u64, links: &'a [u8], count: usize }
 
-impl Node {
+impl Node<'_> {
     pub fn len(&self) -> usize { self.count }
     pub fn is_empty(&self) -> bool { self.count == 0 }
-    pub fn link(&self, i: usize) -> Cid { Cid::from_bytes(&self.links[i]).unwrap() }
+    // Every link of a canonical node is LINK bytes: tag, string head, prefix, then the CID.
+    pub fn link(&self, i: usize) -> Cid { Cid::from_bytes(&self.links[i * LINK + LINK - cid::BYTES..(i + 1) * LINK]).unwrap() }
 
     /// Whether this node fits a place of height `h` holding `size` bytes.
     fn check(&self, h: u32, size: u64) -> Result<(), Error> {
@@ -82,9 +85,11 @@ impl Node {
     }
 }
 
+// Where an encoding goes: written into a buffer, or compared with bytes already there (`decode`'s canonical check).
 struct Out<'a> { bytes: &'a mut [u8], at: usize }
-impl Out<'_> {
-    fn push(&mut self, data: &[u8]) { self.bytes[self.at..self.at + data.len()].copy_from_slice(data); self.at += data.len(); }
+struct Same<'a> { bytes: &'a [u8], at: usize, equal: bool }
+trait Sink {
+    fn push(&mut self, data: &[u8]);
     // A CBOR head in its shortest form, as DAG-CBOR requires.
     fn head(&mut self, major: u8, value: u64) {
         let m = major << 5;
@@ -98,14 +103,26 @@ impl Out<'_> {
     }
     fn text(&mut self, text: &str) { self.head(3, text.len() as u64); self.push(text.as_bytes()); }
 }
+impl Sink for Out<'_> {
+    fn push(&mut self, data: &[u8]) { self.bytes[self.at..self.at + data.len()].copy_from_slice(data); self.at += data.len(); }
+}
+impl Sink for Same<'_> {
+    fn push(&mut self, data: &[u8]) {
+        self.equal &= self.bytes.get(self.at..self.at + data.len()) == Some(data);
+        self.at += data.len();
+    }
+}
 
 /// Encodes a node over `size` bytes with `links` (at most FANOUT) into `out` (NODE_MAX bytes at least); returns its
 /// length. The keys are in DAG-CBOR's order: shorter first.
-pub fn encode(size: u64, links: &[Cid], out: &mut [u8]) -> usize { encode_with(size, links.len(), |k| links[k], out) }
+pub fn encode(size: u64, links: &[Cid], out: &mut [u8]) -> usize {
+    let mut o = Out { bytes: out, at: 0 };
+    encode_with(size, links.len(), |k| links[k], &mut o);
+    o.at
+}
 
 // The links come one by one, so no array of them is built on the stack.
-fn encode_with(size: u64, count: usize, link: impl Fn(usize) -> Cid, out: &mut [u8]) -> usize {
-    let mut o = Out { bytes: out, at: 0 };
+fn encode_with(size: u64, count: usize, link: impl Fn(usize) -> Cid, o: &mut impl Sink) {
     o.head(5, 3);
     o.text("v");
     o.head(0, VERSION);
@@ -119,7 +136,6 @@ fn encode_with(size: u64, count: usize, link: impl Fn(usize) -> Cid, out: &mut [
         o.push(&[0]);
         o.push(&link(k).to_bytes());
     }
-    o.at
 }
 
 struct In<'a> { bytes: &'a [u8], at: usize }
@@ -150,7 +166,7 @@ impl<'a> In<'a> {
 }
 
 /// Decodes a node, only if it is exactly the canonical encoding of this schema.
-pub fn decode(bytes: &[u8]) -> Result<Node, Error> {
+pub fn decode(bytes: &[u8]) -> Result<Node<'_>, Error> {
     let mut i = In { bytes, at: 0 };
     let entries = i.expect(5)?;
     // "v" sorts first, so another schema version is told apart before anything else of it is read.
@@ -162,17 +178,17 @@ pub fn decode(bytes: &[u8]) -> Result<Node, Error> {
     i.key("links")?;
     let count = i.expect(4)? as usize;
     if count == 0 || count > FANOUT { return Err(Error::Format); }
-    let mut node = Node { size, links: [[0; cid::BYTES]; FANOUT], count };
-    for link in node.links[..count].iter_mut() {
+    let start = i.at;
+    for _ in 0..count {
         if i.expect(6)? != 42 || i.expect(2)? != 1 + cid::BYTES as u64 || i.take(1)? != [0] { return Err(Error::Format); }
-        let bytes = i.take(cid::BYTES)?;
-        Cid::from_bytes(bytes).map_err(|_| Error::Format)?;
-        link.copy_from_slice(bytes);
+        Cid::from_bytes(i.take(cid::BYTES)?).map_err(|_| Error::Format)?;
     }
-    if i.at != bytes.len() { return Err(Error::Format); }
+    if i.at != bytes.len() || i.at - start != count * LINK { return Err(Error::Format); }
+    let node = Node { size, links: &bytes[start..], count };
     // Shortest integer forms: the encoding of what was read must be the bytes themselves.
-    let mut again = [0u8; NODE_MAX];
-    if encode_with(size, count, |k| node.link(k), &mut again) != bytes.len() || again[..bytes.len()] != *bytes { return Err(Error::Format); }
+    let mut same = Same { bytes, at: 0, equal: true };
+    encode_with(size, count, |k| node.link(k), &mut same);
+    if !same.equal || same.at != bytes.len() { return Err(Error::Format); }
     Ok(node)
 }
 
@@ -183,7 +199,7 @@ fn fetch<B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &mut [u8; CHUNK]) -> Resu
     Ok(len)
 }
 
-fn node<B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &mut [u8; CHUNK]) -> Result<Node, Error> {
+fn node<'b, B: Blocks>(blocks: &mut B, cid: &Cid, buffer: &'b mut [u8; CHUNK]) -> Result<Node<'b>, Error> {
     if cid.codec() != Codec::DagCbor { return Err(Error::Shape); }
     let len = fetch(blocks, cid, buffer)?;
     decode(&buffer[..len])
@@ -260,7 +276,8 @@ pub fn complete<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK])
 }
 
 #[derive(Clone, Copy)]
-struct Entry { cid: Cid, size: u64 }
+struct Entry { key: [u8; cid::BYTES], size: u64 }
+impl Entry { fn cid(&self) -> Cid { Cid::from_bytes(&self.key).unwrap() } }
 
 /// Writes an object's bytes as chunks and nodes while they come; `finish` returns the root.
 pub struct Builder { chunk: [u8; CHUNK], filled: usize, total: u64, levels: [[Entry; FANOUT]; LEVELS], counts: [usize; LEVELS], node: [u8; NODE_MAX] }
@@ -268,8 +285,9 @@ pub struct Builder { chunk: [u8; CHUNK], filled: usize, total: u64, levels: [[En
 impl Default for Builder { fn default() -> Self { Self::new() } }
 
 impl Builder {
-    pub fn new() -> Self {
-        let empty = Entry { cid: Cid::raw(&[]), size: 0 };
+    /// A builder takes about 110 KiB: a program keeps one in a static, `const` lets it.
+    pub const fn new() -> Self {
+        let empty = Entry { key: [0; cid::BYTES], size: 0 };
         Self { chunk: [0; CHUNK], filled: 0, total: 0, levels: [[empty; FANOUT]; LEVELS], counts: [0; LEVELS], node: [0; NODE_MAX] }
     }
 
@@ -294,7 +312,7 @@ impl Builder {
 
     fn flush_chunk<B: Blocks>(&mut self, blocks: &mut B) -> Result<(), Error> {
         let cid = Self::put(blocks, Codec::Raw, &self.chunk[..self.filled])?;
-        let entry = Entry { cid, size: self.filled as u64 };
+        let entry = Entry { key: cid.to_bytes(), size: self.filled as u64 };
         self.filled = 0;
         self.push(blocks, 0, entry)
     }
@@ -312,9 +330,11 @@ impl Builder {
         self.counts[level] = 0;
         let size = self.levels[level][..count].iter().map(|e| e.size).sum();
         let entries = &self.levels[level];
-        let len = encode_with(size, count, |k| entries[k].cid, &mut self.node);
+        let mut o = Out { bytes: &mut self.node, at: 0 };
+        encode_with(size, count, |k| entries[k].cid(), &mut o);
+        let len = o.at;
         let cid = Self::put(blocks, Codec::DagCbor, &self.node[..len])?;
-        self.push(blocks, level + 1, Entry { cid, size })
+        self.push(blocks, level + 1, Entry { key: cid.to_bytes(), size })
     }
 
     /// Writes what is left and the nodes above it; returns the root and the object's size.
@@ -324,7 +344,7 @@ impl Builder {
             let higher = self.counts[level + 1..].iter().any(|&c| c > 0);
             match self.counts[level] {
                 0 => {}
-                1 if !higher => { self.counts[level] = 0; return Ok((self.levels[level][0].cid, self.total)); }
+                1 if !higher => { self.counts[level] = 0; return Ok((self.levels[level][0].cid(), self.total)); }
                 _ => self.wrap(blocks, level)?,
             }
         }

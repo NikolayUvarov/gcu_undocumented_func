@@ -2,7 +2,7 @@
 
 **Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.13, MC-12.2, Appendix B.3
 
-Part of main task [301](../issues/301-objects-as-merkle-dags.md).
+Part of main task [301](301-objects-as-merkle-dags.done).
 
 ## Problem
 

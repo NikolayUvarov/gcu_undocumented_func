@@ -22,8 +22,6 @@ jobs:
         run: ./02_build.sh
       - name: Network driver without legacy support
         run: cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only
-      - name: Block store, both architectures (not in the image until init starts it, issues/requests-KRN.md)
-        run: cd blockstore && for t in x86_64-unknown-none aarch64-unknown-none-softfloat; do cargo build --release --target $t --target-dir /tmp/blockstore-target || exit 1; done
       - name: Clean tree after the build
         run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
       - name: FAT tools for the FAT host test
@@ -68,7 +66,7 @@ jobs:
           - name: keys, shell, tools
             args: --suites keys,shell,tools,windows,wm,tablet,usb
           - name: files and block writes
-            args: --suites vfs,edit,disk,block
+            args: --suites vfs,edit,disk,block,store
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -146,7 +144,7 @@ jobs:
           - group: programs, shell and four CPUs
             suites: normal,shell,smp,busy,usb
           - group: files, network and TLS
-            suites: vfs,net,tls
+            suites: vfs,store,net,tls
           - group: RAM, ACPI and PCI above 4 GiB
             suites: normal,net
             machine: virt,gic-version=3,highmem=on
