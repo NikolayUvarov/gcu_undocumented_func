@@ -47,6 +47,20 @@ The check now also reports how much of the screenshot is black. On a stall, miss
 
 Two things are wrong and not yet explained: `video_gw` sleeps far longer than the frame period, and no heartbeat lit the mark although `video_gw` sent some. Both are in `video_gw` and the compositor, not in the tools track's files: `video_gw` belongs to the drivers track (`DRV`, open, no owner), and the compositor to none listed in TRACKS.md. Logging there (a heartbeat the compositor refused; the mark switched on and off) would tell the rest.
 
+**The cause.** `video_gw`'s `Stream::next` waited for a frame with
+
+```rust
+while mind::time::monotonic_ns() < due { let _ = mind::time::sleep(((due - mind::time::monotonic_ns()) / 1_000_000) as usize + 1); }
+```
+
+It read the clock twice. When the frame came due between the two readings (the task preempted between them, which a busy CPU makes likely), `due - now` wrapped around (`u64` in a release build) and the sleep asked for was huge; the kernel caps a sleep at 60 s (`SYSCALL_WAIT`). So `video_gw` slept up to a minute in the middle of a stream:
+
+- no frames: the recording that did not end within a minute, and the stream held open for about 60 s (`CLOSED AFTER 604 FRAMES`);
+- no heartbeats, which `video_gw` sends from its main loop: the mark went dark while the stream stayed open, the privacy failure the check is there to catch;
+- `video_gw` asleep with almost no CPU time in the stall report.
+
+**The fix** reads the clock once a pass (`video_gw/src/main.rs`). No other program waits this way (searched for the pattern). `video_gw` is in the drivers track's directories; that track has no owner, so the tools track made the one-line fix itself and says so here and in its commit.
+
 ## Plan
 
 1. The check keeps failing in that case, and says more when it does (done with this issue): four more samples of the pixel 0.3 s apart with their time since `OPENED`, the camera program's own output to its end, and the gateway's log.

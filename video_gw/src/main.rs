@@ -26,7 +26,12 @@ impl Stream {
         let latest = ((now - self.start_ns) / period) as u32 + 1;
         let sequence = (self.sequence + 1).max(latest);
         let due = self.start_ns + (sequence - 1) as u64 * period;
-        while mind::time::monotonic_ns() < due { let _ = mind::time::sleep(((due - mind::time::monotonic_ns()) / 1_000_000) as usize + 1); }
+        // One reading of the clock a pass: a second one already past `due` wrapped the difference into a 60 s sleep.
+        loop {
+            let now = mind::time::monotonic_ns();
+            if now >= due { break; }
+            let _ = mind::time::sleep(((due - now) / 1_000_000) as usize + 1);
+        }
         let pixels = unsafe { core::slice::from_raw_parts_mut(self.frame.as_mut_slice().as_mut_ptr() as *mut u32, self.width * self.height) };
         video::fill(sequence, self.width, self.height, pixels);
         self.sequence = sequence;
