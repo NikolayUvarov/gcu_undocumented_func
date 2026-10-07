@@ -3,7 +3,7 @@
 // Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
 // Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
-// logged. Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
+// logged. Leases are measured on the monotonic clock (303-STO-0001). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
@@ -13,11 +13,11 @@ use cid::Cid;
 use mind::abi::BootInfo;
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, Operation};
-use mind::idl::blockstore::{self, Error, Head as Current, Request, Stats};
+use mind::idl::blockstore::{self, Collected, Error, Head as Current, Request, Stats};
 use mind::idl::codec::List;
 use mind::idl::wire;
 use mind::ipc::Endpoint;
-use store::{Device, Entry, Head, Store, BLOCK_MAX, BUFFER, SECTOR};
+use store::{Device, Entry, Extent, Head, Store, BLOCK_MAX, BUFFER, SECTOR};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
@@ -26,9 +26,13 @@ const BLOCK: usize = 2;
 const CAPACITY: usize = 4096;
 /// Names the store holds (120 bytes each).
 const NAMES: usize = 256;
+/// Runs of blank sectors the store keeps track of between scans.
+const HOLES: usize = 512;
 
 static mut INDEX: [Entry; CAPACITY] = [Entry::EMPTY; CAPACITY];
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
+static mut RUNS: [Extent; HOLES] = [Extent::EMPTY; HOLES];
+static mut WALK: [u8; dag::CHUNK] = [0; dag::CHUNK];
 static mut RECORD: [u8; BUFFER] = [0; BUFFER];
 static mut SCRATCH: [u8; blockstore::REQUEST_MAX] = [0; blockstore::REQUEST_MAX];
 static mut OUT: [u8; BLOCK_MAX] = [0; BLOCK_MAX];
@@ -66,17 +70,19 @@ fn parse(bytes: &[u8]) -> Result<Cid, Error> { Cid::from_bytes(bytes).map_err(|_
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let (index, heads, record, scratch, out) = unsafe {
-        (&mut *core::ptr::addr_of_mut!(INDEX), &mut *core::ptr::addr_of_mut!(HEADS), &mut *core::ptr::addr_of_mut!(RECORD),
-         &mut *core::ptr::addr_of_mut!(SCRATCH), &mut *core::ptr::addr_of_mut!(OUT))
+    let (index, heads, runs, record, walk, scratch, out) = unsafe {
+        (&mut *core::ptr::addr_of_mut!(INDEX), &mut *core::ptr::addr_of_mut!(HEADS), &mut *core::ptr::addr_of_mut!(RUNS),
+         &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *core::ptr::addr_of_mut!(SCRATCH),
+         &mut *core::ptr::addr_of_mut!(OUT))
     };
     let mounted = match Client::open(Endpoint(BLOCK)) {
-        Ok(client) => Store::mount(Medium(client), index, heads, record),
+        Ok(client) => Store::mount(Medium(client), index, heads, runs, record, walk, mind::time::monotonic_ns()),
         Err(_) => Err(store::Error::Device),
     };
     // Without a medium every request is answered with the reason, so clients are not left waiting.
     let mut store = match mounted {
-        Ok(store) => {
+        Ok(mut store) => {
+            store.renew(mind::time::monotonic_ns());
             let s = store.stats();
             mind::println!("[BLOCKSTORE] READY BLOCKS={} NAMES={} SECTORS={}/{} CORRUPT={} DAMAGED={}", s.blocks, s.names, s.used, s.sectors, s.corrupt, s.damaged);
             Ok(store)
@@ -86,6 +92,7 @@ fn main(_info: &'static BootInfo) {
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if !request.is_call { continue; }
+        if let Ok(s) = store.as_mut() { s.set_time(mind::time::monotonic_ns()); }
         let (badge, pid) = (request.badge, request.sender);
         let refused = |operation| {
             if allowed(badge, operation) { return false; }
@@ -100,6 +107,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Stat, call)) if refused(Operation::Stat) => blockstore::reply_stat(call, Err(Error::Rights)),
             Ok((Request::Publish { .. }, call)) if refused(Operation::Publish) => blockstore::reply_publish(call, Err(Error::Rights)),
             Ok((Request::Resolve { .. }, call)) if refused(Operation::Resolve) => blockstore::reply_resolve(call, Err(Error::Rights)),
+            Ok((Request::Collect, call)) if refused(Operation::Collect) => blockstore::reply_collect(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -124,10 +132,17 @@ fn main(_info: &'static BootInfo) {
                 let stats = Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity, names: s.names };
                 blockstore::reply_stat(call, Ok(&stats))
             }
+            Ok((Request::Collect, call)) => {
+                let collected = store.as_mut().map_err(|e| *e).and_then(|s| s.collect().map_err(error)).map(|c| {
+                    mind::println!("[BLOCKSTORE] COLLECTED {} BLOCKS {} NAMES {} SECTORS, {} FREE, BY PID {}", c.blocks, c.names, c.sectors, c.free, pid);
+                    Collected { blocks: c.blocks, names: c.names, sectors: c.sectors, free: c.free }
+                });
+                blockstore::reply_collect(call, collected.as_ref().map_err(|e| *e))
+            }
             Ok((Request::Publish { name, expected, root }, call)) => {
                 let version = parse(root).and_then(|root| {
                     let s = store.as_mut().map_err(|e| *e)?;
-                    let version = s.publish(name.as_str().as_bytes(), expected, &root, out).map_err(error)?;
+                    let version = s.publish(name.as_str().as_bytes(), expected, &root).map_err(error)?;
                     mind::println!("[BLOCKSTORE] PUBLISHED {} VERSION {} ROOT {} BY PID {}", name, version, root, pid);
                     Ok(version)
                 });

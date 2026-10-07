@@ -1,0 +1,42 @@
+# 303 — Retention and garbage collection: what is kept, for whom and how long (track B, fourth step)
+
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.5, MC-4.8, MC-4.11, Appendix B.3
+
+## Problem
+
+The block store kept every block until its medium was full ([300](300-checksummed-block-store.md), [302](../issues-done/302-names-and-current-roots.done)).
+
+- **MC-4.5:** version history has explicit links and a retention policy. The garbage collector takes into account published roots, pinned snapshots, operations in progress and obligations to consumers.
+- **MC-4.11:** the right to access an object and the obligation to retain it are distinct. Retention has a party responsible for accounting, a term or termination condition, and a link to a quota.
+- **Appendix B.3:** retention is a registered obligation with a quota, a term and an owner. Recovery roots, checkpoints and the data of unfinished operations are roots of the collection.
+
+## Plan
+
+The `STO` track numbers its tasks itself and may change the split.
+
+- `303-STO-0001` — **collection by reachability.**
+  - Roots: the current version of every name.
+  - Leases: a block no name retains is kept for 60 s after its last put and after a mount, for writes in progress.
+  - Every name's object is walked before anything is freed; if one is incomplete, nothing is freed.
+  - Freed sectors are blank again and are reused, with a crash-safe order.
+  - A put that finds no room collects; `collect` is in the interface (1.1).
+- `303-STO-0002` — **pins:** retention obligations with an owner (the badge), a term or an explicit end, and a quota per owner (MC-4.11, B.3).
+- `303-STO-0003` — **history:** a name keeps its last N versions, linked explicitly from one to the one before (MC-4.5).
+- `303-STO-0004` — **removing a name:** deleting a reference, kept apart from deleting data (MC-4.8).
+
+## Acceptance criteria
+
+- Host tests and the QEMU `store` suite (x86, aarch64) show:
+  - that what a name or a lease retains survives every collection and mount;
+  - that what nothing retains is freed and its room written again;
+  - that a collection stopped in the middle is finished by the next mount.
+- Pins, history and removal, each with their tests.
+- The profile's Article 4 row states the retention policy.
+
+## Progress (2026-10-07)
+
+- **Done — [`303-STO-0001`](../issues-done/303-STO-0001-collection-by-reachability.done).**
+
+## Related
+
+[docs/storage](../docs/storage/README.md); Constitution Article 4, Appendix B.3.
