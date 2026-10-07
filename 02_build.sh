@@ -74,6 +74,7 @@ USER_CRATES=(
     "ramdisk:ramdisk:ramdisk.elf"
     "vfs_server:vfs_server:vfs_server.elf"
     "blockstore:blockstore:blockstore.elf"
+    "blocks:blocks:blocks.elf"
     "gpio:gpio:gpio.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"

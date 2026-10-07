@@ -1,6 +1,6 @@
 # 300-STO-0004 — Rights to the block store by badge: storing apart from reading
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) (clients minted with the badges) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (a client with fewer rights than the shell's; the badged clients came with [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done)) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
 
 Part of main task [300](300-checksummed-block-store.md).
 
@@ -37,3 +37,8 @@ Any holder of a `blockstore` client could put and get. MC-4.7 says that a hash d
 ## Related
 
 [docs/storage](../docs/storage/README.md); `libmind/src/gpio.rs` (the same pattern for pins); Constitution Article 4.
+
+## Progress (2026-10-07)
+
+- On the platform the shell's client carries badge 7 (get, put, publish), and the `store` suite uses it through `blocks` ([300-STO-0003](../issues-done/300-STO-0003-blocks-tool-and-store-suite.done)).
+- A refusal can only be seen with a client that lacks a right. The shell cannot make one, because a badge is set once and kept by children. A request to the kernel track asks for one.

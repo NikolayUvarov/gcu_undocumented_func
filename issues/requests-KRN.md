@@ -57,3 +57,23 @@ The kernel track decides: measure the loop's share against the guest's own time 
 ### Acceptance criteria
 
 The check keeps its meaning (no budget: the loop takes most of its CPU) and does not fail when the host is busy.
+
+## A block store client with fewer rights
+
+**Recorded by:** the storage track (STO), 2026-10-07.
+
+### Problem
+
+The shell holds the only `blockstore` client (slot 25, badge 7: get, put and publish), and lends that client for `REQUEST_BLOCKSTORE`. A badge is set once and children keep it, so neither the shell nor a program can narrow it.
+
+So no program can hold a client that may only read. The service's refusals by badge (300-STO-0004, `mind::blockstore::allowed`) are therefore tested on the host only.
+
+### Plan (a proposal; the kernel track decides)
+
+- `init` also gives the shell a client badged `BADGE_GET` alone, in a slot of its own.
+- The shell lends that client for a request that asks only to read, for example a new `REQUEST_BLOCKSTORE_READ`.
+
+### Acceptance criteria
+
+- A program that asked only to read holds a client with badge 1.
+- The storage track's `store` suite then checks that `put` and `publish` are refused with `rights`, and that the refusals are logged.

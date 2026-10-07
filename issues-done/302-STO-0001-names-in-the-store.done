@@ -2,11 +2,11 @@
 
 **Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10
 
-Part of main task [302](../issues/302-names-and-current-roots.md).
+Part of main task [302](302-names-and-current-roots.done).
 
 ## Problem
 
-See [302](../issues/302-names-and-current-roots.md). Names need a record that survives a restart, a protocol for concurrent publishers, and a check that a root's data is all stored before the root is published.
+See [302](302-names-and-current-roots.done). Names need a record that survives a restart, a protocol for concurrent publishers, and a check that a root's data is all stored before the root is published.
 
 ## Plan
 
@@ -27,7 +27,7 @@ Host tests:
 
 ## Related
 
-[302](../issues/302-names-and-current-roots.md), [301-STO-0001](301-STO-0001-object-format.done), [docs/storage](../docs/storage/README.md).
+[302](302-names-and-current-roots.done), [301-STO-0001](301-STO-0001-object-format.done), [docs/storage](../docs/storage/README.md).
 
 ## Resolution
 

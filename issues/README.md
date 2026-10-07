@@ -25,11 +25,9 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
 | [207](207-gpio-service.md) | `gpio`: a user-space service for the pins of ARM boards (BCM2711, PL061); hwdocs pin tables | porting (done except hardware) | P2 | — (206 done) | track H |
 | [210](210-apple-silicon-native.md) | Apple Silicon Macs natively (M1 first): boot through m1n1 and U-Boot, device tree, AIC, spin table, DART, DWC3 USB | main task, `PRT` | P3 | a Mac with M1; 205 | track H |
-| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the identifier format is done (`300-STO-0001`), the service is built (`300-STO-0002`) | main task, `STO` | P2 | — | track B |
-| [302](302-names-and-current-roots.md) | Names and their current roots (track B, third step): versions published by compare-and-swap, only complete roots (`302-STO-0001` done in the store) | main task, `STO` | P2 | — | track B |
-| [301](301-objects-as-merkle-dags.md) | Objects larger than a block as a Merkle-DAG of chunks and DAG-CBOR nodes (track B, second step): the format, the library and the store's nodes are done (`301-STO-0001`, `0002`); objects over the running service wait for it | main task, `STO` | P2 | — | track B |
-| [300-STO-0004](300-STO-0004-rights-by-badge.md) | Rights to the block store by badge: `BADGE_GET` reads, `BADGE_PUT` stores, refusals logged; host-tested, waits for badged clients | `STO` | P2 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) | track B |
-| [300-STO-0002](300-STO-0002-blockstore-service.md) | The `blockstore` service: put and get by CID, append-only, every read checked; built and host-tested, waits to be started at boot | `STO` | P2 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) (done) | track B |
+| [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the service runs at boot, the `store` suite passes on x86 and aarch64; rights refusals and corruption on the platform remain (`300-STO-0004`, `0005`) | main task, `STO` | P2 | — | track B |
+| [300-STO-0004](300-STO-0004-rights-by-badge.md) | Rights to the block store by badge: `BADGE_GET` reads, `BADGE_PUT` stores, `BADGE_PUBLISH` publishes, refusals logged; host-tested, the platform check waits for a client with fewer rights | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
+| [300-STO-0005](300-STO-0005-corruption-on-the-platform.md) | Corruption on the platform: a damaged block, chunk or name record refused by the running store | `STO` | P3 | a medium a test can change (`DRV`), or fault injection (500) | track B |
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
@@ -37,7 +35,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [171-APP-0006](171-APP-0006-monitor-bounds.md) | `top`, `memmap`, `load`: capabilities as `n/4095`, task and endpoint counts without the root quota's 65535, the task graph to its own scale (requested by `KRN`) | `APP` | P2 | — | G |
 | [171-APP-0007](171-APP-0007-sysinfo-every-cpu-and-capability.md) | `sysinfo`: every CPU (up to 255) and every capability of a task, in `top`, `load` and `caps` (requested by `KRN`) | `APP` | P2 | — | G |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights).
 
 
 ## Finished tasks (`issues-done/`)
@@ -212,5 +210,9 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [301-STO-0001](../issues-done/301-STO-0001-object-format.done) | The object format: 16 KiB chunks and DAG-CBOR nodes with a shape fixed by the size, a builder and a checking reader (`mind::dag`) | done (2026-10-06) |
 | [301-STO-0002](../issues-done/301-STO-0002-store-takes-nodes.done) | The block store takes nodes: `put(codec, data)`, a `dag-cbor` block stored only if it is a canonical node of `mind::dag` | done (2026-10-06) |
 | [302-STO-0001](../issues-done/302-STO-0001-names-in-the-store.done) | Names in the block store: `publish` by compare-and-swap on the version, only roots whose object is complete; `resolve`; `BADGE_PUBLISH` | done (2026-10-06) |
+| [300-STO-0002](../issues-done/300-STO-0002-blockstore-service.done) | The `blockstore` service: put and get by CID, append-only, every read checked; runs at boot over `ramdisk#1` | done (2026-10-07) |
+| [300-STO-0003](../issues-done/300-STO-0003-blocks-tool-and-store-suite.done) | The `blocks` tool and the `store` suite on x86 and aarch64: the reference root of a 4 MiB object, a file round trip, names by compare-and-swap, a full store, a restart; `dag::Node` off the stack | done (2026-10-07) |
+| [301](../issues-done/301-objects-as-merkle-dags.done) | Objects larger than a block as a Merkle-DAG (track B, second step); damage on the platform split off to 300-STO-0005 | done (2026-10-07) |
+| [302](../issues-done/302-names-and-current-roots.done) | Names and their current roots by compare-and-swap, only complete roots (track B, third step); damage on the platform split off to 300-STO-0005 | done (2026-10-07) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

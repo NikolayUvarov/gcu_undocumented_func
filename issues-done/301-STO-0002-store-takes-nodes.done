@@ -2,7 +2,7 @@
 
 **Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "manifests/Merkle-DAG" · **Constitution:** MC-4.2, MC-4.13
 
-Part of main task [301](../issues/301-objects-as-merkle-dags.md).
+Part of main task [301](301-objects-as-merkle-dags.done).
 
 ## Problem
 
@@ -22,7 +22,7 @@ Part of main task [301](../issues/301-objects-as-merkle-dags.md).
 
 ## Related
 
-[301-STO-0001](301-STO-0001-object-format.done), [300-STO-0002](../issues/300-STO-0002-blockstore-service.md), [docs/storage](../docs/storage/README.md).
+[301-STO-0001](301-STO-0001-object-format.done), [300-STO-0002](300-STO-0002-blockstore-service.done), [docs/storage](../docs/storage/README.md).
 
 ## Resolution
 
