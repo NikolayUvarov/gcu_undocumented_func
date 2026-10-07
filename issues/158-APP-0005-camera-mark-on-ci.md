@@ -33,7 +33,9 @@ A black pixel (`000000`) is neither the mark nor the background, so the screendu
 - `video_gw` logged `CLOSED AFTER 604 FRAMES` (34 locally): the stream stayed open about 60 s, not about 3.5. `ps` afterwards: `video_gw` had run 39 times in all; `vfs_server` 28 149, `ramdisk` 15 760, `nvme` 9 487, `rtc` 1 447.
 - So the program spent about a minute after its last frame, most likely writing the file; meanwhile `video_gw` hardly ran. Yet the heartbeat sent at the opening alone should have lit the mark for 1.5 s, and it was dark at 1.0 s. Either the compositor did not run in those seconds, or its calls failed.
 
-The check now also reports how much of the screenshot is black (nothing composited at all) and `ps` at the end.
+**Third failure** (CI, 3c943da, group "files and block writes", the ATA disk): the mark was there this time, but the recording of 3 s did not end within 60 s; the guest log ends at `OPENED`. The suite had taken under a minute until then. So the cause is not NVMe: a camera run on CI sometimes stalls for a minute or more, mark and all, while every earlier step of the suite runs at its usual pace. On the branch it happened in three of four CI runs; `main`'s last four CI runs passed the same check.
+
+The check now also reports how much of the screenshot is black. On a stall, missing mark or a recording that does not end, it presses Ctrl+Z, which gives the shell back while the program runs on, and reports `ps` and `stat` of every task on the camera's path: what each one waits for during the stall.
 
 ## Plan
 

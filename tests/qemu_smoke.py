@@ -2815,6 +2815,18 @@ def camera_check(vm):
     still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", vm.expect("SHELL RESUMED.", timeout=30))
     assert still, vm.log[-2000:]
     time.sleep(.2); vm.collect(); vm.output = ""
+    def stalled(*report):
+        # Seen on CI and never locally (158-APP-0005): Ctrl+Z gives the shell back while the program runs on, and every task
+        # of the camera's path says what it waits for. The check still fails.
+        vm.send_bytes(b"\x1a")
+        try:
+            vm.expect("SHELL RESUMED.", timeout=20)
+        except AssertionError as e:
+            report += ("no shell after Ctrl+Z", str(e)[-500:])
+        ps = vm.command("ps", raw=True)
+        path = r"camera|video_gw|vfs_server|compositor|nvme|ata|ahci|ramdisk|rtc|logd|sysmon"
+        waits = [vm.command(f"stat {pid}", raw=True) for pid in re.findall(rf"^(\d+) (?:{path}) ", ps, re.M)]
+        raise AssertionError(report + (ps, waits, vm.service_logs("video_gw")))
     ask("camera -r 10 -t 3 data/cam.avi", b"y")
     vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
     opened = time.monotonic()
@@ -2823,8 +2835,7 @@ def camera_check(vm):
     width = int(size.split()[0])
     mark = ((13 * width) + width - 48 - 6) * 3  # the camera mark's body, left of the capture dot
     if during[mark:mark + 3] != bytes((0x20, 0xC0, 0x40)):
-        # Seen once on CI and never locally (158-APP-0005): what follows tells a mark that comes late or blinks from
-        # one that is not drawn at all. The check still fails.
+        # Whether the mark comes late or blinks, or is not drawn at all.
         later = []
         for _ in range(4):
             time.sleep(.3)
@@ -2833,14 +2844,14 @@ def camera_check(vm):
         # How much of the screen is drawn at all: black everywhere would mean nothing reached the framebuffer.
         pixels = len(during) // 3
         black = sum(1 for i in range(0, pixels * 3, 3 * 97) if during[i:i + 3] == b"\0\0\0") * 97 * 100 // pixels
-        # The program's own lines first (its 3 s end the stream), then the gateway's log: when it opened and closed.
-        camera = vm.expect("SHELL RESUMED.", timeout=60)
-        raise AssertionError(("the camera mark while the stream is open", during[mark:mark + 3], f"{black}% of the screen black",
-                              "later:", later, camera, vm.service_logs("video_gw", "CLOSED AFTER"), vm.command("ps", raw=True)))
+        stalled("the camera mark while the stream is open", during[mark:mark + 3], f"{black}% of the screen black", "later:", later)
     vm.serial(enter=False)
     # 30 frames of camera time; a slow encoder (aarch64 under TCG) gets fewer pictures and repeats the last one.
-    video = re.search(r"\[CAMERA\] VIDEO data/cam.avi: 30 FRAMES \((\d+) PICTURES\) 320X240 AT 10/S, SEQUENCE (\d+)\.\.(\d+), TIMESTAMPS ON THE RATE, (\d+) BYTES",
-                      vm.expect("SHELL RESUMED.", timeout=60))
+    try:
+        ended = vm.expect("SHELL RESUMED.", timeout=60)
+    except AssertionError:
+        stalled("the recording of 3 s did not end within a minute", round(time.monotonic() - opened, 1))
+    video = re.search(r"\[CAMERA\] VIDEO data/cam.avi: 30 FRAMES \((\d+) PICTURES\) 320X240 AT 10/S, SEQUENCE (\d+)\.\.(\d+), TIMESTAMPS ON THE RATE, (\d+) BYTES", ended)
     assert video and int(video[3]) - int(video[2]) == 29 and int(video[1]) >= 3, (video and video.groups(), vm.log[-2000:])
     time.sleep(1.8)
     _, _, _, after = vm.screenshot().split(b"\n", 3)
