@@ -375,9 +375,14 @@ def heap_used(vm):
     # flight: the value counts once two readings in a row agree.
     if not getattr(vm, "settled", False):
         # The first reading is a suite's baseline. The kernel frees its list of memory revoked during the services' start
-        # once nothing references that memory, which can come after the first prompt (224 bytes on x86 and aarch64): the
-        # baseline waits until readings half a second apart agree.
+        # once nothing references that memory, which can come after the first prompt (224 bytes on x86 and aarch64; with
+        # 16 CPUs on aarch64 a 4 KiB object goes with it, 2.4 s after boot): the baseline waits for no memory object to be
+        # pending, then until readings half a second apart agree.
         vm.settled = True
+        for _ in range(40):
+            if re.search(r"OBJECTS=0/", vm.command("free")):
+                break
+            time.sleep(.25)
         used = heap_used(vm)
         for _ in range(10):
             time.sleep(.5)
