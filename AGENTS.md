@@ -108,10 +108,18 @@ The maintainer or the owning track reviews and merges it.
 
 ## 5. Working next to other tracks
 
-- **Stay in your track's directories.** If your task needs a change in another track's area, the agent:
-  1. records a request in `issues/requests-<TRK>.md` for that track (the code in section 2): only the owner numbers its tasks, so it turns each request into an `NNN-TRK-MMMM` task and removes the file when it is empty;
-  2. marks its own issue `Blocked by` that request, and then by the task number it gets;
-  3. moves on to other work.
+- **Stay in your track's directories.** If your task needs a change in another track's area, what the agent does depends on whether that track has an owner in [TRACKS.md](TRACKS.md).
+  - **A track with an owner.** The agent:
+    1. records a request in `issues/requests-<TRK>.md` for that track (the code in section 2): only the owner numbers its tasks, so it turns each request into an `NNN-TRK-MMMM` task and removes the file when it is empty;
+    2. marks its own issue `Blocked by` that request, and then by the task number it gets;
+    3. moves on to other work.
+  - **An open track** (status "open", no owner). The agent may make the change itself, as a task of that track, when its own task needs it:
+    1. After bringing in `main`, it numbers the task with that track's code and the next counter not yet used in `issues/` or `issues-done/` (`NNN-TRK-MMMM`). It writes the task's issue file and names its own task as the reason.
+    2. It changes only what its own task needs, in that track's directories, under the same rules and gate as its own work. It does not take the track's main task or its other tasks along.
+    3. Its commit names that task and says the work was done for the other track; its own issue links to it.
+    4. A request waiting in `issues/requests-<TRK>.md` that the change covers is taken from that file.
+
+    The track stays open. Whoever takes it later owns these tasks as well and may revise them. ABI changes are still made only in `KRN` tasks, and a track marked "later" is not worked on this way.
 - **ABI changes are made only in `KRN` tasks.** A task blocked by a `KRN` task waits for it.
 - **Resolving conflicts.** When `main` brings a conflict, merge (do not rebase shared history) and keep both sides' behaviour. Regenerate generated files with their tools (`scripts/mind_idl.py`), never by hand. If both sides changed the same logic and choosing one loses behaviour, ask the owner of the other change.
 - **Reports from people.** A user report that belongs to another track is passed to that track as described in the first point. It is not fixed silently in passing.
@@ -135,7 +143,7 @@ Paste this at the start of a session and fill in the brackets:
 You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <name> track, code <TRK>.
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
-Your directories: <list>. Requests to another track go to issues/requests-<THEIR TRK>.md.
+Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
 Never push to other branches; reach main only through the gate in AGENTS.md section 4.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.

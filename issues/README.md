@@ -15,7 +15,7 @@ Tasks that need a person (repository settings, legal decisions, coordination of 
 
 ## Open tasks
 
-Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owners, branches and starting tasks are in the registry [TRACKS.md](../TRACKS.md). A task is numbered `NNN-TRK-MMMM` (main task, track code, the track's own counter); a request to another track goes to `requests-<TRK>.md`; ABI changes are made only in `KRN` tasks.
+Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owners, branches and starting tasks are in the registry [TRACKS.md](../TRACKS.md). A task is numbered `NNN-TRK-MMMM` (main task, track code, the track's own counter); a request to a track with an owner goes to `requests-<TRK>.md`, and a change one's own task needs in an open track is made as that track's task ([AGENTS.md](../AGENTS.md), section 5); ABI changes are made only in `KRN` tasks.
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|

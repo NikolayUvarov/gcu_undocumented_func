@@ -1,6 +1,6 @@
 # Track registry
 
-**Version:** 1.0 (2026-10-06)
+**Version:** 1.1 (2026-10-07): an open track's task can be done by an agent whose own task needs it.
 
 MIND Core is developed in parallel **tracks**. Each track has its own code, its own directories and its own task numbers. **Tracks can be taken and worked on in parallel**: a session (an agent or a person) that takes a track works only in that track's directories, numbers only its own tasks and reaches `main` through the gate. How to work in a track: [AGENTS.md](AGENTS.md). The open tasks themselves: [issues/README.md](issues/README.md).
 
@@ -17,11 +17,11 @@ Files: `issues/NNN-short-name.md` for a main task, `issues/NNN-TRK-MMMM-short-na
 
 Branches: `<tool>/<TRK>-<name>` for a track's working branch (`claude/NET-stack`), `<tool>/NNN-TRK-MMMM-<name>` for one task (`codex/300-STO-0002-blockstore`). CI runs on these names under any tool prefix.
 
-Requests to another track: `issues/requests-<TRK>.md`. Only the owning track numbers them.
+Requests to another track: `issues/requests-<TRK>.md`. Only the owning track numbers them. A track without an owner has no one to number them: an agent whose own task needs a change there makes it as that track's task, numbered with the track's code ([AGENTS.md](AGENTS.md), section 5).
 
 ## Registry
 
-"Open" means the track has no owner yet: it can be taken now, in parallel with the others.
+"Open" means the track has no owner yet: it can be taken now, in parallel with the others. Until then, an agent whose own task needs a change in an open track's directories makes that change as one of the track's tasks, without taking the track ([AGENTS.md](AGENTS.md), section 5).
 
 | Code | Track | Roadmap | Main tasks | Directories (mainly) | Owner and branch | Status | Start with |
 |---|---|---|---|---|---|---|---|
