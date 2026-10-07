@@ -13,9 +13,17 @@ The tools track's `applications_until_memory_ends` (`tests/qemu_smoke.py`, `norm
 - It reproduces on `main` at 0e1d239 (24 clocks, x86), on the tools branch (26, x86) and on CI (x86 and aarch64, groups "16 CPUs").
 - At the hang every CPU is in the kernel (CPL 0). In a first sample they were in `scheduler::reap` and `scheduler::interrupt` spinning on the lock, and in the idle loop (`ap_entry`). In a second sample 5 s later, all but one were in the idle loop (`hlt`) and CPU 0 in `_start`'s `hlt`. Ctrl+Z on the serial line got no answer.
 - The frame pool was far from empty (26 screens of 4 MiB of 385 MiB).
-- `main`'s own check of 40 applications at once (`memtest hold 0`, no screen) passes with 16 CPUs.
+- `main`'s own check of 40 applications at once (`memtest hold 0`, no screen) passed with 16 CPUs then; on 2026-10-07 it stalls too (below).
 
 Since 171-KRN-0003 an idle CPU gets no tick and sleeps until a wake IPI. A task left ready on an idle CPU, or a wake that does not reach it, would look like this. That is a guess: the probe did not see the tasks' states.
+
+**2026-10-07, on a slower host** (the busy check below measured it slower too): the `normal` suite with `--cpus 16` on x86 stalls in `main`'s own check of 40 applications. The output of `stat tasks` (about 66 tasks) stops in the middle of a line, and no prompt comes within the harness's 8 s.
+
+- It stalled on `main` at 62e2cc0 in 2 runs of 2, and on the tools branch (21c2738, e0a042b) in 6 of 7, two of them with the test file of c2ae45a. The seventh failed earlier, at "PID 4 must keep its own color". GitHub CI passed the group on the same commits, and this morning's full local runs on bbb113c and c2ae45a passed it.
+- A sample of every CPU after the stall: CPU 0 in `_start`'s `sti; hlt`, 12–13 of the others in `ap_entry`'s `sti; hlt`, one spinning (`pause`) on the lock in `ap_entry`, one in `scheduler::interrupt` spinning on it, one in user mode. 5 s later the picture was the same.
+- Then a Ctrl+Z on the serial line made the rest of the list come out at once, and the prompt with it.
+
+So nothing was deadlocked. The shell's output was ready to go on, and no CPU ran it until an interrupt came. That supports the guess above. To reproduce: `python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware OVMF.fd --cpus 16 --suites normal`, on a host where TCG runs 16 CPUs slowly (4 host cores here).
 
 ### To reproduce
 
