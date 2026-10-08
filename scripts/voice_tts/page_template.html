@@ -1,0 +1,80 @@
+<title>Голоса разума корабля</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+/* Layout: a single listening column; per language a measurement table, then each sentence with every voice reading it. */
+:root {
+  --bg: #f2f4f6;
+  --panel: #ffffff;
+  --fg: #17202a;
+  --muted: #5a6673;
+  --line: #d6dce3;
+  --accent: #1d6a85;
+  --compact: #2f6b3c;
+  --compact-bg: #e3f0e5;
+  --quality: #6a3d8a;
+  --quality-bg: #efe6f5;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10161c; --panel: #172029; --fg: #e4eaf0; --muted: #98a6b3; --line: #2b3742; --accent: #6cb8d4;
+    --compact: #9bd3a6; --compact-bg: #1f3325; --quality: #cfb1e6; --quality-bg: #2e2238; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #10161c; --panel: #172029; --fg: #e4eaf0; --muted: #98a6b3; --line: #2b3742; --accent: #6cb8d4;
+  --compact: #9bd3a6; --compact-bg: #1f3325; --quality: #cfb1e6; --quality-bg: #2e2238; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); }
+.wrap { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 56px; display: grid; gap: 28px; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px/1 var(--font-data); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 600 clamp(28px, 5vw, 40px)/1.1 var(--font-display); margin: 0; text-wrap: balance; }
+h2 { font: 600 26px/1.2 var(--font-display); margin: 0; }
+.lede { max-width: 68ch; margin: 0; color: var(--fg); }
+.notes { display: grid; gap: 6px; max-width: 72ch; margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+nav { display: flex; gap: 10px; flex-wrap: wrap; }
+nav a { font: 500 14px var(--font-body); color: var(--accent); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; background: var(--panel); }
+nav a:hover, nav a:focus-visible { border-color: var(--accent); outline: none; }
+.lang { display: grid; gap: 18px; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { font: 500 12px var(--font-data); letter-spacing: .04em; color: var(--muted); text-transform: uppercase; }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+tbody th { font-weight: 500; }
+.kind { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; }
+.n { text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.thr { display: block; color: var(--muted); font-size: 11.5px; }
+.lic { color: var(--muted); max-width: 26ch; }
+.pill { display: inline-block; font: 500 11.5px/1 var(--font-data); padding: 4px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.compact { color: var(--compact); background: var(--compact-bg); }
+.pill.quality { color: var(--quality); background: var(--quality-bg); }
+.phrase { display: grid; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line); }
+.said { margin: 0; font: 500 17px/1.45 var(--font-display); max-width: 70ch; }
+.voices { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; }
+.voices li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-width: 0; }
+.vname { font-weight: 500; min-width: 0; }
+audio { grid-column: 1 / -1; width: 100%; height: 36px; }
+footer { color: var(--muted); font-size: 13.5px; max-width: 72ch; }
+</style>
+<div class="wrap">
+  <header>
+    <span class="eyebrow">MIND Core · синтез речи · 2026-10-08</span>
+    <h1>Голоса разума корабля</h1>
+    <p class="lede">Каждый голос читает одни и те же четыре фразы, по-русски и по-английски. Над фразами — таблица замеров. Отметьте, какие голоса звучат лучше: компактный вариант и вариант по качеству для каждого языка.</p>
+    <ul class="notes">
+      <li><b>CER</b> — доля ошибок в символах, когда синтезированную речь распознаёт лучшая модель распознавания: Vosk 0.54 для русского, Parakeet 110M для английского. Считается на восьми фразах, которые прочитали все голоса (около 800 символов), так что 0,3 пункта — это два-три символа. Меньше — разборчивее.</li>
+      <li><b>UTMOS</b> — автоматическая оценка естественности от 1 до 5 (UTMOSv2), на тех же восьми фразах. Она обучена на английских оценках. Между разными семействами моделей она ошибается: Piper у неё выше Kokoro. Решает слух.</li>
+      <li><b>Время на 1 с речи</b> — на процессоре хоста: компактные модели на одном потоке, большие на четырёх. 0,10 значит 100 мс на секунду речи.</li>
+      <li>Голоса ESpeech и Qwen3-TTS скопированы с записи из FLEURS (CC BY 4.0) только для этого сравнения; для системы нужен свой образец с согласия диктора.</li>
+    </ul>
+    <nav><a href="#ru">Русский</a><a href="#en">English</a></nav>
+  </header>
+<!--SECTIONS-->
+  <footer>Фразы: две системные, одна с омографами и одна из FLEURS (CC BY 4.0). Модели скачаны с их страниц на Hugging Face и alphacephei.com; лицензии в таблицах.</footer>
+</div>
