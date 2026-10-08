@@ -33,3 +33,9 @@ The Apple Silicon track `APL` ([TRACKS.md](../TRACKS.md)) needs a person with an
 
 - [ ] **The virtual machine** (main task [600](../issues/600-apple-silicon-mac-vm-host.md)): follow [docs/apple-silicon.md](../docs/apple-silicon.md) ([Russian](../docs/apple-silicon_RU.md)) on the Mac and send back the terminal output, the Mac's model and chip, `sw_vers` and `qemu-system-aarch64 --version` (tasks [600-APL-0011](../issues/600-APL-0011-first-run-on-a-mac.md) and [600-APL-0012](../issues/600-APL-0012-aarch64-suites-on-a-mac.md)). Nothing but Homebrew's packages and rustup needs to be installed on the Mac.
 - [ ] **Natively** (main task [210](../issues/210-apple-silicon-native.md)), later: a Mac that may get m1n1 and U-Boot through the Asahi installer, which means lowering, once and in recoveryOS, the boot security of the boot entry it adds (a spare Mac is best); and, for the console, a way to reach its UART over USB-C: a second Apple Silicon Mac with Asahi's `macvdmtool`, or a serial adapter made for it (task [210-APL-0006](../issues/210-APL-0006-samsung-style-uart-console.md)).
+
+## 5. An Intel PC and a SATA SSD for the first real x86 boot
+
+Main task [211](../issues/211-intel-pc-from-a-sata-ssd.md): the maintainer has a Samsung 860 PRO and an Intel PC. Nothing in the profile has run on a physical x86 machine yet.
+
+- [ ] Write the image to the SSD as 211 says (a USB-SATA enclosure or adapter for now), boot the PC from it on its first SATA port, and send back what task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) asks for: the machine, the firmware settings, a photo of the screen, and the serial output if the board has COM1.

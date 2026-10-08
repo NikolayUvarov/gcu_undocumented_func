@@ -38,6 +38,8 @@ Today the user can run the aarch64 build in a virtual machine on such a Mac: `03
 | [210-APL-0006](210-APL-0006-samsung-style-uart-console.md) | 3: the console on the Samsung-style UART |
 | [210-APL-0007](210-APL-0007-dart-dma-boundary.md) | 2, 3: the DARTs as the DMA boundary; 16 KiB pages |
 | [210-APL-0008](210-APL-0008-usb-on-type-c-ports.md) | 3: USB on the Type-C ports (DWC3, ATC PHY, PMGR) |
+| [210-APL-0013](210-APL-0013-own-stage-two-instead-of-u-boot.md) | 1, later: our own second stage after m1n1, without U-Boot |
+| [210-APL-0014](210-APL-0014-own-first-stage-instead-of-m1n1.md) | 1, last: our own first stage started by iBoot, without m1n1 |
 
 Step 4 stays here until work on it starts.
 

@@ -34,11 +34,31 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [210-APL-0006](210-APL-0006-samsung-style-uart-console.md) | The console on the Samsung-style UART: the kernel's lines and `mind::dev::Uart` | `APL` (open) | P3 | 210-APL-0002, 0003; a Mac with M1 and its USB-C debug connection | track H |
 | [210-APL-0007](210-APL-0007-dart-dma-boundary.md) | DART: each device's DMA only through its own IOMMU (MC-1.5); DMA regions and 16 KiB pages | `APL` (open) | P3 | 210-APL-0002; `KRN` (DMA regions); a Mac with M1 | track H |
 | [210-APL-0008](210-APL-0008-usb-on-type-c-ports.md) | USB on the Type-C ports: DWC3 as an xHCI for `usb_host`, the ATC PHY, PMGR power | `APL` (open) | P3 | 210-APL-0003, 0007; a Mac with M1 | track H |
+| [210-APL-0013](210-APL-0013-own-stage-two-instead-of-u-boot.md) | Our own second stage after m1n1, without U-Boot | porting, `APL` (open) | P3 | 210-APL-0001, a Mac | track H |
+| [210-APL-0014](210-APL-0014-own-first-stage-instead-of-m1n1.md) | Our own first stage started by iBoot (`kmutil`), without m1n1 | porting, `APL` (open) | P3 | 210-APL-0013, a Mac | track H |
+| [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
+| [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) | The image writer for an internal SATA or NVMe disk, behind an explicit option | `PRT` | P2 | — | track H |
+| [211-PRT-0002](211-PRT-0002-x2apic.md) | The local APIC in x2APIC mode, as firmware leaves it | `PRT` | P1 | — | track H |
+| [211-PRT-0003](211-PRT-0003-tick-without-the-pit.md) | A tick that does not depend on the 8254 (LAPIC timer) | `PRT` | P2 | — | track H |
+| [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) | The boot volume from the bootloader's own device, named in `BootInfo`; a kernel check of the bootloader's version | `KRN` | P1 | — | track H |
+| [211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.md) | The kernel's boot line and fatal messages on the screen, not only on COM1 | `KRN` | P1 | — | track H |
+| [211-DRV-0002](211-DRV-0002-ahci-every-port.md) | `ahci`: every port with a disk and every controller | `DRV` (open) | P2 | 211-KRN-0012 | track A |
+| [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) | The first run on the maintainer's Intel PC from the 860 PRO, recorded as profile `x86-64/PC-0` | `PRT`, with the maintainer | P1 | the PC (issues-human 5) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the service runs at boot, the `store` suite passes on x86 and aarch64; rights refusals and corruption on the platform remain (`300-STO-0004`, `0005`) | main task, `STO` | P2 | — | track B |
 | [303](303-retention-and-collection.md) | Retention and garbage collection (track B, fourth step): collection by reachability from names with leases for writes in progress is done (`303-STO-0001`); pins, history and removing a name are next | main task, `STO` | P2 | — | track B |
 | [300-STO-0004](300-STO-0004-rights-by-badge.md) | Rights to the block store by badge: `BADGE_GET` reads, `BADGE_PUT` stores, `BADGE_PUBLISH` publishes, refusals logged; host-tested, the platform check waits for a client with fewer rights | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
 | [300-STO-0005](300-STO-0005-corruption-on-the-platform.md) | Corruption on the platform: a damaged block, chunk or name record refused by the running store | `STO` | P3 | a medium a test can change (`DRV`), or fault injection (500) | track B |
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
+| [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` (open) | P1 | 350 | track C |
+| [351-UPD-0005](351-UPD-0005-release-and-publish.md) | Release bundle, server layout, `publish_release.py` over SSH | `UPD` (open) | P1 | 350-UPD-0002 | track C |
+| [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) | Slots A and B, two boot records, a trial try and the fallback in the bootloader | `UPD` (open), with `PRT`/`KRN` | P1 | 211-KRN-0012 | track C |
+| [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` (open) | P1 | 0005, 0006, 0008, 351-KRN-0014, NET | track C |
+| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` (open) | P1 | 351-UPD-0006 | track C |
+| [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` (open) | P2 | 351-UPD-0007 | track C |
+| [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD` (open), with `PRT` | P3 | 351-UPD-0006 | track C |
+| [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | Trial boot: the flag in `BootInfo`, confirmation by `init`, a restart deadline, the updater's grants | `KRN` | P1 | 351-UPD-0006, 211-KRN-0012 | track C |
+| [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0006, 351-KRN-0014 | Assurance |
+| [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers | `ASR` (open) | P2 | 351-UPD-0005 | Assurance |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 | [600](600-apple-silicon-mac-vm-host.md) | An Apple Silicon Mac as a host: the aarch64 system in a virtual machine with HVF, built, run and tested on macOS ([guide](../docs/apple-silicon.md)) | main task, `APL` (open) | P2 | a person with an Apple Silicon Mac | track H |
@@ -47,7 +67,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0011](600-APL-0011-first-run-on-a-mac.md) | The first run on an Apple Silicon Mac under HVF, by hand: RNDR, device accesses, ITS, CPUs, memory; recorded in the guide and the profile | `APL` (open) | P2 | a person with an Apple Silicon Mac | track H |
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second; `update` in the shell for 351); [requests-NET.md](requests-NET.md) (HTTPS downloads for a service, an SSH client, a persistent device key, for 351); [requests-STO.md](requests-STO.md) (releases as pinned objects, for 351).
 
 
 ## Finished tasks (`issues-done/`)
