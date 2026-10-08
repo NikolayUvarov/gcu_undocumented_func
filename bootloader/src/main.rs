@@ -7,7 +7,9 @@ use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 #[cfg(target_arch = "x86_64")]
 use uefi::proto::pi::mp::MpServices;
-use uefi::table::boot::{AllocateType, BootServices, MemoryType};
+use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttributes, OpenProtocolParams};
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
 use abi::{BootInfo, ProgramImage, StatPhys, ABI_VERSION, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc;
 
@@ -66,9 +68,33 @@ fn halt() -> ! {
 #[cfg(target_arch = "aarch64")] const MACHINE: u16 = 0xB7;
 fn fail(system_table: &mut SystemTable<Boot>, file: &str, reason: &str) -> ! {
     let _ = writeln!(Serial, "\r\nBOOT ERROR: {}: {}\r", file, reason);
+    show_text(system_table);
     let _ = writeln!(system_table.stdout(), "BOOT ERROR: {}: {}", file, reason);
     halt()
 }
+
+// Apple's console control (211-KRN-0015): a Mac's firmware keeps its console in graphics mode, where text never shows.
+#[repr(C)]
+#[uefi::proto::unsafe_protocol("f42f7782-012e-4c12-9956-49f94304f721")]
+struct ConsoleControl {
+    get_mode: usize,
+    set_mode: unsafe extern "efiapi" fn(this: *mut ConsoleControl, mode: u32) -> Status,
+    lock_std_in: usize,
+}
+
+// Puts the console in text mode where the firmware has Apple's console control; elsewhere it is already.
+fn show_text(system_table: &SystemTable<Boot>) {
+    let services = system_table.boot_services();
+    let Ok(handle) = services.get_handle_for_protocol::<ConsoleControl>() else { return };
+    let params = OpenProtocolParams { handle, agent: services.image_handle(), controller: None };
+    if let Ok(mut control) = unsafe { services.open_protocol::<ConsoleControl>(params, OpenProtocolAttributes::GetProtocol) } {
+        let set_mode = control.set_mode;
+        let _ = unsafe { set_mode(&mut *control, 0) }; // EfiConsoleControlScreenText
+    }
+}
+
+// The firmware's system table while boot services run: a panic is reported on the screen too.
+static BOOT_TABLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
 
 fn keep_program(services: &BootServices, data: &[u8]) -> ProgramImage { let address = services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, data.len().div_ceil(4096)).unwrap(); unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), address as *mut u8, data.len()); } ProgramImage { data: address as *const u8, len: data.len() } }
 #[repr(C)] struct Elf64_Ehdr { e_ident: [u8; 16], e_type: u16, e_machine: u16, e_version: u32, e_entry: u64, e_phoff: u64, e_shoff: u64, e_flags: u32, e_ehsize: u16, e_phentsize: u16, e_phnum: u16, e_shentsize: u16, e_shnum: u16, e_shstrndx: u16 }
@@ -144,6 +170,7 @@ fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buf
 
 #[entry]
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
+    BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {
@@ -184,6 +211,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
         let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
     };
+    BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.
     unsafe {
@@ -198,5 +226,13 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     #[cfg(target_arch = "aarch64")]
     unsafe { core::arch::asm!("msr daifset, #0xf", "mov sp, x1", "mov x29, xzr", "mov x30, xzr", "br x2", in("x0") boot_info, in("x1") kernel_stack, in("x2") kernel_entry, options(noreturn)); }
 }
-#[panic_handler] fn panic(info: &PanicInfo) -> ! { let _ = writeln!(Serial, "\r\nBOOT PANIC: {}\r", info); halt() }
+#[panic_handler] fn panic(info: &PanicInfo) -> ! {
+    let _ = writeln!(Serial, "\r\nBOOT PANIC: {}\r", info);
+    // Taken once: a panic inside the console's own write ends on the serial line.
+    if let Some(mut system_table) = unsafe { SystemTable::<Boot>::from_ptr(BOOT_TABLE.swap(core::ptr::null_mut(), Relaxed)) } {
+        show_text(&system_table);
+        let _ = writeln!(system_table.stdout(), "BOOT PANIC: {}", info);
+    }
+    halt()
+}
 #[no_mangle] pub extern "C" fn wcslen(mut s: *const u16) -> usize { let mut len = 0; unsafe { while *s != 0 { len += 1; s = s.add(1); } } len }
