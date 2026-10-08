@@ -31,8 +31,10 @@ Nothing in the profile has run on a physical x86 machine: "physical machines boo
 
 ## What the maintainer can do now
 
+The full steps are in [docs/write-disk.md](../docs/write-disk.md) ([Russian](../docs/write-disk_RU.md)).
+
 1. Put the 860 PRO in a USB-SATA enclosure or adapter on a Linux machine.
-2. Run `./04_make_usb_image.sh --force`, then `./05_write_usb_linux.sh --list`, then `sudo ./05_write_usb_linux.sh --device /dev/disk/by-id/usb-…`.
+2. Run `./04_make_usb_image.sh --force`, then `./05_write_usb_linux.sh --list`, then `./05_write_usb_linux.sh --device /dev/disk/by-id/usb-…`, which asks for `sudo` and twice for confirmation.
 3. Connect the SSD to the PC's first SATA port. Set the firmware to UEFI with CSM off, Secure Boot off, SATA mode AHCI, and x2APIC off if the firmware offers the switch. Disconnect other disks and sticks.
 4. If the board has a COM1 header, a serial cable shows the kernel's lines.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write a MIND CORE image to an explicitly selected, non-system Linux USB disk."""
+"""Write a MIND CORE image to an explicitly selected, non-system Linux disk: USB, or SATA/NVMe with --internal."""
 import argparse
 import fcntl
 import hashlib
@@ -13,12 +13,13 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 CHUNK = 4 * 1024 * 1024
+INTERNAL = ("sata", "nvme", "ata")  # transports --internal adds to USB (211-PRT-0001)
 
 
 def devices():
     return json.loads(subprocess.check_output([
         "lsblk", "--json", "--tree", "--bytes", "--paths", "--output",
-        "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,RO,LOG-SEC,MAJ:MIN,MOUNTPOINTS",
+        "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,RO,LOG-SEC,MAJ:MIN,MOUNTPOINTS,FSTYPE,LABEL",
     ], text=True))["blockdevices"]
 
 
@@ -32,13 +33,18 @@ def fingerprint(node):
     return tuple(node.get(k) for k in ("path", "maj:min", "size", "model", "serial", "tran", "log-sec"))
 
 
-def validate_target(tree, path, size, protected):
+def validate_target(tree, path, size, protected, internal=False):
     candidates = [n for root in tree for n in descendants(root) if n["path"] == path]
     if len(candidates) != 1:
         raise ValueError("Drive not found or its topology is ambiguous.")
     disk = candidates[0]
-    if disk["type"] != "disk" or disk.get("tran") != "usb":
-        raise ValueError("A whole USB disk is required, e.g. /dev/sdb, not a partition like /dev/sdb1.")
+    if disk["type"] != "disk":
+        raise ValueError("A whole disk is required, e.g. /dev/sdb, not a partition like /dev/sdb1.")
+    if disk.get("tran") in INTERNAL and not internal:
+        raise ValueError(f"This disk is attached over {disk['tran'].upper()}, not USB. "
+                         "To write an internal disk, add --internal.")
+    if disk.get("tran") not in ("usb", *(INTERNAL if internal else ())):
+        raise ValueError("A whole USB disk is required (SATA or NVMe with --internal).")
     if disk["ro"] or disk["log-sec"] != 512 or disk["size"] < size:
         raise ValueError("Disk is write-protected, has a non-512-byte sector size, or is smaller than the image.")
     for node in descendants(disk):
@@ -50,6 +56,37 @@ def validate_target(tree, path, size, protected):
         if "[SWAP]" in mounts:
             raise ValueError("Disk has active swap. Writing is not allowed.")
     return disk
+
+
+def describe(disk):
+    """What the confirmation shows: the disk and everything on it that will be lost."""
+    lines = [f"Disk: {disk['path']} | {disk.get('model') or '?'} | serial {disk.get('serial') or '?'} | "
+             f"{disk['size'] / 10**9:.1f} GB | {(disk.get('tran') or '?').upper()}"]
+    for node in descendants(disk):
+        if node is disk:
+            continue
+        mounts = ", ".join(m for m in node.get("mountpoints") or [] if m) or "not mounted"
+        lines.append(f"  {node['path']} | {node.get('size', 0) / 10**9:.1f} GB | {node.get('fstype') or 'no file system'} | "
+                     f"label {node.get('label') or '-'} | {mounts}")
+    if len(lines) == 1:
+        lines.append("  no partitions")
+    return "\n".join(lines)
+
+
+def identity_word(disk):
+    """What the first prompt asks to type back: the serial number, else the model, else the device name."""
+    return (disk.get("serial") or disk.get("model") or Path(disk["path"]).name).strip()
+
+
+def confirm(disk, device, ask=input):
+    """Two prompts before any write: the disk's identity typed back, then ERASE and its path."""
+    word = identity_word(disk)
+    print("\nALL DATA ON THIS DISK WILL BE LOST:\n" + describe(disk))
+    if ask(f"\n1/2. To confirm the disk, type its serial number (or model) [{word}]: ").strip() != word:
+        raise ValueError("The disk was not confirmed. Nothing was written.")
+    erase = f"ERASE {device}"
+    if ask(f"2/2. To write the image, type {erase}: ") != erase:
+        raise ValueError("Write cancelled. Nothing was written.")
 
 
 def protected_devices(image):
@@ -130,7 +167,8 @@ def copy_and_verify(source, target, size, disk_size, expected, flush, progress=l
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--list", action="store_true", help="list USB disks without writing")
+    parser.add_argument("--list", action="store_true", help="list USB disks (and SATA/NVMe ones with --internal) without writing")
+    parser.add_argument("--internal", action="store_true", help="also allow a SATA or NVMe disk inside the computer (not the system disk)")
     parser.add_argument("--device", help="whole disk: /dev/sdX or /dev/disk/by-id/...")
     parser.add_argument("--image", type=Path, default=ROOT / "dist/mind-core-usb.img")
     parser.add_argument("--check", action="store_true", help="validate the selection without unmounting or writing")
@@ -139,17 +177,26 @@ def main():
         raise ValueError("This script is for Linux. On Windows use the .ps1 script.")
     tree = devices()
     if args.list or not args.device:
-        print("USB disks (PATH | SIZE GiB | MODEL | SERIAL):")
+        kinds = ("usb", *INTERNAL) if args.internal else ("usb",)
+        system = protected_devices(args.image.resolve()) if args.image.exists() else set()
+        print(f"{'USB, SATA and NVMe' if args.internal else 'USB'} disks (PATH | SIZE GB | MODEL | SERIAL | BUS):")
         count = 0
         for disk in tree:
-            if disk["type"] == "disk" and disk.get("tran") == "usb":
-                print(f"{disk['path']} | {disk['size'] / 2**30:.2f} | {disk.get('model')} | {disk.get('serial')}")
+            if disk["type"] == "disk" and disk.get("tran") in kinds:
+                refused = any(n["maj:min"] in system for n in descendants(disk))
+                print(f"{disk['path']} | {disk['size'] / 10**9:.1f} | {disk.get('model')} | {disk.get('serial')} | "
+                      f"{(disk.get('tran') or '?').upper()}" + (" | SYSTEM DISK: REFUSED" if refused else ""))
                 count += 1
         if not count:
             print("None found. For a USB drive attached to Windows, use the Windows script.")
         if not args.list:
             parser.error("pass --device /dev/sdX; the writer never picks a disk automatically")
         return
+    if not args.check and os.geteuid() != 0:
+        if not sys.stdin.isatty():
+            raise ValueError("Writing needs root and an interactive terminal: run it with sudo in a terminal.")
+        print("Writing needs root: running again with sudo (it may ask for your password).", flush=True)
+        os.execvp("sudo", ["sudo", "--", sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
     device = Path(args.device).resolve(strict=True)
     if not stat.S_ISBLK(device.stat().st_mode):
         raise ValueError("--device must point to a block device, not a file.")
@@ -158,31 +205,25 @@ def main():
         raise ValueError("--image must point to a regular image file.")
     with image.open("rb") as source:
         size, digest = image_info(source)
-        disk = validate_target(tree, str(device), size, protected_devices(image))
+        disk = validate_target(tree, str(device), size, protected_devices(image), args.internal)
         identity = fingerprint(disk)
-        print(f"Image: {image}\nSize: {size} bytes\nSHA256: {digest}\n"
-              f"USB: {device} | {disk.get('model')} | {disk.get('serial')} | {disk['size']} bytes")
+        print(f"Image: {image}\nSize: {size} bytes\nSHA256: {digest}\n" + describe(disk))
         mounts = {m for n in descendants(disk) for m in (n.get("mountpoints") or []) if m}
         print("Will unmount: " + (", ".join(sorted(mounts)) or "none"))
         if args.check:
             print("Check passed. Nothing was written.")
             return
-        if os.geteuid() != 0:
-            raise ValueError("Run the script with sudo to write.")
         if not sys.stdin.isatty():
             raise ValueError("Write confirmation must be entered in an interactive terminal.")
-        confirmation = f"ERASE {device}"
-        print("ALL DATA ON THE SELECTED USB DISK WILL BE LOST.")
-        if input(f"Type {confirmation}: ") != confirmation:
-            raise ValueError("Write cancelled.")
+        confirm(disk, device)
         # Recheck identity and safety after the user had time to unplug devices.
-        disk = validate_target(devices(), str(device), size, protected_devices(image))
+        disk = validate_target(devices(), str(device), size, protected_devices(image), args.internal)
         if fingerprint(disk) != identity:
             raise ValueError("Drive changed after selection. Run again.")
         mounts = {m for n in descendants(disk) for m in (n.get("mountpoints") or []) if m}
         for mount in sorted(mounts, key=len, reverse=True):
             subprocess.run(["umount", "--", mount], check=True)
-        disk = validate_target(devices(), str(device), size, protected_devices(image))
+        disk = validate_target(devices(), str(device), size, protected_devices(image), args.internal)
         if fingerprint(disk) != identity or any(m for n in descendants(disk) for m in (n.get("mountpoints") or [])):
             raise ValueError("Drive changed or is still mounted.")
         # O_EXCL claims the entire block device; mounted/in-use devices fail EBUSY.
@@ -198,12 +239,16 @@ def main():
                 os.fsync(fd)
                 fcntl.ioctl(fd, 0x1261)  # BLKFLSBUF: invalidate block cache before read-back
                 print("\nReading back and verifying SHA256...", flush=True)
-            copy_and_verify(source, target, size, length, digest, flush,
-                            lambda percent: print(f"\rWriting: {percent:3d}%", end="", flush=True))
+            shown = [-1]
+            def progress(percent):
+                if percent != shown[0]:
+                    shown[0] = percent
+                    print(f"\rWriting: {percent:3d}%", end="", flush=True)
+            copy_and_verify(source, target, size, length, digest, flush, progress)
         result = subprocess.run(["blockdev", "--rereadpt", str(device)], check=False)
         if result.returncode:
-            print("The partition table will refresh after the USB drive is reconnected.")
-        print("Done. SHA256 matches. You can remove the USB drive. Boot: UEFI x64, Secure Boot off.")
+            print("The partition table will refresh after the disk is reconnected.")
+        print("Done. SHA256 matches. You can remove the disk. Boot: UEFI x64, Secure Boot off, SATA in AHCI mode.")
 
 
 if __name__ == "__main__":

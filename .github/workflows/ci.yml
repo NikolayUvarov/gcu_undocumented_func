@@ -37,6 +37,7 @@ jobs:
           rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests
           python3 tests/idl_test.py
           python3 tests/font_test.py
+          python3 tests/test_usb_writer.py
 
   # TLA+ models of revoke and MOVE checked by TLC (issue 167, docs/assurance).
   models:

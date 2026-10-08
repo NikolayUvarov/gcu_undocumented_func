@@ -8,11 +8,11 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.write_usb_linux import copy_and_verify, image_info, validate_target
+from scripts.write_usb_linux import confirm, copy_and_verify, describe, image_info, validate_target
 
 
 def disk():
-    return {"path": "/dev/sdz", "type": "disk", "size": 2**30, "tran": "usb",
+    return {"path": "/dev/sdz", "type": "disk", "size": 2**30, "tran": "usb", "model": "Samsung SSD 860 PRO", "serial": "S5XYZ123",
             "ro": False, "log-sec": 512, "maj:min": "65:0", "mountpoints": [None],
             "children": [{"path": "/dev/sdz1", "type": "part", "maj:min": "65:1",
                           "mountpoints": ["/media/test"]}]}
@@ -31,6 +31,43 @@ class WriterTests(unittest.TestCase):
         for path in ["/dev/sdz1", "/dev/missing"]:
             with self.assertRaises(ValueError):
                 validate_target([valid], path, 512, set())
+
+    def test_internal_disks_only_with_the_option(self):
+        # 211-PRT-0001: SATA and NVMe disks inside the computer need --internal; everything else is refused as before.
+        for tran in ["sata", "nvme", "ata"]:
+            internal = disk()
+            internal["tran"] = tran
+            with self.subTest(tran=tran):
+                with self.assertRaisesRegex(ValueError, "--internal"):
+                    validate_target([internal], "/dev/sdz", 512, set())
+                self.assertEqual(validate_target([internal], "/dev/sdz", 512, set(), internal=True), internal)
+        for tran in [None, "fc", "spi"]:
+            other = disk()
+            other["tran"] = tran
+            with self.subTest(tran=tran), self.assertRaises(ValueError):
+                validate_target([other], "/dev/sdz", 512, set(), internal=True)
+        system = disk()
+        system["tran"] = "sata"
+        for protected, mounts in [({"65:1"}, ["/media/test"]), (set(), ["/"]), (set(), ["/boot/efi"]), (set(), ["[SWAP]"])]:
+            system["children"][0]["mountpoints"] = mounts
+            with self.subTest(protected=protected, mounts=mounts), self.assertRaises(ValueError):
+                validate_target([system], "/dev/sdz", 512, protected, internal=True)
+
+    def test_two_prompts_before_writing(self):
+        # The disk's serial number typed back, then ERASE and its path; any other answer writes nothing.
+        target = disk()
+        answers = lambda *given: (lambda prompt, it=iter(given): next(it))
+        confirm(target, "/dev/sdz", answers("S5XYZ123", "ERASE /dev/sdz"))
+        for given in [("S5XYZ12", "ERASE /dev/sdz"), ("", "ERASE /dev/sdz"), ("S5XYZ123", "ERASE /dev/sdy"), ("S5XYZ123", "erase /dev/sdz")]:
+            with self.subTest(given=given), self.assertRaises(ValueError):
+                confirm(target, "/dev/sdz", answers(*given))
+        nameless = disk()
+        nameless["serial"] = nameless["model"] = None
+        confirm(nameless, "/dev/sdz", answers("sdz", "ERASE /dev/sdz"))
+        shown = describe(target)
+        self.assertIn("Samsung SSD 860 PRO", shown)
+        self.assertIn("/dev/sdz1", shown)
+        self.assertIn("/media/test", shown)
 
     def test_refuses_system_source_swap_and_active_storage_stack(self):
         for protected in [{"65:0"}, {"65:1"}]:

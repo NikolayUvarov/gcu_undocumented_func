@@ -28,3 +28,21 @@ With `--internal`, an internal SATA disk that holds no system file system is wri
 ## Related
 
 [211](211-intel-pc-from-a-sata-ssd.md).
+
+## Progress
+
+**2026-10-08. Done, except a run on a real internal disk.**
+
+- **`scripts/write_usb_linux.py`:**
+  - `--internal` adds SATA, NVMe and ATA disks to USB ones, and `--list --internal` shows them, marking a system disk `SYSTEM DISK: REFUSED`;
+  - every earlier refusal holds with `--internal` too;
+  - the disk is shown with each partition, its file system, label and mount point;
+  - two prompts come before any write: `1/2`, the serial number typed back (else the model, else the device name), then `2/2`, `ERASE /dev/sdX`;
+  - without root the script runs itself again with `sudo`.
+- **`tests/test_usb_writer.py`** has the new cases (8 tests). It now runs in CI's host tests and in `scripts/ci_local.sh`; before, it ran only by hand.
+- **The whole write path was run on a loop device presented to the script as a SATA disk.**
+  - A wrong serial number left the device untouched, and so did a wrong `ERASE` line.
+  - The right answers wrote the image, verified its SHA-256, and the device then matched the image byte for byte.
+  - A real internal SATA disk has not been written yet; that is the open part.
+- **The guide** [docs/write-disk.md](../docs/write-disk.md) ([Russian](../docs/write-disk_RU.md)) and the README's section on writing the image describe it.
+

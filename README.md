@@ -327,20 +327,27 @@ the previous output image intact. Use `--force` to explicitly replace it.
 
 #### Write the image from Linux or Windows
 
+Step by step, with the firmware settings for a PC and what to check after boot:
+[docs/write-disk.md](docs/write-disk.md) ([Russian](docs/write-disk_RU.md)).
+
 Two writers use `dist/mind-core-usb.img` by default. They require an explicit
-**whole USB disk**, display its identity and size, and require a typed `ERASE ...`
-confirmation. **All existing data on the selected disk will be lost.** They
-refuse internal/system disks, read-only or undersized devices, non-512-byte
-logical sectors, and a disk containing the image or writer itself. Neither
-writer builds the image; run `04_make_usb_image.sh` first if it is missing.
+**whole disk**, display its identity, size and partitions, and ask before
+writing. **All existing data on the selected disk will be lost.** The Linux
+writer asks for the disk's serial number (or model) typed back, then for
+`ERASE /dev/sdX`; the Windows writer for its `ERASE ...` confirmation. They
+refuse system disks, read-only or undersized devices, non-512-byte logical
+sectors, and a disk containing the image or writer itself. The Linux writer
+takes an internal SATA or NVMe disk only with `--internal` (211-PRT-0001); the
+Windows writer takes USB disks only. Neither writer builds the image; run
+`04_make_usb_image.sh` first if it is missing.
 
 Linux (Python 3 and util-linux; normally already installed):
 
 ```bash
-./05_write_usb_linux.sh --list
+./05_write_usb_linux.sh --list                        # --list --internal: SATA/NVMe disks too
 ./05_write_usb_linux.sh --device /dev/sdX --check
-sudo ./05_write_usb_linux.sh --device /dev/sdX
-# Optional: --image /path/to/mind-core-usb.img
+./05_write_usb_linux.sh --device /dev/sdX              # runs itself with sudo, then asks twice
+# Optional: --image /path/to/mind-core-usb.img; --internal for a SATA or NVMe disk inside this machine
 ```
 
 Replace `/dev/sdX` with the drive from `--list`, for example `/dev/sdb`, **not**
@@ -395,8 +402,9 @@ python3 tests/usb_image_smoke.py --qemu /mnt/c/msys64/ucrt64/bin/qemu-system-x86
 
 The test checks image contents, UEFI USB boot, the applications, CPU startup,
 foreground switching and memory reclamation. Real-machine support still has
-the limits documented below; in particular, the kernel currently reads PS/2
-keyboard/UART input and has no USB keyboard driver after leaving UEFI. The test
+the limits documented below and in [docs/write-disk.md](docs/write-disk.md);
+keyboards work through PS/2, the UART and USB HID on the first xHCI controller
+(issue 164). The test
 also lists and reads the image through `usb_storage` and `vfs_server`.
 
 ### Console
