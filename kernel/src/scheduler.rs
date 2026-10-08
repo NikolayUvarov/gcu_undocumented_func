@@ -1017,11 +1017,16 @@ impl Scheduler {
                 // Kept twice: LOGS drains `log`, the focus owner mirrors `console` of the focused task.
                 let length = request.arg2.min(4096);
                 if !task.space.validate_read(request.arg1, length) { Err(ERR_INVALID) } else {
+                    // Until a task takes the screen, logs also go there in chunks (211-KRN-0017): a machine without COM1
+                    // shows how far the services got.
+                    let (mut shown, mut kept, showing) = ([0u8; 256], 0, crate::screen::showing());
                     for i in 0..length {
                         let physical = task.space.readable(request.arg1 + i).unwrap(); let byte = core::ptr::read_volatile(physical as *const u8);
                         task.log.push(byte); task.console.push(byte);
                         if MIRROR_LOGS.load(Ordering::Relaxed) { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); }
+                        if showing { shown[kept] = byte; kept += 1; if kept == shown.len() { crate::screen::print_bytes(&shown); kept = 0; } }
                     }
+                    if kept > 0 { crate::screen::print_bytes(&shown[..kept]); }
                     Ok(length)
                 }
             }
