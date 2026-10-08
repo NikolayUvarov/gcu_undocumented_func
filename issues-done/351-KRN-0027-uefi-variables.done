@@ -34,7 +34,7 @@ Done on 2026-10-08 for x86. aarch64 and authenticated writes (`dbx`) are split i
   - The system call copies the request in, checks that `arg1` names a `Firmware` capability, and copies the answer out. `ERR_NOT_FOUND` covers a variable not set or no runtime services; `ERR_INVALID` with the needed length in `arg2` covers a buffer too small.
 - **Grants.**
   - `init` gives the shell the privilege in escrow (a service spawn turns it into the privilege).
-  - The shell asks `<NAME> ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?` every time, and a script must declare `firmware`.
+  - The shell asks `<NAME> ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?` every time. A program an `msh` script starts never gets it, because `firmware` is not among the words a script may declare.
   - It lends the privilege through `loader.wit` 1.6 `grant-firmware`: `grant` takes endpoints only, and the IDL generator gained the `firmware` handle kind. The loader keeps it only for `SLOT_FIRMWARE`.
 - **`libmind::firmware`**: `get` and `set` with ASCII names, `GLOBAL`, `BOOT_VARIABLE`.
 - **`efivar`**: `efivar [boot]` (`BootCurrent`, `BootNext`, `BootOrder`, `Boot0000`–`Boot0020` with their descriptions), `efivar bootnext <hex>`, `efivar bootorder <hex>,…`, `efivar delete bootnext`.

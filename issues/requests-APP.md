@@ -131,12 +131,13 @@ The `tools` suite finds `log:` in `help` where the image has the partition. `fm`
 
 ### Problem
 
-`efivar` is a new console program. It lists the firmware's boot variables (`BootCurrent`, `BootNext`, `BootOrder`, `Boot####`) and sets `BootNext` and `BootOrder`. The shell lends it the firmware privilege only after the user agrees, and a script must declare `firmware`. The kernel track wrote it to test its system call. The tools guide (`docs/tools`, EN and RU) and the shell's `help` do not name it, nor the `firmware` word for scripts.
+`efivar` is a new console program. It lists the firmware's boot variables (`BootCurrent`, `BootNext`, `BootOrder`, `Boot####`) and sets `BootNext` and `BootOrder`. The shell lends it the firmware privilege only after the user agrees, and a script must declare `firmware`. The kernel track wrote it to test its system call. The tools guide (`docs/tools`, EN and RU) and the shell's `help` do not name it. Scripts cannot declare `firmware` (it is not in `msh`'s words), so a program a script starts runs without it.
 
 ### Plan (a proposal; the tools track decides)
 
 - A row in `docs/tools/README.md` and `README_RU.md`: what `efivar` shows, its three write forms, the consent prompt, and that it works on x86 for now (351-KRN-0028).
-- The scripting guide names `firmware` among the authorities a script may declare.
+- Whether a script may declare `firmware` (the user would still be asked each time) is the tools track's decision.
+- `df` and `fsck` list `log:` as they list `models:` (211-KRN-0019).
 
 ### Acceptance criteria
 
