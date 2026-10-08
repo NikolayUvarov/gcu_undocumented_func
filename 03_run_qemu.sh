@@ -68,6 +68,12 @@ NET=()
 POINTER=()
 [[ "${MIND_POINTER:-tablet}" == ps2 ]] || POINTER=(-device virtio-tablet-pci)
 # RAM: MIND_MEMORY=<size> (QEMU -m, default 512M); the system uses all of it, above 4 GiB too (issue 171).
+# Speech models: MIND_MODELS_DISK=<image> from `scripts/models.py disk`, a read-only VirtIO disk the system shows as
+# models: (issue 251).
+MODELS=()
+if [[ -n "${MIND_MODELS_DISK:-}" ]]; then
+    MODELS=(-drive "if=none,id=models,format=raw,readonly=on,file=${MIND_MODELS_DISK//,/,,}" -device virtio-blk-pci,drive=models)
+fi
 
 printf 'Starting MIND CORE in QEMU: %s (audio: %s)\n' "$QEMU_BIN" "${driver:-none}"
 exec "$QEMU_BIN" \
@@ -76,5 +82,5 @@ exec "$QEMU_BIN" \
     -m "${MIND_MEMORY:-512M}" -smp 4,sockets=1,cores=4,threads=1 \
     -cpu "${MIND_CPU:-qemu64,+rdrand}" \
     -serial stdio -rtc base=localtime \
-    "${AUDIO[@]}" "${NET[@]}" "${POINTER[@]}" \
+    "${AUDIO[@]}" "${NET[@]}" "${POINTER[@]}" "${MODELS[@]}" \
     "$@"

@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 // vfs_server v2 (idl/vfs.wit): FAT volumes from the block drivers — the boot disk, its log partition `log` and the RAM
-// disk `ram` — read and written through handles. A handle belongs to the client that opened it (PID and badge) and carries a zone: what it
-// may change. A client's badge decides the zone of a root: applications get read-only roots; the user's badge (the
-// shell's client) writes anywhere on `ram` and in the boot disk's `data` directory only, so boot files are never
-// writable. A handle opened from another never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle).
-// Each boot's system log goes to the log volume (journal.rs).
+// disk `ram` — read and written through handles, and the model disk `models` (251), read only. A handle belongs to the
+// client that opened it (PID and badge) and carries a zone: what it may change. A client's badge decides the zone of a
+// root: applications get read-only roots; the user's badge (the shell's client) writes anywhere on `ram` and `log` and
+// in the boot disk's `data` directory only, so boot files and models are never writable. A handle opened from another
+// never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle). Each boot's system log goes to the log
+// volume (journal.rs).
 extern crate alloc;
 mod disk;
 mod fat;
@@ -26,6 +27,7 @@ use mind::idl::{rtc, wire};
 use mind::ipc::{self, Endpoint};
 
 const RECEIVED: usize = 9;
+const MODELS_LABEL: &str = "MIND MODELS";
 const HANDLES: usize = 96;
 
 /// What a handle may change.
@@ -183,7 +185,7 @@ impl Server {
                         return self.add(Handle { owner: sender, badge, volume, node, name: dir_name, zone });
                     }
                     let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(name)).ok_or(Error::NotFound)?;
-                    let zone = if !user { Zone::ReadOnly } else if self.volumes[volume].name.is_empty() { Zone::BootRoot } else { Zone::Writable };
+                    let zone = match self.volumes[volume].name { _ if !user => Zone::ReadOnly, "" => Zone::BootRoot, "models" => Zone::ReadOnly, _ => Zone::Writable };
                     let node = self.volumes[volume].volume.root();
                     self.add(Handle { owner: sender, badge, volume, node, name: String::new(), zone })
                 })();
@@ -447,6 +449,7 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let mut volumes = Vec::new();
     // The boot volume: the one the bootloader read the system from, on whichever drive shows it (211-KRN-0012).
+    let mut boot_slot = None;
     'disks: for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
         if mind::dev::cap_info(slot).0 != CAP_KIND_ENDPOINT { continue; }
         let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new).map(Shared::new) else { continue };
@@ -470,11 +473,22 @@ fn main(info: &'static BootInfo) {
                 volumes.push(Mounted { name: "log", volume: log });
                 break;
             }
+            boot_slot = Some(slot);
             break 'disks;
         }
     }
     // Another volume would give programs and data/ of another system: none is mounted in its place.
     if volumes.is_empty() { mind::println!("[VFS] THE BOOT VOLUME ({}) IS ON NO BLOCK DEVICE: NONE MOUNTED", describe(&info.boot_volume)); }
+    // A volume labelled MIND MODELS on another drive is the model disk (251): `models`, read-only for every client.
+    for slot in (SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES).filter(|&slot| Some(slot) != boot_slot) {
+        if mind::dev::cap_info(slot).0 != CAP_KIND_ENDPOINT { continue; }
+        let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new).map(Shared::new) else { continue };
+        let Ok(volume) = Volume::mount(disk) else { continue };
+        if volume.label() != MODELS_LABEL { continue; }
+        mind::println!("[VFS] MOUNTED FAT{} FROM {} AS MODELS: ({} MB, READ-ONLY)", volume.bits(), device_name(volume.disk.kind()), volume.total_bytes() >> 20);
+        volumes.push(Mounted { name: "models", volume });
+        break;
+    }
     // The RAM disk: formatted when blank (its contents never outlive the boot).
     if mind::dev::cap_info(SLOT_RAMDISK).0 == CAP_KIND_ENDPOINT {
         if let Some(mut disk) = mind::block::Device::open(Endpoint(SLOT_RAMDISK)).ok().and_then(Disk::new) {

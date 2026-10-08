@@ -1,0 +1,76 @@
+# Speech models for MIND Core: what scripts/models.py fetches into the model cache and puts on a model disk (main task 251).
+# Each model: a stable id, its role (asr: recognition, tts: synthesis), languages, variant (compact: size first; quality:
+# accuracy and pronunciation first), the engine family, the licence of its weights and any terms of its training data,
+# what was measured (main tasks 250 and 252), the source pinned to a revision, and every file with its size and SHA-256.
+# Any free licence is allowed (the maintainer, 2026-10-08); terms that limit use are written in `terms` and travel with the
+# model in the cache's MANIFEST.json.
+
+[[model]]
+id = "asr-ru-vosk-0.54"
+role = "asr"
+lang = ["ru"]
+variant = "compact"
+engine = "zipformer2-transducer"
+licence = "Apache-2.0"
+terms = "Training data not published by alphacep."
+measured = "WER 5.20 % on 272 FLEURS ru sentences; 0.026 s per second of speech on one core (250)"
+source = { kind = "huggingface", repo = "alphacep/vosk-model-ru", revision = "df6a54a4d8e5d43e82675e4f5dba2d507731a0d1" }
+files = [
+  { path = "am-onnx/encoder.int8.onnx", size = 70876638, sha256 = "eb6c12fbad810d5bc3e427802e604604c69b5943a91feebc43424dd09d9ec407" },
+  { path = "am-onnx/decoder.int8.onnx", size = 1326290, sha256 = "d6cb1c78563388bcb7c8a654a768ac2a8518c22542c5b13999b46a08c2557c81" },
+  { path = "am-onnx/joiner.int8.onnx", size = 259417, sha256 = "93f2e1d12b78d53e7802f1606488c14bb3d764b15fadf5ef6c022f6ba1fa40f7" },
+  { path = "lang/tokens.txt", size = 6388, sha256 = "93bbbc0bae6b78c0bbb743d4aa9fded3bb5ff3aac5f0200e3a769a5a05e0fdf6" },
+  { path = "lang/bpe.model", size = 246184, sha256 = "c7a756aeb3550417d6b2ed3efde9a7aa3eea54787d4eac011e9cce6090c9c64a" },
+]
+
+[[model]]
+id = "asr-ru-gigaam-v3-rnnt"
+role = "asr"
+lang = ["ru"]
+variant = "quality"
+engine = "conformer-transducer"
+licence = "MIT"
+terms = "GigaAM by Salute Developers (Sber); ONNX export by the sherpa-onnx project."
+measured = "WER 3.02 % on 272 FLEURS ru sentences; about 0.12 s per second of speech on one core (250)"
+source = { kind = "huggingface", repo = "csukuangfj/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16", revision = "0424d62637b37d8b7b1eb0f75a04d78dec55fdcc" }
+files = [
+  { path = "encoder.int8.onnx", size = 224570814, sha256 = "0ec54e5f130a91c0f228d21795ede10b31c992a1f73e45dcd827e843a71a9b50" },
+  { path = "decoder.onnx", size = 3331651, sha256 = "5d1cfef155d8e07f213bd2f3229b5f6c5c29355c7fa5c1b9eb62cb1925725254" },
+  { path = "joiner.onnx", size = 1440448, sha256 = "fd1d02f45c2ad3d6b67cc149811ad794ab4b020ed49a0a9e2790a8619d1cddd8" },
+  { path = "tokens.txt", size = 196, sha256 = "17cc514451bcceac9c280068c71502f8448f99e9fb1456b8d0761651fd0392f2" },
+]
+
+[[model]]
+id = "asr-en-zipformer-gigaspeech"
+role = "asr"
+lang = ["en"]
+variant = "compact"
+engine = "zipformer2-transducer"
+licence = "Apache-2.0"
+terms = "Trained on GigaSpeech, whose audio SpeechColab licenses for non-commercial research and education."
+measured = "WER 11.98 % (int8) on 281 FLEURS en sentences; 0.026 s per second of speech on one core (250)"
+source = { kind = "huggingface", repo = "k2-fsa/sherpa-onnx-zipformer-gigaspeech-2023-12-12", revision = "15c8e7e17e48c01bbc1c92dc96de431256b2b53b" }
+files = [
+  { path = "encoder-epoch-30-avg-1.int8.onnx", size = 72850738, sha256 = "d3eff4b1bd747bd781a47966795988539227d05638524b0313f26d3a166962d7" },
+  { path = "decoder-epoch-30-avg-1.int8.onnx", size = 540688, sha256 = "2b0580feb757696fa929922670b7126aaee609630349a1809fd5a2aee926d56e" },
+  { path = "joiner-epoch-30-avg-1.int8.onnx", size = 259417, sha256 = "80160e45cca71dd52f6b0a6d3d12be18126f5308b2d4ba03f001300fea377c64" },
+  { path = "tokens.txt", size = 5020, sha256 = "0ef7d736bf4de3ef947292e4b119ef13f6808cd5f3aec225a843a7135ac1c2ce" },
+  { path = "bpe.model", size = 244837, sha256 = "c8a2a0129c4ab8e463164c142f82d25649661b122c8cd0b7aab5c9e80b90ad24" },
+]
+
+[[model]]
+id = "asr-multi-parakeet-tdt-0.6b-v3"
+role = "asr"
+lang = ["en", "ru"]
+variant = "quality"
+engine = "fastconformer-transducer"
+licence = "CC-BY-4.0"
+terms = "NVIDIA Parakeet TDT 0.6B v3, 25 European languages; ONNX export by the sherpa-onnx project."
+measured = "WER 8.04 % on 281 FLEURS en sentences, 7.08 % on 272 ru; 0.17 s per second of speech on one core (250)"
+source = { kind = "huggingface", repo = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", revision = "2bda32ec70b097a55adaa07d9a7173915b43cc78" }
+files = [
+  { path = "encoder.int8.onnx", size = 652184281, sha256 = "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247" },
+  { path = "decoder.int8.onnx", size = 11845275, sha256 = "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e" },
+  { path = "joiner.int8.onnx", size = 6355277, sha256 = "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3" },
+  { path = "tokens.txt", size = 93939, sha256 = "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d" },
+]

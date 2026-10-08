@@ -1529,7 +1529,7 @@ def fm_check(vm):
     poke("[FM] LEFT=/ FULL")  # fm has the keys again
     assert "SHELL RESUMED" not in vm.log[mark:], vm.log[mark:]
     # Ctrl+Z from a program fm started still goes to the shell; FG brings fm back, the program stays in the background.
-    for _ in range(60):
+    for _ in range(300):  # every entry of the boot disk's root at most, however many programs it holds
         if "CURRENT=clock.elf " in keys(b"\x1b[A", "[FM] LEFT=/ FULL"):
             break
     else:
@@ -3711,7 +3711,39 @@ def disk_suite(args):
         assert mtools("mtype", "-i", part, "::/data/moved/a.txt") == "alpha\nещё".encode()
         assert mtools("mtype", "-i", part, "::/data/moved/sub/b.txt") == "бета\n".encode()
         assert mtools("mtype", "-i", part, "::/broken.txt") == (temp / "broken.txt").read_bytes()
-    print("PASS: disk image: with the chain restored, fsck.fat is clean; the files fm copied and edited read back with mtools", flush=True)
+        print("PASS: disk image: with the chain restored, fsck.fat is clean; the files fm copied and edited read back with mtools", flush=True)
+        models_check(args, image, temp)
+
+
+def models_check(args, boot, temp):
+    """Issue 251: a model disk from scripts/fat32.py on a read-only VirtIO disk next to the boot disk is models:, read-only
+    for the user too; sha256 in the system gives the host's hash of each file, and fsck finds it clean."""
+    import hashlib
+    tree, image = temp / "models", temp / "models.img"
+    files = {"MANIFEST.json": b'{"models": []}\n', "asr-test/am-onnx/encoder.int8.onnx": bytes(range(256)) * (12 << 10) + b"tail",
+             "tts-test/voice.bin": "голос".encode() * 999}  # commands go out as ASCII; tests/fat_host.rs covers Cyrillic names
+    for path, data in files.items():
+        (tree / path).parent.mkdir(parents=True, exist_ok=True)
+        (tree / path).write_bytes(data)
+    subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(image), str(tree)], check=True, capture_output=True)
+    vm = VM(args, boot.relative_to(ROOT).as_posix(), raw=True,
+            extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={image}", "-device", "virtio-blk-pci,drive=models"])
+    try:
+        mounted = vm.service_logs("vfs_server", "AS RAM:")
+        require(mounted, "[VFS] MOUNTED FAT16 FROM ATA AT LBA 2048")
+        require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS: (256 MB, READ-ONLY)")
+        assert re.search(r"^models: +MIND MODELS +FAT32 +4096 ", vm.command("df"), re.M), vm.log[-2000:]
+        command = "sha256 " + " ".join(f"models:{path}" for path in files)
+        vm.send(command + "\n")
+        hashes = vm.expect("MIND> ", timeout=120, after=to_ordinal(to_real(command)) + "\n")
+        for path, data in files.items():
+            require(hashes, f"{hashlib.sha256(data).hexdigest()}  models:{path}")
+        for command, what in [("write models:new.txt text", "WRITE"), ("mkdir models:dir", "MKDIR"), ("rm models:MANIFEST.json", "RM")]:
+            assert re.search(f"ERROR: {what}: (DENIED|READ-ONLY DEVICE)", vm.command(command)), vm.log[-2000:]
+        require(vm.command("fsck models:"), "  clean")
+    finally:
+        vm.close()
+    print("PASS: models: a FAT32 model disk on VirtIO, read-only; sha256 in the system matches the host for 3 files; writes refused; fsck clean", flush=True)
 
 
 def block_suite(args, block_elf):

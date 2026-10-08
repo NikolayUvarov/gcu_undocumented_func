@@ -52,8 +52,6 @@ Main task [250](../issues/250-voice-dictation.md) (voice V3) chose models measur
 
 Whether such terms reach weights trained on the data is a legal question, and the agents do not decide it. MIND Core is MIT OR Apache-2.0, and the model would ship on its boot disk.
 
-- [ ] Decide whether MIND Core may ship the GigaSpeech Zipformer.
-- [ ] If not, choose one of the alternatives in 250. Each needs a second engine:
-  - NVIDIA Parakeet TDT-CTC 110M (CC BY 4.0);
-  - OpenAI Whisper base (MIT).
-- [ ] Optionally, the same question for the Russian model, whose training data is unknown.
+- [x] Decide whether MIND Core may ship the GigaSpeech Zipformer. **Decided by the maintainer, 2026-10-08:** any free model may be used and shipped, including models whose terms allow only non-commercial use. Each model's licence and terms are recorded with it in `models/manifest.toml` and travel with it ([251](../issues/251-model-cache-and-model-disk.md)).
+- [x] If not, choose one of the alternatives in 250. Not needed; English keeps the GigaSpeech Zipformer as its compact model, and Parakeet TDT 0.6B v3 (CC BY 4.0) is its quality model.
+- [x] Optionally, the same question for the Russian model, whose training data is unknown. Covered by the same decision.

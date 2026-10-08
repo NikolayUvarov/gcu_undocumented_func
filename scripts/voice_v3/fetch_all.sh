@@ -28,4 +28,6 @@ m=csukuangfj/sherpa-onnx-nemo-ctc-en-conformer-small; $F $DL/nemo-en-conformer-s
 m=csukuangfj/sherpa-onnx-nemo-ctc-en-conformer-medium; $F $DL/nemo-en-conformer-medium $(r $m model.onnx) $(r $m tokens.txt)
 m=csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k; $F $DL/nemo-ml-fc $(r $m model.onnx) $(r $m tokens.txt)
 m=csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8; $F $DL/parakeet-0.6b-v3 $(r $m encoder.int8.onnx) $(r $m decoder.int8.onnx) $(r $m joiner.int8.onnx) $(r $m tokens.txt)
+m=csukuangfj/sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16; $F $DL/gigaam-v3-ctc $(r $m model.int8.onnx) $(r $m tokens.txt)
+m=csukuangfj/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16; $F $DL/gigaam-v3-rnnt $(r $m encoder.int8.onnx) $(r $m decoder.onnx) $(r $m joiner.onnx) $(r $m tokens.txt)
 for d in vosk-kaldi-small-ru vosk-kaldi-small-en; do (cd $DL/$d && unzip -q -o ./*.zip); done

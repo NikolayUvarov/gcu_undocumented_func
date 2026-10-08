@@ -55,7 +55,7 @@ impl From<Error> for crate::sys::Error {
 // A generated call: the IPC failure and the service's error both become `Error`.
 fn call<T>(result: crate::sys::Result<core::result::Result<T, vfs::Error>>) -> Result<T> { result?.map_err(Error::from) }
 
-struct Client { roots: [(u32, bool); 3] } // root handles of "", "ram" and "log", opened once
+struct Client { roots: [(u32, bool); 4] } // root handles of "", "ram", "log" and "models", opened once
 struct State(UnsafeCell<Option<Client>>);
 unsafe impl Sync for State {} // processes are single-threaded
 static STATE: State = State(UnsafeCell::new(None));
@@ -68,7 +68,7 @@ fn endpoint() -> Endpoint { Endpoint(ENDPOINT.load(Ordering::Relaxed)) }
 /// program's own may not). Handles are bound to the capability they were opened with, so the roots are opened again.
 pub fn use_endpoint(endpoint: Endpoint) {
     ENDPOINT.store(endpoint.0, Ordering::Relaxed);
-    if let Some(c) = unsafe { &mut *STATE.0.get() } { c.roots = [(0, false); 3]; }
+    if let Some(c) = unsafe { &mut *STATE.0.get() } { c.roots = [(0, false); 4]; }
 }
 
 // With a scoped client (`use_scope`): the volume and the directory its root stands for.
@@ -109,7 +109,7 @@ fn locate(path: &str) -> Result<(&str, &str)> {
 
 fn client() -> Result<&'static mut Client> {
     let slot = unsafe { &mut *STATE.0.get() };
-    if slot.is_none() { *slot = Some(Client { roots: [(0, false); 3] }); }
+    if slot.is_none() { *slot = Some(Client { roots: [(0, false); 4] }); }
     Ok(slot.as_mut().unwrap())
 }
 
@@ -122,7 +122,7 @@ pub fn split(path: &str) -> (&str, &str) {
 }
 
 fn root(volume: &str) -> Result<u32> {
-    let index = if volume.is_empty() { 0 } else if volume.eq_ignore_ascii_case("ram") { 1 } else if volume.eq_ignore_ascii_case("log") { 2 } else { return Err(Error::NotFound) };
+    let index = match volume { "" => 0, v if v.eq_ignore_ascii_case("ram") => 1, v if v.eq_ignore_ascii_case("log") => 2, v if v.eq_ignore_ascii_case("models") => 3, _ => return Err(Error::NotFound) };
     let c = client()?;
     if !c.roots[index].1 { let handle = call(vfs::root(endpoint(), volume))?; c.roots[index] = (handle, true); }
     Ok(c.roots[index].0)
@@ -148,7 +148,7 @@ fn close(handle: u32) { let _ = vfs::close(endpoint(), handle); }
 pub struct Dir { handle: u32, owned: bool }
 
 impl Dir {
-    /// The root of a volume (`""`: the boot disk, `"ram"`).
+    /// The root of a volume (`""`: the boot disk, `"ram"`, `"models"`: the model disk, read-only).
     pub fn root(volume: &str) -> Result<Self> { Ok(Self { handle: root(volume)?, owned: false }) }
     /// A directory by path (`ram:docs`, `data/notes`).
     pub fn open(path: &str) -> Result<Self> { let (volume, rest) = locate(path)?; Self::root(volume)?.dir(rest, false) }
@@ -284,8 +284,8 @@ pub fn metadata(path: &str) -> Result<Metadata> {
     match File::open(path) { Ok(file) => file.metadata(), Err(Error::IsDirectory) => Dir::open(path)?.metadata(), Err(e) => Err(e) }
 }
 
-/// The volume `name` (`""`, `"ram"` or `"log"`).
+/// The volume `name` (`""`, `"ram"`, `"log"` or `"models"`).
 pub fn volume(name: &str) -> Result<VolumeInfo> { Dir::root(name)?.volume() }
 
-/// Checks volume `name` (`""`, `"ram"` or `"log"`) without changing it.
+/// Checks volume `name` (`""`, `"ram"`, `"log"` or `"models"`) without changing it.
 pub fn check<T>(name: &str, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> { Dir::root(name)?.check(visit) }
