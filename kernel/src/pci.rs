@@ -55,7 +55,10 @@ const INTEL_SWITCHABLE_XHCI: [u32; 5] = [0x1E31_8086, 0x8C31_8086, 0x9C31_8086, 
 unsafe fn route_to_xhci(bus: u8, device: u8, function: u8) {
     write(bus, device, function, 0xD8, read(bus, device, function, 0xDC));
     write(bus, device, function, 0xD0, read(bus, device, function, 0xD4));
-    crate::serial_print("MIND CORE KERNEL: PCI: INTEL XHCI: USB PORTS ROUTED FROM EHCI TO XHCI\n");
+    // The ports the firmware lets move (its masks) and those that moved: a port left on EHCI is not seen (211-PRT-0004).
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!(
+        "MIND CORE KERNEL: PCI: INTEL XHCI: USB PORTS ROUTED FROM EHCI TO XHCI (USB 2 {:X} OF MASK {:X}, USB 3 {:X} OF MASK {:X})\n",
+        read(bus, device, function, 0xD0), read(bus, device, function, 0xD4), read(bus, device, function, 0xD8), read(bus, device, function, 0xDC)));
 }
 
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
