@@ -136,7 +136,7 @@ Making the suites run on a Mac, under TCG and under HVF, is task [600-APL-0012](
 
 MIND Core cannot run on an Apple Silicon Mac without a virtual machine. There is nothing to install on a Mac for it yet. The reasons are those of issue [210](../issues/210-apple-silicon-native.md); its tasks are in section 8. The hardware facts below come from the Asahi Linux project's documentation; none has been checked on a Mac here.
 
-- **No UEFI.** Apple's iBoot boots the Mac, and `BOOTAA64.EFI` is a UEFI application. The plan is to boot as Asahi Linux does: its boot loader m1n1 starts U-Boot, which gives a UEFI environment. Installing them with the Asahi installer means lowering the boot security of the new boot entry once, in recoveryOS; macOS stays. Task 210-APL-0001.
+- **No UEFI.** Apple's iBoot boots the Mac, and `BOOTAA64.EFI` is a UEFI application. The plan is to boot as Asahi Linux does: its boot loader m1n1 starts U-Boot, which gives a UEFI environment. Installing them with the Asahi installer means lowering the boot security of the new boot entry once, in recoveryOS; macOS stays. Task 210-APL-0001. A loader of our own can later replace U-Boot after m1n1 (task 210-APL-0013), and then m1n1 too, as a raw image that iBoot starts once `kmutil` allows it (task 210-APL-0014). The cost of the second step is the per-core and power set-up m1n1 does, and an NVMe reader for updates without recoveryOS.
 - **No ACPI.** The kernel reads the machine's layout from ACPI tables (MADT, SPCR, GTDT, MCFG, FADT). A Mac is described by a device tree instead. Task 210-APL-0002.
 - **Not a GIC.** The interrupt controller is Apple's AIC (AIC2 on the M1 Pro, Max and Ultra and on later chips), and the timer's interrupt arrives as an FIQ, which the kernel does not take. Task 210-APL-0003.
 - **No PSCI.** The other CPUs start through a spin table, not PSCI `CPU_ON` (task 210-APL-0004); reset goes through a watchdog, not PSCI `SYSTEM_RESET` (task 210-APL-0005).
@@ -167,6 +167,8 @@ Track `APL` is open: anyone may take it ([TRACKS.md](../TRACKS.md), [AGENTS.md](
 | [210-APL-0006](../issues/210-APL-0006-samsung-style-uart-console.md) | The console on the Samsung-style UART |
 | [210-APL-0007](../issues/210-APL-0007-dart-dma-boundary.md) | DART: each device's DMA only through its own IOMMU; 16 KiB pages |
 | [210-APL-0008](../issues/210-APL-0008-usb-on-type-c-ports.md) | USB on the Type-C ports: DWC3 in host mode, the ATC PHY, PMGR power |
+| [210-APL-0013](../issues/210-APL-0013-own-stage-two-instead-of-u-boot.md) | Our own second stage after m1n1, without U-Boot |
+| [210-APL-0014](../issues/210-APL-0014-own-first-stage-instead-of-m1n1.md) | Our own first stage started by iBoot, without m1n1 |
 
 ## 9. What has been tested
 

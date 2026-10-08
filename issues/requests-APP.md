@@ -22,3 +22,23 @@ On x86 each answer is about 14 CMOS port accesses, each a system call. With 60 c
 ### Acceptance criteria
 
 The RTC service's load does not grow by 10 calls a second with each clock.
+
+## `update` in the shell and `msh` (351, phase 2)
+
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [351](351-self-update.md) at the maintainer's request.
+
+### Problem
+
+The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will have an interface (`idl/update.wit`) but no command.
+
+### Plan (a proposal; the tools track decides)
+
+- `update check | fetch | apply | status | rollback` in the shell, and the same in `msh` under `requires: lifecycle`.
+- `apply` asks for confirmation and names the versions.
+- `status` shows the running, staged, trial and last-known-good versions and the last error.
+- `sysmon` or `top` may show a staged update.
+
+### Acceptance criteria
+
+The commands drive the updater against the test server in QEMU, and the tools suite checks them.
+
