@@ -1495,7 +1495,7 @@ def fm_check(vm):
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
     # without the shell being told (fm stayed in front for it).
-    for _ in range(60):
+    for _ in range(300):  # every entry of the boot disk's root at most, however many programs it holds
         if "CURRENT=top.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
             break
     else:
@@ -1521,7 +1521,7 @@ def fm_check(vm):
     poke("[FM] LEFT=/ FULL")  # fm has the keys again
     assert "SHELL RESUMED" not in vm.log[mark:], vm.log[mark:]
     # Ctrl+Z from a program fm started still goes to the shell; FG brings fm back, the program stays in the background.
-    for _ in range(60):
+    for _ in range(300):  # every entry of the boot disk's root at most, however many programs it holds
         if "CURRENT=clock.elf " in keys(b"\x1b[A", "[FM] LEFT=/ FULL"):
             break
     else:
