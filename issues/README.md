@@ -247,6 +247,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [000-KRN-0011](../issues-done/000-KRN-0011-clock-calls-without-the-lock.done) | `UPTIME`, `CLOCK` and `RDTSC` without the scheduler lock, answered from the CPU's running mailbox | done (2026-10-08) |
 | [211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done) | The kernel's boot lines and fatal reports on the screen too, not only on COM1 (211) | done (2026-10-08) |
 | [211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done) | Bootloader errors and panics readable on a Mac's screen: Apple's console control set to text mode (211) | done (2026-10-08) |
+| [211-PRT-0005](../issues-done/211-PRT-0005-windows-writer-default-image.done) | The Windows writer finds its default image under `powershell -File` (Windows PowerShell 5.1) (211) | done (2026-10-08) |
 | [172](../issues-done/172-64-bit-handles-and-abi-version.done) | 64-bit capability handles (32-bit generation), the IPC timeout in `arg2`, 16-byte grants, ABI version 2 checked at program start | done (2026-10-07) |
 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) | The block store starts at boot over `ramdisk#1`; the shell's client in slot 25; `REQUEST_BLOCKSTORE` (requested by STO) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |

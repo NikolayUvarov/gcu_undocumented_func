@@ -1,0 +1,27 @@
+# 211-PRT-0005 — The Windows writer's default image under `powershell -File` — done
+
+**Type:** porting (tools) · **Owner:** `PRT` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1
+
+## Problem
+
+The maintainer reported this while writing the image for a MacBook Pro from Windows. `05_write_usb_windows.ps1` builds the default of `-Image` from `$PSScriptRoot` in its `param()` block. Windows PowerShell 5.1 leaves that variable empty there when the script runs through `powershell -File`, the way the README shows it. `Join-Path` then fails before the script does anything, unless `-Image` is given.
+
+## Plan
+
+Leave `-Image` empty by default. In the script's body, take the script's directory from `$PSScriptRoot`, or from `$MyInvocation.MyCommand.Path` where that is empty, and build the default from it. The other uses of the directory (the disks to protect, `scripts\UsbImageWriter.cs`) go through the same value.
+
+## Acceptance criteria
+
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\05_write_usb_windows.ps1 -DiskNumber N -Check` finds `dist\mind-core-usb.img` without `-Image`. An explicit `-Image` works as before.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md), the README's section "Write the image from Linux or Windows".
+
+## Resolution
+
+- `05_write_usb_windows.ps1`:
+  - `-Image` defaults to empty.
+  - After `Set-StrictMode`, `$ScriptDir` is `$PSScriptRoot`, else the parent of `$MyInvocation.MyCommand.Path`, and an empty `-Image` becomes `$ScriptDir\dist\mind-core-usb.img`.
+  - `Get-ProtectedDisks` and `Add-Type` use `$ScriptDir`.
+- **Not tried here.** This environment has no PowerShell. The fix has not been run on Windows; the maintainer's next run of the documented command is its first check.
