@@ -77,6 +77,7 @@ struct Shell {
     serial: Option<Uart>, // the serial line, for notes that are not a console's
     msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
     script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
+    log_next: Option<u64>, // the next system log record shown above the prompt, until the first key (211-PRT-0004)
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -216,6 +217,22 @@ impl Shell {
 
     fn report(&mut self, error: &str) { let _ = writeln!(self.term, "ERROR: {}", error); }
     // The prompt and whatever was typed so far (output may have interrupted the line).
+    // The system log on the screen only, not the serial line (211-PRT-0004): what the services said at boot, then each
+    // new record above the prompt until the first key, for a machine whose keyboard does not work yet.
+    fn show_log(&mut self, before_prompt: bool) {
+        let Some(mut next) = self.log_next else { return };
+        let mut text = alloc::string::String::new();
+        while let Ok(count) = mind::log::read(next, |entry| { next = entry.seq + 1; text.push_str(entry.text.as_str()); text.push('\n'); }) {
+            if count == 0 { break; }
+        }
+        self.log_next = Some(next);
+        if text.is_empty() { return; }
+        if before_prompt { self.term.put_str(&text); return; }
+        self.term.truncate(Position { line: self.prompt_at.line, col: 0 });
+        self.term.put_str(&text); self.term.put_str("MIND> ");
+        self.prompt_at = self.term.position();
+    }
+
     fn prompt(&mut self) {
         if self.script.is_some() { return; } // a script's commands do not prompt
         let _ = write!(self.term, "MIND> ");
@@ -740,7 +757,7 @@ fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), script: None })
+                            msh: Interpreter::default(), script: None, log_next: None })
 }
 
 mind::entry!(main);
@@ -750,6 +767,7 @@ fn main(info: &'static BootInfo) {
     let mut shell = new_shell(term, own);
     // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN).
     for index in 0..CONSOLES { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
+    shell.log_next = Some(0); shell.show_log(true);
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
@@ -772,18 +790,20 @@ fn main(info: &'static BootInfo) {
         // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout), for
         // the first console.
         shell.activate(0);
+        shell.show_log(false);
         let now = mind::time::uptime_ms() as u64;
         while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
         }
         vt.poll(now, &mut |event| events.push(event));
-        for &event in events.as_slice() { shell.uart(event); }
+        for &event in events.as_slice() { shell.log_next = None; shell.uart(event); }
         events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus, for the console shown.
         // While a program has the focus only the keys the shell listens for come here (F12: push-to-talk, issue 154;
         // Ctrl+Alt+F1…F4: the consoles, issue 155).
         shell.activate(shell.shown);
         while let Some(key) = mind::input::read_key() {
+            shell.log_next = None;
             match key.code() {
                 Code::F(n @ 1..=4) if key.ctrl() && key.alt() => shell.show(n as usize - 1),
                 _ if shell.focused.is_none() => shell.key(key),
