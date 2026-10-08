@@ -19,7 +19,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [171-APP-0008](171-APP-0008-memory-check-every-cpu-count.md) | `applications_until_memory_ends` with every CPU count: the 8-CPU limit can go (16 CPUs pass locally on x86 and aarch64) | `APP` | P2 | — | 171 |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
@@ -174,6 +173,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-APP-0002](../issues-done/171-APP-0002-sysinfo-pages.done) | `sysinfo.wit` 4.0: tasks and endpoints page by page; `sysmon`, `top`, the console's `ps`, `logd` see every task (171) | done (2026-10-06) |
 | [171-APP-0006](../issues-done/171-APP-0006-monitor-bounds.done) | `top`, `memmap`, `load`: capabilities as `n/4095`, counts of tasks and endpoints without the root quota, the task graph to its own scale, the EP column fits 65 535 (requested by `KRN`) | done (2026-10-07) |
 | [171-APP-0007](../issues-done/171-APP-0007-sysinfo-every-cpu-and-capability.done) | `sysinfo`: every CPU and every capability in pages; `top` and `load` show 16 CPUs and more (requested by `KRN`) | done (2026-10-07) |
+| [171-APP-0008](../issues-done/171-APP-0008-memory-check-every-cpu-count.done) | `applications_until_memory_ends` with every CPU count: the groups "16 CPUs" fill memory too (78 clocks on x86, 171 on aarch64) | done (2026-10-08) |
 | [158-APP-0005](../issues-done/158-APP-0005-camera-mark-on-ci.done) | The camera mark was missing on CI: `video_gw` could sleep a minute (fixed in 158-DRV-0001); the check reports a stall with `ps` and `stat` | done (2026-10-07) |
 | [158-DRV-0001](../issues-done/158-DRV-0001-video-gw-frame-wait.done) | `video_gw`: a frame wait read the clock twice and could sleep 60 s (done by `APP` for 158-APP-0005, open track) | done (2026-10-07) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |

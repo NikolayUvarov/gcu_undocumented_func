@@ -734,9 +734,9 @@ def normal_suite(vm):
         clocks_on_many_cpus(vm)
     pool_covers_free_ram(vm)
     memory = gibibytes(getattr(vm.args, "memory", None))
-    # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80. With
-    # more than 8 CPUs it is not run yet (171-APP-0008).
-    if memory <= 1 and vm.cpus <= 8:
+    # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80. It runs
+    # with every CPU count, 16 too (171-APP-0008).
+    if memory <= 1:
         applications_until_memory_ends(vm)
     if memory > 4:
         ram_above_4g(vm)
