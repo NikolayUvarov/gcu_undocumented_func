@@ -36,6 +36,7 @@ use mind::sys::Error;
 const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
+const BOOT_LOG_LINES: usize = 24;
 const COMMANDS: [&str; 47] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
 const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
@@ -218,14 +219,17 @@ impl Shell {
 
     fn report(&mut self, error: &str) { let _ = writeln!(self.term, "ERROR: {}", error); }
     // The prompt and whatever was typed so far (output may have interrupted the line).
-    // The system log on the screen only, not the serial line (211-PRT-0004): what the services said at boot, then each
-    // new record above the prompt until the first key, for a machine whose keyboard does not work yet.
+    // The system log on the screen only, not the serial line (211-PRT-0004): the last BOOT_LOG_LINES records of the boot,
+    // then each new record above the prompt until the first key, for a machine whose keyboard does not work yet. The
+    // scrollback keeps the banner; the whole log is on the log partition (211-KRN-0019).
     fn show_log(&mut self, before_prompt: bool) {
         let Some(mut next) = self.log_next else { return };
         let mut text = alloc::string::String::new();
-        while let Ok(count) = mind::log::read(next, |entry| { next = entry.seq + 1; text.push_str(entry.text.as_str()); text.push('\n'); }) {
+        let mut lines = alloc::collections::VecDeque::new();
+        while let Ok(count) = mind::log::read(next, |entry| { next = entry.seq + 1; lines.push_back(alloc::string::String::from(entry.text.as_str())); if lines.len() > BOOT_LOG_LINES { lines.pop_front(); } }) {
             if count == 0 { break; }
         }
+        for line in &lines { text.push_str(line); text.push('\n'); }
         self.log_next = Some(next);
         if before_prompt { self.term.put_str(&text); return; }
         // A heartbeat: the seconds since boot, so a still screen tells a stopped system from one waiting for keys.
