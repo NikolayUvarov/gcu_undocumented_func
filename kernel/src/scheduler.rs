@@ -85,6 +85,8 @@ struct Task {
     exit_reason: usize, // why it ended (EXIT_*), for a watch that comes after the exit
     handed_by: Option<(usize, u64)>, // the task in front that started it with SPAWN_FOREGROUND: the focus returns there (issue 160)
 }
+// A copy of `list` with room for exactly its elements, if the kernel heap has it.
+fn exact_copy(list: &[usize]) -> Option<Vec<usize>> { let mut copy = Vec::new(); copy.try_reserve_exact(list.len()).ok()?; copy.extend_from_slice(list); Some(copy) }
 // A set of CPUs, one bit each.
 #[derive(Clone, Copy)]
 struct Cpus([u64; cpu::MAX.div_ceil(64)]);
@@ -134,7 +136,7 @@ struct Scheduler {
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize); EXIT_STATUSES], ended_next: usize, // (PID, reason) of the last tasks that ended (EXIT_STATUS)
     dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
-    on_cpu: [Vec<usize>; cpu::MAX], // each CPU's task slots in order (a slot freed or moved is dropped at that CPU's next select)
+    on_cpu: [Vec<usize>; cpu::MAX], // each CPU's task slots in order, sized to them: added at spawn, removed at reap
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -463,6 +465,12 @@ impl Scheduler {
             if self.current.contains(&slot) || !self.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { continue; }
             for index in 1..self.tasks[slot].as_ref().unwrap().cspace.len() { self.remove(slot, index); }
             let mut task = self.tasks[slot].take().unwrap();
+            // Its CPU's list loses the slot and keeps room for exactly the rest: the kernel heap returns as tasks end.
+            let list = &mut self.on_cpu[task.cpu];
+            if let Ok(at) = list.binary_search(&slot) {
+                list.remove(at);
+                if list.is_empty() { *list = Vec::new(); } else if let Some(exact) = exact_copy(list) { *list = exact; }
+            }
             released.extend(task.heap.take_regions()); released.extend(task.screen.take());
         }
         self.tasks.shrink(); // empty chunks at the end of the table go back to the kernel heap
@@ -591,7 +599,7 @@ impl Scheduler {
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
-        if self.on_cpu[cpu].try_reserve(1).is_err() { return Err("OUT OF MEMORY: TASK LIST"); }
+        if self.on_cpu[cpu].try_reserve_exact(1).is_err() { return Err("OUT OF MEMORY: TASK LIST"); }
         let (mut cspace, mut generations, mut table) = (Vec::new(), Vec::new(), Vec::new());
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
