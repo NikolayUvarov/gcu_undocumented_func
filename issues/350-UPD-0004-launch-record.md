@@ -1,6 +1,6 @@
 # 350-UPD-0004 — The launch record: which manifest booted, readable in the system
 
-**Type:** boot (update) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) ("The launch record, readable in the system") · **Main task:** [350](350-signed-boot-images.md) · **Roadmap:** track C "launch records" · **Constitution:** MC-9.1, MC-9.5
+**Type:** boot (update) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — ([350-KRN-0023](../issues-done/350-KRN-0023-launch-record-in-bootinfo.done), the record in `BootInfo` and init's log line, done) · **Main task:** [350](350-signed-boot-images.md) · **Roadmap:** track C "launch records" · **Constitution:** MC-9.1, MC-9.5
 
 ## Problem
 
@@ -21,7 +21,7 @@ The record is evidence: nothing grants or refuses on it.
 ## Progress (2026-10-08)
 
 - **Done:** the serial line. `BOOT: MANIFEST <16 hex> KEY <hex16> [(THE TEST KEY)] VERIFIED, <n> IMAGES CHECKED` is printed on every verified boot, x86 (30 images) and aarch64 (27).
-- **Waiting:** the `BootInfo` field and the `STAT` class from `KRN`.
+- **Done by `KRN`** ([350-KRN-0023](../issues-done/350-KRN-0023-launch-record-in-bootinfo.done)): `BootInfo.launch` and `boot_slot.manifest`, and init's `[INIT] LAUNCH: …` line, the same as the serial line on x86 and aarch64. Left here: a tool that shows it.
 
 ## Related
 

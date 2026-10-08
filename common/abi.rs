@@ -39,7 +39,7 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // keep their places across versions, so each side finds the other's version where it expects it.
 pub const ABI_VERSION: u32 = 4;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
-    pub boot_volume: BootVolume, pub boot_slot: BootSlot, }
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, }
 // The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
 // kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
 // partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.
@@ -55,6 +55,10 @@ pub const BOOT_SLOT_ROOT: u32 = 0;
 pub const BOOT_SLOT_A: u32 = 1;
 pub const BOOT_SLOT_B: u32 = 2;
 pub const TRIAL_DEADLINE_S: u32 = 120;
+// The launch record (350-UPD-0004, MC-9.5): the signing key's identity as the verified manifest names it (16 hex
+// digits), whether it is the public test key, and how many images were checked against it; with boot_slot.manifest,
+// what the serial line's BOOT: MANIFEST line says. Evidence only: nothing grants or refuses on it.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct LaunchRecord { pub key: [u8; 16], pub test_key: u32, pub images: u32 }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }

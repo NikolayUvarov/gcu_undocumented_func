@@ -536,6 +536,16 @@ fn main(info: &'static BootInfo) {
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
+    {
+        let (launch, slot) = (&info.launch, &info.boot_slot);
+        let mut manifest = mind::util::FixedBuf::<16>::new();
+        for byte in &slot.manifest[..8] { let _ = core::fmt::Write::write_fmt(&mut manifest, format_args!("{:02x}", byte)); }
+        let key = core::str::from_utf8(&launch.key).unwrap_or("?").trim_end_matches('\0');
+        let name = match slot.slot { BOOT_SLOT_A => "SLOT A", BOOT_SLOT_B => "SLOT B", _ => "THE VOLUME'S ROOT" };
+        mind::println!("[INIT] LAUNCH: MANIFEST {} KEY {}{} VERIFIED, {} IMAGES CHECKED; {}{}", core::str::from_utf8(manifest.as_bytes()).unwrap_or("?"), key,
+                       if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
+    }
     let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
         // On a real machine, time for a photo of the kernel's lines before the compositor takes the screen (211-PRT-0004).

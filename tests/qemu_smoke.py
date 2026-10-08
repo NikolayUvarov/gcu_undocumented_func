@@ -5141,6 +5141,15 @@ def boot_suite(args, disk):
             vm.close()
     print("PASS: the bootloader reads its own volume when the firmware lists another disk's FAT volume first, and names it "
           "in BootInfo: vfs_server mounts that one (AHCI), not the other disk ahead of it (IDE)", flush=True)
+    # 350-UPD-0004: the launch record the bootloader printed on COM1 is in the running system's log, the same.
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        serial = re.search(r"BOOT: MANIFEST (\S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED)", ANSI.sub("", vm.log))
+        assert serial, vm.log[-3000:]
+        require(vm.command("dmesg -s init", raw=True), f"[INIT] LAUNCH: MANIFEST {serial[1]}; THE VOLUME'S ROOT")
+    finally:
+        vm.close()
+    print("PASS: the launch record (manifest, key, images checked) in the system log matches the bootloader's serial line", flush=True)
     # 211-KRN-0016: two GPUs, the first listed without a linear framebuffer (virtio-gpu): the loader takes the GOP of a
     # console output that has one. Its progress lines name each step on the console (COM1 here, through the firmware).
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-vga", "none", "-device", "virtio-gpu-pci", "-device", "VGA"])

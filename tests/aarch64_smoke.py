@@ -95,6 +95,10 @@ def main():
     assert "KERNEL PANIC" not in output and "KERNEL EXCEPTION" not in output, output
     # A line goes out in one write (issue 209): no service's line lands inside init's.
     assert not re.search(r"^\[INIT\] STARTED \[", output, re.M), output
+    # 350-UPD-0004: the launch record in the system log is the bootloader's serial line.
+    serial = re.search(r"BOOT: MANIFEST (\S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED)", output)
+    assert serial, output[-3000:]
+    require(output, f"[INIT] LAUNCH: MANIFEST {serial[1]}; THE VOLUME'S ROOT")
     entropy = "[KEYSTORE] DEVICE KEY READY" in output
     print(f"PASS: aarch64 boot to [INIT] READY on the PL011 console; logd, loader, keystore ({'device key from RNDR' if entropy else 'no RNDR'}) and sysmon run", flush=True)
 

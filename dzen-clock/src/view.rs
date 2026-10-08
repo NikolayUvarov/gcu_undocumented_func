@@ -54,6 +54,7 @@ mod tests {
             abi_version: crate::abi::ABI_VERSION,
             boot_volume: Default::default(),
             boot_slot: Default::default(),
+            launch: Default::default(),
         }
     }
 

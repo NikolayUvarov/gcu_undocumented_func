@@ -11,7 +11,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, ProgramImage, StatPhys, ABI_VERSION, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, ABI_VERSION, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -270,7 +270,7 @@ fn slot_dir(slot: u8) -> &'static str { if slot == b'A' { "MIND\\A\\" } else { "
 // Reads the kernel and the boot services from `dir` ("" or a slot's directory), checks each against the signed
 // manifest there and loads them; on an error nothing stays allocated but a kernel that failed to relocate.
 fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Directory, dir: &str, file_buf: &mut [u8], manifest_buf: &mut [u8])
-    -> Result<(u64, [ProgramImage; abi::BOOT_IMAGES], [u8; 32]), (&'static str, &'static str)> {
+    -> Result<(u64, [ProgramImage; abi::BOOT_IMAGES], [u8; 32], LaunchRecord), (&'static str, &'static str)> {
     // Nothing is loaded before the manifest's signature checks; each image is checked against it (350-UPD-0003).
     let mut signature = [0u8; 128];
     let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
@@ -310,14 +310,16 @@ fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Direct
     let _ = write!(Serial, "\r\nBOOT: MANIFEST ");
     for b in &digest[..8] { let _ = write!(Serial, "{:02x}", b); }
     let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if verify::TEST_KEY { " (THE TEST KEY)" } else { "" }, checked);
-    Ok((kernel_entry, programs, digest))
+    let mut launch = LaunchRecord { test_key: verify::TEST_KEY as u32, images: checked, ..Default::default() };
+    for (to, from) in launch.key.iter_mut().zip(manifest.key().bytes()) { *to = from; }
+    Ok((kernel_entry, programs, digest, launch))
 }
 
 // The slots (351-UPD-0006): follows the newer valid boot record, counts down a trial's tries on the disk before the
 // slot runs, and falls back to the other slot when one is not confirmed in time or does not verify. Returns the slot
 // loaded and whether it runs on trial; None for a volume without boot records, which boots from its root.
 fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Directory, file_buf: &mut [u8], manifest_buf: &mut [u8])
-    -> Option<Result<(u64, [ProgramImage; abi::BOOT_IMAGES], u8, bool, [u8; 32]), (&'static str, &'static str)>> {
+    -> Option<Result<(u64, [ProgramImage; abi::BOOT_IMAGES], u8, bool, [u8; 32], LaunchRecord), (&'static str, &'static str)>> {
     let mut present = [false; 2];
     let mut records = [None; 2];
     for (k, name) in RECORD_FILES.iter().enumerate() {
@@ -359,7 +361,7 @@ fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Dire
         if slot == 0 { continue; }
         let trial = k == 0 && written.is_some();
         match load_set(services, root, slot_dir(slot), file_buf, manifest_buf) {
-            Ok((entry, programs, digest)) => return Some(Ok((entry, programs, slot, trial, digest))),
+            Ok((entry, programs, digest, launch)) => return Some(Ok((entry, programs, slot, trial, digest, launch))),
             Err((file, reason)) => {
                 let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: {}: {}\r", slot as char, file, reason);
                 last = (file, reason);
@@ -392,12 +394,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             let manifest_buf = unsafe { core::slice::from_raw_parts_mut(manifest_addr as *mut u8, MANIFEST_PAGES * 4096) };
             // A volume with boot records boots a slot; one without, as before them, its root (351-UPD-0006).
             match load_slots(boot_services, &mut root, file_buf, manifest_buf) {
-                Some(slot) => slot.map(|(entry, programs, slot, trial, digest)| (entry, programs, Some((slot, trial)), digest)),
-                None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs, digest)| (entry, programs, None, digest)),
+                Some(slot) => slot.map(|(entry, programs, slot, trial, digest, launch)| (entry, programs, Some((slot, trial)), digest, launch)),
+                None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, None, digest, launch)),
             }
         })()
     };
-    let (kernel_entry, programs, slot, digest) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
+    let (kernel_entry, programs, slot, digest, launch) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
     // Where the system came from and which copy runs, for the kernel and vfs_server (211-KRN-0012, 351-KRN-0014).
     let boot_volume = boot_volume(system_table.boot_services(), image);
     let boot_slot = BootSlot { slot: match slot { Some((b'A', _)) => BOOT_SLOT_A, Some(_) => BOOT_SLOT_B, None => BOOT_SLOT_ROOT },
@@ -421,7 +423,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // On a machine without a hypervisor, time for a photo of these lines before the screen changes (211-PRT-0004).
     if bare_metal() {
