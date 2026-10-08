@@ -159,6 +159,14 @@ mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/voice"
 cp "$BUILD_SCRIPT_DIR"/voice/model.bin "$BUILD_SCRIPT_DIR"/voice/commands.txt "$BUILD_SCRIPT_DIR/usb_root/voice/"
+# With $MIND_SECURE_BOOT_KEYS (a directory holding db.key and db.crt), the bootloader is signed for Secure Boot
+# first (351-UPD-0012, docs/update/secure-boot.md). Then the boot manifest and its signature: the bootloader loads
+# only what it lists (350-UPD-0002, docs/update/README.md).
+STEP="signing the boot volume"
+if [ -n "${MIND_SECURE_BOOT_KEYS:-}" ]; then
+    python3 "$BUILD_SCRIPT_DIR/scripts/secure_boot.py" sign "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI" "$MIND_SECURE_BOOT_KEYS" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
+fi
+python3 "$BUILD_SCRIPT_DIR/scripts/sign_manifest.py" "$BUILD_SCRIPT_DIR/usb_root"
 
 trap - ERR
 finish

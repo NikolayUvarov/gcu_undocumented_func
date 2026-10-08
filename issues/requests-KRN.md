@@ -78,6 +78,42 @@ So no program can hold a client that may only read. The service's refusals by ba
 - With the extra disk, `[BLOCKSTORE] READY` names a medium that survives a reboot of the VM; without it, the RAM disk as today.
 - `vfs_server` holds no client of the store's disk.
 
+## The launch record, readable in the system
+
+**Recorded by:** the update track (UPD), 2026-10-08, for [350](350-signed-boot-images.md) (`350-UPD-0004`).
+
+### Problem
+
+The bootloader now checks the boot volume against a signed manifest (350-UPD-0003, [docs/update](../docs/update/README.md)) and prints a launch record on the serial line: the manifest's SHA-256, the signing key's identity, whether it is the public test key, and how many images it checked. Nothing in the running system can read it. Tools, logs and a future updater cannot tell which manifest booted, and the serial line is not there on every machine.
+
+### Plan (a proposal; the kernel track decides)
+
+- A field in `BootInfo` (an ABI change: a new ABI version): the manifest's SHA-256, the key identity (8 bytes), a flag for the test key and the count of images checked.
+- The kernel keeps it, and a `STAT` class (or a line `init` publishes in its log) makes it readable. It is evidence, not authority: nothing grants or refuses on it.
+- The update track then shows it in a tool (for example `sysinfo` or `ver`) and checks it in the `boot` suite.
+
+### Acceptance criteria
+
+A program reads the record of the volume it booted from, and it matches the serial line's.
+
+## UEFI variables for the updater
+
+**Recorded by:** the update track (UPD), 2026-10-08, for [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) (and the dbx updates of [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md)).
+
+### Problem
+
+A new bootloader is tried once through `BootNext`, then made the default through `BootOrder`; a revoked one is added to `dbx` by an authenticated update signed with our KEK. These are UEFI variables, set through the firmware's runtime services. The kernel does not call runtime services today, so nothing in the running system can set them.
+
+### Plan (a proposal; the kernel track decides)
+
+- The bootloader passes the runtime services table and the memory map entries they need (an ABI change: a new `BootInfo` field), and the kernel keeps the runtime regions mapped after `ExitBootServices` (`SetVirtualAddressMap`, or calls in the identity map where the firmware allows).
+- A system call, or a platform-privileged service, that gets and sets variables by GUID and name: `BootNext`, `BootOrder` and `Boot####` of the global variable GUID, and an authenticated write of `dbx`. Granted only to `updater` (with 351-KRN-0014's grants).
+- On aarch64, the same through the same table; a board without runtime variable services says so.
+
+### Acceptance criteria
+
+In QEMU with OVMF, a program with the grant sets `BootNext` to a second boot entry and the next boot starts that entry once; a program without it is refused.
+
 ## A model disk for `vfs_server`, next to the store's disk
 
 **Recorded by:** the tools track (APP), 2026-10-08, for main task [251](251-model-cache-and-model-disk.md) at the maintainer's request.

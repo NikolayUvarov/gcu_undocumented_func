@@ -6,7 +6,7 @@ Numbered by the storage track from the kernel track's request in `requests-STO.m
 
 ## Problem
 
-Self-update stages a release in slot B of the boot volume ([351-UPD-0006](351-UPD-0006-slots-and-boot-records.md)). MC-9.3 asks that recovery images and the objects they need be protected from ordinary cleanup. The block store has what that needs: objects named by their root, pins that only their owner ends, and collection that never frees what a pin retains ([303-STO-0002](../issues-done/303-STO-0002-pins-and-quotas.done)). But it lives on a RAM disk, so nothing it holds outlives a reset.
+Self-update stages a release in slot B of the boot volume ([351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done)). MC-9.3 asks that recovery images and the objects they need be protected from ordinary cleanup. The block store has what that needs: objects named by their root, pins that only their owner ends, and collection that never frees what a pin retains ([303-STO-0002](../issues-done/303-STO-0002-pins-and-quotas.done)). But it lives on a RAM disk, so nothing it holds outlives a reset.
 
 ## Plan
 

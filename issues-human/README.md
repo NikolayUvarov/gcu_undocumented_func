@@ -39,6 +39,7 @@ The Apple Silicon track `APL` ([TRACKS.md](../TRACKS.md)) needs a person with an
 Main task [211](../issues/211-intel-pc-from-a-sata-ssd.md): the maintainer has a Samsung 860 PRO and an Intel PC. Nothing in the profile has run on a physical x86 machine yet.
 
 - [ ] Write the image to the SSD as 211 says (a USB-SATA enclosure or adapter for now), boot the PC from it on its first SATA port, and send back what task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) asks for: the machine, the firmware settings, a photo of the screen, and the serial output if the board has COM1.
+- [ ] After the first boot works: try Secure Boot with the project's own keys, as [docs/update/secure-boot.md](../docs/update/secure-boot.md) describes (on a machine you can restore: it removes the vendor's keys). Send back the firmware's menus, whether the signed disk boots and the unsigned one is refused, and what had to differ from the steps (task [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md)).
 
 ## 6. The training data behind the English dictation model
 

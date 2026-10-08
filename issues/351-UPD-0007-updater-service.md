@@ -1,6 +1,6 @@
 # 351-UPD-0007 — The `updater` service
 
-**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](351-UPD-0005-release-and-publish.md), [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md), the HTTPS download from `NET` (`requests-NET.md`) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
+**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md), the HTTPS download from `NET` (`requests-NET.md`) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -24,6 +24,10 @@ Something on the device has to turn a published release into a staged, verified 
   - `rollback` writes a record that points at the last confirmed slot.
 - **Sources:** an HTTPS URL, an `ssh://` URL in phase 3, or a directory on a disk (for a USB stick). One verification path serves all three.
 - **Status** is visible to the shell and `sysinfo`: current, staged, trial and last-known-good versions, and the last error.
+- **Images with slots** (moved here from 351-UPD-0006, which left the images in the root layout until a slot can be staged):
+  - `scripts/make_usb_image.py` puts the build in slot A, confirmed, with an empty slot B, as `scripts/boot_slots.py layout` does;
+  - the programs and docs that name `kernel.elf` at the root (`files`, the disk-writing guides) follow.
+- **The slot's manifest** is the release's own. The bootloader checks the slot's kernel and services against it by name ([slots.md](../docs/update/slots.md)), so the updater writes the release's `MANIFEST` and `MANIFEST.SIG` into the slot as published and never signs on the device.
 
 ## Acceptance criteria
 

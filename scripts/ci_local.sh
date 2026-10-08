@@ -72,6 +72,8 @@ X86_GROUPS=(
     "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
     "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
+    "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py"
+    "x86: reproducible build|scripts/reproducible.sh"
 )
 [[ $TAP == 1 ]] && X86_GROUPS+=("x86: network benchmark (tap)|tap_bench")
 A64_GROUPS=(
@@ -89,11 +91,11 @@ host_tests() {
     local t
     rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
     rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint; do
+    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots; do
         rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
     done
     rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1
-    python3 tests/idl_test.py && python3 tests/font_test.py && python3 tests/test_usb_writer.py
+    python3 tests/idl_test.py && python3 tests/font_test.py && python3 tests/test_usb_writer.py && python3 tests/manifest_test.py && python3 tests/release_test.py
 }
 x86_fixtures() {
     local f

@@ -1,6 +1,6 @@
 # 351-ASR-0006 — The update threat model and fuzzing of the metadata parser
 
-**Type:** assurance · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0005](351-UPD-0005-release-and-publish.md) (the formats) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6, MC-11.10, MC-12.2
+**Type:** assurance · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done) (the formats) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6, MC-11.10, MC-12.2
 
 Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
 
