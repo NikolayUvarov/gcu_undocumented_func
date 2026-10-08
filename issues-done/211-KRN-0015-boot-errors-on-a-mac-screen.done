@@ -1,0 +1,38 @@
+# 211-KRN-0015 — Boot errors readable on a Mac's screen — done
+
+**Type:** bootloader · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
+
+## Problem
+
+The bootloader writes `BOOT ERROR` to COM1 and to the UEFI console, and `BOOT PANIC` to COM1 only (`bootloader/src/main.rs`).
+
+- A Mac's firmware keeps its console in graphics mode. Text written to it does not show until a program switches the mode through Apple's console control protocol, as rEFInd and GRUB do.
+- A Mac has no COM1.
+
+So on a Mac every bootloader error and panic looks like a frozen screen. The maintainer saw such a stop while booting the image from a USB disk on a MacBook Pro of 2012–13, with a build from before this task. The reason is unknown.
+
+## Plan
+
+- Before writing a boot error to the console, switch it to text mode through Apple's console control protocol (GUID `f42f7782-012e-4c12-9956-49f94304f721`, `SetMode(EfiConsoleControlScreenText)`), where the firmware has it.
+- A bootloader panic goes to the UEFI console too while boot services run, not only to COM1.
+
+## Acceptance criteria
+
+On firmware with the protocol, a boot error and a bootloader panic switch the console to text before writing to it. Firmware without the protocol behaves as before, and the `boot` suite's error tests still pass.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md), [211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.done) (the kernel's stops on the screen).
+
+## Resolution
+
+- **`bootloader/src/main.rs`.**
+  - `show_text` finds Apple's console control protocol and sets text mode. It opens the protocol with `GET_PROTOCOL`, so no driver loses it.
+  - `fail` calls `show_text` before writing `BOOT ERROR` to the console.
+  - The panic handler writes `BOOT PANIC` to the console too, through the system table kept while boot services run.
+    - It is cleared before `ExitBootServices`.
+    - It is taken only once, so a panic inside the console's own write ends on COM1.
+- **Tests.**
+  - On QEMU (OVMF, AAVMF) the protocol is absent. There the `boot` suite's error tests (a damaged `kernel.elf`, a missing `rtc.elf`) still pass on x86.
+  - The text-mode switch itself has not run on any machine with the protocol. Nothing here is evidence that it works on a Mac. It follows the protocol's published layout, as rEFInd and GRUB use it.
+  - No test makes the bootloader panic.

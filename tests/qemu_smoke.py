@@ -55,11 +55,12 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
         # and line ends came in the middle of lines the guest printed.
+        # `decoy`: a directory served as another FAT disk ahead of the boot disk, on the same bus (211-KRN-0012).
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
@@ -81,6 +82,8 @@ class VM:
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
                    if getattr(args, "disk", None) == "nvme" else ["-drive", source])
+        if decoy:
+            storage = ["-drive", f"format=raw,file=fat:{decoy.replace(',', ',,')}", *storage]
         self.arch = getattr(args, "arch", "x86_64")  # usb_image_smoke.py passes no architecture
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
@@ -5052,6 +5055,26 @@ def boot_suite(args, disk):
         sign_manifest.sign_volume(disk)
     print("PASS: signed boot volume: a changed kernel or service, a changed manifest, another key's signature and no "
           "signature each stop the bootloader before anything is loaded", flush=True)
+    # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
+    # kernel and the services from its own volume.
+    with tempfile.TemporaryDirectory(prefix="smoke-decoy-", dir=ROOT / IMAGE) as decoy:
+        (Path(decoy) / "EFI/APPLE").mkdir(parents=True)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), decoy=Path(decoy).relative_to(ROOT).as_posix())
+        vm.close()
+    print("PASS: bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+    # 211-KRN-0016: two GPUs, the first listed without a linear framebuffer (virtio-gpu): the loader takes the GOP of a
+    # console output that has one. Its progress lines name each step on the console (COM1 here, through the firmware).
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-vga", "none", "-device", "virtio-gpu-pci", "-device", "VGA"])
+    try:
+        log = ANSI.sub("", vm.log).replace("\r", "")
+        for line in (r"MIND CORE BOOT: STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME\n",
+                     r"MIND CORE BOOT: KERNEL AND \d+ SERVICES READ\n", r"MIND CORE BOOT: \d+ GRAPHICS OUTPUTS\n",
+                     r"MIND CORE BOOT: GOP 0: \d+x\d+ STRIDE \d+ BLT ONLY FB 0x0+ CONSOLE\n",
+                     r"MIND CORE BOOT: USING GOP 1: \d+x\d+ STRIDE \d+ BGR FB 0x[0-9A-F]{16}\n", r"MIND CORE BOOT: \d+ CPUS; EXITING BOOT SERVICES\n"):
+            assert re.search(line, log), (line, log[-3000:])
+    finally:
+        vm.close()
+    print("PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console", flush=True)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
@@ -5075,11 +5098,14 @@ def boot_suite(args, disk):
             while not pattern.search(vm.output.replace("\r", "")):
                 assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
                 vm.collect(); time.sleep(.05)
+            # 211-KRN-0013: the boot line and the report are on the screen too, for a machine without a serial port.
+            screen = "\n".join(line.rstrip() for line in screen_text(vm))
+            assert re.search(r"MIND CORE KERNEL: INIT STARTED\n(.*\n)*KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", screen), screen
         finally:
             vm.close()
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
-        print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
+        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
@@ -5088,6 +5114,8 @@ def boot_suite(args, disk):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect("INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)", timeout=60)
+            screen = "\n".join(screen_text(vm))
+            assert "INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)" in screen, screen
         finally:
             vm.close()
         target.write_bytes(kernel)
@@ -5113,6 +5141,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
+    parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
     parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
@@ -5130,6 +5159,13 @@ def main():
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
+    if args.kernel:
+        # A test-only kernel (211-PRT-0002: x2APIC as firmware leaves it) in a copy of the image directory.
+        copy = f"{IMAGE}-kernel"
+        shutil.rmtree(ROOT / copy, ignore_errors=True)
+        shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
+        shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
+        IMAGE = copy
     suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")

@@ -85,6 +85,9 @@ jobs:
             args: --cpu-model max --suites busy,smp
           - name: AVX state, one CPU
             args: --cpu-model max --cpus 1 --suites busy,smp
+          # The local APIC in x2APIC mode, as firmware leaves it on many PCs (211-PRT-0002).
+          - name: x2APIC
+            args: --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})
@@ -105,6 +108,7 @@ jobs:
           done
           (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
           (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
+          (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
       - name: Tap interface for the benchmark (host 10.0.2.2/24; a card on it offers checksum offload)
         if: ${{ matrix.tap }}
         run: |

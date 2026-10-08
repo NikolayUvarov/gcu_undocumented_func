@@ -41,7 +41,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [211-PRT-0002](211-PRT-0002-x2apic.md) | The local APIC in x2APIC mode, as firmware leaves it | `PRT` | P1 | — | track H |
 | [211-PRT-0003](211-PRT-0003-tick-without-the-pit.md) | A tick that does not depend on the 8254 (LAPIC timer) | `PRT` | P2 | — | track H |
 | [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) | The boot volume from the bootloader's own device, named in `BootInfo`; a kernel check of the bootloader's version | `KRN` | P1 | — | track H |
-| [211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.md) | The kernel's boot line and fatal messages on the screen, not only on COM1 | `KRN` | P1 | — | track H |
 | [211-DRV-0002](211-DRV-0002-ahci-every-port.md) | `ahci`: every port with a disk and every controller | `DRV` (open) | P2 | 211-KRN-0012 | track A |
 | [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) | The first run on the maintainer's Intel PC from the 860 PRO, recorded as profile `x86-64/PC-0` | `PRT`, with the maintainer | P1 | the PC (issues-human 5) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the service runs at boot, the `store` and `storefaults` suites pass on x86 and aarch64; rights refusals on the platform remain (`300-STO-0004`) | main task, `STO` | P2 | — | track B |
@@ -246,6 +245,10 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-KRN-0009](../issues-done/171-KRN-0009-sixteen-cpus-at-the-peak.done) | 16 CPUs at the peak: less work under the scheduler lock (`wake_idle` by marks, `select` over the CPU's own tasks, `STAT` in one pass); a 16-CPU clocks check (171) | done (2026-10-08) |
 | [000-KRN-0010](../issues-done/000-KRN-0010-ipc-back-pressure-without-starvation.done) | IPC back-pressure without starvation: senders wait in order, no `ERR_BUSY` for a long queue (ABI 3) | done (2026-10-08) |
 | [000-KRN-0011](../issues-done/000-KRN-0011-clock-calls-without-the-lock.done) | `UPTIME`, `CLOCK` and `RDTSC` without the scheduler lock, answered from the CPU's running mailbox | done (2026-10-08) |
+| [211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done) | The kernel's boot lines and fatal reports on the screen too, not only on COM1 (211) | done (2026-10-08) |
+| [211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done) | Bootloader errors and panics readable on a Mac's screen: Apple's console control set to text mode (211) | done (2026-10-08) |
+| [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done) | The bootloader takes the GOP of a console output (as Linux's `find_gop`), not the first listed; its progress on the text console (211) | done (2026-10-08) |
+| [211-PRT-0005](../issues-done/211-PRT-0005-windows-writer-default-image.done) | The Windows writer finds its default image under `powershell -File` (Windows PowerShell 5.1) (211) | done (2026-10-08) |
 | [172](../issues-done/172-64-bit-handles-and-abi-version.done) | 64-bit capability handles (32-bit generation), the IPC timeout in `arg2`, 16-byte grants, ABI version 2 checked at program start | done (2026-10-07) |
 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) | The block store starts at boot over `ramdisk#1`; the shell's client in slot 25; `REQUEST_BLOCKSTORE` (requested by STO) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |

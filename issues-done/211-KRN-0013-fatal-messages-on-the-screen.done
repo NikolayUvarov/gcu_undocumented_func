@@ -1,0 +1,47 @@
+# 211-KRN-0013 — The kernel's boot line and fatal messages on the screen — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
+
+## Problem
+
+The kernel writes its boot line, `KERNEL PANIC` and `KERNEL EXCEPTION` only to COM1 (`kernel/src/main.rs`; `docs/profile/threat-model.md`). Most PCs have no serial port. A first boot that stops in the kernel — for example on x2APIC (211-PRT-0002) — shows a frozen screen and no reason. The bootloader already prints its own errors on the screen.
+
+## Plan
+
+- A minimal text writer on the GOP framebuffer in the kernel: the built-in font, no scrolling beyond the screen. It is used only:
+  - for the boot line and the steps before `init`;
+  - for a panic or a kernel exception, which overwrites the screen's top lines;
+  - for `INIT EXITED: SYSTEM HALTED`.
+- After `init` starts, the screen belongs to the compositor as today. The kernel writes to it again only on a fatal stop.
+- A test: the boot suite's panic kernel (`--panic-kernel`) shows the panic text on the screen (`screen_text`).
+
+## Acceptance criteria
+
+A kernel panic, in QEMU without a serial console attached, leaves its message readable on the screen. The boot line appears there before `init`. Nothing changes after `init` starts.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-PRT-0002](../issues/211-PRT-0002-x2apic.md).
+
+## Resolution
+
+- **`kernel/src/screen.rs`** takes the bootloader's framebuffer at boot, right after the kernel's page tables, before anything else can stop it.
+  - It clears the screen.
+  - Every boot line (`serial_print`, `PanicSerial`) also goes there in grey, in the 8x16 font of `common/font16.rs`, on the grid `mind::tui` and the tests' screen reader use.
+  - It stops when a task is given the framebuffer (`PLATFORM_FRAMEBUFFER`, the compositor).
+- **A fatal report** (`crate::Fatal`) writes white on dark red: the panic handler, `KERNEL EXCEPTION` and `INIT EXITED`.
+  - It goes below the boot lines while they are on the screen, else from the top, over a task's picture.
+  - The serial lines keep their exact format.
+  - It neither locks nor allocates.
+- **Reach and caches.**
+  - x86 maps a framebuffer above 4 GiB into the identity map, uncached (`mmu::reach_device`).
+  - aarch64 reaches the first TiB.
+  - The written rows are written back from the caches (`cpu::write_back`: `clflush` on x86, `dc cvac` on aarch64), for a framebuffer mapped write-back.
+- **Test:** the `boot` suite's panic kernel and ABI kernel now also read the screen.
+  - The first must show `MIND CORE KERNEL: INIT STARTED` followed by the full panic report.
+  - The second must show `INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)`.
+  - Both pass on x86.
+  - The gate's suites check that nothing changes once the compositor holds the screen.
+- **Not done here.** aarch64 has no panic test kernel; its screen path runs at every aarch64 boot in the gate, but its fatal text is not checked there. Real hardware has not been tried (211-PRT-0004).
+- **Docs:** `docs/profile/threat-model.md`, and the troubleshooting table of `docs/write-disk.md` (EN and RU).
+

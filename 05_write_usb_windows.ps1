@@ -13,11 +13,14 @@ Write the MIND CORE RAW image to a selected USB disk and verify SHA256.
 param(
     [switch]$List,
     [int]$DiskNumber = -1,
-    [string]$Image = (Join-Path $PSScriptRoot 'dist\mind-core-usb.img'),
+    [string]$Image = '',  # default: dist\mind-core-usb.img next to this script
     [switch]$Check
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty in parameter defaults under `powershell -File`: resolved here.
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $Image) { $Image = Join-Path $ScriptDir 'dist\mind-core-usb.img' }
 
 function Assert-UsbTarget($Disk, [long]$ImageSize, [int[]]$ProtectedDisks) {
     if ($Disk.BusType -ne 'USB' -or $Disk.IsBoot -or $Disk.IsSystem) {
@@ -37,7 +40,7 @@ function Get-Identity($Disk) {
 
 function Get-ProtectedDisks([string]$ImagePath) {
     $result = @()
-    foreach ($path in @($ImagePath, $PSScriptRoot)) {
+    foreach ($path in @($ImagePath, $ScriptDir)) {
         $volume = @(Get-Volume -FilePath $path)
         if ($volume.Count -ne 1) { throw "Cannot identify the volume containing $path" }
         $partitions = @($volume | Get-Partition)
@@ -63,7 +66,7 @@ function Invoke-UsbWriter {
     Assert-UsbTarget $disk $item.Length (Get-ProtectedDisks $resolvedImage)
     $identity = Get-Identity $disk
     if (-not ('UsbImageWriter' -as [type])) {
-        Add-Type -Path (Join-Path $PSScriptRoot 'scripts\UsbImageWriter.cs')
+        Add-Type -Path (Join-Path $ScriptDir 'scripts\UsbImageWriter.cs')
     }
     # Keep the source open without write/delete sharing throughout confirmation and I/O.
     $source = [System.IO.File]::Open($resolvedImage, [System.IO.FileMode]::Open,

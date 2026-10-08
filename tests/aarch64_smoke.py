@@ -23,22 +23,24 @@ import sign_manifest  # noqa: E402
 CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined": 0x00}
 
 
-def boot(args, disk, until, timeout=90):
+def boot(args, disk, until, timeout=90, decoy=None):
     """Boots QEMU on `disk` and returns the console output once `until` appears (or the timeout passes). AAVMF under
-    TCG now and then stalls before it loads the bootloader; a boot that shows no kernel line is tried once more."""
-    output = boot_once(args, disk, until, timeout)
+    TCG now and then stalls before it loads the bootloader; a boot that shows no kernel line is tried once more.
+    `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012)."""
+    output = boot_once(args, disk, until, timeout, decoy)
     if "MIND CORE KERNEL" not in output and "BdsDxe: starting" not in output:
         print("NOTE: the firmware stalled before loading the bootloader; booting again", flush=True)
-        output = boot_once(args, disk, until, timeout)
+        output = boot_once(args, disk, until, timeout, decoy)
     return output
 
 
-def boot_once(args, disk, until, timeout):
+def boot_once(args, disk, until, timeout, decoy=None):
     variables = Path(tempfile.mkdtemp()) / "vars.fd"
     shutil.copyfile(args.vars, variables)
     process = subprocess.Popen(
         [args.qemu, "-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512", "-nographic", "-no-reboot",
          "-drive", f"if=pflash,format=raw,readonly=on,file={args.code}", "-drive", f"if=pflash,format=raw,file={variables}",
+         *(["-drive", f"format=raw,file=fat:{decoy},readonly=on"] if decoy else []),
          "-drive", f"format=raw,file=fat:rw:{disk}", "-device", "ramfb", "-nic", "none"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     output, deadline = b"", time.monotonic() + timeout
@@ -83,7 +85,8 @@ def main():
 
     output = boot(args, disk_with(), "[INIT] READY")
     log.write_text(output)
-    for line in ("MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
+    for line in ("MIND CORE BOOT: USING GOP ", "MIND CORE BOOT: 1 CPUS; EXITING BOOT SERVICES",  # 211-KRN-0016
+                 "MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
                  "[INIT] STARTED keystore", "[INIT] STARTED sysmon", "[INIT] READY", "[SYSMON] READY",
                  # 300-KRN-0001: the block store over its own RAM disk.
                  "[INIT] STARTED ramdisk#1", "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"):
@@ -93,6 +96,17 @@ def main():
     assert not re.search(r"^\[INIT\] STARTED \[", output, re.M), output
     entropy = "[KEYSTORE] DEVICE KEY READY" in output
     print(f"PASS: aarch64 boot to [INIT] READY on the PL011 console; logd, loader, keystore ({'device key from RNDR' if entropy else 'no RNDR'}) and sysmon run", flush=True)
+
+    # 211-KRN-0012: the firmware lists another disk's EFI partition first; the loader reads its own volume.
+    decoy = Path(tempfile.mkdtemp()) / "decoy"
+    atexit.register(shutil.rmtree, decoy.parent, True)
+    (decoy / "EFI/APPLE").mkdir(parents=True)
+    output = boot(args, disk_with(), "[INIT] READY", decoy=decoy)
+    with log.open("a") as file:
+        file.write(f"\n=== decoy disk first\n{output}")
+    require(output, "[INIT] READY")
+    assert "BOOT ERROR" not in output, output[-3000:]
+    print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
 
     for case, code in CASES.items():
         output = boot(args, disk_with(case), "QUARANTINED", timeout=120)

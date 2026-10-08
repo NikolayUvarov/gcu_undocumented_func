@@ -96,6 +96,9 @@ unsafe fn clean(start: usize, len: usize) {
     asm!("dsb sy");
 }
 
+/// Writes the cache lines of [start, start + len) back to memory: the kernel's text on a write-back framebuffer.
+pub unsafe fn write_back(start: usize, len: usize) { clean(start, len) }
+
 /// Starts the other CPUs through PSCI CPU_ON and waits until each is online (a second at most each).
 pub unsafe fn start(_info: &BootInfo) {
     let (mair, tcr, sctlr): (u64, u64, u64);

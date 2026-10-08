@@ -134,6 +134,22 @@ pub unsafe fn activate(root: usize) {
     asm!("mov cr3, {}", in(reg) root);
 }
 
+/// Makes [start, start + len) reachable through the kernel's identity map for its own writes (the framebuffer of
+/// 211-KRN-0013): below 4 GiB it is; above, the 2 MiB pages not mapped yet are added, uncached. False beyond RAM_END.
+pub unsafe fn reach_device(start: usize, len: usize) -> bool {
+    let (start, end) = (start as u64, (start + len) as u64);
+    if end <= IDENTITY_END { return true; }
+    if end > RAM_END { return false; }
+    let pdpt = KERNEL_PDPT.load(Ordering::Acquire) as *mut u64;
+    for large in ((start.max(IDENTITY_END) & !(LARGE - 1))..end).step_by(LARGE as usize) {
+        let slot = pdpt.add((large >> 30) as usize);
+        if slot.read() & VALID == 0 { let Ok(pd) = Region::new(PAGE, PAGE) else { return false }; slot.write(pd.ptr() as u64 | 3); core::mem::forget(pd); }
+        let entry = ((slot.read() & !0xFFF) as *mut u64).add((large >> 21 & 511) as usize);
+        if entry.read() & VALID == 0 { entry.write(large | 0x83 | UNCACHED); }
+    }
+    true
+}
+
 /// Makes the kernel's identity mapping of the 2 MiB page holding `physical` (below 4 GiB) uncached, for device
 /// registers the kernel itself writes (MSI-X tables). The caller checks that the page holds no RAM.
 pub unsafe fn uncached(physical: usize) {

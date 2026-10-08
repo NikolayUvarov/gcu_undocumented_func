@@ -1,0 +1,57 @@
+# 211-KRN-0016 — The screen's GOP, and the bootloader's progress on the console — done
+
+**Type:** bootloader · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
+
+## Problem
+
+The maintainer booted a build of `baea426` merged with `main` on a MacBook Pro Retina 15" (A1398, 2012–13, two GPUs). After "EFI Boot" was chosen, the screen froze on the firmware's spinner, with no `BOOT ERROR` text and no kernel lines.
+
+- **The display.** `select_display` took the first GOP handle the firmware lists (`bootloader/src/main.rs:52`). With several GOPs that one may not be the panel's:
+  - with two GPUs;
+  - the console splitter's own GOP;
+  - a GPU with no linear framebuffer.
+  The kernel then draws where nothing is shown, and the firmware's last picture stays.
+- **No progress.** The bootloader printed nothing on success. A machine without COM1 shows nothing until the kernel draws, so a stop anywhere looks the same.
+
+## Plan
+
+1. Choose the GOP as Linux's EFI stub does (`find_gop`):
+   - the first one whose handle carries the console output mark (`gEfiConsoleOutDeviceGuid`) and has a linear framebuffer;
+   - else the first with a linear framebuffer;
+   - else the first.
+2. Print the bootloader's progress on the text console (after `show_text`, 211-KRN-0015) before `ExitBootServices`:
+   - the files read;
+   - the number of GOP handles, and each one's mode and framebuffer;
+   - the chosen one;
+   - "exiting boot services".
+
+## Acceptance criteria
+
+With two GPUs where the first one listed has no linear framebuffer, the system boots on the one with a framebuffer. The progress lines appear on the console in that boot, on x86 and aarch64.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-KRN-0015](211-KRN-0015-boot-errors-on-a-mac-screen.done), [211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.done), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md).
+
+## Resolution
+
+- **`bootloader/src/main.rs`, `select_display`.**
+  - It lists every GOP handle (`locate_handle_buffer`) and tests each for `gEfiConsoleOutDeviceGuid`. It takes the first console output with a linear framebuffer at a non-zero address, else the first with one, else the first. The mode is then chosen as before.
+  - GOPs are opened with `GET_PROTOCOL`, not exclusively, so the firmware's console stays on the screen for the progress lines.
+  - A BltOnly mode's framebuffer is not read. uefi-rs panics on that read.
+- **Measured.** With two physical GOPs, OVMF's console splitter GOP is BltOnly. The first version of this change hit that panic. The panic was readable on the console through 211-KRN-0015, and it is fixed here.
+- **Progress** (`say`, on the UEFI console, after `show_text`):
+  - `MIND CORE BOOT: STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME`;
+  - `KERNEL AND n SERVICES READ`;
+  - `n GRAPHICS OUTPUTS`;
+  - one `GOP i: WxH STRIDE s FORMAT FB 0x… [CONSOLE]` line per handle;
+  - `USING GOP i: …`;
+  - `n CPUS; EXITING BOOT SERVICES`.
+  The kernel clears the screen when it takes it.
+- **Tests.**
+  - The `boot` suite boots with `-vga none -device virtio-gpu-pci -device VGA`. The first GOP is virtio-gpu's (BltOnly, a console output). It checks every progress line and that GOP 1 (the VGA) is used.
+    - The bootloader before this change stops there with `BOOT ERROR: display: no mode with a linear framebuffer (BltOnly)`.
+  - `tests/aarch64_smoke.py` checks the `USING GOP` and `EXITING BOOT SERVICES` lines.
+  - The `display` suite, the rest of `boot` and the USB image boot pass.
+- **Not shown here.** Neither change has run on a Mac.
+  - Whether Apple's firmware marks the panel's GOP as a console output is unknown. If it does not, the bootloader takes the first GOP with a framebuffer, as before. The `GOP` lines on the screen then show what the firmware offers.

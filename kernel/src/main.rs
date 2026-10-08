@@ -40,6 +40,7 @@ mod memory;
 mod paging;
 mod pci;
 mod scheduler;
+mod screen;
 mod task_state;
 mod user_heap;
 
@@ -74,8 +75,10 @@ pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) 
     0
 }
 
-// Boot line and kernel diagnostics go to COM1; the command shell is a ring 3 service started by init.
-fn serial_print(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); } } }
+// Boot line and kernel diagnostics go to COM1, and to the screen until a task takes it (211-KRN-0013); the command
+// shell is a ring 3 service started by init.
+fn serial_only(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); } } }
+fn serial_print(text: &str) { serial_only(text); screen::print(text); }
 
 #[no_mangle]
 #[link_section = ".text._start"]
@@ -87,6 +90,8 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
+        // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
+        screen::init(info);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");
@@ -104,10 +109,17 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
     }
 }
 
-// Serial output without locks or allocation: the panic may come from the allocator or inside the scheduler lock.
+// Serial output without locks or allocation, also on the screen until a task takes it.
 pub struct PanicSerial;
 impl core::fmt::Write for PanicSerial {
     fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_print(text); Ok(()) }
+}
+// A fatal report, on COM1 and from the top of the screen: the panic may come from the allocator or inside the
+// scheduler lock, so neither locks nor allocates.
+pub struct Fatal;
+impl Fatal { pub fn begin() -> Self { screen::begin_fatal(); Fatal } }
+impl core::fmt::Write for Fatal {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result { serial_only(text); screen::fatal(text); Ok(()) }
 }
 
 static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -121,7 +133,7 @@ fn panic(info: &PanicInfo) -> ! {
     // Other CPUs stop first, so their output does not interleave with the report.
     cpu::stop_others();
     let cpu = cpu::id();
-    let mut out = PanicSerial;
+    let mut out = Fatal::begin();
     let _ = write!(out, "\nKERNEL PANIC: {}", info.message());
     if let Some(location) = info.location() { let _ = write!(out, " at {}:{}:{}", location.file(), location.line(), location.column()); }
     let _ = write!(out, " CPU={}", cpu);

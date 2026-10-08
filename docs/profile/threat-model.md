@@ -37,6 +37,6 @@
 | Service dies | Its clients get `ERR_PEER`; new sends to its endpoint fail with `ERR_PEER`. It is restarted only by an explicit `RUN <service> &` (no automatic supervision). |
 | Driver hangs | Not detected (no watchdog, no supervision). |
 | Device misbehaves (DMA) | Not contained. |
-| Kernel exception or panic | The system halts with a message on COM1. |
+| Kernel exception or panic | The system halts with a message on COM1 and on the screen, white on dark red, below the kernel's boot lines or over a task's picture (211-KRN-0013). |
 | Loss of the disk | Programs can no longer be loaded; running tasks continue. |
 | Power loss or reset while files change | `vfs_server` keeps changed sectors in a write-back cache until a flush (`flush`, `sync`, the shell's file commands); everything since the last flush may be lost. A change is written as file data, then every FAT copy, then the directory entry, but the cache writes sectors in LBA order (the FAT before data), so a loss during a flush can leave: allocated clusters not yet in an entry (lost space), an entry with a size longer than its written data (stale bytes), or, after a move, the entry in both directories (a cross-link that `fsck` repairs). There is no journal and no atomicity beyond FAT itself; the dirty bit in FAT[1] (FAT16/32) marks a volume changed since the last flush, so a check knows to look. The RAM disk is lost at every reset by design. |
