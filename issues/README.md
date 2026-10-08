@@ -45,14 +45,16 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) | The first run on the maintainer's Intel PC from the 860 PRO, recorded as profile `x86-64/PC-0` | `PRT`, with the maintainer | P1 | the PC (issues-human 5) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the service runs at boot, the `store` and `storefaults` suites pass on x86 and aarch64; rights refusals on the platform remain (`300-STO-0004`) | main task, `STO` | P2 | — | track B |
 | [300-STO-0004](300-STO-0004-rights-by-badge.md) | Rights to the block store by badge: `BADGE_GET` reads, `BADGE_PUT` stores, `BADGE_PUBLISH` publishes, refusals logged; host-tested, the platform check waits for a client with fewer rights | `STO` | P2 | [requests-KRN.md](requests-KRN.md) | track B |
-| [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` (open) | P2 | — | track C |
-| [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` (open) | P1 | 350 | track C |
-| [351-UPD-0005](351-UPD-0005-release-and-publish.md) | Release bundle, server layout, `publish_release.py` over SSH | `UPD` (open) | P1 | 350-UPD-0002 | track C |
-| [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) | Slots A and B, two boot records, a trial try and the fallback in the bootloader | `UPD` (open), with `PRT`/`KRN` | P1 | 211-KRN-0012 | track C |
-| [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` (open) | P1 | 0005, 0006, 0008, 351-KRN-0014, NET | track C |
-| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` (open) | P1 | 351-UPD-0006 | track C |
-| [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` (open) | P2 | 351-UPD-0007 | track C |
-| [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD` (open), with `PRT` | P3 | 351-UPD-0006 | track C |
+| [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step) | main task, `UPD` | P2 | — | track C |
+| [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
+| [351-UPD-0005](351-UPD-0005-release-and-publish.md) | Release bundle, server layout, `publish_release.py` over SSH | `UPD` | P1 | 350-UPD-0002 | track C |
+| [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) | Slots A and B, two boot records, a trial try and the fallback in the bootloader | `UPD`, with `PRT`/`KRN` | P1 | 211-KRN-0012 | track C |
+| [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` | P1 | 0005, 0006, 0008, 351-KRN-0014, NET | track C |
+| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` | P1 | 351-UPD-0006 | track C |
+| [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` | P2 | 351-UPD-0007 | track C |
+| [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD`, with `PRT` | P3 | 351-UPD-0006 | track C |
+| [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | A version floor in a TPM 2.0 counter, kept by the bootloader (rollback with the disk in hand) | `UPD`, with `PRT` | P2 | 351-UPD-0009, 0012 | track C |
+| [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked | `UPD`, with `PRT` | P2 | 350-UPD-0003 | track C |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable medium for the store (track A); 351-UPD-0007 | track B, C |
 | [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | Trial boot: the flag in `BootInfo`, confirmation by `init`, a restart deadline, the updater's grants | `KRN` | P1 | 351-UPD-0006, 211-KRN-0012 | track C |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0006, 351-KRN-0014 | Assurance |

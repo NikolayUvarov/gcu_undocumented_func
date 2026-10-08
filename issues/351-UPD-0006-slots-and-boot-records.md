@@ -1,8 +1,8 @@
 # 351-UPD-0006 — Slots A and B, two boot records, a trial try and the fallback
 
-**Type:** update (bootloader) · **Owner:** `UPD` track (open), with `PRT` and `KRN` for `bootloader/` · **Priority:** P1 · **Status:** open · **Blocked by:** [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (the bootloader reads its own volume) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.1, MC-9.3
+**Type:** update (bootloader) · **Owner:** `UPD` track, with `PRT` and `KRN` for `bootloader/` · **Priority:** P1 · **Status:** open · **Blocked by:** [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (the bootloader reads its own volume) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.1, MC-9.3
 
-Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
 ## Problem
 

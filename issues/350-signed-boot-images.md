@@ -1,6 +1,6 @@
 # 350 — Signed boot images and a launch record (track C, first step)
 
-**Type:** main task · **Owner:** `UPD` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track C "Signed manifests and launch records; reproducible toolchain" · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-3.11
+**Type:** main task · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track C "Signed manifests and launch records; reproducible toolchain" · **Constitution:** MC-9.1, MC-9.2, MC-9.5, MC-9.7, MC-3.11
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # 351 — Self-update: fetch over HTTPS or SSH, verify, stage in a slot, activate with last-known-good
 
-**Type:** main task · **Owner:** `UPD` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [350](350-signed-boot-images.md) (manifest and signature checks) for the signed parts · **Roadmap:** track C (A/B activation with last-known-good, key roles), track D (transports) · **Constitution:** MC-8.5, MC-9.1–9.6, MC-9.9, MC-3.11, MC-11.9; Appendix B.5
+**Type:** main task · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [350](350-signed-boot-images.md) (manifest and signature checks) for the signed parts · **Roadmap:** track C (A/B activation with last-known-good, key roles), track D (transports) · **Constitution:** MC-8.5, MC-9.1–9.6, MC-9.9, MC-3.11, MC-11.9; Appendix B.5
 
 Asked by the maintainer (2026-10-08): build the kernel and the tools, publish them on a server, have the system fetch them over SSH and HTTPS, and update itself.
 
@@ -30,7 +30,7 @@ Nothing of it exists (survey of 2026-10-08):
   - **Boot records.** The choice is in two boot records, `\MIND\BOOT0` and `\MIND\BOOT1`, each with a sequence number, the slot, the tries left and a CRC. The writer overwrites the older one, so a power cut leaves the other valid. This works without an atomic rename.
   - **Trial and confirmation.** The new slot boots on trial with one try. `init` confirms it after `[INIT] READY` and a health check. Without a confirmation before a deadline the system restarts, and the bootloader takes the last-known-good slot (MC-9.3).
   - **The activation point is a reboot.** Updating services while they run (MC-9.9) is out of scope and stated so.
-- **Rollback (MC-9.4).** The device refuses a release older than the minimum it has seen, and channel metadata past its expiry. Without hardware that can hold a counter against someone with the disk (TPM, authenticated UEFI variables), this protects against the network, not against physical access. The profile says so.
+- **Rollback (MC-9.4).** The device refuses a release older than the minimum it has seen, and channel metadata past its expiry. Without hardware that can hold a counter against someone with the disk (TPM, authenticated UEFI variables), this protects against the network, not against physical access. The profile says so. The way past that limit is a TPM counter for the floor (351-UPD-0011) together with Secure Boot under our own keys (351-UPD-0012): each is useless without the other.
 - **Keys (MC-9.6).**
   - roots, which sign key changes, held offline;
   - the release key;
@@ -72,6 +72,8 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | `UPD` | Minimum version, expiry, key roles, rotation and revocation, the compromise protocol (MC-9.4, 9.6) |
+| [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | `UPD` with `PRT` | A version floor in a TPM 2.0 counter, read and raised by the bootloader through UEFI's TCG2 protocol: rollback stopped also for someone with the disk |
+| [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | `UPD` with `PRT` | Secure Boot with our own keys and old bootloaders revoked, so the floor cannot be bypassed by booting other code |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure (two UEFI boot entries, `BootNext`) |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | `ASR` (open) | The update threat model (rollback, freeze, mix-and-match, endless data, slow retrieval) and fuzzing of the metadata parser |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md): staging and pins | `STO` | Once the block store has a durable medium: releases staged as objects, with the last-known-good pinned against collection (MC-9.3) |
