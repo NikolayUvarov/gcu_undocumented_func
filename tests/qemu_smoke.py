@@ -5037,6 +5037,34 @@ def display_suite(args, disk):
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
 
 
+def store_disk_check(args, disk):
+    """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
+    and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
+        blank = Path(temp) / "store.img"
+        with blank.open("wb") as f:
+            f.truncate(32 << 20)
+        extra = ("-drive", f"format=raw,file={blank},if=none,id=store", "-device", "virtio-blk-pci,drive=store")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+        try:
+            require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
+            assert "FROM VIRTIO" not in vm.command("dmesg -s vfs_server", raw=True)
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.output
+            require(vm.command("blocks stat", raw=True), "SECTORS=")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+            require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (THE STORE'S)")
+            stat = vm.command("blocks stat", raw=True)
+            assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
+            require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            vm.close()
+    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+
+
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
@@ -5238,6 +5266,7 @@ def boot_suite(args, disk):
         print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
     if args.trial_kernel:
         trial_check(args, disk)
+    store_disk_check(args, disk)
 
 
 def main():

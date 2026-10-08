@@ -111,12 +111,13 @@ def main():
         file.write(f"\n=== decoy disk first\n{output}")
     require(output, "[INIT] READY")
     assert "BOOT ERROR" not in output, output[-3000:]
-    # virtio_blk drives the first VirtIO disk only, the decoy here: vfs_server mounts no other volume as the boot volume.
+    # Each VirtIO disk has its virtio_blk instance (211-DRV-0009): vfs_server gets both and mounts the boot volume,
+    # the second disk, holding the manifest the bootloader verified (211-KRN-0012).
     require(output, "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
-    require(output, "[VFS] THE BOOT VOLUME (MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63) IS ON NO BLOCK DEVICE: NONE MOUNTED")
-    assert "[VFS] MOUNTED FAT16 FROM VIRTIO" not in output, output[-3000:]
+    require(output, "[VFS] MOUNTED FAT16 FROM VIRTIO AT LBA 63")
+    require(output, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
     print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first; "
-          "vfs_server does not mount the other disk as the boot volume", flush=True)
+          "vfs_server mounts that volume from the second VirtIO disk", flush=True)
 
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     slots = Path(tempfile.mkdtemp(prefix="mind-slots-"))

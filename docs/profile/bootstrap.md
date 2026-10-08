@@ -24,7 +24,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `usb_storage` | server endpoint, a client of `usb_host` badged for mass storage interfaces (only when `usb_host` runs) |
 | `usb_hid` | server endpoint (the keyboard service), a client of `usb_host` badged for HID interfaces, input privilege (only when `usb_host` runs) |
 | `ramdisk`, `ramdisk#1` | server endpoint (each instance its own 8 MiB disk; `ramdisk#1` is the block store's, 300-KRN-0001) |
-| `blockstore` | server endpoint; a write-badged client of `ramdisk#1` in slot 2 |
+| `blockstore` | server endpoint; a write-badged client in slot 2 of its own disk, a VirtIO disk that is blank or holds its superblock (which `vfs_server` never gets, 300-KRN-0025), else of `ramdisk#1` |
 | `vfs_server` | server endpoint, write-badged client endpoints of the running block drivers and of `ramdisk`, an `rtc` client (slot 6), `logd` with the read badge (slot 12: it saves each boot's system log on the log partition, 211-KRN-0019) |
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
 | `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |

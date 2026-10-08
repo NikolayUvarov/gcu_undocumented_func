@@ -78,7 +78,7 @@ struct Plan { grants: Grants, flags: usize, quota: Quota }
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16 }
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -114,6 +114,26 @@ impl Init {
     // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
     // slot of its own for it (only badged clients are minted and kept).
     fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    // The block store's own disk (300-KRN-0025): a VirtIO disk that is blank or starts with the store's superblock;
+    // looked at once, through a client of init's own, before vfs_server or the store gets any disk.
+    fn store_disk(&mut self) -> Option<&'static str> {
+        if let Some(found) = self.store { return found; }
+        let mut found = None;
+        for name in ["virtio_blk", "virtio_blk#1"] {
+            if !self.running(service_index(name)) { continue; }
+            let Ok(keeper) = self.keeper(name) else { continue };
+            let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { continue };
+            let first = mind::block::Device::open(Endpoint(client)).ok().and_then(|mut disk| disk.read(0, 1).ok().map(|s| (s.iter().all(|&b| b == 0), s.starts_with(b"MIND-STO"))));
+            let _ = ipc::drop_cap(client);
+            if let Some((blank, store)) = first.filter(|&(blank, store)| blank || store) {
+                mind::println!("[INIT] THE BLOCK STORE'S DISK: {} ({})", name, if blank { "BLANK" } else if store { "THE STORE'S" } else { "?" });
+                found = Some(name);
+                break;
+            }
+        }
+        self.store = Some(found);
+        found
+    }
     // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
     fn boot_volume_mounted(&mut self) -> bool {
         let Ok(keeper) = self.keeper("vfs_server") else { return false };
@@ -226,9 +246,14 @@ impl Init {
                 if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
             }
             "virtio_blk" => {
-                // The first VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001): its BAR with the
-                // modern structures and a DMA region; requests are polled, so no interrupt line.
-                let device = [0x1042_1AF4, 0x1001_1AF4].iter().find_map(|&id| platform::find_device_id(0, 0, id, 0).ok()).ok_or(Error::NotFound)?;
+                // The instance's VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001), in PCI order:
+                // instance n drives the n-th; its BAR with the modern structures and a DMA region; requests are polled.
+                let mut disks: [usize; 8] = [usize::MAX; 8]; let mut found = 0;
+                for id in [0x1042_1AF4, 0x1001_1AF4] {
+                    for nth in 0.. { match platform::find_device_id(0, 0, id, nth) { Ok(device) if found < disks.len() => { disks[found] = device; found += 1; } _ => break } }
+                }
+                disks[..found].sort_unstable();
+                let device = *disks[..found].get(instance).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
                 let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
@@ -246,14 +271,17 @@ impl Init {
             // The block store over a RAM disk of its own: its only block client (block::serve has one buffer for all).
             "blockstore" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL);
-                if !self.running(service_index("ramdisk#1")) { return Err(Error::NotFound); }
-                grants.add(SLOT_DEV0, self.badged(&mut minted, "ramdisk#1", mind::block::BADGE_WRITE)?, CLIENT);
+                // Its own disk when there is one, else the RAM disk whose contents never outlive the boot (300-KRN-0025).
+                let disk = match self.store_disk() { Some(disk) => disk, None if self.running(service_index("ramdisk#1")) => "ramdisk#1", None => return Err(Error::NotFound) };
+                grants.add(SLOT_DEV0, self.badged(&mut minted, disk, mind::block::BADGE_WRITE)?, CLIENT);
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
-                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "nvme"] {
+                let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
+                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "nvme"] {
+                    if Some(driver) == store { continue; }
                     if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
@@ -536,7 +564,7 @@ fn bare_metal() -> bool {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib };
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));

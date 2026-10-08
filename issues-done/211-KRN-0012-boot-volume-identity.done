@@ -55,7 +55,7 @@ Done on 2026-10-08, with ABI 4 shared with [351-KRN-0014](351-KRN-0014-trial-boo
 - **Tests** (`boot` suite, x86):
   - a decoy FAT disk on IDE (`ata`, the first block driver) ahead of the boot disk on AHCI: `vfs_server` mounts the AHCI volume and `ls` lists its files;
   - a kernel built with `loader-abi-test` stops with the message.
-- **On aarch64** (`tests/aarch64_smoke.py`), the decoy is the first VirtIO disk, the only one `virtio_blk` drives: `vfs_server` mounts no volume and says so. Reading the programs from the boot disk there needs `virtio_blk` to drive every VirtIO disk: [211-DRV-0009](../issues/211-DRV-0009-virtio-blk-every-disk.md).
+- **On aarch64** (`tests/aarch64_smoke.py`), the decoy is the first VirtIO disk, the only one `virtio_blk` drives: `vfs_server` mounts no volume and says so. Since then `virtio_blk#1` drives the second disk and the boot volume is mounted there: [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
 - `docs/api`, the profile and its evidence say what is now provided.
 
 ## Related
