@@ -4171,9 +4171,12 @@ def net_suite(args, disk):
     threading.Thread(target=web.serve_forever, daemon=True).start()
     dns = _dns_server()
     web_port, dns_port = web.server_address[1], dns.getsockname()[1]
-    # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing.
-    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n")
+    # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing;
+    # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
+    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
+                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n")
     shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
+    shutil.copyfile(disk / "netcheck.elf", disk / "named.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -4222,6 +4225,12 @@ def net_suite(args, disk):
             time.sleep(.25)
         assert ended, vm.command(f"logs {holder}")
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] REVOKED 2 OF netcheck: 1 COPIES REMOVED, 1 SOCKETS CLOSED")
+        # Names in the policy (351-NET-0003): the address a name resolved to when the grant was made, and nothing else.
+        checks = vm.command(f"named tcp:10.0.2.2:{web_port} tcp:10.0.2.3:{web_port}")
+        require(checks, f"NETCHECK tcp:10.0.2.2:{web_port} OK"); require(checks, f"NETCHECK tcp:10.0.2.3:{web_port} Denied")
+        log = vm.command("dmesg -s netpolicy")
+        for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
+            require(log, line)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -4346,7 +4355,7 @@ def net_suite(args, disk):
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
-          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), two cards on two networks "
+          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)

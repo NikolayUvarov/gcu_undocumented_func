@@ -1,0 +1,43 @@
+# 351-NET-0003 — Names in the network policy — done
+
+**Type:** network (policy broker) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6
+
+Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (the kernel track, for 351), by the storage session working the network track at the maintainer's request (2026-10-08).
+
+## Problem
+
+A line of `netpolicy.txt` names an IPv4 address. An update server is known by its name, and its address may change.
+
+## Plan
+
+- A line may name a host: `updater updates.example.org tcp 443`. The broker resolves it when it makes the grant, through the stack's resolver, and registers the addresses it got. The log line of the grant names both.
+- A name that does not resolve gives no rule; a grant with no rule is refused, as today.
+- The grant's addresses do not follow later changes of the name: a new grant resolves again.
+- Tests: a name the test DNS server resolves, one it does not, and the stack refusing an address the name did not give.
+
+## Acceptance criteria
+
+In QEMU, a program whose policy names a host reaches the address the name resolved to when the grant was made, and nothing else.
+
+## Related
+
+[351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), issue 102.
+
+## Resolution
+
+Done on 2026-10-08 by the storage session working the network track at the maintainer's request.
+
+- **`netpolicy`:**
+  - A line's address may be a host name.
+  - The broker looks it up when it makes the grant, at the file's `resolver A.B.C.D[:PORT]` line, or else at the stack's DNS server. It registers the address it got and logs `<program>: <name> IS <address>`.
+  - A name that does not resolve gives no rule and is logged (`NOT RESOLVED (<error>)`).
+  - The grant keeps the address; a new grant looks the name up again.
+- **`netstack`** lets the policy badge `resolve` as well as read the configuration. `idl/socket.wit` goes to 2.3.0 (a minor version: only the major travels on the wire), and its bindings are regenerated.
+- **Tests:** in the `net` suite (`named`, a copy of `netcheck`), on x86 and aarch64:
+  - `www.mind.test`, resolved by the test DNS server, gives the rule, and its address is reached;
+  - another address is refused;
+  - `missing.example` gives none;
+  - both are logged.
+- **Docs:** the profile's MC-11.6 row (names done; the answers are plain DNS and not authenticated), evidence rows for x86 and aarch64, the README's `netpolicy` row, the IDL table, and [docs/network/downloads.md](../docs/network/downloads.md).
+
+**Changed from the plan:** each name gives one address (the stack's resolver returns one).

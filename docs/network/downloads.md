@@ -48,6 +48,8 @@ download FILE URL [--sha256 HEX] [--tries N]
   download 10.0.2.2 tcp 8443 3600 67108864   # the release server: an hour, up to 64 MiB
   ```
 
+  The address may be a host name (`download updates.example.org tcp 443`). The broker looks it up when it makes the grant, at the file's `resolver` line or else the stack's DNS server, and the grant keeps that address (351-NET-0003).
+
 Plain HTTP gives neither confidentiality nor authenticity. For a release, authenticity comes from its signature, which the updater checks (351-UPD-0005, 0007), not from the transport. `download` refuses `https://`: no launcher lends a program a TLS client yet. That needs a request flag, which is a kernel task (`issues/requests-KRN.md`), and the shell's lending of its client (`issues/requests-APP.md`). It is 351-NET-0002.
 
 ## Tested
@@ -65,7 +67,6 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
 ## Not provided yet
 
 - **HTTPS**, and trust for the update server: roots shipped with the release, or the server's key pinned (351-NET-0002).
-- **Names in the network policy**, resolved when the grant is made (351-NET-0003). Today a policy line names an IPv4 address.
 - **Chunked bodies, redirects, keep-alive, several connections at once, IPv6.**
 - **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.
 - **A parser with less authority than its program.** The head is parsed in the downloading program, which holds the grant and the file. Track D plans session parsers with minimal authority (Appendix B.6).

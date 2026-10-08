@@ -596,7 +596,8 @@ fn main(_info: &'static BootInfo) {
         let dns = stack.dns();
         let allowed = match policy::access(badge) {
             Access::Operator => Ok(()),
-            Access::Policy => if matches!(decoded, socket::Request::Config) { Ok(()) } else { Err(Error::Denied) }, // the broker reads the DNS server
+            // The broker reads the DNS server and looks up the host names of the policy (socket.wit 2.3).
+            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. }) { Ok(()) } else { Err(Error::Denied) },
             Access::Grant(_) if matches!(decoded, socket::Request::Interfaces) => Ok(()),
             Access::Grant(_) if matches!(decoded, socket::Request::Offload { .. }) => Err(Error::Denied),
             Access::Nothing => Err(Error::Denied),
