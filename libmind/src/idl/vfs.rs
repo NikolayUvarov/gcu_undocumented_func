@@ -3,8 +3,8 @@
 //! to a directory handle and cannot leave it (`..` is refused). A handle belongs to the client that opened it (PID and
 //! endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 //! from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
-//! the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files are never writable. Major version 2: directory
-//! handles change the meaning of `open` and `list` of 1.0.
+//! the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files and the model disk `models` are never writable. Major
+//! version 2: directory handles change the meaning of `open` and `list` of 1.0.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -41,7 +41,7 @@ impl Wire for Entry {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, size: Wire::decode(r)?, modified: Wire::decode(r)?, attributes: Wire::decode(r)?, directory: Wire::decode(r)? }) }
 }
 
-/// A mounted volume: its name (empty for the boot disk, `ram`), FAT label and type, size and free space.
+/// A mounted volume: its name (empty for the boot disk, `ram`, `models`), FAT label and type, size and free space.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Volume { pub name: Text<16>, pub label: Text<11>, pub fat_bits: u8, pub bytes: u64, pub free: u64, pub cluster: u32, pub writable: bool }
 impl Wire for Volume {

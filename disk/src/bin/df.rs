@@ -10,8 +10,9 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("df — the volumes: FAT type, cluster size, size, used and free space (KiB).\nUsage: df");
     mind::println!("VOLUME  LABEL        TYPE   CLUSTER    SIZE KB    USED KB    FREE KB  USE");
-    for (name, shown) in [("", "A:"), ("ram", "ram:")] {
+    for (name, shown) in [("", "A:"), ("ram", "ram:"), ("models", "models:")] {
         match mind::fs::volume(name) {
+            Err(mind::fs::Error::NotFound) if name == "models" => {} // no model disk (251)
             Ok(v) => {
                 let used = v.bytes - v.free.min(v.bytes);
                 let percent = if v.bytes == 0 { 0 } else { (used * 100).div_ceil(v.bytes) };
