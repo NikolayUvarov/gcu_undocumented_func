@@ -104,6 +104,13 @@ The gate is one of the following:
 
 The maintainer or the owning track reviews and merges it.
 
+**`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. The maintainer builds it and tries a fix on a real machine at once, without waiting for the tests.
+
+- An agent of the maintainer pushes a commit there as soon as it builds, before running its tests: it merges its branch into `fast-test`, or fast-forwards it. Never force-push it.
+- When `main` moves, it is merged into `fast-test`.
+- Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the gate.
+- A build from `fast-test` is not evidence of anything (section 1) until its commits pass the gate.
+
 **A maintainer's machine can run the gate continuously.** `scripts/ci_watch.sh` fetches `origin` every 10 minutes. It tests each new commit of `main`, and of every other branch merged with `main`, and keeps a history in `~/.cache/mind-ci-watch/history.log`. Run it with `--once` for a single pass.
 
 ## 5. Working next to other tracks
