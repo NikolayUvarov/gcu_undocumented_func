@@ -576,8 +576,8 @@ fn ipc_endpoints_and_holders() {
     let mut view = ipc::Ipc::new();
     view.refresh(&mut source).unwrap();
     let screen = draw(&mut view, 120, 20);
-    assert!(screen.iter().any(|l| l.contains("2 endpoints, 51 234 messages, a queue holds at most 4 senders")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("   4  loader (PID 5)               3   1/4     0      1 234       2         1    —  init (PID 1)")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("2 endpoints, 51 234 messages, senders wait in order (ABI 3)")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("   4  loader (PID 5)               3      1     0      1 234       2         1    —  init (PID 1)")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("   2  shell (PID 7)") && l.contains("  1  init (PID 1)")), "the bound IRQ: {:#?}", screen);
     view.key(chr('m'), &mut source);
     assert!(view.status().starts_with("VIEW=ENDPOINTS SORT=MESSAGES ENDPOINTS=2 SELECTED=2"), "{}", view.status());
