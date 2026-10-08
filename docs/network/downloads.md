@@ -41,18 +41,19 @@ download FILE URL [--sha256 HEX] [--tries N]
   - It writes the body in pieces of 64 KiB, and gives up with the bytes it has (`GAVE UP AFTER n CONNECTIONS AT m BYTES`). The next run goes on from there.
   - It stops at once on what asking again would not change: a status, a malformed answer, a file it cannot write.
 - **At the end** it reads the file back and prints its SHA-256. With `--sha256` it says whether that matches, and exits with status 1 if not.
+- **The grant's term and volume must cover the download.** When the term runs out, the stack closes the connection and the broker takes the grant back (`DOWNLOAD: NO NETWORK GRANT`). The next run gets a new grant and goes on from where the file ends.
 - **A policy line**, for example:
 
   ```
-  download 10.0.2.2 tcp 8443 600 67108864   # the release server: 10 minutes, up to 64 MiB
+  download 10.0.2.2 tcp 8443 3600 67108864   # the release server: an hour, up to 64 MiB
   ```
 
 Plain HTTP gives neither confidentiality nor authenticity. For a release, authenticity comes from its signature, which the updater checks (351-UPD-0005, 0007), not from the transport. `download` refuses `https://`: no launcher lends a program a TLS client yet. That needs a request flag, which is a kernel task (`issues/requests-KRN.md`), and the shell's lending of its client (`issues/requests-APP.md`). It is 351-NET-0002.
 
 ## Tested
 
-These tests run in the `net` suite in QEMU with user networking; they have passed on x86. They boot their own VM, and on x86 its boot disk is on AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. 30 MiB takes about 90 s on x86 under TCG. This is not a measure of throughput. The server is `scripts/serve_release.py`, which now answers single byte ranges, over plain HTTP. It is given a hook that cuts the first response for a path.
-- 30 MiB through `download`'s own grant: the first response is cut at 10 MiB, and the rest is asked for with `Range: bytes=10485760-`.
+These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networking. They boot their own VM, and on x86 its boot disk is on AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. 30 MiB takes about 90 s on x86 under TCG, almost all of it in writing the file. This is not a measure of throughput. On aarch64 the file is 8 MiB, cut at 3 MiB: there 30 MiB took more than 10 minutes. The server is `scripts/serve_release.py`, which now answers single byte ranges, over plain HTTP. It is given a hook that cuts the first response for a path.
+- 30 MiB (8 MiB on aarch64) through `download`'s own grant: the first response is cut at 10 MiB (3 MiB), and the rest is asked for with `Range` from there.
 - The SHA-256 is checked in the system. A second run finds the file complete (416) and changes nothing.
 - A run given up on after one connection, at 50 000 of 200 000 bytes, is resumed by the next run.
 - These are refused:
@@ -66,4 +67,5 @@ These tests run in the `net` suite in QEMU with user networking; they have passe
 - **HTTPS**, and trust for the update server: roots shipped with the release, or the server's key pinned (351-NET-0002).
 - **Names in the network policy**, resolved when the grant is made (351-NET-0003). Today a policy line names an IPv4 address.
 - **Chunked bodies, redirects, keep-alive, several connections at once, IPv6.**
+- **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.
 - **A parser with less authority than its program.** The head is parsed in the downloading program, which holds the grant and the file. Track D plans session parsers with minimal authority (Appendix B.6).

@@ -4111,19 +4111,21 @@ def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
     and resumed by the next run; what the grant, the server and the file's directory refuse. On x86 the boot disk is on
-    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB."""
+    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request
+    and walks the file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
     files = Path(tempfile.mkdtemp(prefix="mind-download-"))
-    big, small = os.urandom(30 << 20), os.urandom(200_000)
+    size, cut = (30 << 20, 10 << 20) if args.arch == "x86_64" else (8 << 20, 3 << 20)
+    big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
     (files / "small.bin").write_bytes(small)
     # The release server, the first response for each file cut short (a test hook).
-    release = serve_release.serve(files, cuts={"/big.bin": 10 << 20, "/small.bin": 50_000})
+    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000})
     port = release.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
-    (disk / "netpolicy.txt").write_text(f"# download may reach the release server, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 600 {64 << 20}\n")
+    (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
-        download_runs(vm, release, port, big, small)
+        download_runs(vm, release, port, big, small, cut)
     finally:
         vm.close()
         release.shutdown()
@@ -4131,8 +4133,9 @@ def download_check(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
 
 
-def download_runs(vm, release, port, big, small):
+def download_runs(vm, release, port, big, small, cut):
     url = f"http://10.0.2.2:{port}"
+    size = len(big)
 
     def run(command, until, timeout=8):
         # The program's lines, up to the prompt after its last one.
@@ -4140,12 +4143,12 @@ def download_runs(vm, release, port, big, small):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {10 << 20} OF {30 << 20}, RESUMING", f"DOWNLOAD: DONE {30 << 20} BYTES IN"):
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
-    assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={10 << 20}-")], release.requests
+    assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
-    require(out, f"DOWNLOAD: RESUMING data/big.bin AT {30 << 20}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {30 << 20} BYTES")
-    print("PASS: download: 30 MiB over HTTP through its own grant, the connection cut at 10 MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
+    require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
+    print(f"PASS: download: {size >> 20} MiB over HTTP through its own grant, the connection cut at {cut >> 20} MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
     out = run(f"download data/small.bin {url}/small.bin --tries 1", "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 50000 BYTES")
     require(out, "DOWNLOAD: CONNECTION CUT AT 50000 OF 200000, RESUMING")
     small_digest = hashlib.sha256(small).hexdigest()
@@ -4156,7 +4159,7 @@ def download_runs(vm, release, port, big, small):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: HTTPS"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 600 S, {64 << 20} BYTES")
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
 
 

@@ -39,10 +39,10 @@ Done on 2026-10-08 by the storage session working the network track at the maint
 
   Named `download` because the shell has a `fetch` command.
 - **`scripts/serve_release.py`:** single byte ranges (206, 416), plain HTTP with `--plain`, and a hook that cuts the next response for a path.
-- **The `net` suite (`download_check`, in its own VM; on x86 the boot disk is on AHCI):** passes on x86. The aarch64 run is recorded with its result.
-  - 30 MiB through `download`'s own grant, cut at 10 MiB and resumed with `Range`, SHA-256 matching;
+- **The `net` suite (`download_check`, in its own VM; on x86 the boot disk is on AHCI):** passes on x86 with 30 MiB, and on aarch64 with 8 MiB cut at 3 MiB. `vfs_server` writes a sector per block request and walks the file's chain on every write, so 30 MiB took more than 10 minutes on emulated aarch64.
+  - 30 MiB through `download`'s own grant, cut at 10 MiB and resumed with `Range`, SHA-256 matching (on aarch64 8 MiB cut at 3 MiB);
   - a second run finds the file complete;
   - a run given up on is resumed by the next;
   - a 404, a port outside the grant, `https://` and a file outside the writable directories are refused.
-- **Docs:** [docs/network/downloads.md](../docs/network/downloads.md), the API table, the README's program list, and an evidence row for x86.
+- **Docs:** [docs/network/downloads.md](../docs/network/downloads.md), the API table, the README's program list, and evidence rows for x86 and aarch64.
 - **Requests:** `REQUEST_TLS` to the kernel track (`requests-KRN.md`), and the shell's lending of its TLS client to the tools track (`requests-APP.md`). Both are for 351-NET-0002.
