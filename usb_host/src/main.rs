@@ -20,6 +20,7 @@ const RECEIVED_CAP: usize = 9;
 const SCAN_MS: u64 = 250;
 const MAX_DEVICES: usize = 16; const MAX_INTERFACES: usize = 4; const MAX_RINGS: usize = 6; const MAX_DEPTH: u8 = 5;
 const CLASS_HUB: u8 = 9;
+const ROOT_TRIES: u8 = 3; // set-up attempts for a device on a root port before it is left alone until reconnected
 const SERVED: [u8; 2] = [3, 8]; // HID, mass storage: the classes with a class driver
 
 #[derive(Clone, Copy, Default)]
@@ -36,7 +37,7 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64, step: &'static str }
+struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64] }
 
 fn speed_name(speed: u8) -> &'static str { match speed { 1 => "FULL", 2 => "LOW", 3 => "HIGH", 4 => "SUPER", _ => "?" } }
 fn dci(address: u8) -> u8 { (address & 0xF) * 2 + (address >> 7) }
@@ -207,14 +208,19 @@ impl Host {
             let changed = self.xhci.acknowledge(port);
             let connected = self.xhci.connected(port);
             let present = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent.is_none() && d.root as usize == port));
-            if changed { self.root_failed &= !(1 << (port - 1)); mind::println!("[USB] PORT {}: {} (PORTSC {:08X})", port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
+            if changed { self.root_failed &= !(1 << (port - 1)); self.root_tries[port - 1] = 0; mind::println!("[USB] PORT {}: {} (PORTSC {:08X})", port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
             if !connected || self.root_failed & 1 << (port - 1) != 0 { continue; }
             self.step = "PORT RESET"; self.xhci.last = 0;
             let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
             // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
-            if set_up.is_none() { self.root_failed |= 1 << (port - 1); mind::println!("[USB] PORT {}: DEVICE NOT SET UP AT {} (COMPLETION {}, PORTSC {:08X})", port, self.step, self.xhci.last, self.xhci.port_status(port)); }
+            // Three tries a connection, a scan apart: a device that is slow after the firmware let it go may answer later.
+            if set_up.is_none() {
+                self.root_tries[port - 1] += 1;
+                if self.root_tries[port - 1] >= ROOT_TRIES { self.root_failed |= 1 << (port - 1); }
+                mind::println!("[USB] PORT {}: DEVICE NOT SET UP AT {} (COMPLETION {}, PORTSC {:08X}, TRY {} OF {})", port, self.step, self.xhci.last, self.xhci.port_status(port), self.root_tries[port - 1], ROOT_TRIES);
+            }
         }
         for hub in 0..MAX_DEVICES {
             let Some(device) = self.devices[hub] else { continue };
@@ -422,7 +428,7 @@ fn main(_info: &'static BootInfo) {
     }
     // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
     for port in 1..=xhci.ports() { mind::println!("[USB] PORT {} PORTSC {:08X}", port, xhci.port_status(port)); }
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "" };
+    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64] };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     host.scan();
