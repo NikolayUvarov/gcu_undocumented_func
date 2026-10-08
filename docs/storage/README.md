@@ -1,8 +1,8 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.5 (2026-10-08) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.6 (2026-10-08) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues/300-checksummed-block-store.md), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
-This document describes the storage format of track B as it is built. Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
+This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
 ## Content identifiers — implemented (300-STO-0001)
 
@@ -60,14 +60,14 @@ On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores a
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
-`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.2 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
+`blockstore` serves [`idl/blockstore.wit`](../../idl/blockstore.wit) 1.3 over a block client: `put` takes a content type (`raw` or `dag-cbor`, a node checked before it is stored) and bytes and returns their CID, `get` takes a CID and returns the bytes checked against it, plus `has` and `stat`. Its logic is `blockstore/src/store.rs`. `init` starts it at boot over a RAM disk of its own, `ramdisk#1` ([300-KRN-0001](../../issues-done/300-KRN-0001-blockstore-at-boot.done)). The shell holds a client with every right (slot 25) and lends it for `REQUEST_BLOCKSTORE`. The `blocks` tool uses it.
 
 **Layout (version 2, 303-STO-0002..0004):**
 
 | Sectors | Content |
 |---|---|
 | 0 | superblock: `MIND-STO`, layout version (u16), sector size (u16), the SHA-256 of these 16 bytes |
-| 1 … | records, each starting on a sector. A block record: `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes, padded with zeros to the sector. Name records are described under Names, pin records under Retention. Each kind of record is checked by its own SHA-256 and the layout version in it |
+| 1 … | records, each starting on a sector. A block record: `MIND-BLK`, layout version (u16), zero (u16), length (u32), the block's CID (36 bytes), the SHA-256 of these 52 bytes (84 bytes in all), then the block's bytes, padded with zeros to the sector. Name records are described under Names, commit records under Several names at once, pin records under Retention. Each kind of record is checked by its own SHA-256 and the layout version in it |
 
 A store of layout 1 is refused with `layout` and left as it is (MC-4.13); nothing converts it. The only medium today is a RAM disk, which starts blank at every boot, so no store of layout 1 outlives a reset.
 
@@ -83,7 +83,7 @@ A store of layout 1 is refused with `layout` and left as it is (MC-4.13); nothin
   - A block is at most 16 KiB, and the index holds 4096 blocks (the service's static memory).
   - A put that finds no room collects once (below); if there is still none, it is refused with `full`. A store with more blocks than the index holds is not mounted at all.
   - Bytes already held are not written again.
-  - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`, `MIND-PIN`, `MIND-DEL`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
+  - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`, `MIND-TXN`, `MIND-PIN`, `MIND-DEL`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
 - **Durability.** A put returns once the device has flushed the record. On the RAM disk that means until the next reset, nothing more.
 - **What is not provided:**
   - copies on other media (MC-4.8, independence of copies);
@@ -124,9 +124,9 @@ A **name** is a stable entity, its **versions** are the immutable roots it has p
 - **History (303-STO-0003, MC-4.5).** A name keeps its newest 4 versions: the current one and up to 3 before it. Each record links the root of the version before it, so the links are explicit on the medium. When mounting, the newest valid version of each name is current and the next valid ones are kept up to 4; a collection frees the records of older versions. `history` lists the kept versions, newest first. Every kept version retains its object (Retention, below).
 - **Removing a name (303-STO-0004, MC-4.8).** `unpublish(name, expected)` is a compare-and-swap like a publication, and writes a version without a root. The name then resolves to `not-found` and retains nothing; it keeps only that version, and a collection frees the records before it. Removing a name deletes a reference, not data: its objects go only when a collection finds that nothing else retains them (another name, a pin, a lease). Publishing from the removal's version creates the name again with the next number.
 - **A damaged record.** If the latest record of a name is damaged, it is counted as damaged (`stat`) and the version before it is current. That loses a confirmed change on a damaged medium, but the loss is reported, not silent. Copies on other media are not provided yet (MC-4.8).
-- **Boundary (MC-4.10).** One name per publication. There is no transaction across names, and a reader of two names may see one published and the other not.
+- **Boundary (MC-4.10).** A publication or a removal changes one name. Several names change together only through a commit (below); two separate publications are two changes, and a reader may see one and not the other.
 - **Rights.** `publish` and `unpublish` need `BADGE_PUBLISH`; `resolve` and `history` need `BADGE_GET`. A publication and a removal are logged with the name, version, root and the caller's PID. A name is not owned: any client with `BADGE_PUBLISH` may publish its next version or remove it. The owner recorded with a version is the account its object is charged to (below), not a right over the name.
-- **Not provided yet:** several names at once; a history longer than 4 versions, or chosen per name; names that only their publisher may change.
+- **Not provided yet:** a history longer than 4 versions, or chosen per name; names that only their publisher may change.
 
 Evidence: `tests/blockstore_host.rs` (`a_name_changes_only_from_the_version_expected`, `a_root_is_published_only_with_every_block_stored`, `names_are_found_again_after_a_remount`, `a_damaged_name_record_is_reported_and_the_version_before_stands`, `names_are_checked_and_bounded`, `each_version_links_the_one_before`, `a_removed_name_retains_nothing_and_keeps_its_version`, `a_collection_frees_what_no_name_retains_once_its_lease_ends`) and `tests/dag_host.rs` (`an_object_is_complete_only_with_every_block`).
 
@@ -138,6 +138,47 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - the history of three versions, a removal refused from a stale version and accepted from the current one, `not-found` after it, and the removal found again after a restart.
 
 The `storefaults` suite (x86 and aarch64, 300-STO-0005) damages the record of a name's second version on the medium. A new instance counts its sector `DAMAGED=1`, and the first version is current.
+
+## Several names at once — run on the platform (304)
+
+`commit` changes up to 8 names in one step (304-STO-0007, `blockstore.wit` 1.3). Each change names the version it expects (0 for a new name) and either a new root or none, which removes the name. The contract MC-4.10 asks for:
+
+- **Atomicity.** All the changes or none.
+  - Before anything is written, the store checks every change: the expected versions, that each root's object is complete, that a removed name exists, and the owner's quota for all the new roots together.
+  - If any check fails, the commit is refused with that error (`conflict`, `incomplete`, `not-found`, `quota`, `invalid`, `full`) and nothing is written.
+  - The changes are written as one record: a header sector (`MIND-TXN`, layout version, the count, and a SHA-256 over the header and every entry), then one sector per name with a name record's fields. An entry has no magic and no digest of its own, so it never counts as a record by itself.
+  - A mount applies a commit only if its digest checks and every entry is valid. A damaged or torn commit changes no name, and its non-blank sectors are counted as damaged.
+- **Isolation.** The service handles one request at a time, so a commit's changes appear together, between two requests. `snapshot` reads up to 8 names in one request, which is a consistent point. Reading the same names with separate `resolve` calls may straddle a commit.
+- **Durability.** The record is flushed before the reply, which is the same level as a publication: the device's flush, so on the RAM disk until the next reset.
+- **History and retention.** Each entry links the root of its name's version before, as a name record does. The versions a commit made are kept and retain their objects like any other. The commit record stays as long as any name keeps one of its versions, and a collection frees it once none does.
+- **Rights.** `commit` needs `BADGE_PUBLISH` and `snapshot` needs `BADGE_GET`. Each change is logged (`COMMITTED <name> VERSION <n> ROOT <cid>`, or `REMOVED`, with the caller's PID).
+- **Not provided:** a commit across stores, and reads that hold a snapshot across several requests (MVCC). A commit is bounded to 8 names, and every name's own history still keeps 4 versions.
+
+Evidence: `tests/blockstore_host.rs`:
+- `a_commit_changes_every_name_or_none`: every refusal writes nothing and changes no name, and a valid commit with a new name, a change and a removal is found whole after a mount;
+- `a_commit_past_the_quota_changes_nothing`;
+- `a_damaged_or_torn_commit_changes_no_name`: a flipped byte in the header or in either entry, and a write that stopped before the last entry;
+- `a_commit_record_goes_once_no_name_keeps_its_versions`;
+- the random model, which commits two names at a time, sometimes from a stale version.
+
+On the platform, the QEMU `store` suite (x86 and aarch64) commits two names, refuses a commit with a stale version and one with a root never stored (the other name unchanged), reads a snapshot of four names, and finds a commit with a removal whole after a restart. The `storefaults` suite damages an entry of a commit on the medium: a new instance applies neither change and counts the record's 3 sectors as damaged.
+
+## Recovery without the main store — run on the platform (305)
+
+Appendix B.4 asks that the bootstrap and recovery set be available without a working main storage service. MC-6.8 asks that boot and recovery dependencies form no unresolvable cycle, and that a failed component have a recovery boundary or a degradation mode.
+
+- **The recovery set is the boot volume.** It holds the bootloader, the kernel, `init`, the drivers, every service's image (`blockstore.elf` too) and the programs. They are read from the FAT boot volume, which programs cannot write. Nothing in the boot path is a client of the store: `init` starts `blockstore` after its RAM disk, no service needs it to start, and the shell lends its client only to a program that asks for it. The device key lives in `keystore`'s memory, not in the store. So the store depends on the boot volume and nothing depends on the store to boot.
+- **A crash.** `init` is the store's lifecycle owner. It restarts a killed or failed `blockstore` up to 3 times in 60 s, then quarantines it until an operator starts it. A restarted instance mounts the same medium and verifies every block again. Requests in flight when it ended fail with `ERR_PEER`, and clients retry on their own terms (MC-6.6).
+- **A medium it cannot mount** (another file system, a damaged superblock, another layout) is left as it is and never formatted. The service keeps running and answers every request with the reason (`device`, with `stat` too, 305-STO-0008), and its log names it (`NOT MOUNTED: Foreign`). This is the degradation mode: the rest of the system goes on without the store.
+- **Not provided:**
+  - a tool that repairs or re-creates an unmountable store (on the RAM disk a reset gives a blank medium, and with it every block is lost);
+  - a second copy to recover from (MC-4.8);
+  - recovery of the store from another store.
+- **Later:** when releases are kept in the store for self-update ([351-STO-0006](../../issues/351-STO-0006-releases-pinned-in-the-store.md)), the boot slots stay on the boot volume. The store holds a copy that can rebuild a slot, not the only source a boot needs.
+
+Evidence: the QEMU `storefaults` suite (x86 and aarch64):
+- the store is killed: `init` restarts it (one more start in `svc`), and the new instance mounts the medium with its names and damage counts;
+- the superblock's digest is damaged and the service restarted: it logs `NOT MOUNTED: Foreign` and answers `stat`, `resolve` and a put with `device`, while `run clock` starts a program from the boot volume.
 
 ## Retention and collection — implemented, run on the platform (303)
 

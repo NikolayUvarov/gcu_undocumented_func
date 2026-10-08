@@ -2505,6 +2505,63 @@ def store_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store retention: a name keeps its versions, an owner its quota, a pin its object until unpinned; "
           "a removed name retains nothing and mounts again as removed", flush=True)
+    # 304-STO-0007: several names at once, all or none, read at one point between commits.
+    require(vm.command("write ram:left.txt left"), "WROTE 5 BYTES")
+    left = cid_raw(b"left\n")
+    require(blocks("put ram:left.txt"), f"PUT {left} SIZE 5")
+    done = blocks(f"commit copy 1 {left} pair 0 {root}")
+    for line in ("COMMITTED copy VERSION 2", "COMMITTED pair VERSION 1"):
+        require(done, line)
+    logged = f"[BLOCKSTORE] COMMITTED pair VERSION 1 ROOT {root}"
+    require(vm.service_logs("blockstore", logged), logged)
+    # A stale version, or a root never stored, beside a valid change: nothing changes.
+    require(blocks(f"commit copy 1 {root} pair 1 {left}"), "blocks: commit: Conflict")
+    require(blocks(f"commit copy 2 {root} ghost 0 {cid_raw(b'never stored')}"), "blocks: commit: Incomplete")
+    snap = blocks("snapshot copy pair ghost obj")
+    for line in (f"copy VERSION 2 ROOT {left}", f"pair VERSION 1 ROOT {root}", "ghost NONE", "obj VERSION 4 REMOVED"):
+        require(snap, line)
+    # A removal and a change in one commit, found whole by a new instance.
+    done = blocks(f"commit pair 1 - copy 2 {root}")
+    for line in ("COMMITTED pair VERSION 2 REMOVED", "COMMITTED copy VERSION 3"):
+        require(done, line)
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NAMES=3 SECTORS="), "CORRUPT=0 DAMAGED=0")
+    snap = blocks("snapshot copy pair")
+    for line in (f"copy VERSION 3 ROOT {root}", "pair VERSION 2 REMOVED"):
+        require(snap, line)
+    print("PASS: block store commits: two names change at once or not at all (a stale version, a missing root), a "
+          "snapshot reads them at one point, a commit with a removal is found whole after a restart", flush=True)
+    # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
+    # and saves the next, its manifest and state under two names in one commit.
+    def tally(args):
+        vm.send(f"tally {args}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+    require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
+    require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
+    require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
+    require(tally("add apples"), "SAVED EPOCH 3 SEQUENCE 3: apples = 4")
+    snap = blocks("snapshot checkpoint/tally checkpoint/tally/state")
+    for line in ("checkpoint/tally VERSION 3 ROOT", "checkpoint/tally/state VERSION 3 ROOT"):
+        require(snap, line)
+    # An instance restores epoch 3 and stalls; another saves epoch 4 meanwhile; the stale one's save is refused whole.
+    held = re.search(r"PID=(\d+) NAME=tally BACKGROUND", vm.command("run tally hold 6 pears &"))
+    assert held, "tally did not start in the background"
+    require(vm.program_logs(held[1], "HOLDING EPOCH"), "HOLDING EPOCH 3")
+    require(tally("add apples"), "SAVED EPOCH 4 SEQUENCE 4: apples = 5")
+    require(vm.program_logs(held[1], "FENCED"), "tally: FENCED: epoch 3 is no longer current; nothing saved")
+    shown = tally("show")
+    for line in ("TALLY EPOCH 4 SEQUENCE 4", "apples = 5", "pears = 1"):
+        require(shown, line)
+    # Effects: the intent is saved before the effect begins. An instance that ends between the effect and its record
+    # leaves it pending; the next refuses new effects until someone who knows the outcome reconciles it (B.4).
+    require(tally("effect fx.txt crash"), "EFFECT 1 BEGUN; ENDING BEFORE ITS OUTCOME IS RECORDED")
+    require(vm.command("cat ram:fx.txt"), "done by tally")
+    require(tally("show"), "EFFECT 1 write:ram:fx.txt PENDING: RECONCILE BEFORE TRYING AGAIN")
+    require(tally("effect fy.txt"), "tally: effect refused: effect 1 is pending; reconcile it first")
+    require(tally("reconcile 1 done"), "RECONCILED 1 SAVED EPOCH 6")
+    require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
+    print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
+          "effect cut short comes back pending and is reconciled before another begins", flush=True)
 
 
 def free_port():
@@ -2619,9 +2676,51 @@ def store_faults_suite(vm):
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    # A damaged commit (304-STO-0007): a byte of its first entry; a new instance applies none of it, and counts its
+    # header and both entries damaged.
+    for path, text in (("ram:c1.txt", "first change"), ("ram:c2.txt", "second change")):
+        require(vm.command(f"write {path} {text}"), f"WROTE {len(text) + 1} BYTES")
+        require(blocks(f"put {path}"), f"PUT {cid_raw(text.encode() + bytes([10]))} SIZE {len(text) + 1}")
+    first, other = cid_raw(b"first change\n"), cid_raw(b"second change\n")
+    done = blocks(f"commit obj 1 {first} aux 0 {other}")
+    for line in ("COMMITTED obj VERSION 2", "COMMITTED aux VERSION 1"):
+        require(done, line)
+    txn = b"MIND-TXN" + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
+    assert poke(vm, txn, 512 + 100, GDB_PORT) >= 1
+    require(restart(), f"CORRUPT=0 DAMAGED={34 + 3}")
+    snap = blocks("snapshot obj aux")
+    for line in (f"obj VERSION 1 ROOT {root}", "aux NONE"):
+        require(snap, line)
     print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
           "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
-          "header loses its record alone", flush=True)
+          "header loses its record alone; a damaged commit changes no name", flush=True)
+    # 305-STO-0008: a crash. init restarts the killed store within its budget, and the new instance mounts the medium.
+    old = vm.services()["blockstore"]
+    starts = int(re.search(r"^blockstore\s+\d+\s+(\d+)", vm.command("svc", raw=True), re.M)[1])
+    vm.command(f"kill {old}", raw=True)
+    for _ in range(40):
+        if vm.services().get("blockstore", old) != old:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("init did not restart the block store")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=0 DAMAGED=37")
+    assert re.search(fr"^blockstore\s+\d+\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
+    require(blocks("snapshot obj"), f"obj VERSION 1 ROOT {root}")
+    # A medium it cannot mount (sector 0's digest damaged): the store stays up and answers every request with the
+    # reason, and the system, started from the boot volume, goes on without it (MC-6.8, Appendix B.4).
+    superblock = b"MIND-STO" + (2).to_bytes(2, "little") + (512).to_bytes(2, "little")
+    assert poke(vm, superblock, 20, GDB_PORT) >= 1
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Foreign")
+    require(blocks("stat"), "blocks: stat: Device")
+    require(blocks("resolve obj"), "blocks: resolve obj: Device")
+    require(blocks("pattern 10"), "blocks: pattern: Store (the store: Device)")
+    started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))
+    assert started, "a program from the boot volume does not start while the store is down"
+    vm.command(f"kill {started[1]}")
+    print("PASS: block store recovery: a killed store is restarted by init and mounts its medium again; a medium it "
+          "cannot mount leaves it answering every request with the reason while programs start from the boot volume", flush=True)
 
 
 def escrow_check(vm):

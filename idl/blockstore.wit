@@ -5,7 +5,8 @@
 /// A name's current version points at the root of an object and changes only by compare-and-swap (302-STO-0001).
 /// What no name retains and no lease protects is collected (303-STO-0001, 1.1). A name keeps its last 4 versions; it can be
 /// removed; an owner (the badge) pins objects; what an owner retains is bounded by its quota (303-STO-0002..0004, 1.2).
-package mind:blockstore@1.2.0;
+/// Several names change at once, all or none, and are read at one point (304-STO-0007, 1.3).
+package mind:blockstore@1.3.0;
 
 interface blockstore {
     /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
@@ -42,6 +43,10 @@ interface blockstore {
     /// names and pins (1.2).
     record usage { retained: u64, quota: u64, names: u32, pins: u32 }
 
+    /// One name's change in a commit: the version expected (0: a new name) and the new root; no root removes the
+    /// name (1.3).
+    record update { name: string<64>, expected: u64, root: list<u8, 36> }
+
     /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
     /// stored is not written again. Errors: invalid (not a node), too-large, full (medium or index), read-only, device.
     put: func(codec: codec, data: bytes<16384>) -> result<bytes<36>, error>;
@@ -76,4 +81,13 @@ interface blockstore {
     pins: func() -> result<list<pinned, 32>, error>;
     /// What the caller's owner retains and may retain (1.2).
     usage: func() -> result<usage, error>;
+    /// Changes up to 8 names at once, all or none (MC-4.10): each from the version it expects, to a complete root or
+    /// to a removal, within the caller's quota. One record with one digest holds every change, flushed before the
+    /// reply; requests are served one at a time, so no reader sees part of a commit. Returns the new versions, in
+    /// order. Errors: invalid (a name twice, or 0 or more than 8), conflict, incomplete, not-found (removing what is
+    /// not there), quota, full, read-only, device; each changes nothing (1.3).
+    commit: func(updates: list<update, 8>) -> result<list<u64, 8>, error>;
+    /// The current version and root of up to 8 names, read at one point between commits: version 0 and no root for
+    /// a name that does not exist, no root for a removed one (1.3).
+    snapshot: func(names: list<string<64>, 8>) -> result<list<head, 8>, error>;
 }

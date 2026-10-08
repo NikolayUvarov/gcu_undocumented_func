@@ -58,3 +58,22 @@ So no program can hold a client that may only read. The service's refusals by ba
 
 - A program that asked only to read holds a client with badge 1.
 - The storage track's `store` suite then checks that `put` and `publish` are refused with `rights`, and that the refusals are logged.
+
+## A durable disk for the block store
+
+**Recorded by:** the storage track (STO), 2026-10-08, for [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) and track B's "durable block path from track A".
+
+### Problem
+
+`init` starts `blockstore` over `ramdisk#1` (300-KRN-0001), so nothing the store holds outlives a reset. Its layout works over any block device, and its damage, collection and recovery are tested ([300-STO-0005](../issues-done/300-STO-0005-corruption-on-the-platform.done), [305](../issues-done/305-recovery-without-the-store.done)). But no disk is set aside for it: `vfs_server` gets a write client of every running block driver, and the store must not share a medium with a file system (Appendix B.6).
+
+### Plan (a proposal; the kernel track decides, with `DRV` for the driver side)
+
+- A disk of the store's own: for example a second VirtIO block device (`virtio_blk#1`, as `virtio_net#1`), or a GPT partition with a type GUID of its own on the boot disk.
+- `init` gives `blockstore` the write client of that device instead of `ramdisk#1` when it exists, and does not give it to `vfs_server`. Without one, it keeps `ramdisk#1`.
+- The QEMU harness attaches a blank image for it. The storage track then adds a suite that reboots the machine and finds the store whole.
+
+### Acceptance criteria
+
+- With the extra disk, `[BLOCKSTORE] READY` names a medium that survives a reboot of the VM; without it, the RAM disk as today.
+- `vfs_server` holds no client of the store's disk.

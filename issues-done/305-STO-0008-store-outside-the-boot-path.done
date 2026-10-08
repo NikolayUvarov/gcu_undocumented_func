@@ -1,0 +1,33 @@
+# 305-STO-0008 — The store outside the boot path: crash, unmountable medium, recovery set — done
+
+**Type:** tests and service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-6.8, Appendix B.4
+
+Part of main task [305](305-recovery-without-the-store.done).
+
+## Problem
+
+See [305](305-recovery-without-the-store.done).
+
+## Plan
+
+- `blockstore`: `stat` answers the mount error when there is no store, as the other requests do.
+- The QEMU `storefaults` suite:
+  1. kills the store, and checks that `init` restarts it and that the new instance mounts the medium with its names;
+  2. damages the superblock and restarts the store, then checks the `NOT MOUNTED: Foreign` log, `device` answers to `stat`, `resolve` and a put, and a program started from the boot volume.
+- `docs/storage`: the recovery set, the crash boundary, the degradation mode and what is not provided.
+
+## Acceptance criteria
+
+As in [305](305-recovery-without-the-store.done).
+
+## Related
+
+[300-STO-0005](300-STO-0005-corruption-on-the-platform.done) (the fault injection this uses).
+
+## Resolution
+
+- **`blockstore/src/main.rs`:** `stat` without a mounted store answers its error (it reported an empty store before).
+- **`tests/qemu_smoke.py` `store_faults_suite`:**
+  - `kill` of the store: `init` restarts it (one more start in `svc`), and the new instance logs `READY … CORRUPT=0 DAMAGED=37`, with `obj` at its version;
+  - the superblock's digest damaged, then `svc restart blockstore`: `[BLOCKSTORE] NOT MOUNTED: Foreign`; `blocks stat`, `blocks resolve obj` and `blocks pattern 10` answer `Device`; `run clock &` starts a program.
+- **Docs:** `docs/storage` (Recovery without the main store); the profile's supervision row (MC-6.4–6.9) and Article 4 row; the evidence rows on x86 and aarch64.

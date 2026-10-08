@@ -1,0 +1,40 @@
+# 306-STO-0009 — The checkpoint format and protocol, and the pilot `tally` — done
+
+**Type:** library and tool (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.10, MC-6.11, MC-6.12, Appendix B.4
+
+Part of main task [306](306-checkpoints-and-rebinding.done).
+
+## Problem
+
+See [306](306-checkpoints-and-rebinding.done).
+
+## Plan
+
+- **`mind::checkpoint`**:
+  - `Manifest` with one encoding (format 1): the contract and its version, the schema, the epoch, the sequence, the state's root, resources, authorities and the effect journal;
+  - `restore`: one snapshot of the two names, then checks of format, contract, schema, epoch and roots;
+  - `save`: the next epoch, the manifest put, both names committed from the epoch restored, `fenced` on a conflict;
+  - `rebind`: the recorded authorities not held now;
+  - a `Store` trait, so the logic runs on the host.
+- **`tally`**: counters kept across instances; `hold` stalls an instance to show fencing; `effect` journals an external effect (writing a file) and can end before recording it; `reconcile` settles it.
+- **Docs:** `docs/storage/checkpoints.md` with `tally`'s contract.
+
+## Acceptance criteria
+
+As in [306](306-checkpoints-and-rebinding.done).
+
+## Related
+
+[304-STO-0007](304-STO-0007-commit-of-several-names.done) (the commit both names share).
+
+## Resolution
+
+- **`libmind/src/checkpoint.rs`** (new): the format, `restore`, `save`, `rebind`, `Names`, `Label`, `Effect` and `Outcome`.
+- **`tally/`** (new program, in `02_build.sh` and so in the aarch64 build): contract `tally` 1, schema 1. It records the resource `blockstore` and the authorities `blockstore` and `files`, and checks them against its capabilities at every start.
+- **Tests:**
+  - `tests/checkpoint_host.rs` (6, over `blockstore/src/store.rs` on a simulated medium), in the host-test lists of CI and `scripts/ci_local.sh`.
+  - QEMU `store` suite (x86 and aarch64):
+    - `tally add` three times gives epochs and sequences 1 to 3, with `checkpoint/tally` and `checkpoint/tally/state` both at version 3;
+    - `run tally hold 6 pears &` restores epoch 3 and stalls, `tally add apples` saves epoch 4, and the held instance prints `FENCED` with the counters unchanged by it;
+    - `tally effect fx.txt crash` writes the file and ends; the next `show` lists effect 1 as pending; a new effect is refused; `reconcile 1 done` saves epoch 6; the next effect completes at epoch 8.
+- **Docs:** `docs/storage/checkpoints.md`; the profile's row MC-6.10–6.12 (x86 and aarch64); evidence rows; `docs/api` (`checkpoint`); README (`tally`).

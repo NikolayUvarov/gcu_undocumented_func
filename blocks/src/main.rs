@@ -1,14 +1,15 @@
 #![no_std]
 #![no_main]
 // blocks: the block store from the shell (300-STO-0003, docs/storage). Puts a file or a test pattern as an object
-// (mind::dag), reads one back with every block checked, publishes, resolves and removes names, pins objects, shows
-// what the caller retains, collects, fills the store. A console program: it asks the shell for the store's client
+// (mind::dag), reads one back with every block checked, publishes, resolves and removes names, changes several at
+// once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store. A console program: it asks the shell for the store's client
 // (REQUEST_BLOCKSTORE) and the user's files (REQUEST_FILES).
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, Blocks, Builder, CHUNK};
 use mind::fs::File;
-use mind::idl::blockstore::{self, Error};
+use mind::idl::blockstore::{self, Error, Update};
+use mind::idl::codec::{List, Text};
 use mind::ipc::Endpoint;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE);
@@ -58,14 +59,65 @@ fn cid(text: &str) -> Option<Cid> {
     cid
 }
 
+fn store_silent(e: mind::Error) { mind::println!("blocks: the store does not answer: {:?}", e); }
+
+// commit <name> <expected> <cid|->...: every change at once, or none (`-` removes the name).
+fn commit<'a>(mut words: impl Iterator<Item = &'a str>) {
+    let mut updates = [Update::default(); 8];
+    let mut n = 0;
+    while let Some(name) = words.next() {
+        let (Some(expected), Some(root)) = (words.next(), words.next()) else { mind::println!("blocks: commit <name> <expected> <cid|->..."); return };
+        let Ok(expected) = expected.parse::<u64>() else { mind::println!("blocks: not a version: {}", expected); return };
+        let root = if root == "-" { List::default() } else { let Some(c) = cid(root) else { return }; List::from_slice(&c.to_bytes()).unwrap_or_default() };
+        let (Some(text), true) = (Text::new(name), n < updates.len()) else { mind::println!("blocks: commit: at most 8 names of at most 64 bytes"); return };
+        updates[n] = Update { name: text, expected, root };
+        n += 1;
+    }
+    match blockstore::commit(STORE, &updates[..n]) {
+        Ok(Ok(versions)) => for (u, v) in updates.iter().zip(versions.as_slice()) {
+            if u.root.is_empty() { mind::println!("COMMITTED {} VERSION {} REMOVED", u.name, v) } else { mind::println!("COMMITTED {} VERSION {}", u.name, v) }
+        },
+        Ok(Err(e)) => mind::println!("blocks: commit: {:?}", e),
+        Err(e) => store_silent(e),
+    }
+}
+
+// snapshot <name>...: the names as one point between commits saw them.
+fn snapshot<'a>(words: impl Iterator<Item = &'a str>) {
+    let mut names = [Text::<64>::default(); 8];
+    let mut n = 0;
+    for name in words {
+        let (Some(text), true) = (Text::new(name), n < names.len()) else { mind::println!("blocks: snapshot: at most 8 names of at most 64 bytes"); return };
+        names[n] = text;
+        n += 1;
+    }
+    match blockstore::snapshot(STORE, &names[..n]) {
+        Ok(Ok(heads)) => for (name, head) in names.iter().zip(heads.as_slice()) {
+            match Cid::from_bytes(head.root.as_slice()) {
+                Ok(root) => mind::println!("{} VERSION {} ROOT {}", name, head.version, root),
+                Err(_) if head.version == 0 => mind::println!("{} NONE", name),
+                Err(_) => mind::println!("{} VERSION {} REMOVED", name, head.version),
+            }
+        },
+        Ok(Err(e)) => mind::println!("blocks: snapshot: {:?}", e),
+        Err(e) => store_silent(e),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
     let mut remote = Remote { last: None };
     let mut words = mind::process::args_str().split_whitespace();
+    let mut rest = words.clone();
+    match rest.next() {
+        Some("commit") => return commit(rest),
+        Some("snapshot") => return snapshot(rest),
+        _ => {}
+    }
     match (words.next(), words.next(), words.next(), words.next()) {
         (Some("stat"), None, ..) => match blockstore::stat(STORE) {
             Ok(Ok(s)) => mind::println!("BLOCKS={} NAMES={} BYTES={} SECTORS={}/{} CORRUPT={} DAMAGED={} CAPACITY={}", s.blocks, s.names, s.bytes, s.used, s.sectors, s.corrupt, s.damaged, s.capacity),
@@ -210,6 +262,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]"),
+        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]"),
     }
 }

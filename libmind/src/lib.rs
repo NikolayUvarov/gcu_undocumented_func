@@ -14,6 +14,7 @@ pub mod audio;
 pub mod block;
 pub mod block_protocol;
 pub mod blockstore;
+pub mod checkpoint;
 pub mod cid;
 pub mod control;
 pub mod dag;

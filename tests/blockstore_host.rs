@@ -19,7 +19,7 @@ mod rights;
 
 use cid::{Cid, Codec};
 use std::collections::HashMap;
-use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Usage, BLOCK_MAX, BUFFER, HEADER, HISTORY, LEASE_NS, NAME_MAX, SECTOR};
+use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Pin, Stats, Store, Update, Usage, BLOCK_MAX, BUFFER, COMMIT_MAX, HEADER, HISTORY, LEASE_NS, NAME_MAX, SECTOR};
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
@@ -41,8 +41,8 @@ impl Device for &mut Memory {
         assert!(self.writable && data.len() % SECTOR == 0 && data.len() <= BUFFER);
         if self.fail_write { return false; }
         let at = lba as usize * SECTOR;
-        // A block, name or pin record goes only into blank sectors: nothing stored is overwritten.
-        if data.starts_with(b"MIND-BLK") || data.starts_with(b"MIND-REF") || data.starts_with(b"MIND-PIN") {
+        // A block, name, pin or commit record goes only into blank sectors: nothing stored is overwritten.
+        if [&b"MIND-BLK"[..], b"MIND-REF", b"MIND-PIN", b"MIND-TXN"].iter().any(|m| data.starts_with(m)) {
             assert!(self.data[at..at + data.len()].iter().all(|&b| b == 0), "a record written over sectors that are not blank at {lba}");
         }
         self.data[at..at + data.len()].copy_from_slice(data);
@@ -376,8 +376,8 @@ fn rights_come_from_the_badge() {
         // A collection frees only what nothing retains, as a put that finds no room does: the put right.
         assert_eq!(allowed(badge, Collect), put, "badge {badge:#x}");
         // Removing a name and pins are retention, as publishing is; history is reading; pins and usage are any client's.
-        assert_eq!([allowed(badge, Unpublish), allowed(badge, Pin), allowed(badge, Unpin)], [publish; 3], "badge {badge:#x}");
-        assert_eq!(allowed(badge, History), get, "badge {badge:#x}");
+        assert_eq!([allowed(badge, Unpublish), allowed(badge, Pin), allowed(badge, Unpin), allowed(badge, Commit)], [publish; 4], "badge {badge:#x}");
+        assert_eq!([allowed(badge, History), allowed(badge, Snapshot)], [get; 2], "badge {badge:#x}");
         assert_eq!([allowed(badge, Pins), allowed(badge, Usage)], [stat; 2], "badge {badge:#x}");
     }
 }
@@ -552,10 +552,10 @@ fn names_are_checked_and_bounded() {
 fn a_block_cannot_plant_a_record_for_a_scan_after_damage() {
     // A record's second sector starts SECTOR - HEADER bytes into the block's data.
     let at = SECTOR - HEADER;
-    let mut medium = Memory::new(64);
-    let mut room = Room::new(8);
+    let mut medium = Memory::new(128);
+    let mut room = Room::new(16);
     let mut store = mount(&mut medium, &mut room).unwrap();
-    for magic in [&b"MIND-REF"[..], b"MIND-BLK"] {
+    for magic in [&b"MIND-REF"[..], b"MIND-BLK", b"MIND-PIN", b"MIND-DEL", b"MIND-TXN"] {
         for offset in [at, at + SECTOR] {
             let mut data = vec![0u8; at + 2 * SECTOR];
             data[offset..offset + 8].copy_from_slice(magic);
@@ -567,7 +567,7 @@ fn a_block_cannot_plant_a_record_for_a_scan_after_damage() {
         data[..8].copy_from_slice(magic);
         assert!(store.put(Codec::Raw, &data).is_ok());
     }
-    assert_eq!(store.stats().used, 1 + 2 * record_sectors(at + 2 * SECTOR) as u64);
+    assert_eq!(store.stats().used, 1 + 5 * record_sectors(at + 2 * SECTOR) as u64);
 }
 
 // An object of `len` bytes written into the store; its root.
@@ -748,7 +748,7 @@ fn random_puts_names_collections_and_remounts_match_a_model() {
             let retained = |blocks: &HashMap<Cid, (Vec<u8>, u64)>, names: &HashMap<Vec<u8>, Vec<(u64, Cid)>>, cid: &Cid| {
                 names.values().flatten().any(|(_, r)| r == cid) || now < blocks[cid].1 + LEASE_NS
             };
-            match next(5) {
+            match next(6) {
                 0 | 1 => {
                     let data = block(next(40) as usize, [1, 600, 3000, 9000][next(4) as usize]);
                     match store.put(Codec::Raw, &data) {
@@ -774,6 +774,29 @@ fn random_puts_names_collections_and_remounts_match_a_model() {
                 3 => {
                     store.collect().unwrap();
                     for cid in blocks.keys() { assert_eq!(store.has(cid), retained(&blocks, &names, cid), "round {round}"); }
+                }
+                // Two names at once (304-STO-0007): both change or neither; sometimes from a stale version.
+                4 if blocks.len() >= 2 => {
+                    let first = next(3) as u8;
+                    let pair = [vec![b'n', b'0' + first], vec![b'n', b'0' + (first + 1 + next(2) as u8) % 3]];
+                    let roots = [0, 1].map(|_| *blocks.keys().nth(next(blocks.len() as u64) as usize).unwrap());
+                    let current = [0, 1].map(|k| names.get(&pair[k]).map_or(0, |h| h[0].0));
+                    let stale = next(4) == 0;
+                    let updates = [0, 1].map(|k| Update { name: &pair[k], expected: current[k] + (stale && k == 0) as u64, root: Some(roots[k]) });
+                    match store.commit(&updates, OWNER) {
+                        Ok(v) => {
+                            assert!(!stale);
+                            assert_eq!(v[..2], [current[0] + 1, current[1] + 1]);
+                            for k in 0..2 {
+                                let kept = names.entry(pair[k].clone()).or_default();
+                                kept.insert(0, (v[k], roots[k]));
+                                kept.truncate(HISTORY);
+                            }
+                        }
+                        Err(Error::Conflict) => assert!(stale),
+                        Err(Error::Incomplete) => assert!(!store.has(&roots[0]) || !store.has(&roots[1])),
+                        Err(e) => assert_eq!(e, Error::Full),
+                    }
                 }
                 _ => {}
             }
@@ -936,3 +959,126 @@ fn each_version_links_the_one_before() {
     let store = mount(&mut medium, &mut room).unwrap();
     assert_eq!(store.history(b"doc").unwrap().iter().map(|v| (v.version, v.owner)).collect::<Vec<_>>(), vec![(3, OWNER)]);
 }
+
+// Two names and a third, each with a stored object; the store after `commit(a, b)` from their first versions.
+fn two_names(store: &mut Store<&mut Memory>) -> [Cid; 4] {
+    let roots = [object(store, 21, 20_000), object(store, 22, 100), object(store, 23, 30_000), object(store, 24, 50)];
+    assert_eq!(store.publish(b"a", 0, &roots[0], OWNER), Ok(1));
+    assert_eq!(store.publish(b"b", 0, &roots[1], OWNER), Ok(1));
+    roots
+}
+
+#[test]
+fn a_commit_changes_every_name_or_none() {
+    let mut medium = Memory::new(512);
+    let mut room = Room::with_names(64, 16);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let [a1, b1, a2, b2] = two_names(&mut store);
+    let free = store.stats().free;
+    // Refusals write nothing and change no name: a stale version, a root not stored, the same name twice, too many.
+    let refused: [(&[Update], Error); 6] = [
+        (&[Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 2, root: Some(b2) }], Error::Conflict),
+        (&[Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"c", expected: 0, root: Some(Cid::raw(b"never stored")) }], Error::Incomplete),
+        (&[Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"a", expected: 1, root: Some(b2) }], Error::Invalid),
+        (&[Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"gone", expected: 0, root: None }], Error::NotFound),
+        (&[Update { name: b"a:b", expected: 0, root: Some(a2) }], Error::Invalid),
+        (&[], Error::Invalid),
+    ];
+    for (updates, error) in refused {
+        assert_eq!(store.commit(updates, OWNER).map(|_| ()), Err(error));
+        assert_eq!((store.resolve(b"a"), store.resolve(b"b"), store.resolve(b"c")), (Ok((1, a1)), Ok((1, b1)), Err(Error::NotFound)));
+        assert_eq!(store.stats().free, free);
+    }
+    let many: Vec<Vec<u8>> = (0..=COMMIT_MAX).map(|k| format!("n{k}").into_bytes()).collect();
+    let many: Vec<Update> = many.iter().map(|name| Update { name, expected: 0, root: Some(b2) }).collect();
+    assert_eq!(store.commit(&many, OWNER).map(|_| ()), Err(Error::Invalid));
+    assert_eq!(store.commit(&many[..COMMIT_MAX], OWNER).map(|v| v[COMMIT_MAX - 1]), Ok(1));
+    // Both from their current versions, one name new and one removed: every change at once.
+    let updates = [Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 1, root: None }, Update { name: b"c", expected: 0, root: Some(b2) }];
+    assert_eq!(store.commit(&updates, OWNER).map(|v| v[..3].to_vec()), Ok(vec![2, 2, 1]));
+    assert_eq!((store.resolve(b"a"), store.resolve(b"b"), store.resolve(b"c")), (Ok((2, a2)), Err(Error::NotFound), Ok((1, b2))));
+    assert_eq!([b"a", b"b", b"c", b"z"].map(|n| store.snapshot(n).unwrap()), [(2, Some(a2)), (2, None), (1, Some(b2)), (0, None)]);
+    // Its versions link the roots before them, as a publication's do.
+    assert_eq!(store.history(b"a").unwrap().iter().map(|v| (v.version, v.root())).collect::<Vec<_>>(), vec![(2, Some(a2)), (1, Some(a1))]);
+    drop(store);
+    // A mount finds the commit whole.
+    let mut room = Room::with_names(64, 16);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!([b"a", b"b", b"c"].map(|n| store.snapshot(n).unwrap()), [(2, Some(a2)), (2, None), (1, Some(b2))]);
+    assert_eq!((store.stats().corrupt, store.stats().damaged), (0, 0));
+}
+
+#[test]
+fn a_commit_past_the_quota_changes_nothing() {
+    let mut medium = Memory::new(128);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let (big, other) = (object(&mut store, 8, 30_000), object(&mut store, 9, 20_000));
+    let updates = [Update { name: b"big", expected: 0, root: Some(big) }, Update { name: b"other", expected: 0, root: Some(other) }];
+    assert_eq!(store.commit(&updates, OWNER).map(|_| ()), Err(Error::Quota));
+    assert_eq!((store.resolve(b"big"), store.resolve(b"other")), (Err(Error::NotFound), Err(Error::NotFound)));
+    // The same object under two names counts once.
+    let updates = [Update { name: b"big", expected: 0, root: Some(big) }, Update { name: b"same", expected: 0, root: Some(big) }];
+    assert!(store.commit(&updates, OWNER).is_ok());
+    assert_eq!(store.usage(OWNER).retained, 30_000);
+}
+
+#[test]
+fn a_damaged_or_torn_commit_changes_no_name() {
+    // A byte of any sector of the record, or a write that stopped before its last sector: a mount applies none of it.
+    for case in 0..4 {
+        let mut medium = Memory::new(512);
+        let (a1, b1, at);
+        {
+            let mut room = Room::new(64);
+            let mut store = mount(&mut medium, &mut room).unwrap();
+            let [x1, y1, a2, b2] = two_names(&mut store);
+            (a1, b1) = (x1, y1);
+            let updates = [Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 1, root: Some(b2) }];
+            store.commit(&updates, OWNER).unwrap();
+        }
+        at = medium.data.chunks(SECTOR).position(|s| s.starts_with(b"MIND-TXN")).unwrap() as u64;
+        match case {
+            0 => medium.flip(at, 20),
+            1 => medium.flip(at + 1, 30),
+            2 => medium.flip(at + 2, 100),
+            _ => medium.data[(at + 2) as usize * SECTOR..(at + 3) as usize * SECTOR].fill(0),
+        }
+        let mut room = Room::new(64);
+        let store = mount(&mut medium, &mut room).unwrap();
+        assert_eq!((store.resolve(b"a"), store.resolve(b"b")), (Ok((1, a1)), Ok((1, b1))), "case {case}");
+        // Every non-blank sector of the record is reported.
+        assert_eq!(store.stats().damaged, if case == 3 { 2 } else { 3 }, "case {case}");
+    }
+}
+
+#[test]
+fn a_commit_record_goes_once_no_name_keeps_its_versions() {
+    let mut medium = Memory::new(512);
+    let mut room = Room::new(64);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let [_, _, a2, b2] = two_names(&mut store);
+    let updates = [Update { name: b"a", expected: 1, root: Some(a2) }, Update { name: b"b", expected: 1, root: Some(b2) }];
+    store.commit(&updates, OWNER).unwrap();
+    let txn = |m: &Memory| m.data.chunks(SECTOR).filter(|s| s.starts_with(b"MIND-TXN")).count();
+    // a moves on HISTORY versions; b still keeps version 2: the record stays.
+    for v in 2..2 + HISTORY as u64 { assert_eq!(store.publish(b"a", v, &a2, OWNER), Ok(v + 1)); }
+    store.set_time(LEASE_NS);
+    store.collect().unwrap();
+    assert_eq!(store.history(b"b").unwrap()[0].version, 2);
+    drop(store);
+    assert_eq!(txn(&medium), 1);
+    let mut room = Room::new(64).at(LEASE_NS);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.snapshot(b"a").unwrap().0, store.snapshot(b"b").unwrap()), (2 + HISTORY as u64, (2, Some(b2))));
+    // Once b moves on too, the record goes with the versions no name keeps.
+    for v in 2..2 + HISTORY as u64 { assert_eq!(store.publish(b"b", v, &b2, OWNER), Ok(v + 1)); }
+    store.set_time(2 * LEASE_NS);
+    assert!(store.collect().unwrap().names >= 2);
+    drop(store);
+    assert_eq!(txn(&medium), 0);
+    let mut room = Room::new(64).at(2 * LEASE_NS);
+    let store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!((store.snapshot(b"a").unwrap().0, store.snapshot(b"b").unwrap().0, store.stats().damaged), (2 + HISTORY as u64, 2 + HISTORY as u64, 0));
+}
+
