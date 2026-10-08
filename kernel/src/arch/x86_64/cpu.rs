@@ -8,6 +8,8 @@ pub const MAX: usize = 255;
 static INDEX: [core::sync::atomic::AtomicU8; 256] = [const { core::sync::atomic::AtomicU8::new(0) }; 256];
 pub static COUNT: AtomicUsize = AtomicUsize::new(1);
 static LAPIC: AtomicUsize = AtomicUsize::new(0xfee00000);
+// The firmware left the local APIC in x2APIC mode: its registers are MSRs, its ID 32 bits (211-PRT-0002).
+static X2APIC: AtomicBool = AtomicBool::new(false);
 pub static ONLINE: [AtomicBool; MAX] = [const { AtomicBool::new(false) }; MAX];
 pub static TICKS: [AtomicU64; MAX] = [const { AtomicU64::new(0) }; MAX];
 // PID and name (16 bytes) of the task running on each CPU, 0 when idle: read by the panic handler without locks.
@@ -34,16 +36,21 @@ unsafe fn cpu(index: usize) -> *mut Cpu {
 }
 
 pub fn id() -> usize {
-    let apic = unsafe { read(0x20) >> 24 } as usize;
+    let apic = unsafe { if X2APIC.load(Ordering::Relaxed) { read(0x20) } else { read(0x20) >> 24 } } as usize;
     INDEX[apic & 255].load(Ordering::Relaxed) as usize
 }
 pub fn apic_id(index: usize) -> u32 {
     unsafe { (*cpu(index)).apic_id }
 }
+unsafe fn rdmsr(msr: u32) -> u64 { let (lo, hi): (u32, u32); asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi); (hi as u64) << 32 | lo as u64 }
+unsafe fn wrmsr(msr: u32, value: u64) { asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32); }
+// A local APIC register by its xAPIC offset: memory, or in x2APIC mode the MSR 0x800 + offset / 16.
 pub unsafe fn read(register: usize) -> u32 {
+    if X2APIC.load(Ordering::Relaxed) { return rdmsr(0x800 + register as u32 / 16) as u32; }
     core::ptr::read_volatile((LAPIC.load(Ordering::Relaxed) + register) as *const u32)
 }
 pub unsafe fn write(register: usize, value: u32) {
+    if X2APIC.load(Ordering::Relaxed) { return wrmsr(0x800 + register as u32 / 16, value as u64); }
     core::ptr::write_volatile(
         (LAPIC.load(Ordering::Relaxed) + register) as *mut u32,
         value,
@@ -71,12 +78,16 @@ fn processors(info: &BootInfo) -> ([u32; MAX], usize) {
 pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
     let (ids, count) = processors(info);
     COUNT.store(count, Ordering::Release);
-    let lo: u32;
-    let hi: u32;
-    asm!("rdmsr", in("ecx") 0x1bu32, out("eax") lo, out("edx") hi);
-    assert_eq!(hi, 0, "LAPIC must be below 4 GiB");
-    assert_eq!(lo & (1 << 10), 0, "x2APIC is not supported yet");
-    LAPIC.store((lo as usize) & 0xfffff000, Ordering::Release);
+    // Test-only: what many PCs' firmware does, x2APIC on before the kernel starts.
+    #[cfg(feature = "x2apic-test")]
+    if core::arch::x86_64::__cpuid(1).ecx & (1 << 21) != 0 { wrmsr(0x1b, rdmsr(0x1b) | 1 << 10); }
+    let base = rdmsr(0x1b);
+    if base & 1 << 10 != 0 {
+        X2APIC.store(true, Ordering::Release);
+    } else {
+        assert_eq!(base >> 32, 0, "LAPIC must be below 4 GiB");
+        LAPIC.store((base as usize) & 0xfffff000, Ordering::Release);
+    }
     for i in 0..count {
         let c = &mut *cpu(i);
         c.apic_id = ids[i];
@@ -141,11 +152,9 @@ pub unsafe fn load(index: usize) {
 }
 
 pub unsafe fn lapic_init(bsp: bool) {
-    let mut lo: u32;
-    let hi: u32;
-    asm!("rdmsr", in("ecx") 0x1bu32, out("eax") lo, out("edx") hi);
-    lo |= 1 << 11;
-    asm!("wrmsr", in("ecx") 0x1bu32, in("eax") lo, in("edx") hi);
+    // Enabled, then in x2APIC mode like the boot CPU: the architecture allows no step from disabled to x2APIC.
+    wrmsr(0x1b, rdmsr(0x1b) | 1 << 11);
+    if X2APIC.load(Ordering::Acquire) { wrmsr(0x1b, rdmsr(0x1b) | 1 << 10); }
     write(0x80, 0); // TPR: accept all priorities.
     write(0xf0, 0x1ff); // enabled, spurious vector 255
     for register in [0x320, 0x330, 0x340, 0x360, 0x370] {
@@ -156,6 +165,8 @@ pub unsafe fn lapic_init(bsp: bool) {
 }
 
 pub unsafe fn ipi(target: u32, command: u32) {
+    // x2APIC: one write of the ICR, the 32-bit destination above the command; there is no delivery status to wait for.
+    if X2APIC.load(Ordering::Relaxed) { return crate::interrupts::without(|| wrmsr(0x830, (target as u64) << 32 | command as u64)); }
     crate::interrupts::without(|| {
         for _ in 0..1_000_000 {
             if read(0x300) & (1 << 12) == 0 {
@@ -308,7 +319,8 @@ pub unsafe fn start(info: &BootInfo) {
         (target(core::ptr::addr_of!(ap_boot_index)) as *mut u64).write_unaligned(i as u64);
         ipi(apic_id(i), 0xc500);
         delay(10);
-        ipi(apic_id(i), 0x8500);
+        // The level de-assert INIT has no x2APIC form.
+        if !X2APIC.load(Ordering::Relaxed) { ipi(apic_id(i), 0x8500); }
         delay(10);
         ipi(apic_id(i), 0x600 | (base >> 12) as u32);
         delay(10);

@@ -49,6 +49,10 @@ fn processors(madt: &[u8]) {
         if kind == 0 && len >= 8 && u32_at(madt, at + 4) & 1 != 0 && madt[at + 3] != 0xFF && count < CPUS.len() {
             CPUS[count].store(madt[at + 3] as u32, Ordering::Relaxed); count += 1;
         }
+        // Processor Local x2APIC (211-PRT-0002): firmware in x2APIC mode may list processors only this way.
+        if kind == 9 && len >= 16 && u32_at(madt, at + 8) & 1 != 0 && u32_at(madt, at + 4) != u32::MAX && count < CPUS.len() {
+            CPUS[count].store(u32_at(madt, at + 4), Ordering::Relaxed); count += 1;
+        }
         at += len;
     }
     CPU_COUNT.store(count, Ordering::Release);
