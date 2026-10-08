@@ -3,14 +3,18 @@
 import argparse
 import os
 from pathlib import Path
+import re
+import shutil
+import struct
+import subprocess
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.make_usb_image import ARCHES, ROOT, check_image, qemu_path, read_payloads
+from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, qemu_path, read_payloads
 import qemu_smoke
-from qemu_smoke import VM, files_check, heap_used, require, task_rows
+from qemu_smoke import MTOOLS_ENV, VM, files_check, fsck_volume, heap_used, require, task_rows
 
 
 def main():
@@ -30,7 +34,18 @@ def main():
     with args.image.open("rb") as image:
         image.seek(450)
         assert image.read(1) == b"\xef", "USB image must mark the UEFI system partition"
-    vm = VM(args, qemu_path(args.image, args.qemu), usb=True)
+    # A copy boots without a snapshot, so that what the system writes on its log partition can be read back.
+    work = Path(tempfile.mkdtemp(prefix=".mind-usb-image-", dir=args.image.parent))
+    booted = work / args.image.name
+    shutil.copyfile(args.image, booted)
+    try:
+        run(args, booted)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def run(args, booted):
+    vm = VM(args, qemu_path(booted, args.qemu), usb=True, snapshot=False)
     try:
         # The baseline once the boot has settled (on aarch64 a service still frees memory of its start a moment later).
         baseline = heap_used(vm)
@@ -74,12 +89,37 @@ def main():
         files_check(vm, 5)
         vm.command("kill 5")
         assert "FAULT PID=" not in vm.command("faults")
-        print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; VFS over xHCI USB mass storage through usb_host")
+        # The log partition (211-PRT-0006, 211-KRN-0019): mounted as log:, this boot's system log saved there.
+        vfs = vm.command("dmesg -s vfs_server", raw=True)  # its buffered output was read above
+        require(vfs, "[VFS] MOUNTED FAT16 AT LBA ")
+        name = re.search(r"GOES TO LOG:(boot\d{4}\.log)", vfs)[1]
+        require(vm.command("logger LOG-PARTITION-CHECK"), "LOGGED")
+        for _ in range(20):
+            saved = vm.command(f"cat log:{name}", raw=True)
+            if "LOG-PARTITION-CHECK" in saved:
+                break
+            time.sleep(.5)
+        require(saved, "THE SYSTEM LOG OF ONE BOOT")
+        require(saved, "LOG-PARTITION-CHECK")
+        require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
+        require(vm.command("sync"), "OK")
+        time.sleep(3)  # the journal's last save, flushed
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-image{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
         log.write_text(vm.log)
         print(f"QEMU log: {log}")
+    # On the host, as any computer reads it: the boot log and the note on a clean FAT16 volume.
+    with booted.open("rb") as image:
+        mbr = image.read(512)
+    assert mbr[466] == 0x0E, "the log partition"
+    start = struct.unpack_from("<I", mbr, 470)[0]
+    read = lambda file: subprocess.run(["mtype", "-i", f"{booted}@@{start * 512}", f"::{file}"], check=True, capture_output=True, env=MTOOLS_ENV).stdout
+    require(read(name).decode(errors="replace"), "LOG-PARTITION-CHECK")
+    assert read("note.txt") == b"written on MIND CORE\n", read("note.txt")
+    fsck_volume(booted, start, LOG_SECTORS)
+    print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
+          "VFS over xHCI USB mass storage through usb_host; the boot's system log and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":

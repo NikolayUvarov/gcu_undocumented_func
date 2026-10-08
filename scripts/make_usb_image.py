@@ -11,6 +11,7 @@ import subprocess
 import re
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 # Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
@@ -34,6 +35,15 @@ SIGNED = ("MANIFEST", "MANIFEST.SIG")
 VOICE = ("voice/model.bin", "voice/commands.txt")
 FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE, *SIGNED)
 SECTOR = 512
+# The log partition after the boot one (211-PRT-0006): FAT16 with an ordinary MBR type (0x0E, FAT16 LBA), which Windows,
+# macOS and Linux mount and write. vfs_server mounts it as log: by its label and saves each boot's system log there.
+LOG_LABEL = b"MIND LOG   "
+LOG_SECTORS = 64 * 1024 * 1024 // SECTOR
+LOG_ALIGN = 2048  # 1 MiB
+LOG_SPC = 4  # 2 KiB clusters: about 32 700 of them
+LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.LOG (the last 50 boots are kept).\r\n"
+              b"This partition is an ordinary FAT16 volume: read it on any computer, and send the logs with a report\r\n"
+              b"of what happened (docs/write-disk.md, section 9). On MIND CORE it is log: (ls log:, cat log:boot0001.log).\r\n")
 
 
 def files(arch):
@@ -93,6 +103,90 @@ def read_payloads(source, arch="x86_64"):
     return payloads
 
 
+def fat_time(when):
+    """FAT date and time of a struct_time (2-second resolution)."""
+    return ((when.tm_year - 1980) << 9 | when.tm_mon << 5 | when.tm_mday,
+            when.tm_hour << 11 | when.tm_min << 5 | when.tm_sec // 2)
+
+
+def log_volume(start, when):
+    """The log partition's FAT16 volume: boot sector, two FATs, the root with the label and README.TXT."""
+    reserved, fats, root_entries = 1, 2, 512
+    root_sectors = root_entries * 32 // SECTOR
+    fat_sectors = 1
+    for _ in range(3):
+        clusters = (LOG_SECTORS - reserved - fats * fat_sectors - root_sectors) // LOG_SPC
+        fat_sectors = ((clusters + 2) * 2 + SECTOR - 1) // SECTOR
+    clusters = (LOG_SECTORS - reserved - fats * fat_sectors - root_sectors) // LOG_SPC
+    assert 4085 <= clusters < 65525
+    volume = bytearray(LOG_SECTORS * SECTOR)
+    boot = bytearray(SECTOR)
+    boot[0:3] = b"\xeb\x3c\x90"
+    boot[3:11] = b"MINDCORE"
+    struct.pack_into("<HBHBHHBHHHII", boot, 11, SECTOR, LOG_SPC, reserved, fats, root_entries, 0, 0xF8, fat_sectors, 63, 255,
+                     start, LOG_SECTORS)
+    boot[36], boot[38] = 0x80, 0x29
+    struct.pack_into("<I", boot, 39, 0x4D4C4F47)  # the volume ID
+    boot[43:54] = LOG_LABEL
+    boot[54:62] = b"FAT16   "
+    boot[510:512] = b"\x55\xaa"
+    volume[:SECTOR] = boot
+    date, time_ = fat_time(when)
+    fat = bytearray(fat_sectors * SECTOR)
+    struct.pack_into("<HHH", fat, 0, 0xFFF8, 0xFFFF, 0xFFFF)  # media, clean, README.TXT in cluster 2 alone
+    for copy in range(fats):
+        at = (reserved + copy * fat_sectors) * SECTOR
+        volume[at:at + len(fat)] = fat
+    root = (reserved + fats * fat_sectors) * SECTOR
+    label = bytearray(32)
+    label[0:11], label[11] = LOG_LABEL, 0x08
+    struct.pack_into("<HH", label, 22, time_, date)
+    readme = bytearray(32)
+    readme[0:11], readme[11] = b"README  TXT", 0x20
+    struct.pack_into("<HHH", readme, 14, time_, date, date)  # created, accessed
+    struct.pack_into("<HHHI", readme, 22, time_, date, 2, len(LOG_README))  # written, first cluster, size
+    volume[root:root + 64] = label + readme
+    data = root + root_sectors * SECTOR
+    volume[data:data + len(LOG_README)] = LOG_README
+    return bytes(volume)
+
+
+def add_log_partition(image, when):
+    """Appends the log partition at the next MiB after the image and enters it in the MBR's second slot."""
+    size = image.stat().st_size
+    start = -(-size // SECTOR // LOG_ALIGN) * LOG_ALIGN
+    with image.open("r+b") as disk:
+        mbr = bytearray(disk.read(SECTOR))
+        if size % SECTOR or any(mbr[462:510]):
+            raise ValueError("Invalid USB image: not whole sectors, or more than one partition before the log partition")
+        mbr[462:478] = struct.pack("<B3sB3sII", 0, b"\xfe\xff\xff", 0x0E, b"\xfe\xff\xff", start, LOG_SECTORS)
+        disk.seek(0)
+        disk.write(mbr)
+        disk.seek(start * SECTOR)
+        disk.write(log_volume(start, when))
+        disk.flush()
+        os.fsync(disk.fileno())
+
+
+def check_log_partition(disk, mbr, image_size, boot_end):
+    """The second MBR entry is the log partition: FAT16 LBA after the boot one, labelled MIND LOG."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(f"Invalid USB image: {message}")
+    require(not any(mbr[478:510]), "more than two partitions")
+    require(mbr[466] == 0x0E, "log partition type (FAT16 LBA)")
+    start, length = struct.unpack_from("<II", mbr, 470)
+    require(start >= boot_end and start % LOG_ALIGN == 0 and length == LOG_SECTORS and (start + length) * SECTOR <= image_size,
+            "log partition placement")
+    disk.seek(start * SECTOR)
+    boot = disk.read(SECTOR)
+    bps, spc, reserved, fats, roots = struct.unpack_from("<HBHBH", boot, 11)
+    require(boot[510:] == b"\x55\xaa" and bps == SECTOR and spc == LOG_SPC and fats == 2 and roots == 512
+            and struct.unpack_from("<I", boot, 32)[0] == LOG_SECTORS and struct.unpack_from("<I", boot, 28)[0] == start,
+            "log partition FAT16 parameters")
+    require(boot[38] == 0x29 and boot[43:54] == LOG_LABEL and boot[54:62] == b"FAT16   ", "log partition label")
+
+
 def check_image(image, payloads, mark_esp=False):
     """Check MBR/FAT16 geometry and all packaged file contents independently of QEMU.
 
@@ -106,7 +200,7 @@ def check_image(image, payloads, mark_esp=False):
     with image.open("r+b" if mark_esp else "rb") as disk:
         mbr = disk.read(SECTOR)
         require(len(mbr) == SECTOR and mbr[510:] == b"\x55\xaa", "MBR signature")
-        require(not any(mbr[462:510]), "expected a single partition")
+        require(not any(mbr[462:478]) or mbr[466] == 0x0E, "expected the boot partition and at most the log partition")
         require(mbr[450] in (0x04, 0x06, 0x0e, 0xef), "FAT16/ESP partition type")
         start, length = struct.unpack_from("<II", mbr, 454)
         require(start > 0 and length > 0 and (start + length) * SECTOR <= image.stat().st_size,
@@ -176,6 +270,8 @@ def check_image(image, payloads, mark_esp=False):
             require(not entry[11] & 0x10 and size == len(expected), f"size of {name}")
             actual = chain(struct.unpack_from("<H", entry, 26)[0])[:size]
             require(actual == expected, f"contents of {name} do not match the build output")
+        if any(mbr[462:478]):
+            check_log_partition(disk, mbr, image.stat().st_size, start + length)
         if mark_esp:
             disk.seek(450)
             disk.write(b"\xef")
@@ -232,6 +328,8 @@ def main():
         subprocess.run([qemu_img, "convert", "-O", "raw", "json:" + json.dumps(descriptor),
                         qemu_path(temporary, qemu_img)], check=True)
         check_image(temporary, payloads, mark_esp=True)
+        add_log_partition(temporary, time.localtime())
+        check_image(temporary, payloads)
         digest = hashlib.sha256()
         with temporary.open("rb") as disk:
             for chunk in iter(lambda: disk.read(1024 * 1024), b""):

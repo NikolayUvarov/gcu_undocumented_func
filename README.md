@@ -291,8 +291,10 @@ and `qemu-img` installed (the latter comes with QEMU):
 ```
 
 This rebuilds all components and creates **`dist/mind-core-usb.img`**, a complete
-raw disk image of approximately 504 MiB. The image contains an MBR with a UEFI
-system partition, a FAT16 filesystem labelled `MIND CORE`, `EFI/BOOT/BOOTX64.EFI`,
+raw disk image of 568 MiB. The image contains an MBR with a UEFI
+system partition, a FAT16 filesystem labelled `MIND CORE`, and a 64 MiB FAT16
+log partition labelled `MIND LOG` that any computer mounts: MIND Core keeps each
+boot's system log there (`log:`, [docs/write-disk.md](docs/write-disk.md)). The boot volume holds `EFI/BOOT/BOOTX64.EFI`,
 `kernel.elf`, the services in `BOOT_FILES` of `common/abi.rs` and every other `*.elf`
 built into `usb_root/` (the applications), including long names such as `compositor.elf`.
 
@@ -305,7 +307,7 @@ needed, and the script does not write to physical disks.
 Write the **entire `.img` to the USB device in RAW/DD mode** with your chosen
 image-writing tool; copying the `.img` as a file onto the drive will not make it
 bootable. Writing the image replaces the drive's partition table and data.
-Use a drive of at least 512 MiB, select **UEFI x64** in the boot menu, and disable
+Use a drive of at least 1 GiB, select **UEFI x64** in the boot menu, and disable
 **Secure Boot** for this unsigned loader. Legacy BIOS boot is not supported.
 FAT16 is supported for UEFI removable media; the fallback loader path is
 `EFI/BOOT/BOOTX64.EFI` ([UEFI media specification](https://uefi.org/specs/UEFI/2.11/13_Protocols_Media_Access.html)).

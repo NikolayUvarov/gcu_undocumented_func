@@ -358,8 +358,9 @@ impl Init {
             }
             _ => return Err(Error::NotFound),
         }
-        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
-        if name == "shell" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
+        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg), and
+        // vfs_server's, which saves it on the boot disk's log partition (211-KRN-0019).
+        if name == "shell" || name == "vfs_server" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader gets all of init's root quota but what the services need (issue 171: no
         // fixed count of applications; memory limits them); the shell serves voice control on one endpoint (issue 079).

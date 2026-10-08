@@ -1,19 +1,22 @@
 #![no_std]
 #![no_main]
-// vfs_server v2 (idl/vfs.wit): FAT volumes from the block drivers — the boot disk and the RAM disk `ram` — read and
-// written through handles. A handle belongs to the client that opened it (PID and badge) and carries a zone: what it
+// vfs_server v2 (idl/vfs.wit): FAT volumes from the block drivers — the boot disk, its log partition `log` and the RAM
+// disk `ram` — read and written through handles. A handle belongs to the client that opened it (PID and badge) and carries a zone: what it
 // may change. A client's badge decides the zone of a root: applications get read-only roots; the user's badge (the
 // shell's client) writes anywhere on `ram` and in the boot disk's `data` directory only, so boot files are never
 // writable. A handle opened from another never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle).
+// Each boot's system log goes to the log volume (journal.rs).
 extern crate alloc;
 mod disk;
 mod fat;
+mod journal;
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use disk::Disk;
+use disk::{Disk, Shared};
 use fat::{Node, Volume};
+use journal::Journal;
 use mind::abi::*;
 use mind::fs::{BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
@@ -38,18 +41,20 @@ impl Zone {
 
 struct Handle { owner: u64, badge: u16, volume: usize, node: Node, name: String, zone: Zone }
 
-struct Mounted { name: &'static str, volume: Volume<Disk> }
+struct Mounted { name: &'static str, volume: Volume<Shared> }
 
 // A client confined to one directory (`scope`): the capability vfs_server minted with the scope's badge stays here, so
 // ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user.
 struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize }
 
-struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16 }
+struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)> }
 
 const SCOPES: usize = 8;
 const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
 // Badges of scoped clients start here (below: applications 0, the user 1).
 const SCOPE_BADGE_FIRST: u16 = 0x100;
+// The label of the boot disk's log partition, which every computer can read and write (211-PRT-0006).
+const LOG_LABEL: &str = "MIND LOG";
 
 fn error(e: fat::Error) -> Error {
     match e {
@@ -75,6 +80,16 @@ fn now() -> u32 {
 }
 
 impl Server {
+    // The system log's new records to this boot's file, when due; open handles of the file see its new size.
+    fn save_journal(&mut self) {
+        let now_ms = mind::time::uptime_ms() as u64;
+        let Some((index, journal)) = self.journal.as_mut() else { return };
+        if now_ms < journal.due { return; }
+        journal.due = now_ms + journal::SAVE_MS;
+        let index = *index;
+        if let Some(node) = journal.save(&mut self.volumes[index].volume, Endpoint(SLOT_LOG), now()) { self.refresh(index, node); }
+    }
+
     fn get(&self, id: u32, sender: u64, badge: u16) -> Result<&Handle, Error> {
         match self.handles.get(id as usize) { Some(Some(h)) if h.owner == sender && h.badge == badge => Ok(h), _ => Err(Error::Invalid) }
     }
@@ -380,6 +395,19 @@ fn entry(name: &str, node: &Node) -> vfs::Entry {
     vfs::Entry { name: text(name), size: node.size, modified: node.modified, attributes, directory: node.is_dir() }
 }
 
+// This boot's log file on the log volume, when vfs_server may read the system log (init gives it logd's read badge).
+fn start_journal(volumes: &mut [Mounted]) -> Option<(usize, Journal)> {
+    let index = volumes.iter().position(|m| m.name == "log" && m.volume.writable())?;
+    if !matches!(mind::idl::log::state(Endpoint(SLOT_LOG)), Ok(Ok(_))) { mind::println!("[VFS] LOG: NOT KEPT, THE SYSTEM LOG CANNOT BE READ"); return None; }
+    let rtc = Endpoint(SLOT_VFS_RTC);
+    let (date, seconds) = (rtc::date(rtc).ok().flatten().map(mind::rtc::civil_from_days), rtc::now(rtc).ok().flatten());
+    let mut header = String::from("MIND CORE: THE SYSTEM LOG OF ONE BOOT (211-KRN-0019). [SECONDS SINCE BOOT] TASK(PID) LINE\n");
+    if let (Some((y, m, d)), Some(s)) = (date, seconds) { let _ = core::fmt::Write::write_fmt(&mut header, format_args!("STARTED {:04}-{:02}-{:02} {:02}:{:02}:{:02} BY THE MACHINE'S CLOCK\n", y, m, d, s / 3600, s / 60 % 60, s % 60)); }
+    let journal = Journal::start(&mut volumes[index].volume, &header, now())?;
+    mind::println!("[VFS] LOG: THIS BOOT'S SYSTEM LOG GOES TO LOG:{}", journal.name);
+    Some((index, journal))
+}
+
 fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", BLOCK_KIND_VIRTIO => "VIRTIO", BLOCK_KIND_NVME => "NVME", mind::block::KIND_RAM => "RAM", _ => "?" } }
 
 mind::entry!(main);
@@ -388,11 +416,20 @@ fn main(_info: &'static BootInfo) {
     // The boot disk: the first drive with a FAT volume (order: ata, ahci, usb_storage).
     for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
         if mind::dev::cap_info(slot).0 != CAP_KIND_ENDPOINT { continue; }
-        let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new) else { continue };
-        if let Ok(volume) = Volume::mount(disk) {
+        let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new).map(Shared::new) else { continue };
+        if let Ok(volume) = Volume::mount(disk.clone()) {
             mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}{}", volume.bits(), device_name(volume.disk.kind()), volume.start(),
                            if volume.writable() { " (DEVICE WRITABLE)" } else { " (READ-ONLY DEVICE)" });
+            let boot = volume.start();
             volumes.push(Mounted { name: "", volume });
+            // The log partition on the same disk, by its label (211-KRN-0019).
+            for start in fat::fat_starts(&mut disk.clone()).into_iter().flatten().filter(|&start| start != boot) {
+                let Ok(log) = Volume::mount_at(disk.clone(), start) else { continue };
+                if !log.label().eq_ignore_ascii_case(LOG_LABEL) { continue; }
+                mind::println!("[VFS] MOUNTED FAT{} AT LBA {} AS LOG: ({} KB){}", log.bits(), start, log.total_bytes() / 1024, if log.writable() { "" } else { " (READ-ONLY DEVICE)" });
+                volumes.push(Mounted { name: "log", volume: log });
+                break;
+            }
             break;
         }
     }
@@ -403,17 +440,24 @@ fn main(_info: &'static BootInfo) {
             let mut probe = [0u8; fat::SECTOR];
             let blank = fat::Sectors::read(&mut disk, 0, &mut probe) && probe[510..512] != [0x55, 0xAA];
             if blank && fat::format(&mut disk, "MIND RAM", now()).is_err() { mind::println!("[VFS] CANNOT FORMAT THE RAM DISK"); }
-            match Volume::mount(disk) {
+            match Volume::mount(Shared::new(disk)) {
                 Ok(volume) => { mind::println!("[VFS] MOUNTED FAT{} FROM RAM AS RAM: ({} KB)", volume.bits(), volume.total_bytes() / 1024); volumes.push(Mounted { name: "ram", volume }); }
                 Err(_) => mind::println!("[VFS] NO FAT VOLUME ON THE RAM DISK"),
             }
         }
     }
-    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST };
+    let journal = start_journal(&mut volumes);
+    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST, journal };
     // The private copy of each request (MC-2.11); the data of a write is decoded in place from it.
     let mut scratch: Box<[u8; vfs::REQUEST_MAX]> = alloc::vec![0u8; vfs::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        // The system log is saved between requests, at least every journal::SAVE_MS.
+        let request = match server.journal.as_ref() {
+            Some((_, journal)) => Endpoint::SERVICE.recv_timeout(RECEIVED, journal.due.saturating_sub(mind::time::uptime_ms() as u64).clamp(1, journal::SAVE_MS) as u32),
+            None => Endpoint::SERVICE.recv(RECEIVED),
+        };
+        server.save_journal();
+        let Ok(request) = request else { continue };
         let _ = match vfs::decode(&request, RECEIVED, &mut scratch) {
             Ok((decoded, call)) => server.serve(decoded, call, request.sender, request.badge),
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },

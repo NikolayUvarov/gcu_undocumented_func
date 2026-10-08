@@ -1,13 +1,13 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.2 (2026-10-08) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.3 (2026-10-08): the log partition · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
 ## 1. What you need
 
 - **A Linux machine** with Python 3, util-linux (`lsblk`, `findmnt`, `blockdev`) and `sudo`, plus the project's toolchain (`./01_prepare_env.sh`) and `qemu-img` (comes with QEMU) to build the image.
-- **A disk whose contents may be lost**, of 512 MiB or more. Any of these:
+- **A disk whose contents may be lost**, of 1 GiB or more (the image is 568 MiB). Any of these:
   - a USB stick;
   - an SSD in a USB-SATA adapter or enclosure (for example a Samsung 860 PRO);
   - an SATA or NVMe disk inside the Linux machine, with `--internal` (section 4). It must not be the disk Linux runs from: the writer refuses that one in every case.
@@ -19,7 +19,12 @@
 ./04_make_usb_image.sh --force
 ```
 
-It builds everything and writes `dist/mind-core-usb.img` (about 504 MiB): an MBR with one FAT16 EFI system partition labelled `MIND CORE`. It holds `EFI/BOOT/BOOTX64.EFI`, the kernel, the services and the programs. The script checks every file it packed and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
+It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has two partitions:
+
+- **`MIND CORE`**, the boot volume: FAT16, marked as the EFI system partition. It holds `EFI/BOOT/BOOTX64.EFI`, the kernel, the services and the programs.
+- **`MIND LOG`**, the log volume: 64 MiB of FAT16 with an ordinary type, which Windows, macOS and Linux mount by themselves. MIND Core writes the system log of each boot there as `BOOTNNNN.LOG` (section 9).
+
+The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
@@ -124,6 +129,7 @@ write data/hello first boot
 sync
 reboot
 cat data/hello             # after the reboot: the file survived
+ls log:                    # the log partition: a BOOTNNNN.LOG for each boot
 ```
 
 ## 8. If it stops
@@ -148,6 +154,9 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - the PC's board or model, the CPU, and the firmware version;
 - the firmware settings you used (section 6);
 - how the disk was attached: internal SATA port, or USB adapter;
+- **the files of the `MIND LOG` partition.** Attach the disk to any computer and copy `BOOTNNNN.LOG` from it:
+  - each file is one boot's system log, written every 2 seconds, so it reaches the last seconds before a hang;
+  - the kernel's own boot lines (`MIND CORE KERNEL: …`) are not in it yet; a photo shows them;
 - a photo of the screen where it stopped, or the output of `cpus`, `svc`, `stat devices` and `physmap` if the shell came up;
 - the serial output, if you had a COM1 cable.
 

@@ -105,3 +105,22 @@ The `wm` suite checks that:
 ### Acceptance criteria
 
 The `wm` suite opens three windows and lists them. It brings the second to the front from the list, by key and by click, and checks that a closed window leaves the list.
+
+## The log volume `log:` in the shell's help and in `fm` (211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-08, for [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md).
+
+### Problem
+
+Disk images now have a log partition, mounted as `log:`. On it `vfs_server` keeps each boot's system log, `bootNNNN.log`, and the shell's client may write there. Paths with `log:` already work in the shell's commands, through `libmind::fs`. But the shell's help names only `ram:` and `data/`, and `fm` offers only the boot disk and `ram:`.
+
+### Plan (a proposal; the tools track decides)
+
+- The shell's help:
+  - `ls`, `cat`: "`log:` is the boot disk's log partition, with each boot's system log";
+  - `write`, `mkdir`, `rm`, `mv`: "on `ram:`, on `log:` and in `data/`".
+- `fm` offers `log:` as a volume where it is mounted. `mind::fs::volume("log")` says whether it is.
+
+### Acceptance criteria
+
+The `tools` suite finds `log:` in `help` where the image has the partition. `fm` lists `log:` and shows a boot log in its viewer, in the USB image test or a suite booted from an image with the partition.
