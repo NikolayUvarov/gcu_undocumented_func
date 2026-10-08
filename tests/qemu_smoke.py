@@ -1491,7 +1491,8 @@ def fm_check(vm):
     keys(b"\x7f", "LEFT=/ FULL")
     # A program started from the panel takes fm's place in front (issue 160): top gets the keys, and Esc brings fm back
     # without the shell being told (fm stayed in front for it).
-    for _ in range(60):
+    # Down through the root's entries: about 80 now, the boot manifest and its signature among them (350-UPD-0002).
+    for _ in range(120):
         if "CURRENT=top.elf " in keys(b"\x1b[B", "[FM] LEFT=/ FULL"):
             break
     else:
