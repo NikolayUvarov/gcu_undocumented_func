@@ -33,5 +33,6 @@ With 16 CPUs under load the lock was held almost all the time ([171-KRN-0009](17
   - this kernel: 103 runs and 309 system calls;
   - the kernel before (ffc3d46): 103 and 309.
 - **Measured.** With 16 CPUs at the peak (x86, 78 clocks): a clock starts in 0.4 s, `ps` 0.2 s, `uptime` 0.3 s, `date` 0.1 s. That is 000-KRN-0010 and this task together; before both, 0.4, 0.2, 0.4 and 0.1 s. At this load `UPTIME` came mostly from the retries 000-KRN-0010 removed, so this change does not show here.
+- **aarch64 with 16 CPUs at the peak** (171 clocks), with 000-KRN-0010 and this task together: the last ten clocks start in 1.6 s on average (before both: 4.6 s), `uptime` 1.6 s (4.6 s), `date` 0.3 s (0.2–2.1 s), `ps` 0.2 s (0.3 s).
 - **Gate:** the full local run (`scripts/ci_local.sh`, every group, in three parts) on the commit that took this to `main`. It runs `normal`, `busy`, `smp` and `isolation` on x86 and aarch64 with 1, 4 and 16 CPUs.
 - **Profile:** `docs/profile/clocks.md` says these calls are answered without the lock and when their counts reach `STAT`.
