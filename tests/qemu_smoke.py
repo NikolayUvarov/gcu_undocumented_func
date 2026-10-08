@@ -2528,6 +2528,37 @@ def store_suite(vm):
         require(snap, line)
     print("PASS: block store commits: two names change at once or not at all (a stale version, a missing root), a "
           "snapshot reads them at one point, a commit with a removal is found whole after a restart", flush=True)
+    # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
+    # and saves the next, its manifest and state under two names in one commit.
+    def tally(args):
+        vm.send(f"tally {args}\n")
+        return vm.expect("MIND> ", timeout=240, after=f"tally {args}\n")
+    require(tally("show"), "TALLY EPOCH 0 SEQUENCE 0")
+    require(tally("add apples 3"), "SAVED EPOCH 1 SEQUENCE 1: apples = 3")
+    require(tally("add pears"), "SAVED EPOCH 2 SEQUENCE 2: pears = 1")
+    require(tally("add apples"), "SAVED EPOCH 3 SEQUENCE 3: apples = 4")
+    snap = blocks("snapshot checkpoint/tally checkpoint/tally/state")
+    for line in ("checkpoint/tally VERSION 3 ROOT", "checkpoint/tally/state VERSION 3 ROOT"):
+        require(snap, line)
+    # An instance restores epoch 3 and stalls; another saves epoch 4 meanwhile; the stale one's save is refused whole.
+    held = re.search(r"PID=(\d+) NAME=tally BACKGROUND", vm.command("run tally hold 6 pears &"))
+    assert held, "tally did not start in the background"
+    require(vm.program_logs(held[1], "HOLDING EPOCH"), "HOLDING EPOCH 3")
+    require(tally("add apples"), "SAVED EPOCH 4 SEQUENCE 4: apples = 5")
+    require(vm.program_logs(held[1], "FENCED"), "tally: FENCED: epoch 3 is no longer current; nothing saved")
+    shown = tally("show")
+    for line in ("TALLY EPOCH 4 SEQUENCE 4", "apples = 5", "pears = 1"):
+        require(shown, line)
+    # Effects: the intent is saved before the effect begins. An instance that ends between the effect and its record
+    # leaves it pending; the next refuses new effects until someone who knows the outcome reconciles it (B.4).
+    require(tally("effect fx.txt crash"), "EFFECT 1 BEGUN; ENDING BEFORE ITS OUTCOME IS RECORDED")
+    require(vm.command("cat ram:fx.txt"), "done by tally")
+    require(tally("show"), "EFFECT 1 write:ram:fx.txt PENDING: RECONCILE BEFORE TRYING AGAIN")
+    require(tally("effect fy.txt"), "tally: effect refused: effect 1 is pending; reconcile it first")
+    require(tally("reconcile 1 done"), "RECONCILED 1 SAVED EPOCH 6")
+    require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
+    print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
+          "effect cut short comes back pending and is reconciled before another begins", flush=True)
 
 
 def free_port():

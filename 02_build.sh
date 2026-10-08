@@ -75,6 +75,7 @@ USER_CRATES=(
     "vfs_server:vfs_server:vfs_server.elf"
     "blockstore:blockstore:blockstore.elf"
     "blocks:blocks:blocks.elf"
+    "tally:tally:tally.elf"
     "gpio:gpio:gpio.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"

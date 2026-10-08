@@ -1,0 +1,41 @@
+# 306 — Checkpoints and rebinding (track B, seventh step) — done
+
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "checkpoint/rebind" · **Constitution:** MC-6.10, MC-6.11, MC-6.12, Appendix B.3, B.4
+
+## Problem
+
+Nothing in the system saved and restored a component's state.
+- MC-6.10 asks a component that claims to do so for a versioned checkpoint contract, and a protocol for the consistency point, receipts, acknowledgement and failures between an effect and its record.
+- MC-6.11 asks that a checkpoint keep data, resource references and authorities apart, and that a restore never return a revoked right.
+- MC-6.12 asks that two owners never accept commands for the same component at once.
+- Appendix B.3 makes checkpoints roots of collection. B.4 asks for reconciliation of effects with an unknown outcome, not blind retry.
+
+## Plan
+
+- `306-STO-0009` — **a checkpoint format and protocol in `libmind` and a pilot**:
+  - a versioned manifest;
+  - save with the state through one commit of two names ([304](304-several-names-at-once.done)), fenced by the names' version;
+  - restore with contract, schema and consistency checks;
+  - an effect journal;
+  - rebinding of authorities from current grants;
+  - the program `tally` as the pilot, with its contract written down.
+
+## Acceptance criteria
+
+- `docs/storage/checkpoints.md` states the format, the protocol and the pilot's contract with every item MC-6.10 lists.
+- Host tests: the format's refusals, restore after a remount, fencing, contract and schema refusals, pending effects, rebinding.
+- QEMU (x86 and aarch64): `tally` across instances, a stale instance fenced, an effect cut short reconciled.
+- A profile row for MC-6.10–6.12 says what is met and what is not.
+
+## Related
+
+[docs/storage/checkpoints.md](../docs/storage/checkpoints.md), [304](304-several-names-at-once.done), [305](305-recovery-without-the-store.done).
+
+## Resolution
+
+Done by [306-STO-0009](306-STO-0009-checkpoint-format-and-pilot.done). Not done, and listed in the profile:
+- checkpoints of services, with inboxes, outboxes and unfinished replies;
+- migration of an instance;
+- a platform test of an authority that is missing at restore.
+
+A service that wants persistence follows the same protocol with its own contract. Its queues need the persistent-execution profile MC-6.10 describes, which no service has asked for yet.
