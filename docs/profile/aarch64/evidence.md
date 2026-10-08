@@ -22,6 +22,7 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | On QEMU `virt` the kernel reports no pin controller and `gpio` does not start | every aarch64 boot; `normal` suite (`MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES`) |
 | USB boot keyboard reports become PS/2 set 1 codes; report descriptors of a tablet and a mouse give their fields | Host tests in `tests/hid_host.rs` |
 | The block store at boot: an object gets the independent reference's root and reads back; a file round trip; names by compare-and-swap, only complete roots; a full medium refused; the store found again after a restart; room freed by a collection once leases end; a name's history of three versions, a quota refusal for a publication and a pin, a pin, a removal found again after a restart (300-STO-0003, 303) | `store` suite on `virt` (CI group "files, network and TLS") |
+| Damage on the block store's medium, injected from the host into its bytes in guest RAM (QMP `pmemsave`, gdbstub writes at the RAM's base 0x4000_0000): a corrupt chunk refused when read and when mounting, a collection refused meanwhile, a put repairs it; a damaged header loses its record alone; a damaged name record counted and the version before it current (300-STO-0005) | `storefaults` suite on `virt` (CI group "files, network and TLS") |
 
 ## Not covered by any test
 

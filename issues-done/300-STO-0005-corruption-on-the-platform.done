@@ -1,0 +1,45 @@
+# 300-STO-0005 — Corruption on the platform: a damaged block, chunk or name record refused by the running store — done
+
+**Type:** tests (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B; Assurance · **Constitution:** MC-4.8, MC-12.1
+
+Part of main task [300](../issues/300-checksummed-block-store.md); split off from 300-STO-0002, 301 and 302.
+
+## Problem
+
+The host tests show the expected outcome of each kind of damage on a simulated medium:
+- a flipped byte in a block is refused at mount and at read;
+- a damaged header or a torn write loses only its own record;
+- a damaged latest name record is reported, and the version before it is current.
+
+On the platform none of this has run. The store's medium is `ramdisk#1`, and only `blockstore` holds its client (Appendix B.6), so no test program can damage it.
+
+## Plan
+
+- **When the store runs on a durable disk** (a VirtIO or AHCI disk image of its own): the QEMU suite stops the VM, flips bytes in the image on the host, boots again, and checks what `blocks stat`, `get`, `check` and `resolve` answer.
+- **Or with the assurance track's fault injection:** a driver that damages what it returns.
+
+## Acceptance criteria
+
+The three kinds of damage above give, on x86 and aarch64, the outcomes the host tests give.
+
+## Related
+
+[300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done), [docs/storage](../docs/storage/README.md).
+
+## Resolution
+
+Neither medium in the plan was needed: the test damages the RAM disk's bytes from the host, in the guest's memory. No program in the system is given a way to reach the medium (Appendix B.6 holds), and no other track had to change anything.
+
+- **`tests/qemu_smoke.py`:**
+  - `poke(vm, needle, offset, port)` reads the guest's RAM with QMP `pmemsave` (x86 from address 0, aarch64 `virt` from 0x4000_0000), finds every copy of a record's bytes, and flips one bit at an offset in each through QEMU's gdbstub (`Qqemu.PhyMemMode:1`, then `M`), which writes physical memory with the guest stopped. The RAM disk's sectors are such copies. The VM of this suite alone runs with `-gdb tcp:127.0.0.1:<free port>`.
+  - `record_header(chunk)`: a block record's header up to its CID (layout 2), to find a chunk's record.
+  - `store_faults_suite`, suite `storefaults`, on x86 and aarch64. It puts a 100 000-byte pattern (its root is the independent reference's) and names it, then:
+    1. flips a byte in the third chunk's data: `check` stops at `corrupt`, the store logs the chunk's CID, `stat` says `CORRUPT=1`, and `collect` refuses with `incomplete`; a put of the same pattern stores the chunk again, the object reads back whole, the next collection frees the damaged copy and `stat` says `CORRUPT=0`;
+    2. flips a byte in the fifth chunk's data, then restarts the service: the new instance logs `CORRUPT=1 DAMAGED=0`, the chunk is `not-found`, and a put repairs it;
+    3. publishes a second version and flips a byte in its name record's root: the new instance logs `DAMAGED=1`, and `resolve` gives the first version;
+    4. after a collection frees the fifth chunk's corrupt copy, flips a byte in the second chunk's header (in its CID): the new instance logs `CORRUPT=0 DAMAGED=34` (the record's 33 sectors and the name record's one), the chunk is `not-found`, the records after it are found, and a put repairs the object.
+- **CI:** `storefaults` runs in the groups "files and block writes" (x86) and "files, network and TLS" (aarch64) of `.github/workflows/ci.yml` and `scripts/ci_local.sh`.
+- **Docs:** `docs/storage` (the block store, names), the evidence rows of `docs/profile` and `docs/profile/aarch64`, the Article 4 rows.
+- **Runs** (local, 4 CPUs): `storefaults` alone 45 s on x86 and 49 s on aarch64. The new instances log the same lines on both: `CORRUPT=1 DAMAGED=0` after the chunk found at the mount, `DAMAGED=1` after the name record, `CORRUPT=0 DAMAGED=34` after the header.
+- **What it shows and what not:** the running store, on both architectures, gives for each kind of damage the outcome the host tests give. The damage is a bit flipped by the test in RAM between a write and a read. It is not a device's failure, and it says nothing about other media (MC-12.1). A torn write ends as a header that does not check or a record whose bytes do not match its CID, both injected here; a device stopping in the middle of a write is tested on the host only (`a_torn_write_is_a_corrupt_record_and_the_log_goes_on`).
+

@@ -56,7 +56,7 @@ Evidence: `tests/dag_host.rs`.
 - The roots and node bytes equal those of an independent reference: the tree built by its shape rule in Python, with the `dag-cbor` and `multiformats` libraries, for sizes around every boundary of the shape.
 - Non-canonical nodes, trees out of shape and forged blocks are refused.
 
-On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores an object of 4 MiB + 1 byte through the running store with `blocks pattern`. It gets the reference's root and reads back equal. A damaged chunk refused on the platform is not tested yet ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
+On the platform, the QEMU `store` suite (x86 and aarch64, 300-STO-0003) stores an object of 4 MiB + 1 byte through the running store with `blocks pattern`. It gets the reference's root and reads back equal. The `storefaults` suite damages a chunk of a stored object on the store's medium; reading the object then fails as corrupt (300-STO-0005, below).
 
 ## The block store — runs at boot on x86 and aarch64 (300-STO-0002, 0003)
 
@@ -102,7 +102,13 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - a full medium refused with `full` while what it holds stays readable;
 - a restarted instance mounting the same medium with every block verified again.
 
-Damage on the platform is not tested yet: no program can change the store's medium ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
+**Damage on the platform (300-STO-0005).** No program can change the store's medium: only `blockstore` holds the RAM disk's client (Appendix B.6). The QEMU `storefaults` suite (x86 and aarch64) therefore injects damage from the host. It finds a record's bytes in the guest's RAM (QMP `pmemsave`) and flips one bit of every copy through QEMU's gdbstub, which writes physical memory with the guest stopped. The RAM disk's sectors are such copies. The suite checks:
+- a flipped byte in a chunk of a named object: the object's read stops at `corrupt`, the store logs the chunk's CID, `stat` counts it, and a collection refuses with `incomplete` while the name's object lacks the chunk; a put of the same bytes stores it again elsewhere, the object reads back whole, and the next collection frees the damaged copy;
+- a flipped byte found by a new instance mounting the medium: counted `CORRUPT=1`, the chunk left out of the index (`not-found`), and repaired by a put of the same bytes;
+- a damaged record header: the new instance loses that record alone, counts its 33 sectors damaged, and finds the records after it; a put of the same bytes repairs the object;
+- a damaged name record (below).
+
+This is damage to the medium's bytes between writes and reads, made by the test, not a failure of a real device. A torn write ends as one of the outcomes injected here (a header that does not check, or a record whose bytes do not match its CID); a device stopping in the middle of a write is tested on the host only. The outcomes are those of the host tests for the same damage; they say nothing about other media or other kinds of fault (MC-12.1).
 
 ## Names — run on the platform (302, 303-STO-0003, 0004)
 
@@ -131,7 +137,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - the latest version found again after a restart of the service;
 - the history of three versions, a removal refused from a stale version and accepted from the current one, `not-found` after it, and the removal found again after a restart.
 
-A damaged name record on the platform is not tested yet ([300-STO-0005](../../issues/300-STO-0005-corruption-on-the-platform.md)).
+The `storefaults` suite (x86 and aarch64, 300-STO-0005) damages the record of a name's second version on the medium. A new instance counts its sector `DAMAGED=1`, and the first version is current.
 
 ## Retention and collection — implemented, run on the platform (303)
 

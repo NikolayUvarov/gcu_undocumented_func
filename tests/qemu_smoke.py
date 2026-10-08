@@ -2504,6 +2504,123 @@ def store_suite(vm):
           "a removed name retains nothing and mounts again as removed", flush=True)
 
 
+def free_port():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+# The gdbstub port of the storefaults suite's VM (300-STO-0005).
+GDB_PORT = free_port()
+
+
+def guest_ram(vm):
+    """The guest's RAM: its first physical address (x86 from 0, QEMU virt from 1 GiB) and size."""
+    return (0x4000_0000 if vm.args.arch == "aarch64" else 0), int(gibibytes(getattr(vm.args, "memory", None)) * (1 << 30))
+
+
+def poke(vm, needle, offset, port):
+    """Fault injection from the host (300-STO-0005): in every copy of `needle` in the guest's RAM, the byte `offset`
+    bytes after its start gets one bit flipped. The RAM is read with QMP pmemsave; the bytes are written through
+    QEMU's gdbstub in physical-memory mode, which stops the guest for the write. Returns how many copies changed."""
+    base, size = guest_ram(vm)
+    with tempfile.TemporaryDirectory() as temp:
+        dump = Path(temp) / "ram"
+        vm.hmp(f'pmemsave {base} {size} "{dump}"')
+        data = dump.read_bytes()
+    places, at = [], data.find(needle)
+    while at >= 0:
+        places.append(at)
+        at = data.find(needle, at + 1)
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as gdb:
+        pending = b""
+        def packet(text):
+            nonlocal pending
+            body = text.encode()
+            gdb.sendall(b"$" + body + b"#%02x" % (sum(body) % 256))
+            while True:
+                start = pending.find(b"$")
+                end = pending.find(b"#", start)
+                if start >= 0 and end >= 0 and len(pending) >= end + 3:
+                    reply, pending = pending[start + 1:end], pending[end + 3:]
+                    gdb.sendall(b"+")
+                    return reply.decode()
+                pending += gdb.recv(4096)
+        assert packet("Qqemu.PhyMemMode:1") == "OK"
+        for at in places:
+            byte = data[at + offset] ^ 0x10
+            assert packet(f"M{base + at + offset:x},1:{byte:02x}") == "OK", "gdbstub refused the write"
+        packet("D")
+    return len(places)
+
+
+def record_header(chunk):
+    """A raw block's record header on the store's medium, up to its CID (layout 2, blockstore/src/store.rs)."""
+    import hashlib
+    cid = bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(chunk).digest()
+    return b"MIND-BLK" + (2).to_bytes(2, "little") + bytes(2) + len(chunk).to_bytes(4, "little") + cid
+
+
+def store_faults_suite(vm):
+    """300-STO-0005: damage on the block store's own medium, injected from the host into the RAM disk's bytes in guest
+    memory (no program can reach that medium). A flipped byte in a chunk is refused when read and when mounting; a
+    collection refuses while a name's object lacks it; a put of the same bytes repairs it and a collection frees the
+    damaged copy. A damaged name record is reported, and the version before it stands. A damaged record header loses
+    that record alone: its sectors are counted damaged, and the records after it are found."""
+    def blocks(args, timeout=240):
+        vm.send(f"blocks {args}\n")
+        return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+    def restart():
+        require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+        return vm.service_logs("blockstore", "[BLOCKSTORE] READY")
+    data = bytes((i * 31 + 7) % 251 for i in range(100000))
+    chunk = lambda k: data[k * 16384:(k + 1) * 16384]
+    root = "bafyreiaatjv3tf4ncvx6eeupemzvs5lz5zepknmtfeqlxdcibwwc5ae4ru"  # the reference's root of the pattern's first 100 000 bytes
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "[BLOCKSTORE] READY")
+    require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
+    require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
+    # A byte of the third chunk, 100 bytes into its data: refused when read, and the name's object is no longer whole.
+    assert poke(vm, record_header(chunk(2)), 84 + 100, GDB_PORT) >= 1
+    require(blocks(f"check {root} pattern"), "blocks: check: Corrupt (the store: Corrupt)")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] CORRUPT"), f"[BLOCKSTORE] CORRUPT {cid_raw(chunk(2))}")
+    require(blocks("stat"), "CORRUPT=1 DAMAGED=0")
+    require(blocks("collect"), "blocks: collect: Incomplete")
+    # A put of the same bytes stores the chunk again elsewhere; a collection then frees the damaged copy.
+    require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
+    require(blocks("stat"), "CORRUPT=0 DAMAGED=0")
+    # A byte of the fifth chunk, found when a new instance mounts the medium.
+    assert poke(vm, record_header(chunk(4)), 84 + 100, GDB_PORT) >= 1
+    require(restart(), "CORRUPT=1 DAMAGED=0")
+    require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
+    require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    # A damaged name record: the second version's. A new instance counts its sector damaged; the first version stands.
+    require(vm.command("write ram:v2.txt second"), "WROTE 7 BYTES")
+    second = cid_raw(b"second\n")
+    require(blocks("put ram:v2.txt"), f"PUT {second} SIZE 7")
+    require(blocks(f"publish obj {second} 1"), "PUBLISHED obj VERSION 2")
+    import base64
+    second_bytes = base64.b32decode(second[1:].upper() + "=" * (-len(second[1:]) % 8))
+    name_record = b"MIND-REF" + (2).to_bytes(2, "little") + (3).to_bytes(2, "little") + (2).to_bytes(8, "little") + second_bytes
+    assert poke(vm, name_record, 100, GDB_PORT) >= 1
+    require(restart(), "DAMAGED=1")
+    require(blocks("resolve obj"), f"obj VERSION 1 ROOT {root}")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    # A damaged header, in the second chunk's CID: that record is lost whole, its 33 sectors counted damaged with the
+    # name record's one; the chunks after it are found. A collection first frees the fifth chunk's corrupt copy.
+    assert re.search(r"COLLECTED [1-9]\d* BLOCKS", blocks("collect"))
+    assert poke(vm, record_header(chunk(1)), 30, GDB_PORT) >= 1
+    require(restart(), f"CORRUPT=0 DAMAGED={1 + (84 + 16384 + 511) // 512}")
+    require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
+    require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
+    require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
+          "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
+          "header loses its record alone", flush=True)
+
+
 def escrow_check(vm):
     """Issue 170: init keeps the privileges it grants in escrow and holds no process control: it can pass them to a
     service it starts but not use them. Services restarted from escrow get the privilege itself."""
@@ -4863,7 +4980,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -4880,7 +4997,7 @@ def main():
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -4888,7 +5005,7 @@ def main():
     if args.block_elf:
         suites.append("block")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "vfs", "store", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -4965,7 +5082,7 @@ def main():
             # line, and audio_gw must keep playing without interrupts (issue 096).
             vm = VM(args, disk.relative_to(ROOT).as_posix(),
                     rtc="2026-09-19T19:35:05" if suite == "dzen" else "localtime", audio=wav, ahci=suite == "ahci",
-                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else (), tablet=suite == "tablet", usb_input=suite == "usb")
+                    extra=["-nic", "user,model=virtio-net-pci"] if suite == "listen" else ["-gdb", f"tcp:127.0.0.1:{GDB_PORT}"] if suite == "storefaults" else (), tablet=suite == "tablet", usb_input=suite == "usb")
             try:
                 if suite == "audio":
                     audio_suite(vm, wav)
@@ -4978,7 +5095,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

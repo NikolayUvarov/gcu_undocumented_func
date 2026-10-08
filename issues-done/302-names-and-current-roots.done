@@ -45,4 +45,4 @@ The `STO` track numbers its tasks itself and may change the split.
   - a root never stored is refused as `Incomplete`, and no name is created;
   - each publication is in the log;
   - after `svc restart blockstore`, the new instance finds the name at its latest version.
-- **Split off:** "a damaged latest record is reported" on the platform goes to [300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md). The host tests cover it.
+- **Split off:** "a damaged latest record is reported" on the platform goes to [300-STO-0005](300-STO-0005-corruption-on-the-platform.done). The host tests cover it.

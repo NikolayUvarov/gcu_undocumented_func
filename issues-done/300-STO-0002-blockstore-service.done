@@ -54,4 +54,4 @@ Content identifiers exist ([300-STO-0001](300-STO-0001-content-identifiers.done)
 
 - **The service** runs on x86 and aarch64 over `ramdisk#1`, started by `init` ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done)).
 - **Put and get, and a full store refused,** are checked in QEMU by the `store` suite of [300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done).
-- **A corrupt block refused** is checked by the host tests only. No program can change the store's medium, because only `blockstore` holds the client of `ramdisk#1`. That part is split off into [300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md).
+- **A corrupt block refused** is checked by the host tests only. No program can change the store's medium, because only `blockstore` holds the client of `ramdisk#1`. That part is split off into [300-STO-0005](300-STO-0005-corruption-on-the-platform.done).

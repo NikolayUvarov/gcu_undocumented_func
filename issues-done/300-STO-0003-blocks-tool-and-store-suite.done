@@ -47,5 +47,5 @@ The block store, objects and names had host tests only. The acceptance criteria 
   - The host tests (`dag` 9, `blockstore` 22) pass unchanged.
 - **CI:** the standalone build steps for `blockstore` are gone; `02_build.sh` builds it for both architectures (300-KRN-0001).
 - **Not covered on the platform:**
-  - a corrupt block, chunk or name record ([300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md));
+  - a corrupt block, chunk or name record ([300-STO-0005](300-STO-0005-corruption-on-the-platform.done));
   - refusals by badge, because the shell's client holds every right ([300-STO-0004](../issues/300-STO-0004-rights-by-badge.md)).

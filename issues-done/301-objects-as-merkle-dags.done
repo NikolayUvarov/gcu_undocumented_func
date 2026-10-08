@@ -42,4 +42,4 @@ The `STO` track numbers its tasks itself and may change the split.
 - **Done:** [301-STO-0001](301-STO-0001-object-format.done) and [301-STO-0002](301-STO-0002-store-takes-nodes.done). The service part, `301-STO-0003`, was done with [300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done):
   - `blocks put` writes a file as an object through the running store;
   - in QEMU (x86 and aarch64), an object of 4 MiB + 1 byte gets the root that the independent reference computed (`bafyreiczboab…`) and reads back equal to the pattern.
-- **Split off:** "a damaged chunk of it is refused there" goes to [300-STO-0005](../issues/300-STO-0005-corruption-on-the-platform.md). The host tests cover it, but no program can change the store's medium.
+- **Split off:** "a damaged chunk of it is refused there" goes to [300-STO-0005](300-STO-0005-corruption-on-the-platform.done). The host tests cover it, but no program can change the store's medium.
