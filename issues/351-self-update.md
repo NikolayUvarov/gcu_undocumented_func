@@ -46,7 +46,7 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [350](350-signed-boot-images.md) | `UPD` | Manifest, signing tool, verification in the bootloader, launch record (planned there) |
-| [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) | `UPD`, with `PRT` and `KRN` for the bootloader | Slots A and B, the two boot records, the trial try and the fallback in the bootloader |
+| [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) | `UPD`, with `PRT` and `KRN` for the bootloader | Slots A and B, the two boot records, the trial try and the fallback in the bootloader: done, tested in QEMU ([slots.md](../docs/update/slots.md)) |
 | [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | `KRN` | The trial flag in `BootInfo`, the confirmation from `init`, a deadline that restarts an unconfirmed trial, the updater's grants |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | `ASR` (open) | Power cut at every step of staging and activation in QEMU; the system always comes back on a slot that verifies |
 
@@ -54,7 +54,7 @@ Nothing of it exists (survey of 2026-10-08):
 
 | Task | Track | What |
 |---|---|---|
-| [351-UPD-0005](351-UPD-0005-release-and-publish.md) | `UPD` | Release bundle and server layout; `scripts/publish_release.py` signs and uploads over SSH; a test server for CI |
+| [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done) | `UPD` | Release bundle and server layout; `scripts/publish_release.py` signs and uploads over SSH; a test server for CI |
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | `UPD` (`vfs_server` has no owner) | An update zone: a badge that may write only the inactive slot and the boot records |
 | `requests-NET.md`: HTTPS downloads | `NET` | HTTPS for a service besides the shell; a streaming GET with resume into a file; the update server's trust (root store or pinned key); names and larger volumes in `netpolicy` |
 | [351-UPD-0007](351-UPD-0007-updater-service.md) | `UPD` | The `updater` service: check the channel, verify, fetch into the inactive slot, verify every file, write the trial record, ask to restart, report |

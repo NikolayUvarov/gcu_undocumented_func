@@ -1,0 +1,85 @@
+# Slots A and B: boot records, a trial and the fallback
+
+**Version:** 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+
+The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The updater that stages a slot, and init's confirmation, are not yet (see the end of this page).
+
+## The layout
+
+| Path | Holds |
+|---|---|
+| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services and the build's `MANIFEST` and `MANIFEST.SIG`. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
+| `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each |
+| `EFI/BOOT/` | the bootloader, outside the slots (351-UPD-0010 updates it) |
+| the root | the applications, the licences and the voice model, shared by both slots |
+
+A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The USB images and the volumes of the QEMU suites keep that layout until the updater can stage a slot (351-UPD-0007). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), and slot A is confirmed.
+
+## The boot record
+
+512 bytes, little-endian. The same encoding is in `bootloader/src/slots.rs` and `scripts/boot_slots.py`.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 8 | magic `MINDBOOT` |
+| 8 | 4 | format, 1 |
+| 12 | 8 | sequence number |
+| 20 | 1 | slot: `A` or `B` |
+| 21 | 1 | the slot to fall back to: `A`, `B` or 0 for none |
+| 22 | 1 | tries left |
+| 23 | 1 | flags: bit 0, confirmed |
+| 24 | 484 | zeros |
+| 508 | 4 | CRC-32 (IEEE, as zlib computes it) of bytes 0–507 |
+
+A record of another size, magic or format, with a bad CRC, an unknown slot or flag, or anything but zeros in the reserved bytes is ignored. A record file of zeros is empty: never written.
+
+## What the bootloader does
+
+1. **It reads both records** from its own volume and takes the valid one with the higher sequence number. It names a damaged record on the serial line (`BOOT: RECORD MIND\BOOT1 DAMAGED, IGNORED`).
+2. **A confirmed record:** it boots that slot. If the slot does not verify, it boots the fallback slot.
+3. **Not confirmed, with tries left:** before it loads anything it writes the same record with one try fewer and the next sequence number into the *other* record file. Then it boots the slot on trial (`BOOT: SLOT B LOADED ON TRIAL`).
+   - If that write fails, the slot does not run on trial: a try that cannot be counted could repeat for ever. The fallback slot boots instead, or, with none, the slot itself (`BOOT: CANNOT RECORD THE TRY`). This case is not tested in QEMU yet.
+   - If the slot does not verify, the bootloader writes the record once more with no tries left and boots the fallback slot.
+4. **Not confirmed, no tries left:** the trial is over. It boots the fallback slot (`BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT`) and writes nothing.
+5. **No valid record:** it tries slot A, then slot B.
+
+A slot "verifies" as in [README.md](README.md): its manifest's signature, then the size and SHA-256 of each image. What it loaded is printed as the launch record, followed by `BOOT: SLOT <x> LOADED`. The console shows the slot too. If no slot verifies, the boot stops with `BOOT ERROR` and the last reason.
+
+## Writing a record
+
+Writing a record is the updater's job (351-UPD-0007). Until it exists, `scripts/boot_slots.py` writes records into a disk image.
+
+- **Always write the other file:** the one that does not hold the newer valid record, with that record's sequence number plus one. A cut during the write leaves the newer valid record as it was, and the torn one fails its CRC. This covers the record. Damage to the FAT file system itself during the cut is examined in 351-ASR-0005.
+- **Staging a slot:**
+  - slot = the new one;
+  - fallback = the slot now confirmed;
+  - tries = N;
+  - not confirmed.
+
+  Command: `boot_slots.py stage IMAGE B --tries 3`.
+- **Confirming:** the same slot and fallback, confirmed. Command: `boot_slots.py confirm IMAGE`. On the device, `init` will do this after a healthy start (351-KRN-0014).
+- `boot_slots.py show VOLUME|IMAGE` prints both records and which one counts.
+
+## Tested
+
+The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each uses a raw disk image with both slots and the build's bootloader, in QEMU (`tests/boot_slots_check.py`).
+- Slot B staged with one try boots on trial, and the try is counted on the disk before it runs. Once its record is confirmed, B boots as confirmed.
+- Staged again and not confirmed, B gives way to slot A at the next boot.
+- Slot B with one byte of a service changed is not loaded. A boots and B is left with no tries.
+- A newer record torn by a cut write is ignored for the older one.
+- `fsck.fat` finds the file system consistent after the bootloader's writes.
+- Host tests (`tests/boot_slots_host.rs`) cover:
+  - the encoding;
+  - that every single flipped bit is refused;
+  - the choice between two records.
+
+The suites with a root volume show that a volume without records boots as before.
+
+## Not provided yet
+
+- **The trial flag in `BootInfo`, init's confirmation and the deadline** (351-KRN-0014). The running system does not know it is on trial. Here the host writes the confirmation. A trial slot that hangs after the kernel starts is not restarted: a person must reset the machine, and then its tries run out.
+- **The updater** that downloads a release into the other slot and writes the records (351-UPD-0007, 0008).
+- **Applications in the slots.** They stay at the root, shared, so a fallback runs the newer applications on the older kernel. Moving them needs the loader to know the booted slot (with 351-KRN-0014).
+- **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.
+- **Images built with slots.** That comes with the updater.
+- **A cut during the bootloader's own write, on real media** (351-ASR-0005).

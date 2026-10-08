@@ -38,4 +38,10 @@ if [[ "${1:-}" == --fixtures ]]; then
         -C link-arg=-T"$ROOT/app/linker.ld" -C link-arg=-pie -C link-arg=-zmax-page-size=4096 \
         -C link-arg=--no-dynamic-linker -C link-arg=-znotext "$ROOT/tests/busy_app.rs" -o "$OUT/fixture-busy_app.elf"
 fi
+# The bootloader signed for Secure Boot if $MIND_SECURE_BOOT_KEYS names the keys (351-UPD-0012), then the boot
+# manifest and its signature over everything staged (350-UPD-0002).
+if [[ -n "${MIND_SECURE_BOOT_KEYS:-}" ]]; then
+    python3 "$ROOT/scripts/secure_boot.py" sign "$OUT/EFI/BOOT/BOOTAA64.EFI" "$MIND_SECURE_BOOT_KEYS" "$OUT/EFI/BOOT/BOOTAA64.EFI"
+fi
+python3 "$ROOT/scripts/sign_manifest.py" "$OUT"
 echo ">>> aarch64 build ready: $OUT"

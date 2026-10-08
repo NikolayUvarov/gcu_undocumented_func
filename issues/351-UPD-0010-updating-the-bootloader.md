@@ -1,6 +1,6 @@
 # 351-UPD-0010 — Updating the bootloader itself
 
-**Type:** update (boot) · **Owner:** `UPD` track, with `PRT` · **Priority:** P3 · **Status:** open · **Blocked by:** [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3
+**Type:** update (boot) · **Owner:** `UPD` track, with `PRT` · **Priority:** P3 · **Status:** open · **Blocked by:** [requests-KRN.md](requests-KRN.md) ("UEFI variables for the updater": `BootNext` and `BootOrder` from the running system); [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 

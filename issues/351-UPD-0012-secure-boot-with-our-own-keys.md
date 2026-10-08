@@ -1,6 +1,6 @@
 # 351-UPD-0012 — Secure Boot with our own keys, and old bootloaders revoked
 
-**Type:** update (boot, root of trust) · **Owner:** `UPD` track, with `PRT` · **Priority:** P2 · **Status:** open · **Blocked by:** 350-UPD-0003 (the bootloader verifies what it loads) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.1, MC-9.4, MC-9.6
+**Type:** update (boot, root of trust) · **Owner:** `UPD` track, with `PRT` · **Priority:** P2 · **Status:** in progress · **Blocked by:** a run on the maintainer's PC ([issues-human](../issues-human/README.md), section 5) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.1, MC-9.4, MC-9.6
 
 ## Problem
 
@@ -23,6 +23,22 @@ Even a hardware counter is useless while the code that reads it can be replaced.
   - OVMF's Secure Boot build with our keys enrolled;
   - a signed loader boots;
   - an unsigned one and a revoked one are refused by the firmware.
+
+## Progress (2026-10-08)
+
+Worked by the storage session at the maintainer's request (2026-10-08).
+
+- **Done in QEMU:**
+  - `scripts/secure_boot.py`: test keys (PK, KEK and db, RSA-2048, labelled TEST), signing with `sbsign`, the Authenticode hash, and OVMF variable stores with the keys enrolled, Secure Boot on and revoked hashes in dbx (`python3-virt-firmware`).
+  - `tests/secure_boot_smoke.py`, with OVMF's Secure Boot build: the bootloader signed with our db key boots to the shell; the firmware refuses (`Access Denied`) the unsigned bootloader, one signed with another key, and the signed one once its hash is in dbx. It runs in CI's "USB image" job and in `scripts/ci_local.sh`.
+  - The builds sign the bootloader when `$MIND_SECURE_BOOT_KEYS` names the keys, before the boot manifest is signed.
+  - **Revocation is chosen to be dbx**, not an SBAT-like generation with a TPM counter: the firmware enforces dbx without a TPM.
+  - [docs/update/secure-boot.md](../docs/update/secure-boot.md) and [secure-boot_RU.md](../docs/update/secure-boot_RU.md) give the keys, the trust model and the steps for a real PC.
+  - The profile's Article 9 row states it.
+- **Open:**
+  - the run on the maintainer's PC (issues-human, section 5), recorded with 211-PRT-0004;
+  - authenticated dbx updates through the updater (351-UPD-0009, 0010);
+  - Secure Boot on aarch64.
 
 ## Acceptance criteria
 
