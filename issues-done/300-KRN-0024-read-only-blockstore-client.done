@@ -1,0 +1,31 @@
+# 300-KRN-0024 — A block store client that may only read — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Constitution:** MC-3.4, MC-3.11
+
+## Problem
+
+From the storage track's request ("A block store client with fewer rights", for [300-STO-0004](../issues/300-STO-0004-rights-by-badge.md)).
+
+The shell held the only `blockstore` client, badged get, put and publish, and lent it for `REQUEST_BLOCKSTORE`. A badge is set once, so no program could hold a client that may only read. The service's refusals by badge were tested on the host only.
+
+## Plan
+
+- `init` also gives the shell a client badged `BADGE_GET` alone, in a fixed slot of its own.
+- The shell lends it for a request that asks only to read.
+
+## Acceptance criteria
+
+A program that asked only to read holds a client with badge 1. The storage track's `store` suite then checks that `put` and `publish` are refused.
+
+## Resolution
+
+- **`common/abi.rs`:** `SLOT_BLOCKSTORE_READ` (26); `SLOT_DYNAMIC` moves to 27. This is in ABI 4, which had not reached `main` yet.
+- **`libmind::process`:** `REQUEST_BLOCKSTORE_READ` (32768).
+- **`init`** gives the shell that client next to the full one, where the store runs.
+- **The shell** lends it into the program's `SLOT_BLOCKSTORE` when the program asks only to read. It does so in the tools track's file, for this request. A program that asks for both gets the full client.
+- **Test:** the `isolation` fixture asks for `REQUEST_BLOCKSTORE_READ`, and its case `k` checks that `SLOT_BLOCKSTORE` holds an endpoint with badge 1. Run here, with the `store` suite, on x86.
+- **Left to the storage track** (300-STO-0004): the refusals of `put` and `publish` through such a client in the `store` suite.
+
+## Related
+
+[300-STO-0004](../issues/300-STO-0004-rights-by-badge.md), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done).

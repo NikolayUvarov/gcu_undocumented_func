@@ -361,7 +361,11 @@ impl Init {
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
-                if self.running(service_index("blockstore")) { grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT); }
+                if self.running(service_index("blockstore")) {
+                    grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT);
+                    // One that may only get, for programs that only read (300-KRN-0024).
+                    grants.add(SLOT_BLOCKSTORE_READ, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET)?, CLIENT);
+                }
                 if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
                 if self.running(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; } // lent on with the user's consent
             }

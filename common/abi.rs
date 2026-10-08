@@ -273,8 +273,11 @@ pub const SLOT_CAMERA: usize = 24;
 // A client of the block store (idl/blockstore.wit, 300-KRN-0001): the shell's (get, put and publish), which it lends
 // for REQUEST_BLOCKSTORE to the program's same slot.
 pub const SLOT_BLOCKSTORE: usize = 25;
+// The shell's block store client with the get badge alone, which it lends for REQUEST_BLOCKSTORE_READ to the program's
+// SLOT_BLOCKSTORE: a program that only reads holds a client that cannot put or publish (ABI 4, 300-KRN-0024).
+pub const SLOT_BLOCKSTORE_READ: usize = 26;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 26;
+pub const SLOT_DYNAMIC: usize = 27;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):

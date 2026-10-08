@@ -82,6 +82,11 @@ unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
     call(mb, 3, message.as_ptr() as usize, message.len());
 }
 
+// The request note `mind::request!` writes: a block store client that may only get (REQUEST_BLOCKSTORE_READ, 300-KRN-0024).
+#[used]
+#[link_section = ".mind_request"]
+static MIND_REQUEST: [u8; 16] = [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', 0, 0x80, 0, 0, 0, 0, 0, 0];
+
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
@@ -232,6 +237,8 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                         asm!("ud2", options(noreturn));
                     }
                 }
+                // It asked only to read the block store (its request note): the client lent is badged get alone (300-KRN-0024).
+                if call(mb, abi::SYSCALL_CAP_INFO, abi::SLOT_BLOCKSTORE, 0) != abi::CAP_KIND_ENDPOINT || (*mb).arg2 != 1 { fail(); }
                 // MIND IDL: the rtc service checks requests against idl/rtc.wit (status 0x81 version, 0x80 invalid).
                 let rtc = |word: usize, extra: usize| { let raw = mb; (*raw).msg = [0, 0, word, extra]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_RTC, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
                 if rtc(1 | 2 << 8, 0) != 0x81 || rtc(9 | 1 << 8, 0) != 0x80 || rtc(1 | 1 << 8 | 1 << 40, 0) != 0x80 || rtc(1 | 1 << 8, 1) != 0x80 || rtc(1 | 1 << 8, 0) > 1 {
