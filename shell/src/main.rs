@@ -78,6 +78,7 @@ struct Shell {
     msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
     script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
     log_next: Option<u64>, // the next system log record shown above the prompt, until the first key (211-PRT-0004)
+    beat: (u64, u64), // until then: the line of the `UP n S` heartbeat above the prompt, and the second it shows
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -226,10 +227,17 @@ impl Shell {
             if count == 0 { break; }
         }
         self.log_next = Some(next);
-        if text.is_empty() { return; }
         if before_prompt { self.term.put_str(&text); return; }
-        self.term.truncate(Position { line: self.prompt_at.line, col: 0 });
-        self.term.put_str(&text); self.term.put_str("MIND> ");
+        // A heartbeat: the seconds since boot, so a still screen tells a stopped system from one waiting for keys.
+        let second = mind::time::uptime_ms() as u64 / 1000;
+        if text.is_empty() && second == self.beat.1 { return; }
+        self.term.truncate(Position { line: self.beat.0, col: 0 });
+        self.term.put_str(&text);
+        self.beat = (self.term.position().line, second);
+        let mut line = mind::util::FixedBuf::<32>::new();
+        let _ = writeln!(line, "UP {} S", second);
+        self.term.put_str(core::str::from_utf8(line.as_bytes()).unwrap_or(""));
+        self.term.put_str("MIND> ");
         self.prompt_at = self.term.position();
     }
 
@@ -757,7 +765,7 @@ fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), script: None, log_next: None })
+                            msh: Interpreter::default(), script: None, log_next: None, beat: (0, u64::MAX) })
 }
 
 mind::entry!(main);
@@ -772,6 +780,7 @@ fn main(info: &'static BootInfo) {
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
+    shell.beat.0 = shell.term.position().line;
     shell.prompt();
     let mut vt = Vt::new();
     let mut events = Events::new();
