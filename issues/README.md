@@ -40,6 +40,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) | The image writer for an internal SATA or NVMe disk, behind an explicit option | `PRT` | P2 | — | track H |
 | [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) | The boot volume from the bootloader's own device, named in `BootInfo`; a kernel check of the bootloader's version | `KRN` | P1 | — | track H |
 | [211-DRV-0004](211-DRV-0004-ehci.md) | An EHCI driver for an Intel Mac's internal keyboard and trackpad (proposed) | `DRV` (open) | P2 | — | track A |
+| [211-DRV-0008](211-DRV-0008-usb-mouse-on-real-hardware.md) | A USB mouse on real hardware: the report protocol after the firmware's boot protocol; an interface whose setup fails is retried without flooding the log (in progress) | `DRV` (open) | P2 | — | track A |
 | [211-DRV-0002](211-DRV-0002-ahci-every-port.md) | `ahci`: every port with a disk and every controller | `DRV` (open) | P2 | 211-KRN-0012 | track A |
 | [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) | The first run on the maintainer's Intel PC from the 860 PRO, recorded as profile `x86-64/PC-0` | `PRT`, with the maintainer | P1 | the PC (issues-human 5) | track H |
 | [300](300-checksummed-block-store.md) | A checksummed block store with content addresses (track B, first step): the service runs at boot, the `store` and `storefaults` suites pass on x86 and aarch64; rights refusals on the platform remain (`300-STO-0004`) | main task, `STO` | P2 | — | track B |

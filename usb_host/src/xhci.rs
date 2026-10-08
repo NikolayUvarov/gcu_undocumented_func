@@ -309,7 +309,14 @@ impl Xhci {
         let code = status >> 24;
         // The first report and a failure are logged: a keyboard that sends nothing shows which (211-DRV-0003).
         if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; mind::println!("[USB] SLOT {} ENDPOINT {}: INTERRUPT TRANSFER FAILED (COMPLETION {})", interrupt.slot, interrupt.dci, code); return; }
-        if !interrupt.reported { interrupt.reported = true; mind::println!("[USB] SLOT {} ENDPOINT {}: FIRST REPORT ({} BYTES)", interrupt.slot, interrupt.dci, interrupt.length.saturating_sub(status & 0xFF_FFFF)); }
+        if !interrupt.reported {
+            interrupt.reported = true;
+            let at = (pointer.wrapping_sub(self.dma.physical(interrupt.ring.page)) / TRB as u64) as usize;
+            let (got, buffer) = (interrupt.length.saturating_sub(status & 0xFF_FFFF) as usize, interrupt.ring.page + REPORT_AREA + (at % REPORT_BUFFERS) * REPORT_BYTES);
+            let (slot, dci, bytes) = (interrupt.slot, interrupt.dci, self.dma.bytes(buffer, got.min(8)));
+            mind::println!("[USB] SLOT {} ENDPOINT {}: FIRST REPORT ({} BYTES: {:02X?})", slot, dci, got, bytes);
+        }
+        let Some(interrupt) = self.interrupts[index].as_mut() else { return };
         let at = (pointer.wrapping_sub(self.dma.physical(interrupt.ring.page)) / TRB as u64) as usize;
         let buffer = interrupt.ring.page + REPORT_AREA + (at % REPORT_BUFFERS) * REPORT_BYTES;
         let length = interrupt.length.saturating_sub(status & 0xFF_FFFF) as usize;

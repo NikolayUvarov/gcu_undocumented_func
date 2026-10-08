@@ -4753,8 +4753,9 @@ def wm_suite(vm):
 
 
 def usb_suite(vm):
-    """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port, usb_hid
-    turns their reports into keys and pointer events; devices come and go at run time, and both drivers restart."""
+    """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port (and a
+    mouse plugged in later), usb_hid turns their reports into keys and pointer events; devices come and go at run time,
+    and both drivers restart."""
     names = vm.services()
     assert "usb_host" in names and "usb_hid" in names and "ps2_kbd" not in names and "virtio_input" not in names, names
     hid = vm.service_logs("usb_hid", "TABLET")
@@ -4812,6 +4813,23 @@ def usb_suite(vm):
     # The cell where the pixel is depends on the screen's size: x86's is the 1280 x 800 the clicks assume.
     require(logged(vm, start, "BUTTONS=1"), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0" if vm.arch == "x86_64" else " BUTTONS=1 WHEEL=0")
     vm.send_bytes(b"\x1b"); time.sleep(.3); vm.send("\n"); time.sleep(.3); vm.collect(); vm.output = ""
+    # A boot mouse plugged in at run time (211-DRV-0003): its layout from the descriptor in the report protocol, its
+    # first reports logged, its movement to the focused program.
+    vm.qmp("device_add", driver="usb-mouse", bus="xhci.0", port="1.3", id="mouse")
+    require(vm.service_logs("usb_hid", "MOUSE"), "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    time.sleep(.3)
+    start = len(vm.log)
+    vm.hmp("mouse_move 20 10")
+    time.sleep(.5)
+    vm.collect()
+    moves = [tuple(map(int, m)) for m in re.findall(r"\[KEYS\] pointer buttons=0 dx=(-?\d+) dy=(-?\d+) wheel=0", vm.log[start:])]
+    vm.send_bytes(b"\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert sum(m[0] for m in moves) == 20 and sum(m[1] for m in moves) == 10, moves
+    require(vm.service_logs("usb_hid", "REPORT ["), "[USB_HID] 0627:0001 REPORT [00, ")
     # Unplugged and plugged in again, on another hub port: usb_hid lets it go and takes the new one.
     vm.qmp("device_del", id="kbd")
     require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
@@ -4825,7 +4843,7 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub and tablet: keys, layouts, repeat, a click, hot plug, driver restarts", flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts", flush=True)
 
 
 def tablet_suite(vm, wav):
