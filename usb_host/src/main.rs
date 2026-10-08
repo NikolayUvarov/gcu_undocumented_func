@@ -5,6 +5,7 @@
 // class drivers for (HID, mass storage), and serves idl/usb.wit: a class driver claims an interface of the one class
 // its badge names and moves data through the buffer it lends. Ports are scanned every SCAN_MS, so devices may come and
 // go. Events are polled (no interrupt line).
+mod ehci;
 mod xhci;
 
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_MEM, ERR_TIMEOUT};
@@ -37,7 +38,13 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64] }
+struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
+
+// The EHCI buses live in static memory: a service has no heap, and its 64 KiB stack holds the xHCI host already.
+static mut EHCI_BUSES: [Option<ehci::Bus>; 2] = [const { None }; 2];
+
+// A handle's device byte: an xHCI device's index, or 0x40 times (EHCI bus + 1) plus its index there (211-DRV-0004).
+fn ehci_device(handle: u32) -> Option<(usize, usize)> { let byte = ((handle >> 8) & 0xFF) as usize; (byte >= 0x40).then(|| ((byte >> 6) - 1, byte & 0x3F)) }
 
 fn speed_name(speed: u8) -> &'static str { match speed { 1 => "FULL", 2 => "LOW", 3 => "HIGH", 4 => "SUPER", _ => "?" } }
 fn dci(address: u8) -> u8 { (address & 0xF) * 2 + (address >> 7) }
@@ -272,6 +279,11 @@ impl Host {
     // The device and interface a handle names, if the client with `badge` holds it.
     fn interface(&self, handle: u32, badge: u16) -> Result<(usize, usize)> {
         let (generation, index, iface) = ((handle >> 16) as u16, ((handle >> 8) & 0xFF) as usize, (handle & 0xFF) as usize);
+        if let Some((bus, index)) = ehci_device(handle) {
+            let device = self.ehci.get(bus).and_then(Option::as_ref).and_then(|b| b.devices.get(index).copied().flatten()).ok_or(Error::NotFound)?;
+            if device.generation != generation || iface >= device.count || device.interfaces[iface].owner != badge { return Err(Error::NotFound); }
+            return Ok((index, iface));
+        }
         let device = self.devices.get(index).copied().flatten().ok_or(Error::NotFound)?;
         if device.generation != generation || iface >= device.count || device.interfaces[iface].owner != badge { return Err(Error::NotFound); }
         Ok((index, iface))
@@ -292,11 +304,30 @@ impl Host {
             info.encode(self.buffer(badge)?);
             return Ok((generation as u32) << 16 | (index as u32) << 8 | iface as u32);
         }
+        for b in 0..self.ehci.len() {
+            let Some(bus) = self.ehci[b].as_mut() else { continue };
+            for index in 0..bus.devices.len() {
+                let Some(device) = bus.devices[index].as_mut() else { continue };
+                let Some(iface) = (0..device.count).find(|&i| device.interfaces[i].info.class == class && device.interfaces[i].owner == 0) else { continue };
+                device.interfaces[iface].owner = badge;
+                let (info, generation) = (device.interfaces[iface].info, device.generation);
+                info.encode(self.buffer(badge)?);
+                return Ok((generation as u32) << 16 | (0x40 * (b as u32 + 1) + index as u32) << 8 | iface as u32);
+            }
+        }
         Err(Error::NotFound)
     }
 
     fn release(&mut self, handle: u32, badge: u16) -> Result<()> {
         let (index, iface) = self.interface(handle, badge)?;
+        if let Some((b, _)) = ehci_device(handle) {
+            let bus = self.ehci[b].as_mut().ok_or(Error::NotFound)?;
+            let device = bus.devices[index].as_mut().ok_or(Error::NotFound)?;
+            device.interfaces[iface].owner = 0;
+            let info = device.interfaces[iface].info;
+            for endpoint in info.endpoints() { if let Some(qh) = bus.pipe_of(index, endpoint.address) { bus.hc.forget(qh); } }
+            return Ok(());
+        }
         let device = self.devices[index].as_mut().ok_or(Error::NotFound)?;
         device.interfaces[iface].owner = 0;
         let (slot, info) = (device.slot, device.interfaces[iface].info);
@@ -305,6 +336,15 @@ impl Host {
     }
 
     fn release_all(&mut self, badge: u16) {
+        for bus in self.ehci.iter_mut().flatten() {
+            for index in 0..bus.devices.len() {
+                let Some(device) = bus.devices[index] else { continue };
+                for iface in (0..device.count).filter(|&i| device.interfaces[i].owner == badge) {
+                    for endpoint in device.interfaces[iface].info.endpoints() { if let Some(qh) = bus.pipe_of(index, endpoint.address) { bus.hc.forget(qh); } }
+                    if let Some(d) = bus.devices[index].as_mut() { d.interfaces[iface].owner = 0; }
+                }
+            }
+        }
         for index in 0..MAX_DEVICES {
             let Some(device) = self.devices[index] else { continue };
             for iface in (0..device.count).filter(|&i| device.interfaces[i].owner == badge) {
@@ -328,6 +368,7 @@ impl Host {
 
     fn control_request(&mut self, badge: u16, handle: u32, request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Result<u16> {
         let (device, iface) = self.interface(handle, badge)?;
+        if let Some((b, _)) = ehci_device(handle) { return self.ehci_control(b, badge, device, iface, request_type, request, value, index, length); }
         let info = self.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
         if !Self::allowed(&info, request_type, request, index) { return Err(Error::Rights); }
         if length as usize > CONTROL_MAX { return Err(Error::Invalid); }
@@ -340,6 +381,7 @@ impl Host {
 
     fn bulk(&mut self, badge: u16, handle: u32, address: u8, offset: u32, length: u32) -> Result<u32> {
         let (index, iface) = self.interface(handle, badge)?;
+        if let Some((b, _)) = ehci_device(handle) { return self.ehci_bulk(b, badge, index, iface, address, offset, length); }
         let device = self.devices[index].ok_or(Error::NotFound)?;
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_bulk()).ok_or(Error::Invalid)?;
         let (offset, length) = (offset as usize, length as usize);
@@ -377,6 +419,7 @@ impl Host {
 
     fn reports(&mut self, badge: u16, handle: u32, address: u8) -> Result<u16> {
         let (index, iface) = self.interface(handle, badge)?;
+        if let Some((b, _)) = ehci_device(handle) { return self.ehci_reports(b, badge, index, iface, address); }
         let device = self.devices[index].ok_or(Error::NotFound)?;
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_interrupt() && e.is_in()).ok_or(Error::Invalid)?;
         let target = dci(address);
@@ -393,6 +436,60 @@ impl Host {
         let count = self.xhci.take_reports(armed, |report| { out[at] = report.len() as u8; out[at + 1..at + 1 + report.len()].copy_from_slice(report); at += 1 + report.len(); })
             .map_err(|_| Error::NotFound)?;
         self.buffer(badge)?[..at].copy_from_slice(&out[..at]);
+        Ok(count as u16)
+    }
+
+    // The same requests for a device on EHCI bus `b` (211-DRV-0004).
+    #[allow(clippy::too_many_arguments)]
+    fn ehci_control(&mut self, b: usize, badge: u16, device: usize, iface: usize, request_type: u8, request: u8, value: u16, index: u16, length: u16) -> Result<u16> {
+        let Host { ehci, buffers, .. } = self;
+        let bus = ehci[b].as_mut().ok_or(Error::NotFound)?;
+        let info = bus.devices[device].ok_or(Error::NotFound)?.interfaces[iface].info;
+        if !Self::allowed(&info, request_type, request, index) { return Err(Error::Rights); }
+        if length as usize > CONTROL_MAX { return Err(Error::Invalid); }
+        let buffer = buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
+        let input = request_type & 0x80 != 0;
+        if !input { bus.hc.small(length as usize).copy_from_slice(&buffer[..length as usize]); }
+        let got = bus.control(device, request_type, request, value, index, length).map_err(|code| if code == 0 { Error::Other(ERR_TIMEOUT) } else { Error::Invalid })?;
+        if input { buffer[..got].copy_from_slice(bus.hc.small(got)); }
+        Ok(got as u16)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn ehci_bulk(&mut self, b: usize, badge: u16, index: usize, iface: usize, address: u8, offset: u32, length: u32) -> Result<u32> {
+        let Host { ehci, buffers, .. } = self;
+        let bus = ehci[b].as_mut().ok_or(Error::NotFound)?;
+        let endpoint = bus.devices[index].ok_or(Error::NotFound)?.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_bulk()).ok_or(Error::Invalid)?;
+        let buffer = buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
+        let (offset, length) = (offset as usize, length as usize);
+        if length == 0 || length > BULK_MAX || offset.checked_add(length).is_none_or(|end| end > buffer.len()) { return Err(Error::Invalid); }
+        let qh = bus.pipe_of(index, address).ok_or(Error::Invalid)?;
+        if !endpoint.is_in() { bus.hc.data(length).copy_from_slice(&buffer[offset..offset + length]); }
+        match bus.hc.bulk(qh, endpoint.is_in(), length) {
+            Ok(got) => { if endpoint.is_in() { buffer[offset..offset + got].copy_from_slice(bus.hc.data(got)); } Ok(got as u32) }
+            Err(STALL) => { let _ = bus.control(index, 0x02, 1, 0, address as u16, 0); Err(Error::Invalid) } // CLEAR_FEATURE ENDPOINT_HALT
+            Err(0) => Err(Error::Other(ERR_TIMEOUT)),
+            Err(_) => Err(Error::Invalid),
+        }
+    }
+
+    fn ehci_reports(&mut self, b: usize, badge: u16, index: usize, iface: usize, address: u8) -> Result<u16> {
+        let Host { ehci, buffers, .. } = self;
+        let bus = ehci[b].as_mut().ok_or(Error::NotFound)?;
+        let endpoint = bus.devices[index].ok_or(Error::NotFound)?.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_interrupt() && e.is_in()).ok_or(Error::Invalid)?;
+        let qh = bus.pipe_of(index, address).ok_or(Error::Invalid)?;
+        let armed = match bus.hc.armed(qh) {
+            Some(armed) => armed,
+            None => {
+                if !bus.hc.arm(qh, endpoint.packet) { return Err(Error::NoMemory); }
+                mind::println!("[USB] EHCI {} DEVICE {} ENDPOINT {:02X}: POLLED (PACKET {}, INTERVAL {})", b, bus.address_of(index), address, endpoint.packet, endpoint.interval);
+                bus.hc.armed(qh).ok_or(Error::NoMemory)?
+            }
+        };
+        let mut out = [0u8; 8 * 65]; let mut at = 0;
+        let count = bus.hc.take_reports(armed, |report| { out[at] = report.len() as u8; out[at + 1..at + 1 + report.len()].copy_from_slice(report); at += 1 + report.len(); })
+            .map_err(|_| Error::NotFound)?;
+        buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice()[..at].copy_from_slice(&out[..at]);
         Ok(count as u16)
     }
 
@@ -429,16 +526,24 @@ fn main(_info: &'static BootInfo) {
     }
     // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
     for port in 1..=xhci.ports() { mind::println!("[USB] PORT {} PORTSC {:08X}", port, xhci.port_status(port)); }
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64] };
+    // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
+    let buses: &'static mut [Option<ehci::Bus>; 2] = unsafe { &mut *core::ptr::addr_of_mut!(EHCI_BUSES) };
+    for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
+        let (Ok(mmio), Ok(dma)) = (Mmio::map(bar_slot), Dma::map(dma_slot)) else { continue };
+        match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
+    }
+    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     host.scan();
+    for bus in host.ehci.iter_mut().flatten() { bus.scan(); }
     host.scanned = mind::time::uptime_ms() as u64;
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, SCAN_MS as u32);
         host.xhci.pump();
+        for bus in host.ehci.iter_mut().flatten() { bus.hc.pump(); }
         let now = mind::time::uptime_ms() as u64;
-        if now >= host.scanned + SCAN_MS { host.scan(); host.scanned = now; }
+        if now >= host.scanned + SCAN_MS { host.scan(); for bus in host.ehci.iter_mut().flatten() { bus.scan(); } host.scanned = now; }
         let Ok(request) = received else { continue };
         match usb::decode(&request, RECEIVED_CAP) {
             Ok((call_request, call)) => host.serve(request.badge, call_request, call),

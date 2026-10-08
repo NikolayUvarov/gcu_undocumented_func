@@ -19,6 +19,11 @@ pub const BULK_MAX: usize = 64 * 1024;
 
 pub const MAX_ENDPOINTS: usize = 4;
 
+/// `usb_host`'s EHCI controllers (211-DRV-0004): the slots of each one's register window and DMA region, and the
+/// region's size; init grants them, after the xHCI controller's own.
+pub const EHCI: [(usize, usize); 2] = [(3, 8), (7, 9)];
+pub const EHCI_DMA_BYTES: usize = 128 * 1024;
+
 /// One endpoint of an interface: address (bit 7: IN), attributes (bits 0-1: 2 bulk, 3 interrupt), packet size, interval.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EndpointInfo { pub address: u8, pub attributes: u8, pub packet: u16, pub interval: u8 }

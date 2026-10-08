@@ -200,6 +200,13 @@ impl Init {
                 let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
+                // EHCI controllers (class 0C:03:20, 211-DRV-0004): an Intel Mac's internal keyboard and trackpad sit
+                // behind them; each its BAR0 and its own DMA region.
+                for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
+                    let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
+                    let Ok(bar) = Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) else { continue };
+                    grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
+                }
             }
             // USB class drivers: a client of usb_host whose badge names the one class it may claim.
             "usb_storage" | "usb_hid" => {

@@ -51,7 +51,7 @@ pub struct Xhci {
 pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
 
 // Polls `done`: a thousand times at once, then every 10 ms; `attempts` 1500 is about 5 s, 4000 about 30 s.
-fn wait_for(attempts: usize, mut done: impl FnMut() -> bool) -> bool {
+pub(crate) fn wait_for(attempts: usize, mut done: impl FnMut() -> bool) -> bool {
     for attempt in 0..attempts { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
     false
 }
