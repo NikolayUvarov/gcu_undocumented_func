@@ -7,8 +7,12 @@
   models.py pack    OUT.tar [selection]     one file to copy elsewhere; `fetch --from OUT.tar` takes it back
   models.py disk    OUT.img [selection]     a FAT32 disk of models for MIND Core (MANIFEST.json at its root)
   models.py pin     REPO PATH... --id ID    print a manifest entry for files of a Hugging Face repository, hashed
+                                           (a PATH ending in / takes every file below it)
 
-A source is a Hugging Face repository at a revision, or a zip archive (url, sha256, size, strip: the prefix of its paths).
+A source is a Hugging Face repository at a revision, or a zip or tar archive (url, sha256, size, strip: the prefix of its
+paths).
+A model may serve several variants (`variant` a list), name the voices chosen from it (`voices`), and need other models
+(`needs`, such as a vocoder): a selection takes those along.
 
 A selection is any of --variant compact|quality, --role asr|tts, --lang ru|en and model ids; none means every model.
 The cache is $MIND_MODELS, else ~/.cache/mind-models: <cache>/<id>/<path> and <cache>/MANIFEST.json. Every file is
@@ -51,7 +55,7 @@ def select(models, args):
     for m in models:
         if args.ids and m["id"] not in args.ids:
             continue
-        if args.variant and m["variant"] != args.variant:
+        if args.variant and args.variant not in variants(m):
             continue
         if args.role and m["role"] != args.role:
             continue
@@ -61,7 +65,19 @@ def select(models, args):
     unknown = set(args.ids or ()) - {m["id"] for m in models}
     if unknown:
         raise ValueError(f"not in the manifest: {', '.join(sorted(unknown))}")
-    return picked
+    by_id, ids = {m["id"]: m for m in models}, [m["id"] for m in picked]
+    for model_id in ids:  # what a picked model needs comes along, after it
+        for need in by_id[model_id].get("needs", []):
+            if need not in by_id:
+                raise ValueError(f"{model_id} needs {need}, which is not in the manifest")
+            if need not in ids:
+                ids.append(need)
+    return [by_id[i] for i in ids]
+
+
+def variants(model):
+    v = model["variant"]
+    return v if isinstance(v, list) else [v]
 
 
 def sha256_of(path):
@@ -96,17 +112,33 @@ def download(url, target, expected):
     os.replace(partial, target)
 
 
+_ARCHIVES_CHECKED = set()  # archives hashed once in this run
+
+
 def from_archive(cache, model, entry, target):
-    """A file of a zip archive the source names: the archive is fetched once, checked, and kept under <cache>/.archives."""
+    """A file of a zip or tar archive the source names: the archive is fetched once, checked, and kept under
+    <cache>/.archives."""
     src = model["source"]
-    archive = cache / ".archives" / f"{src['sha256']}.zip"
-    if not archive.is_file() or sha256_of(archive) != src["sha256"]:
-        print(f"{model['id']}: archive {src['url']} ({src['size'] / 1e6:.1f} MB)", flush=True)
-        download(src["url"], archive, src["sha256"])
-    with zipfile.ZipFile(archive) as z, tempfile.TemporaryDirectory(dir=cache) as tmp:
+    is_zip = src["url"].endswith(".zip")
+    archive = cache / ".archives" / (src["sha256"] + (".zip" if is_zip else ".tar"))
+    if archive not in _ARCHIVES_CHECKED:
+        if not archive.is_file() or sha256_of(archive) != src["sha256"]:
+            print(f"{model['id']}: archive {src['url']} ({src['size'] / 1e6:.1f} MB)", flush=True)
+            download(src["url"], archive, src["sha256"])
+        _ARCHIVES_CHECKED.add(archive)
+    member = src.get("strip", "") + entry["path"]
+    with tempfile.TemporaryDirectory(dir=cache) as tmp:
         extracted = Path(tmp) / "file"
-        with z.open(src.get("strip", "") + entry["path"]) as zf, open(extracted, "wb") as out:
-            shutil.copyfileobj(zf, out, CHUNK)
+        if is_zip:
+            with zipfile.ZipFile(archive) as z, z.open(member) as zf, open(extracted, "wb") as out:
+                shutil.copyfileobj(zf, out, CHUNK)
+        else:
+            with tarfile.open(archive) as t:
+                tf = t.extractfile(member)
+                if tf is None:
+                    raise ValueError(f"{src['url']}: no file {member}")
+                with tf, open(extracted, "wb") as out:
+                    shutil.copyfileobj(tf, out, CHUNK)
         copy_checked(extracted, target, entry["sha256"])
 
 
@@ -143,8 +175,12 @@ def cmd_list(args, models):
         size = sum(f["size"] for f in m["files"])
         total += size
         mark = "cached" if present(cache, m, False) else "-"
-        print(f"{m['id']:34} {m['role']:3} {','.join(m['lang']):5} {m['variant']:7} {size / 1e6:8.1f} MB  {m['licence']:22} {mark}")
-    print(f"{'':34} {'':3} {'':5} {'':7} {total / 1e6:8.1f} MB  in all")
+        print(f"{m['id']:34} {m['role']:3} {','.join(m['lang']):5} {','.join(variants(m)):15} {size / 1e6:8.1f} MB  {m['licence']:22} {mark}")
+        for v in m.get("voices", []):
+            print(f"{'':36}voice {v['name']} ({v['gender']}, {v['lang']}, {', '.join(v['variant'] if isinstance(v['variant'], list) else [v['variant']])})")
+        if m.get("needs"):
+            print(f"{'':36}needs {', '.join(m['needs'])}")
+    print(f"{'':34} {'':3} {'':5} {'':15} {total / 1e6:8.1f} MB  in all")
 
 
 def cmd_fetch(args, models):
@@ -239,11 +275,20 @@ def cmd_pin(args, _models):
     api = f"https://huggingface.co/api/models/{args.repo}"
     with urllib.request.urlopen(api, timeout=60) as r:
         revision = json.load(r)["sha"]
-    with urllib.request.urlopen(f"{api}/tree/{revision}?recursive=true", timeout=60) as r:
-        tree = {e["path"]: e for e in json.load(r) if e["type"] == "file"}
+    tree = {}
+    for folder in sorted({p.rstrip("/") if p.endswith("/") else p.rpartition("/")[0] for p in args.paths}):
+        # One directory at a time: a large repository's whole tree comes in pages.
+        with urllib.request.urlopen(f"{api}/tree/{revision}/{folder}?recursive=true".replace("//?", "?"), timeout=60) as r:
+            tree.update({e["path"]: e for e in json.load(r) if e["type"] == "file"})
     lines = ["[[model]]", f'id = "{args.id}"', 'role = ""', 'lang = []', 'variant = ""', 'engine = ""', 'licence = ""',
              f'source = {{ kind = "huggingface", repo = "{args.repo}", revision = "{revision}" }}', "files = ["]
+    paths = []
     for path in args.paths:
+        below = sorted(p for p in tree if p.startswith(path)) if path.endswith("/") else [path]
+        if not below or below[0] not in tree:
+            raise ValueError(f"{args.repo}@{revision}: no file {path}")
+        paths += below
+    for path in paths:
         e = tree[path]
         if "lfs" in e:
             digest, size = e["lfs"]["oid"], e["lfs"]["size"]
