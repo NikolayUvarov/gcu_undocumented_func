@@ -2453,24 +2453,55 @@ def store_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; names by "
           "compare-and-swap, only complete roots; a full medium refused; a restarted store finds blocks and names again", flush=True)
-    # What no name retains goes once its lease (60 s after the last put or the mount) has ended.
+    # What no name retains goes once its lease (60 s after the last put or the mount) has ended: a file put and never
+    # published goes; the file kept as obj's second version stays, retained by the name's history (303-STO-0003).
+    require(vm.command("write ram:loose.txt never named"), "WROTE 12 BYTES")
+    loose = cid_raw(b"never named\n")
+    require(blocks("put ram:loose.txt"), f"PUT {loose} SIZE 12")
     time.sleep(61)
     # The medium is full of blocks whose leases have ended: new ones get room from the collection the first put starts.
-    filled = re.search(r"FILLED (\d+) BLOCKS, THEN Full \(Some\(Full\)\)", blocks("fill", timeout=600))
-    assert filled and int(filled[1]) > 100, filled
+    require(blocks("fill 120", timeout=600), "FILLED 120 BLOCKS")
     # The new blocks' leases run: an explicit collection right after frees no block (before the long check below).
     collected = blocks("collect")
     assert re.search(r"COLLECTED 0 BLOCKS \d+ NAMES \d+ SECTORS, \d+ FREE", collected), collected
     require(vm.service_logs("blockstore", "[BLOCKSTORE] COLLECTED 0 BLOCKS"), "[BLOCKSTORE] COLLECTED 0 BLOCKS")
-    require(blocks(f"get {note} ram:gone.txt"), "blocks: get: NotFound")
+    require(blocks(f"get {loose} ram:gone.txt"), "blocks: get: NotFound")
+    require(blocks(f"get {note} ram:kept.txt"), "GOT 12 BYTES")
+    print("PASS: block store collection: once leases end, a put that needs room frees what nothing retains and the room "
+          "is written again; a name's earlier version stays", flush=True)
+    # 303-STO-0002..0004: history, quotas, pins and removing a name, for the shell's owner (badge 7).
+    history = blocks("history obj")
+    for line in (f"obj VERSION 3 ROOT {root}", f"obj VERSION 2 ROOT {note}", f"obj VERSION 1 ROOT {root}"):
+        require(history, line)
     require(blocks(f"publish copy {root}"), "PUBLISHED copy VERSION 1")
-    # What the collections left mounts again whole.
+    quota = 16384 * 512 // 4 * 3
+    require(blocks("usage"), f"RETAINED {4194305 + 12} OF {quota} BYTES, 2 NAMES, 0 PINS")
+    # 2 200 000 more bytes would pass three quarters of the medium: refused for a name and for a pin.
+    other = re.search(r"PUT (\S+) SIZE 2200000", blocks("pattern 2200000"))[1]
+    require(blocks(f"publish big {other}"), "blocks: publish big: Quota")
+    require(blocks(f"pin {other}"), "blocks: pin: Quota")
+    # The file is retained by obj's history already: a pin of it costs nothing more.
+    require(blocks(f"pin {note}"), f"PINNED {note} AS 1")
+    require(blocks("pins"), f"PIN 1 ROOT {note} SIZE 12")
+    require(blocks("usage"), f"RETAINED {4194305 + 12} OF {quota} BYTES, 2 NAMES, 1 PINS")
+    # Removing a name: a version without a root; the name retains nothing more, and it comes back only from that version.
+    require(blocks("unpublish obj 2"), "blocks: unpublish obj: Conflict")
+    require(blocks("unpublish obj 3"), "REMOVED obj VERSION 4")
+    require(blocks("resolve obj"), "blocks: resolve obj: NotFound")
+    require(blocks("history obj"), "obj VERSION 4 REMOVED")
+    require(blocks("usage"), f"RETAINED {4194305 + 12} OF {quota} BYTES, 1 NAMES, 1 PINS")
+    require(blocks("unpin 1"), "UNPINNED 1")
+    require(blocks("pins"), "0 PINS")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] UNPINNED 1"), "[BLOCKSTORE] REMOVED obj VERSION 4")
+    # What the collections left mounts again whole: the removal, the copy's version, no pin.
     require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
     require(vm.service_logs("blockstore", "NAMES=2 SECTORS="), "CORRUPT=0 DAMAGED=0")
+    require(blocks("history obj"), "obj VERSION 4 REMOVED")
     require(blocks("resolve copy"), f"copy VERSION 1 ROOT {root}")
+    require(blocks("pins"), "0 PINS")
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
-    print("PASS: block store collection: once leases end, a put that needs room frees what no name retains and the room "
-          "is written again; named objects stay whole and mount again", flush=True)
+    print("PASS: block store retention: a name keeps its versions, an owner its quota, a pin its object until unpinned; "
+          "a removed name retains nothing and mounts again as removed", flush=True)
 
 
 def escrow_check(vm):

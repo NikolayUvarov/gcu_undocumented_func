@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
 // blocks: the block store from the shell (300-STO-0003, docs/storage). Puts a file or a test pattern as an object
-// (mind::dag), reads one back with every block checked, publishes and resolves names, collects, fills the store. A console
-// program: it asks the shell for the store's client (REQUEST_BLOCKSTORE) and the user's files (REQUEST_FILES).
+// (mind::dag), reads one back with every block checked, publishes, resolves and removes names, pins objects, shows
+// what the caller retains, collects, fills the store. A console program: it asks the shell for the store's client
+// (REQUEST_BLOCKSTORE) and the user's files (REQUEST_FILES).
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, Blocks, Builder, CHUNK};
@@ -59,7 +60,7 @@ fn cid(text: &str) -> Option<Cid> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | collect | fill");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -139,25 +140,76 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(e)) => mind::println!("blocks: resolve {}: {:?}", name, e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
+        (Some("history"), Some(name), None, _) => match blockstore::history(STORE, name) {
+            Ok(Ok(kept)) => for k in kept.as_slice() {
+                match Cid::from_bytes(k.root.as_slice()) {
+                    Ok(root) => mind::println!("{} VERSION {} ROOT {}", name, k.version, root),
+                    Err(_) => mind::println!("{} VERSION {} REMOVED", name, k.version),
+                }
+            },
+            Ok(Err(e)) => mind::println!("blocks: history {}: {:?}", name, e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some("unpublish"), Some(name), Some(version), None) => {
+            let Ok(expected) = version.parse::<u64>() else { mind::println!("blocks: not a version"); return };
+            match blockstore::unpublish(STORE, name, expected) {
+                Ok(Ok(v)) => mind::println!("REMOVED {} VERSION {}", name, v),
+                Ok(Err(e)) => mind::println!("blocks: unpublish {}: {:?}", name, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            }
+        }
+        (Some("pin"), Some(text), None, _) => {
+            let Some(root) = cid(text) else { return };
+            match blockstore::pin(STORE, &root.to_bytes()) {
+                Ok(Ok(id)) => mind::println!("PINNED {} AS {}", root, id),
+                Ok(Err(e)) => mind::println!("blocks: pin: {:?}", e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            }
+        }
+        (Some("unpin"), Some(id), None, _) => {
+            let Ok(id) = id.parse::<u32>() else { mind::println!("blocks: not a pin id"); return };
+            match blockstore::unpin(STORE, id) {
+                Ok(Ok(())) => mind::println!("UNPINNED {}", id),
+                Ok(Err(e)) => mind::println!("blocks: unpin {}: {:?}", id, e),
+                Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+            }
+        }
+        (Some("pins"), None, ..) => match blockstore::pins(STORE) {
+            Ok(Ok(pins)) => {
+                for p in pins.as_slice() {
+                    if let Ok(root) = Cid::from_bytes(p.root.as_slice()) { mind::println!("PIN {} ROOT {} SIZE {}", p.id, root, p.size); }
+                }
+                mind::println!("{} PINS", pins.as_slice().len());
+            }
+            Ok(Err(e)) => mind::println!("blocks: pins: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
+        (Some("usage"), None, ..) => match blockstore::usage(STORE) {
+            Ok(Ok(u)) => mind::println!("RETAINED {} OF {} BYTES, {} NAMES, {} PINS", u.retained, u.quota, u.names, u.pins),
+            Ok(Err(e)) => mind::println!("blocks: usage: {:?}", e),
+            Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
+        },
         (Some("collect"), None, ..) => match blockstore::collect(STORE) {
             Ok(Ok(c)) => mind::println!("COLLECTED {} BLOCKS {} NAMES {} SECTORS, {} FREE", c.blocks, c.names, c.sectors, c.free),
             Ok(Err(e)) => mind::println!("blocks: collect: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
-        (Some("fill"), None, ..) => {
+        (Some("fill"), most, None, _) => {
+            let Ok(most) = most.map_or(Ok(u64::MAX), |m| m.parse::<u64>()) else { mind::println!("blocks: fill [blocks]"); return };
             // Distinct blocks of CHUNK bytes until the store refuses one: what a full medium answers. The time makes
             // them new on every run, so a second fill does not just find the first one's blocks.
             let (mut count, start) = (0u64, mind::time::monotonic_ns());
-            loop {
+            while count < most {
                 data.fill(0xA5);
                 data[..8].copy_from_slice(&count.to_le_bytes());
                 data[8..16].copy_from_slice(&start.to_le_bytes());
                 match remote.put(Codec::Raw, data) {
                     Ok(_) => count += 1,
-                    Err(e) => { mind::println!("FILLED {} BLOCKS, THEN {:?} ({:?})", count, e, remote.last); break; }
+                    Err(e) => { mind::println!("FILLED {} BLOCKS, THEN {:?} ({:?})", count, e, remote.last); return; }
                 }
             }
+            mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | collect | fill"),
+        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]"),
     }
 }

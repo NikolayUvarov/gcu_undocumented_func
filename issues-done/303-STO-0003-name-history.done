@@ -1,0 +1,33 @@
+# 303-STO-0003 — A name's history: its last versions kept, each linked to the one before — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.3, MC-4.5
+
+Part of main task [303](303-retention-and-collection.done).
+
+## Problem
+
+After [303-STO-0001](303-STO-0001-collection-by-reachability.done) only a name's current version retained its object, and a collection freed the records of earlier versions. MC-4.5 asks for a version history with explicit links and a retention policy.
+
+## Plan
+
+- **The name record (layout 2)** links the root of the version before it (zero for the first) and records its owner and kind.
+- **A name keeps its newest `HISTORY` = 4 versions**: the current one and up to 3 before it. Each kept version retains its object; a collection frees the records of older versions and what only they reached.
+- **Mount:** the newest valid version of each name is current, and the next valid ones are kept up to 4, whatever order their records lie in.
+- **The interface:** `history(name)` in `idl/blockstore.wit` 1.2, newest first, for `BADGE_GET`.
+
+## Acceptance criteria
+
+- Host tests: an earlier version retains its object until it falls out of the newest 4; the history found again after a mount; the random model keeps the last 4 versions of every name; each record links the root before it on the medium.
+- QEMU `store` suite, x86 and aarch64: the history of three versions; a file kept as an earlier version survives a collection that frees a file nothing retains.
+
+## Related
+
+[303-STO-0002](303-STO-0002-pins-and-quotas.done), [303-STO-0004](303-STO-0004-removing-a-name.done), [docs/storage](../docs/storage/README.md) (Names).
+
+## Resolution
+
+- **`blockstore/src/store.rs`:** `Version` (number, owner, root or none, size) and `Head` keeping up to `HISTORY` of them, newest first (`keep`); `name_record` writes the previous version's root, `parse_name` checks it is a supported CID or zero; `collect` marks the objects of every kept version; the sweep frees name records of versions no longer kept; `history`.
+- **`blockstore/src/main.rs`:** `history` answered as a list of `kept`.
+- **`blocks history <name>`.**
+- **Tests:** `tests/blockstore_host.rs` `a_collection_frees_what_no_name_retains_once_its_lease_ends` (the first version's object kept by the history, freed once 4 newer versions exist, the same after a mount), `each_version_links_the_one_before` (the records' roots, links and owners on the medium), `random_puts_names_collections_and_remounts_match_a_model` (the model keeps each name's last 4 versions). QEMU `store` suite (x86 and aarch64): `history obj` lists versions 3, 2 and 1; the file that is version 2 stays after the collection that frees a file nothing retains.
+- **Not done:** a history longer than 4 versions or chosen per name; the store does not follow the links when reading (they are kept for whoever audits the medium).

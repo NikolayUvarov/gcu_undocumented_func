@@ -1,0 +1,37 @@
+# 303-STO-0002 — Pins with an owner, and quotas per owner — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.5, MC-4.11, Appendix B.3
+
+Part of main task [303](303-retention-and-collection.done).
+
+## Problem
+
+After [303-STO-0001](303-STO-0001-collection-by-reachability.done) only names retained objects, and nothing limited what a client could make the store retain but the medium. MC-4.11 separates the right to access an object from the obligation to retain it: retention has a party responsible for accounting, a term or a termination condition, and a link to a quota. Appendix B.3 makes retention a registered obligation with a quota, a term and an owner.
+
+## Plan
+
+- **A pin** is a record of its own on the medium (`MIND-PIN`, layout 2): an id, an owner (the badge of the client that pinned), the object's root, a SHA-256. It retains the object until the owner ends it with `unpin` (the termination condition); another owner gets `rights`. Pins are found again when mounting, and ids go on from the highest found.
+- **Pins are roots of the collection**, like names: every pinned object is walked and marked. An ended pin's record is freed at once.
+- **Accounts:** what a name's kept version or a pin retains is charged to the owner that published or pinned it, each root counted once however many names and pins hold it.
+- **Quota:** a publication or a pin that would take the owner's account past its quota is refused with `quota`, and nothing is written. Until whoever grants the clients sets quotas, each owner's quota is three quarters of the medium.
+- **The interface:** `pin`, `unpin`, `pins`, `usage` and the error `quota` in `idl/blockstore.wit` 1.2; `pin` and `unpin` need `BADGE_PUBLISH`, `pins` and `usage` any right.
+
+## Acceptance criteria
+
+- Host tests: an object kept by a pin until its owner unpins it, another owner refused, pins found again after a mount; a publication and a pin refused past the quota, a root counted once, another owner's account apart.
+- QEMU `store` suite, x86 and aarch64: a pin, `usage`, a publication and a pin refused past the quota, an unpin, no pin after a restart.
+
+## Related
+
+[303-STO-0003](303-STO-0003-name-history.done), [303-STO-0004](303-STO-0004-removing-a-name.done), [docs/storage](../docs/storage/README.md) (Retention).
+
+## Resolution
+
+Done together with 303-STO-0003 and 0004, in one change of the medium's layout (version 2).
+
+- **`blockstore/src/store.rs`:** `Pin` and its record (`pin_record`, `parse_pin`); `Store::pin`, `unpin`, `pins`, `usage`; `retained_by` counts each root of an owner once; `collect` marks every pinned object; the sweep frees pin records no pin holds; `mount` takes a table of pins and sizes every retained object once the scan is done; `Error::Quota`, `Error::Rights` for another owner's pin; `Stats::pins`.
+- **`blockstore/src/main.rs`:** the owner is the badge of the request's capability; `PINNED … AS … BY PID … (BADGE …)` and `UNPINNED … BY PID …` in the log; the pin table holds 64.
+- **`idl/blockstore.wit` 1.2.0** and `libmind/src/idl/blockstore.rs` (generated); `libmind/src/blockstore.rs`: `Operation::Pin`, `Unpin`, `Pins`, `Usage` and their rights.
+- **`blocks pin <cid> | unpin <id> | pins | usage`.**
+- **Tests:** `tests/blockstore_host.rs` `a_pin_retains_its_object_until_its_owner_unpins_it`, `an_owner_retains_no_more_than_its_quota`, and `rights_come_from_the_badge` for the new requests; the medium in the tests asserts that a pin record, like a block or name record, is written only over blank sectors. QEMU `store` suite (x86 and aarch64): a second name of the same object counted once, 2 200 000 more bytes refused with `quota` for a name and for a pin, a pin of the file obj's history already retains charged nothing more, an unpin, `0 PINS` after a restart.
+- **Not done:** a pin with a term of its own (it lasts until its owner ends it); quotas granted per owner by whoever grants the clients, and a bound on all owners together; owners apart from badges (clients sharing a badge share an account). The profile lists these as not met.

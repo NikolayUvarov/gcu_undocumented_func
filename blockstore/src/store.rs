@@ -22,7 +22,7 @@ pub const HEADER: usize = 84;
 pub const RECORD_SECTORS: usize = (HEADER + BLOCK_MAX).div_ceil(SECTOR);
 pub const BUFFER: usize = RECORD_SECTORS * SECTOR;
 /// The layout's version; another is refused, never read as this one (MC-4.13).
-pub const LAYOUT: u16 = 1;
+pub const LAYOUT: u16 = 2;
 const SUPER_MAGIC: &[u8; 8] = b"MIND-STO";
 const RECORD_MAGIC: &[u8; 8] = b"MIND-BLK";
 const NAME_MAGIC: &[u8; 8] = b"MIND-REF";
@@ -33,8 +33,15 @@ const FREE_MAGIC: &[u8; 8] = b"MIND-DEL";
 pub const LEASE_NS: u64 = 60_000_000_000;
 /// Bytes of a name at most; a name is 1 to NAME_MAX of `A-Z a-z 0-9 . _ / -`.
 pub const NAME_MAX: usize = 64;
-// A name record: magic, layout, name length (u16), version (u64), root CID, name (padded with zeros), digest.
-const NAME_RECORD: usize = 120 + 32;
+// A name record: magic, layout, name length (u16), version (u64), root CID (zero for a removal), the previous
+// version's root (zero for none), name (padded with zeros), kind (0: points at the root, 1: removes the name), zero,
+// owner (u16), and the SHA-256 of these 160 bytes.
+const NAME_RECORD: usize = 160 + 32;
+// A pin record: magic, layout, zero, id (u32), owner (u16), zero, root CID, and the SHA-256 of these 56 bytes.
+const PIN_MAGIC: &[u8; 8] = b"MIND-PIN";
+const PIN_RECORD: usize = 56 + 32;
+/// Versions of a name the store keeps and retains: the current one and the ones before it (MC-4.5).
+pub const HISTORY: usize = 4;
 
 /// The medium under the store: sectors of SECTOR bytes, read and written up to RECORD_SECTORS at a time.
 pub trait Device {
@@ -75,6 +82,10 @@ pub enum Error {
     /// A block of the root's object is not stored (MC-4.4): nothing was published; or a name's object lacks one, so
     /// nothing was collected.
     Incomplete,
+    /// The owner would retain more than its quota (MC-4.11): nothing was published or pinned.
+    Quota,
+    /// A pin of another owner.
+    Rights,
 }
 
 /// What the store holds.
@@ -96,7 +107,13 @@ pub struct Stats {
     pub names: u32,
     /// Blank sectors the store can write.
     pub free: u64,
+    /// Pins held.
+    pub pins: u32,
 }
+
+/// What one owner retains: the distinct roots of its names' kept versions and of its pins, their bytes, and its quota.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage { pub retained: u64, pub quota: u64, pub names: u32, pub pins: u32 }
 
 /// What a collection freed: block records (unretained, duplicate or corrupt copies), superseded name records, their
 /// sectors; and the blank sectors after it.
@@ -114,12 +131,50 @@ impl Entry { pub const EMPTY: Entry = Entry { key: [0; cid::BYTES], lba: 0, len:
 pub struct Extent { start: u64, len: u64 }
 impl Extent { pub const EMPTY: Extent = Extent { start: 0, len: 0 }; }
 
-/// A name's current version and root.
+/// A version of a name: its number, who published it (a badge), the root it points at (none: this version removed
+/// the name), and the size of that object, charged to the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Head { name: [u8; NAME_MAX], len: u8, pub version: u64, root: [u8; cid::BYTES] }
+pub struct Version { pub version: u64, pub owner: u16, root: [u8; cid::BYTES], points: bool, pub size: u64 }
+impl Version {
+    pub const EMPTY: Version = Version { version: 0, owner: 0, root: [0; cid::BYTES], points: false, size: 0 };
+    pub fn root(&self) -> Option<Cid> { self.points.then(|| Cid::from_bytes(&self.root).unwrap()) }
+}
+
+/// A name and the versions of it the store keeps, newest first: at most HISTORY, only the last once it is removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Head { name: [u8; NAME_MAX], len: u8, kept: [Version; HISTORY], count: u8 }
 impl Head {
-    pub const EMPTY: Head = Head { name: [0; NAME_MAX], len: 0, version: 0, root: [0; cid::BYTES] };
+    pub const EMPTY: Head = Head { name: [0; NAME_MAX], len: 0, kept: [Version::EMPTY; HISTORY], count: 0 };
+    fn new(name: &[u8], version: Version) -> Self {
+        let mut h = Head { len: name.len() as u8, ..Head::EMPTY };
+        h.name[..name.len()].copy_from_slice(name);
+        h.keep(version);
+        h
+    }
     pub fn name(&self) -> &[u8] { &self.name[..self.len as usize] }
+    pub fn latest(&self) -> &Version { &self.kept[0] }
+    pub fn versions(&self) -> &[Version] { &self.kept[..self.count as usize] }
+    fn removed(&self) -> bool { !self.kept[0].points }
+    // The roots the name retains: those of its kept versions, none once it is removed.
+    fn retains(&self) -> impl Iterator<Item = &Version> { self.versions().iter().filter(move |v| v.points && !self.removed()) }
+    // Keeps `v` among the newest HISTORY versions; once the newest removes the name, only it is kept.
+    fn keep(&mut self, v: Version) {
+        let n = self.count as usize;
+        if self.kept[..n].iter().any(|k| k.version == v.version) { return; }
+        let at = self.kept[..n].iter().position(|k| k.version < v.version).unwrap_or(n);
+        if at == HISTORY { return; }
+        self.kept.copy_within(at..HISTORY - 1, at + 1);
+        self.kept[at] = v;
+        self.count = (n + 1).min(HISTORY) as u8;
+        if self.removed() { self.count = 1; }
+    }
+}
+
+/// A pin: a retention obligation of an owner (a badge) on an object, until the owner unpins it (MC-4.11, Appendix B.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pin { pub id: u32, pub owner: u16, root: [u8; cid::BYTES], lba: u64, pub size: u64 }
+impl Pin {
+    pub const EMPTY: Pin = Pin { id: 0, owner: 0, root: [0; cid::BYTES], lba: 0, size: 0 };
     pub fn root(&self) -> Cid { Cid::from_bytes(&self.root).unwrap() }
 }
 
@@ -128,28 +183,58 @@ pub fn valid_name(name: &[u8]) -> bool {
     (1..=NAME_MAX).contains(&name.len()) && name.iter().all(|&c| c.is_ascii_alphanumeric() || b"._/-".contains(&c))
 }
 
-fn name_record(head: &Head) -> [u8; SECTOR] {
+fn name_record(name: &[u8], v: &Version, previous: Option<Cid>) -> [u8; SECTOR] {
     let mut r = [0u8; SECTOR];
     r[..8].copy_from_slice(NAME_MAGIC);
     r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
-    r[10..12].copy_from_slice(&(head.len as u16).to_le_bytes());
-    r[12..20].copy_from_slice(&head.version.to_le_bytes());
-    r[20..56].copy_from_slice(&head.root);
-    r[56..120].copy_from_slice(&head.name);
-    let check = sha256::digest(&r[..120]);
-    r[120..NAME_RECORD].copy_from_slice(&check);
+    r[10..12].copy_from_slice(&(name.len() as u16).to_le_bytes());
+    r[12..20].copy_from_slice(&v.version.to_le_bytes());
+    if v.points { r[20..56].copy_from_slice(&v.root); }
+    if let Some(p) = previous { r[56..92].copy_from_slice(&p.to_bytes()); }
+    r[92..92 + name.len()].copy_from_slice(name);
+    r[156] = !v.points as u8;
+    r[158..160].copy_from_slice(&v.owner.to_le_bytes());
+    let check = sha256::digest(&r[..160]);
+    r[160..NAME_RECORD].copy_from_slice(&check);
     r
 }
 
-/// The head a sector names, if it is a whole, valid name record of this layout.
-fn parse_name(sector: &[u8]) -> Option<Head> {
-    if &sector[..8] != NAME_MAGIC || sector[120..NAME_RECORD] != sha256::digest(&sector[..120]) { return None; }
+/// The name and version a sector records, if it is a whole, valid name record of this layout.
+fn parse_name(sector: &[u8]) -> Option<([u8; NAME_MAX], usize, Version)> {
+    if &sector[..8] != NAME_MAGIC || sector[160..NAME_RECORD] != sha256::digest(&sector[..160]) { return None; }
     if u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[NAME_RECORD..].iter().any(|&b| b != 0) { return None; }
     let len = u16::from_le_bytes([sector[10], sector[11]]) as usize;
     let version = u64::from_le_bytes(sector[12..20].try_into().unwrap());
-    if !valid_name(sector.get(56..56 + len)?) || sector[56 + len..120].iter().any(|&b| b != 0) || version == 0 { return None; }
+    if !valid_name(sector.get(92..92 + len)?) || sector[92 + len..156].iter().any(|&b| b != 0) || version == 0 || sector[157] != 0 { return None; }
+    let points = match sector[156] { 0 => true, 1 => false, _ => return None };
+    // A version points at a supported CID or removes the name; its link to the one before is one or zero.
+    if points { Cid::from_bytes(&sector[20..56]).ok()?; } else if sector[20..56].iter().any(|&b| b != 0) { return None; }
+    if sector[56..92].iter().any(|&b| b != 0) { Cid::from_bytes(&sector[56..92]).ok()?; }
+    let owner = u16::from_le_bytes([sector[158], sector[159]]);
+    let v = Version { version, owner, root: sector[20..56].try_into().unwrap(), points, size: 0 };
+    Some((sector[92..156].try_into().unwrap(), len, v))
+}
+
+fn pin_record(pin: &Pin) -> [u8; SECTOR] {
+    let mut r = [0u8; SECTOR];
+    r[..8].copy_from_slice(PIN_MAGIC);
+    r[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+    r[12..16].copy_from_slice(&pin.id.to_le_bytes());
+    r[16..18].copy_from_slice(&pin.owner.to_le_bytes());
+    r[20..56].copy_from_slice(&pin.root);
+    let check = sha256::digest(&r[..56]);
+    r[56..PIN_RECORD].copy_from_slice(&check);
+    r
+}
+
+/// The pin a sector records, if it is a whole, valid pin record of this layout.
+fn parse_pin(sector: &[u8]) -> Option<Pin> {
+    if &sector[..8] != PIN_MAGIC || sector[56..PIN_RECORD] != sha256::digest(&sector[..56]) { return None; }
+    if u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[10..12] != [0, 0] || sector[18..20] != [0, 0] { return None; }
+    if sector[PIN_RECORD..].iter().any(|&b| b != 0) { return None; }
     Cid::from_bytes(&sector[20..56]).ok()?;
-    Some(Head { name: sector[56..120].try_into().unwrap(), len: len as u8, version, root: sector[20..56].try_into().unwrap() })
+    let id = u32::from_le_bytes(sector[12..16].try_into().unwrap());
+    Some(Pin { id, owner: u16::from_le_bytes([sector[16], sector[17]]), root: sector[20..56].try_into().unwrap(), lba: 0, size: 0 })
 }
 
 pub struct Store<'a, D: Device> {
@@ -158,6 +243,11 @@ pub struct Store<'a, D: Device> {
     count: usize,
     heads: &'a mut [Head],
     names: usize,
+    pins: &'a mut [Pin],
+    pinned: usize,
+    next_pin: u32,
+    // What each owner may retain: three quarters of the medium, until whoever grants the clients sets quotas.
+    quota: u64,
     // Blank runs, sorted; runs past its length are not used until the next scan.
     holes: &'a mut [Extent],
     runs: usize,
@@ -241,9 +331,10 @@ fn superblock() -> [u8; SECTOR] {
 impl<'a, D: Device> Store<'a, D> {
     /// Mounts the store on `dev` at time `now` (ns): a blank medium is formatted (if writable), a store is scanned and
     /// its blocks verified; anything else is refused. `index` bounds how many blocks it can hold, `heads` how many
-    /// names, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
-    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], holes: &'a mut [Extent], buffer: &'a mut [u8; BUFFER],
-                 scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
+    /// names, `pins` how many pins, `holes` how many runs of blank sectors it uses. Every block starts a lease at `now`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], pins: &'a mut [Pin], holes: &'a mut [Extent],
+                 buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
         if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
         if buffer[..SECTOR].iter().all(|&b| b == 0) {
@@ -256,8 +347,13 @@ impl<'a, D: Device> Store<'a, D> {
         } else if buffer[..16] != superblock()[..16] {
             return Err(Error::Layout);
         }
-        let mut store = Store { dev, index, count: 0, heads, names: 0, holes, runs: 0, buffer, scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0 };
+        let quota = dev.sectors() * SECTOR as u64 / 4 * 3;
+        let mut store = Store {
+            dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
+            scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0,
+        };
         store.pass(false)?;
+        store.size_retained();
         Ok(store)
     }
 
@@ -303,18 +399,40 @@ impl<'a, D: Device> Store<'a, D> {
                     next = here + n;
                     break;
                 }
-                if let Some(head) = parse_name(sector) {
-                    let current = self.find(head.name()).map(|i| self.heads[i].version);
+                if let Some((name, len, v)) = parse_name(sector) {
+                    let name = &name[..len];
+                    let head = self.find(name);
                     if !sweep {
-                        // The latest version of a name is current.
-                        match current {
-                            Ok(version) => if head.version > version { let i = self.find(head.name()).unwrap(); self.heads[i] = head; },
-                            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, head); }
+                        match head {
+                            Ok(i) => self.heads[i].keep(v),
+                            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, Head::new(name, v)); }
                         }
-                    } else if current != Ok(head.version) {
+                    } else if !head.is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)) {
+                        // A version the name no longer keeps.
                         self.erase(here, 1)?;
                         run.get_or_insert(here);
                         freed.names += 1;
+                        freed.sectors += 1;
+                        next = here + 1;
+                        break;
+                    }
+                    self.occupied(&mut run, here, 1);
+                    at += 1;
+                    continue;
+                }
+                if let Some(mut pin) = parse_pin(sector) {
+                    let held = self.pins[..self.pinned].iter().position(|p| p.id == pin.id);
+                    if !sweep {
+                        if held.is_none() {
+                            if self.pinned == self.pins.len() { return Err(Error::Full); }
+                            pin.lba = here;
+                            self.pins[self.pinned] = pin;
+                            self.pinned += 1;
+                            self.next_pin = self.next_pin.max(pin.id.wrapping_add(1));
+                        }
+                    } else if !held.is_some_and(|k| self.pins[k].lba == here) {
+                        self.erase(here, 1)?;
+                        run.get_or_insert(here);
                         freed.sectors += 1;
                         next = here + 1;
                         break;
@@ -360,6 +478,15 @@ impl<'a, D: Device> Store<'a, D> {
 
     fn hole(&mut self, start: u64, len: u64) {
         if len > 0 && self.runs < self.holes.len() { self.holes[self.runs] = Extent { start, len }; self.runs += 1; }
+    }
+
+    // Sectors made blank outside a scan: back among the runs, in order (dropped if the list is full until the next scan).
+    fn release(&mut self, start: u64, len: u64) {
+        if self.runs == self.holes.len() { return; }
+        let at = self.holes[..self.runs].iter().position(|h| h.start > start).unwrap_or(self.runs);
+        self.holes.copy_within(at..self.runs, at + 1);
+        self.holes[at] = Extent { start, len };
+        self.runs += 1;
     }
 
     // Frees `n` sectors at `lba`: a marker first, so a scan after a stop in the middle finishes it, then zeros.
@@ -435,11 +562,17 @@ impl<'a, D: Device> Store<'a, D> {
         self.names += 1;
     }
 
-    /// The current version and root of `name`.
+    /// The current version and root of `name`; not found once it is removed.
     pub fn resolve(&self, name: &[u8]) -> Result<(u64, Cid), Error> {
         if !valid_name(name) { return Err(Error::Invalid); }
         let head = &self.heads[self.find(name).map_err(|_| Error::NotFound)?];
-        Ok((head.version, head.root()))
+        head.latest().root().map(|root| (head.latest().version, root)).ok_or(Error::NotFound)
+    }
+
+    /// The versions of `name` the store keeps, newest first (a version without a root removed the name).
+    pub fn history(&self, name: &[u8]) -> Result<&[Version], Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        Ok(self.heads[self.find(name).map_err(|_| Error::NotFound)?].versions())
     }
 
     // Walks the object `root` through the store; `visit` sees the store and each block's CID.
@@ -455,39 +588,137 @@ impl<'a, D: Device> Store<'a, D> {
         })
     }
 
-    /// Publishes `root` as the next version of `name` if `expected` is its current version (0: a new name), once
-    /// every block of the object `root` names is stored (MC-4.3, 4.4); returns the new version after the device has
-    /// flushed it.
-    pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid) -> Result<u64, Error> {
+    // The size of every retained object, for the owners' accounts: read from each root once a mount is done.
+    fn size_retained(&mut self) {
+        let Some(scratch) = self.scratch.take() else { return };
+        for i in 0..self.names {
+            for k in 0..self.heads[i].count as usize {
+                if let Some(root) = self.heads[i].kept[k].root() { self.heads[i].kept[k].size = dag::size(self, &root, scratch).unwrap_or(0); }
+            }
+        }
+        for i in 0..self.pinned { let root = self.pins[i].root(); self.pins[i].size = dag::size(self, &root, scratch).unwrap_or(0); }
+        self.scratch = Some(scratch);
+    }
+
+    // The roots `owner` retains through its names' kept versions and its pins, with their objects' sizes.
+    fn owned(&self, owner: u16) -> impl Iterator<Item = ([u8; cid::BYTES], u64)> + '_ {
+        self.heads[..self.names].iter().flat_map(|h| h.retains()).filter(move |v| v.owner == owner).map(|v| (v.root, v.size))
+            .chain(self.pins[..self.pinned].iter().filter(move |p| p.owner == owner).map(|p| (p.root, p.size)))
+    }
+
+    // The bytes `owner` retains, each root counted once however many names and pins retain it; with `extra` added
+    // unless it is one of them.
+    fn retained_by(&self, owner: u16, extra: Option<(&Cid, u64)>) -> u64 {
+        let mut total = 0;
+        for (k, (root, size)) in self.owned(owner).enumerate() {
+            if !self.owned(owner).take(k).any(|(r, _)| r == root) { total += size; }
+        }
+        if let Some((cid, size)) = extra { if !self.owned(owner).any(|(r, _)| r == cid.to_bytes()) { total += size; } }
+        total
+    }
+
+    /// What `owner` retains and may retain.
+    pub fn usage(&self, owner: u16) -> Usage {
+        Usage {
+            retained: self.retained_by(owner, None),
+            quota: self.quota,
+            names: self.heads[..self.names].iter().filter(|h| !h.removed() && h.latest().owner == owner).count() as u32,
+            pins: self.pins[..self.pinned].iter().filter(|p| p.owner == owner).count() as u32,
+        }
+    }
+
+    /// Publishes `root` as the next version of `name` for `owner` if `expected` is its current version (0: a new
+    /// name; after a removal, the removal's version), once every block of the object `root` names is stored (MC-4.3,
+    /// 4.4) and within the owner's quota (MC-4.11); returns the new version after the device has flushed it. The
+    /// record links the version before; the name keeps its last HISTORY versions.
+    pub fn publish(&mut self, name: &[u8], expected: u64, root: &Cid, owner: u16) -> Result<u64, Error> {
         if !valid_name(name) { return Err(Error::Invalid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
-        let current = self.find(name).map_or(0, |i| self.heads[i].version);
+        let current = self.find(name).map_or(0, |i| self.heads[i].latest().version);
         if expected != current { return Err(Error::Conflict); }
         if self.find(name).is_err() && self.names == self.heads.len() { return Err(Error::Full); }
         // Room first: a collection it starts may free blocks of `root` whose lease ended, and the check below sees it.
         let lba = self.room(1)?;
-        self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        let mut head = Head { name: [0; NAME_MAX], len: name.len() as u8, version: current + 1, root: root.to_bytes() };
-        head.name[..name.len()].copy_from_slice(name);
+        let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
+        if self.retained_by(owner, Some((root, size))) > self.quota { return Err(Error::Quota); }
+        let previous = self.find(name).ok().and_then(|i| self.heads[i].latest().root());
+        let v = Version { version: current + 1, owner, root: root.to_bytes(), points: true, size };
         self.claim(lba, 1);
-        if !self.dev.write(lba, &name_record(&head)) || !self.dev.flush() { return Err(Error::Device); }
-        match self.find(name) { Ok(i) => self.heads[i] = head, Err(i) => self.add(i, head) }
-        Ok(head.version)
+        if !self.dev.write(lba, &name_record(name, &v, previous)) || !self.dev.flush() { return Err(Error::Device); }
+        match self.find(name) { Ok(i) => self.heads[i].keep(v), Err(i) => self.add(i, Head::new(name, v)) }
+        Ok(v.version)
     }
 
-    /// Frees what no name retains and no lease protects: unretained blocks, other copies of a block (corrupt ones
-    /// too), and name records that are not current (MC-4.5). Every name's object is walked first, every node read and
-    /// checked; if one lacks a block or holds a corrupt node, nothing is freed.
+    /// Removes `name` for `owner` if `expected` is its current version: a version without a root, which ends what the
+    /// name retains (deleting a reference, not data: the objects go when a collection finds nothing else retains
+    /// them, MC-4.8). Returns the removal's version; publishing from it creates the name again.
+    pub fn unpublish(&mut self, name: &[u8], expected: u64, owner: u16) -> Result<u64, Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let i = self.find(name).map_err(|_| Error::NotFound)?;
+        if self.heads[i].removed() { return Err(Error::NotFound); }
+        if expected != self.heads[i].latest().version { return Err(Error::Conflict); }
+        let lba = self.room(1)?;
+        let i = self.find(name).map_err(|_| Error::NotFound)?;
+        let previous = self.heads[i].latest().root();
+        let v = Version { version: expected + 1, owner, ..Version::EMPTY };
+        self.claim(lba, 1);
+        if !self.dev.write(lba, &name_record(name, &v, previous)) || !self.dev.flush() { return Err(Error::Device); }
+        self.heads[i].keep(v);
+        Ok(v.version)
+    }
+
+    /// Pins the object `root` for `owner` until it unpins it, once every block of it is stored and within the owner's
+    /// quota; returns the pin's id after the device has flushed it.
+    pub fn pin(&mut self, root: &Cid, owner: u16) -> Result<u32, Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        if self.pinned == self.pins.len() { return Err(Error::Full); }
+        let lba = self.room(1)?;
+        let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
+        if self.retained_by(owner, Some((root, size))) > self.quota { return Err(Error::Quota); }
+        let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size };
+        self.claim(lba, 1);
+        if !self.dev.write(lba, &pin_record(&pin)) || !self.dev.flush() { return Err(Error::Device); }
+        self.next_pin = self.next_pin.wrapping_add(1).max(1);
+        self.pins[self.pinned] = pin;
+        self.pinned += 1;
+        Ok(pin.id)
+    }
+
+    /// Ends `owner`'s pin `id`: its record is freed at once; the object goes when nothing else retains it.
+    pub fn unpin(&mut self, id: u32, owner: u16) -> Result<(), Error> {
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let k = self.pins[..self.pinned].iter().position(|p| p.id == id).ok_or(Error::NotFound)?;
+        if self.pins[k].owner != owner { return Err(Error::Rights); }
+        let lba = self.pins[k].lba;
+        self.erase(lba, 1)?;
+        self.pins.copy_within(k + 1..self.pinned, k);
+        self.pinned -= 1;
+        self.release(lba, 1);
+        Ok(())
+    }
+
+    /// The pins of `owner`.
+    pub fn pins(&self, owner: u16) -> impl Iterator<Item = &Pin> { self.pins[..self.pinned].iter().filter(move |p| p.owner == owner) }
+
+    /// Frees what no name retains, no pin holds and no lease protects: unretained blocks, other copies of a block
+    /// (corrupt ones too), name versions a name no longer keeps (MC-4.5). Every retained object is walked first, every
+    /// node read and checked; if one lacks a block or holds a corrupt node, nothing is freed.
     pub fn collect(&mut self) -> Result<Collected, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         for e in self.index[..self.count].iter_mut() { e.live = false; }
+        let mark = |s: &mut Self, cid: &Cid| match s.position(&cid.to_bytes()) {
+            Ok(k) => { s.index[k].live = true; Ok(()) }
+            Err(_) => Err(dag::Error::NotFound),
+        };
         for i in 0..self.names {
-            let root = self.heads[i].root();
-            self.walk(&root, |s, cid| match s.position(&cid.to_bytes()) {
-                Ok(k) => { s.index[k].live = true; Ok(()) }
-                Err(_) => Err(dag::Error::NotFound),
-            })?;
+            for k in 0..self.heads[i].count as usize {
+                let head = &self.heads[i];
+                if head.removed() { break; }
+                if let Some(root) = head.kept[k].root() { self.walk(&root, mark)?; }
+            }
         }
+        for i in 0..self.pinned { let root = self.pins[i].root(); self.walk(&root, mark)?; }
         self.pass(true)
     }
 
@@ -508,8 +739,8 @@ impl<'a, D: Device> Store<'a, D> {
         record[..HEADER].copy_from_slice(&header(&cid, data.len()));
         record[HEADER..HEADER + data.len()].copy_from_slice(data);
         // Only a header sector starts with a record's magic, so a scan that resumes after a damaged sector cannot take
-        // a client's bytes for a name, a block or a free record.
-        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
+        // a client's bytes for a record of any kind.
+        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC, PIN_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
         // The sectors are taken even if the write fails: they may hold part of it now, and are not written again.
         self.claim(lba, n);
         if !self.dev.write(lba, &self.buffer[..n as usize * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
@@ -533,7 +764,7 @@ impl<'a, D: Device> Store<'a, D> {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
             corrupt: self.corrupt, damaged: self.damaged, capacity: self.index.len() as u32, names: self.names as u32,
-            free: self.holes[..self.runs].iter().map(|h| h.len).sum(),
+            free: self.holes[..self.runs].iter().map(|h| h.len).sum(), pins: self.pinned as u32,
         }
     }
 

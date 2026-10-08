@@ -4,7 +4,8 @@
 //! CID before it is returned: a block whose bytes do not match is reported corrupt, never returned (MC-4.2, 4.8).
 //! What a client may do comes from its capability's badge (300-STO-0004); a CID alone grants nothing (MC-4.7).
 //! A name's current version points at the root of an object and changes only by compare-and-swap (302-STO-0001).
-//! What no name retains and no lease protects is collected (303-STO-0001, 1.1).
+//! What no name retains and no lease protects is collected (303-STO-0001, 1.1). A name keeps its last 4 versions; it can be
+//! removed; an owner (the badge) pins objects; what an owner retains is bounded by its quota (303-STO-0002..0004, 1.2).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,20 +15,22 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
-/// (`mind::blockstore`: put and collect need BADGE_PUT, get, has and resolve BADGE_GET, publish BADGE_PUBLISH, stat any).
+/// (`mind::blockstore`: put and collect need BADGE_PUT; get, has, resolve and history BADGE_GET; publish, unpublish, pin
+/// and unpin BADGE_PUBLISH; stat, pins and usage any).
 /// `invalid`: a `dag-cbor` block that is not a node of `mind::dag` (301-STO-0002), a name that is not 1 to 64 bytes
 /// of `A-Z a-z 0-9 . _ / -`, a root whose tree is out of shape. `conflict`: the name's current version is not the
-/// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything.
+/// expected one. `incomplete`: a block of the root's object is not stored. Neither publishes anything. `quota`: the
+/// owner would retain more than its quota; nothing is published or pinned (1.2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8, Conflict = 9, Incomplete = 10 }
+pub enum Error { #[default] NotFound = 0, Corrupt = 1, Full = 2, TooLarge = 3, ReadOnly = 4, Device = 5, Unsupported = 6, Rights = 7, Invalid = 8, Conflict = 9, Incomplete = 10, Quota = 11 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), 9 => Some(Self::Conflict), 10 => Some(Self::Incomplete), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Corrupt), 2 => Some(Self::Full), 3 => Some(Self::TooLarge), 4 => Some(Self::ReadOnly), 5 => Some(Self::Device), 6 => Some(Self::Unsupported), 7 => Some(Self::Rights), 8 => Some(Self::Invalid), 9 => Some(Self::Conflict), 10 => Some(Self::Incomplete), 11 => Some(Self::Quota), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -77,6 +80,34 @@ impl Wire for Collected {
     const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.names.encode(w)?; self.sectors.encode(w)?; self.free.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, names: Wire::decode(r)?, sectors: Wire::decode(r)?, free: Wire::decode(r)? }) }
+}
+
+/// A version a name keeps: its number and root; no root: the version removed the name (1.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Kept { pub version: u64, pub root: List<u8, 36> }
+impl Wire for Kept {
+    const MAX: usize = <u64 as Wire>::MAX + <List<u8, 36> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.root.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, root: Wire::decode(r)? }) }
+}
+
+/// A pin of the caller's owner: its id, the object's root and size (1.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pinned { pub id: u32, pub root: List<u8, 36>, pub size: u64 }
+impl Wire for Pinned {
+    const MAX: usize = <u32 as Wire>::MAX + <List<u8, 36> as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.root.encode(w)?; self.size.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, root: Wire::decode(r)?, size: Wire::decode(r)? }) }
+}
+
+/// What the caller's owner (the badge of its capability) retains, counting each root once, its quota, and its
+/// names and pins (1.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage { pub retained: u64, pub quota: u64, pub names: u32, pub pins: u32 }
+impl Wire for Usage {
+    const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.retained.encode(w)?; self.quota.encode(w)?; self.names.encode(w)?; self.pins.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { retained: Wire::decode(r)?, quota: Wire::decode(r)?, names: Wire::decode(r)?, pins: Wire::decode(r)? }) }
 }
 
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
@@ -190,6 +221,92 @@ pub fn collect(endpoint: Endpoint) -> Result<core::result::Result<Collected, Err
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Collected as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Removes `name` if `expected` is its current version: a version without a root, which ends what the name retains
+/// (the objects go when nothing else retains them). Returns that version; publishing from it creates the name again.
+/// Errors: not-found (no such name, or removed), conflict, full, read-only, device (1.2).
+pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::result::Result<u64, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        expected.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 8, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u64 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The versions `name` keeps, newest first: the current one and up to 3 before it, each retained (1.2).
+pub fn history(endpoint: Endpoint, name: &str) -> Result<core::result::Result<List<Kept, 4>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<64>(name, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 186, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Kept, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Pins the object `root` for the caller's owner until it unpins it, once every block of it is stored and within
+/// the owner's quota; returns the pin's id. Errors: incomplete, quota, full, invalid, unsupported, read-only (1.2).
+pub fn pin(endpoint: Endpoint, root: &[u8]) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<36>(root, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Ends a pin of the caller's owner. Errors: not-found, rights (another owner's pin) (1.2).
+pub fn unpin(endpoint: Endpoint, id: u32) -> Result<core::result::Result<(), Error>> {
+    let words = [11 | MAJOR << 8 | ((id) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// The pins of the caller's owner, at most 32 (1.2).
+pub fn pins(endpoint: Endpoint) -> Result<core::result::Result<List<Pinned, 32>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1602, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Pinned, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// What the caller's owner retains and may retain (1.2).
+pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 13 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 24, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Usage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16387;
 
@@ -203,6 +320,12 @@ pub enum Request<'a> {
     Publish { name: Text<64>, expected: u64, root: &'a [u8] },
     Resolve { name: Text<64> },
     Collect,
+    Unpublish { name: Text<64>, expected: u64 },
+    History { name: Text<64> },
+    Pin { root: &'a [u8] },
+    Unpin { id: u32 },
+    Pins,
+    Usage,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -270,6 +393,49 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Collect, call))
         }
+        8 => {
+            let (call, length) = wire::take_buffer(request, cap, 8, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let expected = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Unpublish { name, expected }, call))
+        }
+        9 => {
+            let (call, length) = wire::take_buffer(request, cap, 186, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::History { name }, call))
+        }
+        10 => {
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let root = codec::decode_bytes::<36>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Pin { root }, call))
+        }
+        11 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Unpin { id: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
+        }
+        12 => {
+            let (call, length) = wire::take_buffer(request, cap, 1602, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Pins, call))
+        }
+        13 => {
+            let (call, length) = wire::take_buffer(request, cap, 24, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Usage, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -299,6 +465,30 @@ pub fn reply_resolve(call: Call, value: core::result::Result<&Head, Error>) -> R
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_collect(call: Call, value: core::result::Result<&Collected, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_unpublish(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_history(call: Call, value: core::result::Result<&[Kept], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Kept, 4>(value, w))
+}
+pub fn reply_pin(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_unpin(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_pins(call: Call, value: core::result::Result<&[Pinned], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Pinned, 32>(value, w))
+}
+pub fn reply_usage(call: Call, value: core::result::Result<&Usage, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

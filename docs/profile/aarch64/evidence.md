@@ -21,7 +21,7 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | Pin controller logic: BCM2711 function select of every pin, set/clear, levels, pulls; PL061 directions and masked data; who may change a pin; this repository's hwdocs tables parse and malformed ones are refused | Host tests in `tests/gpio_host.rs` (register models; no hardware) |
 | On QEMU `virt` the kernel reports no pin controller and `gpio` does not start | every aarch64 boot; `normal` suite (`MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES`) |
 | USB boot keyboard reports become PS/2 set 1 codes; report descriptors of a tablet and a mouse give their fields | Host tests in `tests/hid_host.rs` |
-| The block store at boot: an object gets the independent reference's root and reads back; a file round trip; names by compare-and-swap, only complete roots; a full medium refused; the store found again after a restart; room freed by a collection once leases end (300-STO-0003, 303-STO-0001) | `store` suite on `virt` (CI group "files, network and TLS") |
+| The block store at boot: an object gets the independent reference's root and reads back; a file round trip; names by compare-and-swap, only complete roots; a full medium refused; the store found again after a restart; room freed by a collection once leases end; a name's history of three versions, a quota refusal for a publication and a pin, a pin, a removal found again after a restart (300-STO-0003, 303) | `store` suite on `virt` (CI group "files, network and TLS") |
 
 ## Not covered by any test
 

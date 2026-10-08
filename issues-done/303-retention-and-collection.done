@@ -1,10 +1,10 @@
-# 303 — Retention and garbage collection: what is kept, for whom and how long (track B, fourth step)
+# 303 — Retention and garbage collection: what is kept, for whom and how long (track B, fourth step) — done
 
-**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.5, MC-4.8, MC-4.11, Appendix B.3
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.5, MC-4.8, MC-4.11, Appendix B.3
 
 ## Problem
 
-The block store kept every block until its medium was full ([300](300-checksummed-block-store.md), [302](../issues-done/302-names-and-current-roots.done)).
+The block store kept every block until its medium was full ([300](../issues/300-checksummed-block-store.md), [302](302-names-and-current-roots.done)).
 
 - **MC-4.5:** version history has explicit links and a retention policy. The garbage collector takes into account published roots, pinned snapshots, operations in progress and obligations to consumers.
 - **MC-4.11:** the right to access an object and the obligation to retain it are distinct. Retention has a party responsible for accounting, a term or termination condition, and a link to a quota.
@@ -33,10 +33,20 @@ The `STO` track numbers its tasks itself and may change the split.
 - Pins, history and removal, each with their tests.
 - The profile's Article 4 row states the retention policy.
 
-## Progress (2026-10-07)
-
-- **Done — [`303-STO-0001`](../issues-done/303-STO-0001-collection-by-reachability.done).**
 
 ## Related
 
 [docs/storage](../docs/storage/README.md); Constitution Article 4, Appendix B.3.
+
+## Resolution
+
+Every task of the plan is done:
+
+- [303-STO-0001](303-STO-0001-collection-by-reachability.done): collection by reachability, leases, room reused crash-safely; `blockstore.wit` 1.1.
+- [303-STO-0002](303-STO-0002-pins-and-quotas.done): pins with an owner (the badge), ended by their owner; accounts and a quota per owner.
+- [303-STO-0003](303-STO-0003-name-history.done): a name keeps its newest 4 versions, each record linking the root before it.
+- [303-STO-0004](303-STO-0004-removing-a-name.done): removing a name is a version without a root; its data goes only by collection.
+
+0002 to 0004 share one change of the medium's layout (version 2) and `blockstore.wit` 1.2. The acceptance criteria are met by the host tests in `tests/blockstore_host.rs` (33) and the QEMU `store` suite on x86 and aarch64, and the profile's Article 4 rows (x86 and aarch64) state the policy.
+
+Not done, and listed as not met in the profile: pins with a term of their own, quotas granted per owner, owners apart from badges, obligations to consumers (MC-4.5), leases across a restart. They need the grants of clients (the shell's is the only one, `300-STO-0004`) or consumers of the store, which do not exist yet; they will be split into new tasks when that work starts.

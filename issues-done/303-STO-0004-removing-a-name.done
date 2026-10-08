@@ -1,0 +1,34 @@
+# 303-STO-0004 — Removing a name: deleting a reference, apart from deleting data — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "retention/GC" · **Constitution:** MC-4.3, MC-4.8
+
+Part of main task [303](303-retention-and-collection.done).
+
+## Problem
+
+A published name could not be removed, so what it retained stayed until the medium was replaced. MC-4.8 keeps deleting a reference apart from deleting data.
+
+## Plan
+
+- **`unpublish(name, expected)`** is a compare-and-swap like a publication: it writes a version without a root (kind 1 in the name record).
+- The removed name resolves to `not-found` and retains nothing; it keeps only the removal's version, and a collection frees the records before it.
+- **Data goes only by collection:** the objects the name retained are freed when a collection finds that nothing else retains them.
+- **Publishing from the removal's version** creates the name again, with the next number; a stale version gets `conflict`.
+- **The interface:** `unpublish` in `idl/blockstore.wit` 1.2, for `BADGE_PUBLISH`, logged like a publication.
+
+## Acceptance criteria
+
+- Host tests: a removal refused from a stale version and for an unknown or removed name; the name's object kept until a collection; the name created again from the removal's version; the removal found again after a mount.
+- QEMU `store` suite, x86 and aarch64: a removal refused from a stale version, accepted from the current one, `not-found` after it, logged, and found again after a restart.
+
+## Related
+
+[303-STO-0002](303-STO-0002-pins-and-quotas.done), [303-STO-0003](303-STO-0003-name-history.done), [docs/storage](../docs/storage/README.md) (Names).
+
+## Resolution
+
+- **`blockstore/src/store.rs`:** `Store::unpublish`; a `Version` without a root; `Head::retains` is empty once the newest version removes the name, and `keep` drops the versions before it; `resolve` answers `NotFound` for a removed name; `usage` counts only names that are not removed.
+- **`blockstore/src/main.rs`:** `REMOVED <name> VERSION <n> BY PID <pid>` in the log.
+- **`blocks unpublish <name> <version>`;** `blocks history` prints a removal as `REMOVED`.
+- **Tests:** `tests/blockstore_host.rs` `a_removed_name_retains_nothing_and_keeps_its_version`, `each_version_links_the_one_before` (a removal's record: no root, the link to the root before it). QEMU `store` suite (x86 and aarch64): `unpublish obj 2` → `conflict`, `unpublish obj 3` → version 4, `resolve obj` → `not-found`, `history obj` → `obj VERSION 4 REMOVED`, logged; after a restart the history is the same and the other name resolves.
+- **Not done:** names that only their publisher may change or remove: any client with `BADGE_PUBLISH` may.
