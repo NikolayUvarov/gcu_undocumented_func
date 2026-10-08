@@ -220,6 +220,8 @@ def main():
             target = source / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+        # The writable directory: files written there (`write data/…`) can be read on any computer afterwards.
+        (source / "data").mkdir(exist_ok=True)
         temporary = work / "disk.img"
         descriptor = {"driver": "raw", "file": {
             "driver": "vvfat", "dir": qemu_path(source, qemu_img),
