@@ -70,6 +70,8 @@ impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, ar
 
 pub const SYSCALL_RDTSC: usize = 1;
 pub const SYSCALL_READ_KEY: usize = 2;
+// LOG: arg1 = address, arg2 = length (at most 4096) -> bytes taken. A console its reader drained within the last second
+// (an application's from its start) takes only what fits; the caller sends the rest again (ABI 4, 000-KRN-0030).
 pub const SYSCALL_LOG: usize = 3;
 pub const SYSCALL_WAIT: usize = 5;
 pub const SYSCALL_UPTIME: usize = 6;

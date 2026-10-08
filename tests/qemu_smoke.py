@@ -2999,6 +2999,7 @@ def services_suite(vm):
     require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
+    console_flow_check(vm)
     lifecycle_check(vm)
     # help <name>: the program's text read from its file, the shell's own lines, or a service; nothing is started.
     output = vm.command("help fm")
@@ -3084,6 +3085,14 @@ def lifecycle_check(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert not re.search(fr"^{clock} clock ", vm.command("ps", raw=True), re.M)
     require(vm.command("dmesg -s init"), f"[INIT] STOPPED rtc PID={pids['rtc'] - BASE}")
+
+
+def console_flow_check(vm):
+    """000-KRN-0030: a console program that prints far more than the console's 4 KiB before the shell reads it loses
+    nothing: the kernel takes what fits while the shell drains, and the program sends the rest again."""
+    output = vm.command("cat lines.txt", raw=True)
+    lines = re.findall(r"^LINE (\d{3}) [.]+$", output, re.M)
+    assert lines == [f"{n:03}" for n in range(300)], (len(lines), output[:400], output[-400:])
 
 
 def dmesg_check(vm):
@@ -5425,6 +5434,8 @@ def main():
                 shutil.copyfile(ROOT / IMAGE / name, disk / name)
             shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
             if suite == "services":
+                # 12 KiB for cat: three times the console's queue (000-KRN-0030).
+                (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()

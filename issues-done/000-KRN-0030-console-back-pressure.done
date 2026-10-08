@@ -1,0 +1,39 @@
+# 000-KRN-0030 — A console program's output is not lost to a slow reader — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-10.2, MC-12.1
+
+## Problem
+
+The local gate on `8f7d202` failed in the `services` suite on 4 CPUs and on 1 CPU. `dmesg` printed the system log, about 5 KiB now that init logs the launch record and the services log more. The shell showed only the last 4 KiB: the head, with `[LOGD] READY`, was gone.
+
+The kernel keeps a task's console output in a 4 KiB queue. `LOG` took every byte and dropped the oldest when the queue was full, so a program that printed faster than the shell read lost its first lines. The longer log made this visible, but any console program with more than 4 KiB of output (`cat` of a file, `help`) could lose its head the same way.
+
+## Plan
+
+- Back-pressure in `LOG` while someone reads the console:
+  - while the console was drained by `CONSOLE_READ` within the last second, `LOG` takes only what fits and returns that count;
+  - an application counts as read from its start, since the shell reads a console program before its first pump;
+  - `mind::process::log` sends the rest again, 2 ms apart.
+- After a second without reads the console takes everything and drops its oldest bytes, as before. A reader that went away cannot stop a writer for more than a second.
+- Services start without a reader, so their output is unchanged.
+
+## Acceptance criteria
+
+`cat` of a 12 KiB file shows all its lines, on 4 CPUs and on 1 CPU. The `services` suite's `dmesg` check passes again.
+
+## Resolution
+
+Done on 2026-10-08.
+
+- **ABI 4** (`common/abi.rs`): `LOG` returns the bytes it took, and the comment says when that is less than asked.
+- **The kernel** (`kernel/src/scheduler.rs`):
+  - `Task.console_read_ns`: set by `CONSOLE_READ`, or at start for an application;
+  - `LOG` limits its length to `console.room()` while that read is less than `CONSOLE_READER_NS` (1 s) old;
+  - `Queue::room` is in `kernel/src/input.rs`.
+- **`libmind::process::log`** loops until all is taken, waiting 2 ms after a partial write. A program built before this ABI is stopped by the version check.
+- **Tests:** the `services` suite cats `lines.txt` (300 lines, 12 KiB) and finds every line in order (`console_flow_check`), and its `dmesg` check passes again, on 4 CPUs and 1 CPU.
+- `docs/api` describes the `LOG` row.
+
+## Related
+
+[171](../issues-done/171-limits-from-the-hardware.done) (limits from the hardware), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the longer boot log).

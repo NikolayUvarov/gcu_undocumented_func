@@ -33,7 +33,7 @@ Required authority is in brackets; "none" means every task may call it.
 | 6 | `UPTIME` | → milliseconds since boot [none] |
 | 44 | `CLOCK` | → monotonic ns; `arg2` = resolution ns, `msg[2]` = calibrated TSC Hz (0: tick clock) [none] |
 | 5 | `WAIT` | `arg1` = ms (10 ms granularity, at most 60 s; ends early on input) → uptime at the call [none] |
-| 3 | `LOG` | `arg1` = address, `arg2` = length (≤ 4096) → bytes written to the task's log and console [none] |
+| 3 | `LOG` | `arg1` = address, `arg2` = length (≤ 4096) → bytes written to the task's log and console. While a reader drains the console (`CONSOLE_READ` within the last second; an application counts as read from its start), only what fits in the console's 4 KiB is taken and the caller sends the rest again (`mind::process::log` waits 2 ms between tries), so a console program's output is not lost to a slow reader; after a second without reads the console takes everything and drops its oldest bytes, as before (000-KRN-0030) [none] |
 | 7 | `EXIT` | ends the task [none] |
 | 2 | `READ_KEY` | → legacy byte of the next input event that has one, 0 if none [focused task] |
 | 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`; pointer events: `KEY_POINTER`, `pointer_fields` for a mouse's movement, `pointer_absolute_fields` when `POINTER_ABSOLUTE` is set: a tablet's position as a share of the screen in `POINTER_SCALE` steps, issue 161), 0 if none [focused task] |

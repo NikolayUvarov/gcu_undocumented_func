@@ -15,6 +15,8 @@ const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
+// A console read within this long pushes back on its writer (LOG takes only what fits); an application counts as read from its start.
+const CONSOLE_READER_NS: u64 = 1_000_000_000;
 const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyond it leaves the subtree unrevocable
 // Interrupt lines: 1..15 on the PIC, then MSI-X vectors 0x40..0x4F as lines 16..31 (allocated by PLATFORM_DEVICE_MSIX).
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
@@ -68,7 +70,7 @@ struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
-    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, dirty: bool,
+    input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64, dirty: bool,
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
     cspace: Vec<Option<Capability>>, generations: Vec<u32>,
     nodes: Vec<Node>,
@@ -683,7 +685,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
+        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
         if let Err(at) = self.on_cpu[cpu].binary_search(&slot) { self.on_cpu[cpu].insert(at, slot); }
         self.readied.mark(cpu); self.next_pid = next_pid; Ok(pid)
     }
@@ -1007,7 +1009,7 @@ impl Scheduler {
                 let (address, capacity) = (request.msg[0], request.msg[1].min(4096));
                 let console = request.syscall_num == SYSCALL_CONSOLE_READ;
                 let queue = match self.find(request.arg1 as u64) {
-                    Some(target) => { let t = self.tasks[target].as_mut().unwrap(); if console { &mut t.console } else { &mut t.log } }
+                    Some(target) => { let t = self.tasks[target].as_mut().unwrap(); if console { t.console_read_ns = crate::clock::now_ns(); &mut t.console } else { &mut t.log } }
                     // The last focused or screenless program that exited: its unread output (for TASK_LOGS too, so a
                     // background console program's output can be read after it ended).
                     None => match self.exited_console.as_mut() { Some((pid, queue)) if *pid == request.arg1 as u64 => queue, _ => return Err(ERR_NOT_FOUND) },
@@ -1063,7 +1065,9 @@ impl Scheduler {
             SYSCALL_INPUT_POINTER => { task.pointer = request.arg1 != 0; Ok(0) }
             SYSCALL_LOG => {
                 // Kept twice: LOGS drains `log`, the focus owner mirrors `console` of the focused task.
-                let length = request.arg2.min(4096);
+                // A console its reader drained within the last second takes only what fits; the caller sends the rest again.
+                let reader = task.console_read_ns != 0 && crate::clock::now_ns().saturating_sub(task.console_read_ns) < CONSOLE_READER_NS;
+                let length = if reader { request.arg2.min(4096).min(task.console.room()) } else { request.arg2.min(4096) };
                 if !task.space.validate_read(request.arg1, length) { Err(ERR_INVALID) } else {
                     // Until a task takes the screen, logs also go there in chunks (211-KRN-0017): a machine without COM1
                     // shows how far the services got.

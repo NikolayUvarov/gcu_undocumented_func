@@ -23,7 +23,14 @@ impl Exit {
 /// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`;
 /// and to the program that started it if it lent an endpoint for that: `mind::output`).
 pub fn log(bytes: &[u8]) {
-    for chunk in bytes.chunks(4096) { call(SYSCALL_LOG, chunk.as_ptr() as usize, chunk.len()); }
+    // A console whose reader keeps up takes what fits (000-KRN-0030): the rest goes again once it has read.
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let taken = call(SYSCALL_LOG, rest.as_ptr() as usize, rest.len().min(4096));
+        if taken > rest.len() { break; }
+        rest = &rest[taken..];
+        if !rest.is_empty() && taken < 4096 { call(SYSCALL_WAIT, 2, 0); }
+    }
     crate::log::capture(bytes);
     crate::output::send(bytes);
 }
