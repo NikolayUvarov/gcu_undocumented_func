@@ -584,7 +584,7 @@ impl Scheduler {
                 self.msi[index] = Some((a, entry));
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
-            PLATFORM_FRAMEBUFFER => { crate::screen::take(); Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)) }
+            PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
                 let bytes = a.checked_next_multiple_of(4096).filter(|&n| n > 0).ok_or(ERR_INVALID)?;
@@ -1256,7 +1256,9 @@ impl Scheduler {
                         Some(t) => {
                             let (source, dirty) = (t.screen.as_ref().unwrap().ptr() as usize, core::mem::take(&mut t.dirty) | core::mem::take(&mut self.dirty));
                             // New capability only on screen change: the compositor keeps the mapping across frames.
-                            if source != self.composited { self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
+                            // The compositor's first frame covers the whole screen: the kernel's boot lines and logs stop
+                            // there, not when it is given the framebuffer (211-KRN-0017).
+                            if source != self.composited { crate::screen::take(); self.composited = source; self.remove(slot, request.arg1); let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.cspace[request.arg1] = Some(Capability::Memory(source, frame_bytes(&self.boot), CAP_READ)); task.nodes[request.arg1] = self.root(); Ok(2) } else { Ok(dirty as usize) }
                         }
                     }
                 }
