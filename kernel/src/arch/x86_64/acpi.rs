@@ -9,6 +9,8 @@ static RESET: AtomicU64 = AtomicU64::new(0);
 // xAPIC IDs of the enabled processors the MADT lists, in its order (issue 171: as many as it lists, up to xAPIC's 255).
 pub static CPUS: [AtomicU32; crate::cpu::MAX] = [const { AtomicU32::new(0) }; crate::cpu::MAX];
 pub static CPU_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ACPI PM timer (211-PRT-0003): its I/O port, bit 31 set when it counts 32 bits rather than 24 (0: none).
+static PM_TIMER: AtomicU32 = AtomicU32::new(0);
 const WINDOW: u64 = 0x1_0000_0000;
 
 unsafe fn bytes(address: u64, len: u64) -> Option<&'static [u8]> {
@@ -32,11 +34,22 @@ pub unsafe fn init(rsdp: u64) {
         // Flags bit 10: RESET_REG_SUP; the generic address at 116, the value at 128 (FADT revision 2 and later).
         if &table[..4] != b"FACP" { continue; }
         fadt = true;
+        // PM timer: X_PM_TMR_BLK (generic address at 208, I/O space) or PM_TMR_BLK at 76 (length 4 at 91); flags bit 8:
+        // a 32-bit counter.
+        let port = if table.len() >= 220 && table[208] == 1 && u64_at(table, 212) != 0 { u64_at(table, 212) }
+                   else if table.len() >= 92 && table[91] == 4 { u32_at(table, 76) as u64 } else { 0 };
+        if port != 0 && port < 0x1_0000 { PM_TIMER.store(port as u32 | ((table.len() >= 116 && u32_at(table, 112) & 1 << 8 != 0) as u32) << 31, Ordering::Release); }
         if table.len() < 129 || u32_at(table, 112) & 1 << 10 == 0 { serial_print(if table.len() < 129 { "MIND CORE KERNEL: ACPI: FADT WITHOUT A RESET REGISTER (REVISION 1)\n" } else { "MIND CORE KERNEL: ACPI: RESET REGISTER NOT SUPPORTED\n" }); continue; }
         let (space, register) = (table[116], u64_at(table, 120));
         if matches!(space, 0..=2) && register != 0 && register < 1 << 48 { RESET.store((space as u64) << 56 | (table[128] as u64) << 48 | register, Ordering::Release); serial_print("MIND CORE KERNEL: ACPI: RESET REGISTER FOUND\n"); }
     }
     if !fadt { serial_print("MIND CORE KERNEL: ACPI: NO FADT\n"); }
+}
+
+/// The ACPI PM timer's port and counter mask, if the FADT names one.
+pub fn pm_timer() -> Option<(u16, u32)> {
+    let value = PM_TIMER.load(Ordering::Acquire);
+    (value & 0xFFFF != 0).then(|| (value as u16, if value & 1 << 31 != 0 { u32::MAX } else { 0xFF_FFFF }))
 }
 
 // Processor Local APIC entries (type 0, 8 bytes): APIC ID at 3, flags at 4 (bit 0 enabled). x2APIC entries (type 9)

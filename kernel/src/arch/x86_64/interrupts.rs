@@ -1,6 +1,6 @@
 use super::port::outb;
 use core::arch::asm;
-use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 
 const TICK_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
@@ -55,6 +55,11 @@ unsafe fn set_handler(index: usize, address: u64, cs: u16) {
 extern "x86-interrupt" fn unexpected(_frame: &mut InterruptFrame) {
     crate::cpu::halt_all();
 }
+// The tick comes from the boot CPU's LAPIC timer rather than the PIT through the 8259 (211-PRT-0003).
+static LAPIC_TICK: AtomicBool = AtomicBool::new(false);
+pub fn tick_from_pit() -> bool { !LAPIC_TICK.load(Ordering::Relaxed) }
+pub fn tick_from_lapic() { LAPIC_TICK.store(true, Ordering::Relaxed); }
+
 pub fn advance() {
     TICKS.fetch_add(1, Ordering::Relaxed);
 }
@@ -125,6 +130,7 @@ pub unsafe fn init() {
     outb(0x43, 0x36);
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
+    super::clock::start_tick();
     asm!("sti");
 }
 
