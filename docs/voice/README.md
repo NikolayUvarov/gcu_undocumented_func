@@ -1,6 +1,6 @@
 # MIND CORE — voice: speaking, listening, understanding
 
-**Version:** 0.4 (2026-10-04) · **Status:** V0–V2 done, V3–V4 planned · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Art. 8 (cognitive plane), 11.5, 11.11 (untrusted input), MC-3.7, MC-3.11 · **Roadmap:** [track G](../../ROADMAP.md) (input methods, UI), D (network for V4) · [Russian](README_RU.md)
+**Version:** 0.5 (2026-10-08): the V3 models chosen by measurement · **Status:** V0–V2 done, V3 started ([250](../../issues/250-voice-dictation.md)), V4 planned · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Art. 8 (cognitive plane), 11.5, 11.11 (untrusted input), MC-3.7, MC-3.11 · **Roadmap:** [track G](../../ROADMAP.md) (input methods, UI), D (network for V4) · [Russian](README_RU.md)
 
 The system is meant to talk with people: to speak, to listen and to act on what it heard. This plan says what exists, what is missing, how the pieces fit the Constitution, and which work belongs to the **tools track** (`APP` in [TRACKS.md](../../TRACKS.md): issues 077–099, then u001–u017, and since 2026-10-06 main tasks 250–299 and tasks `NNN-APP-MMMM`) and which to the **kernel track** (issues 150–199; the network track has 100–149).
 
@@ -50,7 +50,7 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 | **V1. Commands** (done) | Offline recognizer of a fixed grammar (Russian, English) from a model file; `hear` prints what it recognized; tested by synthesizer loopback | tools | [078](../../issues-done/078-voice-command-recognizer.done) |
 | **V2. Voice control** (done) | `voice` + shell integration: intents, confirmations, spoken replies, push-to-talk in the shell, a command set covering the tools | tools | [079](../../issues-done/079-voice-control-in-the-shell.done) |
 | **V2+. Push-to-talk anywhere** | A key that reaches the voice program whatever has the focus | kernel | [154](../../issues-done/154-push-to-talk-routing.done) (done) |
-| **V3. Dictation** | Large-vocabulary recognition (text into `edit`, search in `fm`) from a 40–80 MB model | kernel first, then tools | [150](../../issues-done/150-user-memory-beyond-the-arena.done), [153](../../issues-done/153-xsave-avx-state.done); a tools issue when they are done |
+| **V3. Dictation** | Large-vocabulary recognition (text into `edit`, search in `fm`) from a 40–80 MB model | kernel first, then tools | [150](../../issues-done/150-user-memory-beyond-the-arena.done) and [153](../../issues-done/153-xsave-avx-state.done) done; [250](../../issues/250-voice-dictation.md): Zipformer2 models, `vosk-model-ru` 0.54 for Russian (5.2 % WER on FLEURS), the GigaSpeech Zipformer for English after a licensing decision |
 | **V4. Understanding and dialogue** | Free speech → intent through a language model: remote first (through the network track's policy broker and TLS service), local later | network, tools | 101–103 (network track); a tools issue then |
 
 ### V0 — hearing (tools, done)
@@ -94,7 +94,8 @@ microphone ─► audio_gw ─► front end ─► recognizer ─► interpreter
 | [077](../../issues-done/077-voice-audio-front-end.done) | V0: audio front end — 16 kHz mono, speech detection, WAV source, `listen --vad` — **done** | — |
 | [078](../../issues-done/078-voice-command-recognizer.done) | V1: offline command recognizer — features, model file, grammar from the synthesizer's phonemes, `hear` — **done** | — |
 | [079](../../issues-done/079-voice-control-in-the-shell.done) | V2: `voice` program, intents in the shell, confirmations, spoken replies, capture ownership in `audio_gw` — **done** | — |
-| later | V3 dictation, V4 understanding through a language model | 150, 153; 101–103 |
+| [250](../../issues/250-voice-dictation.md) | V3: dictation with a Zipformer2 model, Russian first; the models compared by measurement — **open** | — (150, 153 done); English: a licensing decision |
+| later | V4 understanding through a language model | 101–103 |
 
 ### Kernel track (150–199)
 

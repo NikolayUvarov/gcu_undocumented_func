@@ -39,3 +39,20 @@ The Apple Silicon track `APL` ([TRACKS.md](../TRACKS.md)) needs a person with an
 Main task [211](../issues/211-intel-pc-from-a-sata-ssd.md): the maintainer has a Samsung 860 PRO and an Intel PC. Nothing in the profile has run on a physical x86 machine yet.
 
 - [ ] Write the image to the SSD as 211 says (a USB-SATA enclosure or adapter for now), boot the PC from it on its first SATA port, and send back what task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) asks for: the machine, the firmware settings, a photo of the screen, and the serial output if the board has COM1.
+
+## 6. The training data behind the English dictation model
+
+Main task [250](../issues/250-voice-dictation.md) (voice V3) chose models measured on the same sentences:
+
+- **Russian:** alphacep's `vosk-model-ru` 0.54. Its weights are under Apache-2.0, and its training data is not published.
+- **English:** the k2-fsa Zipformer GigaSpeech 2023-12-12. It runs on the same engine as the Russian model.
+  - Its weights are under Apache-2.0.
+  - It was trained on GigaSpeech, whose audio SpeechColab licenses for non-commercial research and education only. SpeechColab does not own the audio's copyright.
+
+Whether such terms reach weights trained on the data is a legal question, and the agents do not decide it. MIND Core is MIT OR Apache-2.0, and the model would ship on its boot disk.
+
+- [ ] Decide whether MIND Core may ship the GigaSpeech Zipformer.
+- [ ] If not, choose one of the alternatives in 250. Each needs a second engine:
+  - NVIDIA Parakeet TDT-CTC 110M (CC BY 4.0);
+  - OpenAI Whisper base (MIT).
+- [ ] Optionally, the same question for the Russian model, whose training data is unknown.
