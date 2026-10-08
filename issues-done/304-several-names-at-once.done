@@ -1,0 +1,30 @@
+# 304 — Several names at once: a commit with a declared boundary (track B, fifth step) — done
+
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "transactional Head/Refs service" · **Constitution:** MC-4.3, MC-4.4, MC-4.10, Appendix B.3
+
+## Problem
+
+A name changes by compare-and-swap ([302](302-names-and-current-roots.done)), but only one at a time. A change that spans several names, for example an object and the index that points at it, could be seen half done. MC-4.10 asks that a publication to several roots declare its boundary of atomicity, isolation and durability, and name the read method that sees the roots consistently. Appendix B.3 asks that the Head service give multi-root transactions and snapshot reads an explicit scope.
+
+## Plan
+
+- `304-STO-0007` — **a commit of several names**: one record, checked whole before it is written and applied whole or not at all when mounting; a snapshot read of several names; `blockstore.wit` 1.3.
+
+## Acceptance criteria
+
+- Host tests: every refusal writes nothing; a valid commit is found whole after a mount; a damaged or torn commit changes no name; the commit record is collected once no name keeps its versions.
+- QEMU, x86 and aarch64: a commit of two names, a refused commit that changes neither, a snapshot, and a commit found whole after a restart; a damaged commit on the medium changes no name.
+- The profile's Article 4 row states the boundary.
+
+## Related
+
+[docs/storage](../docs/storage/README.md) (Several names at once); [303](303-retention-and-collection.done).
+
+## Resolution
+
+Done by [304-STO-0007](304-STO-0007-commit-of-several-names.done). The boundary is stated in `docs/storage` and in the profile's Article 4 rows (x86 and aarch64):
+- atomic, with one record and one digest;
+- isolated, since the service serves one request at a time and `snapshot` reads at one point;
+- durable to a publication's level.
+
+Not done: commits across stores, and snapshots held across requests (MVCC). Neither has a user yet.

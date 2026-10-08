@@ -1,7 +1,7 @@
 //! The block store's layout and logic (issues 300-STO-0002, 301-STO-0002, 302-STO-0001, 303-STO-0001; MC-4.2, 4.3,
 //! 4.4, 4.5, 4.8): immutable blocks named by their CID, and names whose current version points at a root, as records on
-//! a block device; what no name retains and no lease protects is collected. Nothing here depends on the kernel: the
-//! host tests build it too.
+//! a block device; what no name retains and no lease protects is collected; several names change at once in one
+//! commit record (304-STO-0007). Nothing here depends on the kernel: the host tests build it too.
 //!
 //! Sector 0 holds the superblock. Records follow from sector 1, each starting on a sector. A block record is a header
 //! (magic, layout version, length, the block's CID, a digest of the header) and the block's bytes, padded to the
@@ -42,6 +42,11 @@ const PIN_MAGIC: &[u8; 8] = b"MIND-PIN";
 const PIN_RECORD: usize = 56 + 32;
 /// Versions of a name the store keeps and retains: the current one and the ones before it (MC-4.5).
 pub const HISTORY: usize = 4;
+// A commit record: a header sector (magic, layout, count (u16), zero, the SHA-256 of these 16 bytes and of every entry
+// sector), then one sector per name: a name record's fields without its magic and digest, so no entry stands alone.
+const TXN_MAGIC: &[u8; 8] = b"MIND-TXN";
+/// Names one commit changes at most.
+pub const COMMIT_MAX: usize = 8;
 
 /// The medium under the store: sectors of SECTOR bytes, read and written up to RECORD_SECTORS at a time.
 pub trait Device {
@@ -178,6 +183,10 @@ impl Pin {
     pub fn root(&self) -> Cid { Cid::from_bytes(&self.root).unwrap() }
 }
 
+/// One name's change in a commit: the version expected and the new root; none removes the name.
+#[derive(Clone, Copy, Debug)]
+pub struct Update<'n> { pub name: &'n [u8], pub expected: u64, pub root: Option<Cid> }
+
 /// Whether `name` is 1 to NAME_MAX bytes of `A-Z a-z 0-9 . _ / -`.
 pub fn valid_name(name: &[u8]) -> bool {
     (1..=NAME_MAX).contains(&name.len()) && name.iter().all(|&c| c.is_ascii_alphanumeric() || b"._/-".contains(&c))
@@ -202,6 +211,17 @@ fn name_record(name: &[u8], v: &Version, previous: Option<Cid>) -> [u8; SECTOR] 
 /// The name and version a sector records, if it is a whole, valid name record of this layout.
 fn parse_name(sector: &[u8]) -> Option<([u8; NAME_MAX], usize, Version)> {
     if &sector[..8] != NAME_MAGIC || sector[160..NAME_RECORD] != sha256::digest(&sector[..160]) { return None; }
+    name_fields(sector)
+}
+
+// A commit's entry: a name record's fields with zeros where its magic and digest would be.
+fn parse_entry(sector: &[u8]) -> Option<([u8; NAME_MAX], usize, Version)> {
+    if sector[..8].iter().any(|&b| b != 0) || sector[160..NAME_RECORD].iter().any(|&b| b != 0) { return None; }
+    name_fields(sector)
+}
+
+// The fields of a name record or commit entry, checked.
+fn name_fields(sector: &[u8]) -> Option<([u8; NAME_MAX], usize, Version)> {
     if u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[NAME_RECORD..].iter().any(|&b| b != 0) { return None; }
     let len = u16::from_le_bytes([sector[10], sector[11]]) as usize;
     let version = u64::from_le_bytes(sector[12..20].try_into().unwrap());
@@ -213,6 +233,22 @@ fn parse_name(sector: &[u8]) -> Option<([u8; NAME_MAX], usize, Version)> {
     let owner = u16::from_le_bytes([sector[158], sector[159]]);
     let v = Version { version, owner, root: sector[20..56].try_into().unwrap(), points, size: 0 };
     Some((sector[92..156].try_into().unwrap(), len, v))
+}
+
+// The count of entries a commit header announces, if the sector is one of this layout.
+fn parse_txn(sector: &[u8]) -> Option<usize> {
+    if &sector[..8] != TXN_MAGIC || u16::from_le_bytes([sector[8], sector[9]]) != LAYOUT || sector[12..16] != [0; 4] { return None; }
+    if sector[48..].iter().any(|&b| b != 0) { return None; }
+    let count = u16::from_le_bytes([sector[10], sector[11]]) as usize;
+    (1..=COMMIT_MAX).contains(&count).then_some(count)
+}
+
+// The digest a commit header carries: of its first 16 bytes and every entry sector.
+fn txn_digest(record: &[u8]) -> [u8; 32] {
+    let mut h = sha256::Sha256::new();
+    h.update(&record[..16]);
+    h.update(&record[SECTOR..]);
+    h.finish()
 }
 
 fn pin_record(pin: &Pin) -> [u8; SECTOR] {
@@ -399,6 +435,36 @@ impl<'a, D: Device> Store<'a, D> {
                     next = here + n;
                     break;
                 }
+                if let Some(count) = parse_txn(sector).filter(|&c| here + 1 + c as u64 <= sectors) {
+                    // A commit applies whole or not at all: its digest covers every entry (MC-4.10).
+                    let n = 1 + count as u64;
+                    if !self.dev.read(here, &mut self.buffer[..n as usize * SECTOR]) { return Err(Error::Device); }
+                    match self.commit_entries(count) {
+                        Some(entries) => {
+                            let entries = &entries[..count];
+                            let kept = if sweep {
+                                entries.iter().any(|(name, len, v)| self.find(&name[..*len]).is_ok_and(|i| self.heads[i].versions().iter().any(|k| k.version == v.version)))
+                            } else {
+                                for (name, len, v) in entries { self.keep_version(&name[..*len], *v)?; }
+                                true
+                            };
+                            if kept { self.occupied(&mut run, here, n); } else {
+                                self.erase(here, n)?;
+                                run.get_or_insert(here);
+                                freed.names += count as u32;
+                                freed.sectors += n;
+                            }
+                            next = here + n;
+                        }
+                        None => {
+                            // A damaged commit: its header is counted, its entries are counted as the scan meets them.
+                            self.damaged += 1;
+                            self.occupied(&mut run, here, 1);
+                            next = here + 1;
+                        }
+                    }
+                    break;
+                }
                 if let Some((name, len, v)) = parse_name(sector) {
                     let name = &name[..len];
                     let head = self.find(name);
@@ -468,6 +534,29 @@ impl<'a, D: Device> Store<'a, D> {
         }
         freed.free = self.holes[..self.runs].iter().map(|h| h.len).sum();
         Ok(freed)
+    }
+
+    // A version found on the medium: the name keeps it among its newest.
+    fn keep_version(&mut self, name: &[u8], v: Version) -> Result<(), Error> {
+        match self.find(name) {
+            Ok(i) => self.heads[i].keep(v),
+            Err(i) => { if self.names == self.heads.len() { return Err(Error::Full); } self.add(i, Head::new(name, v)); }
+        }
+        Ok(())
+    }
+
+    // The entries of the commit read into the buffer, if its digest and every entry check.
+    fn commit_entries(&self, count: usize) -> Option<[([u8; NAME_MAX], usize, Version); COMMIT_MAX]> {
+        let record = &self.buffer[..(1 + count) * SECTOR];
+        if record[16..48] != txn_digest(record) { return None; }
+        let mut entries = [([0u8; NAME_MAX], 0, Version::EMPTY); COMMIT_MAX];
+        for (k, entry) in entries.iter_mut().take(count).enumerate() {
+            *entry = parse_entry(&record[(1 + k) * SECTOR..(2 + k) * SECTOR])?;
+            let name = &entry.0[..entry.1];
+            // One entry per name.
+            if record[SECTOR..(1 + k) * SECTOR].chunks(SECTOR).any(|s| parse_entry(s).is_some_and(|(n, l, _)| &n[..l] == name)) { return None; }
+        }
+        Some(entries)
     }
 
     // A record or damaged sector at `here`: the blank run before it ends.
@@ -606,21 +695,23 @@ impl<'a, D: Device> Store<'a, D> {
             .chain(self.pins[..self.pinned].iter().filter(move |p| p.owner == owner).map(|p| (p.root, p.size)))
     }
 
-    // The bytes `owner` retains, each root counted once however many names and pins retain it; with `extra` added
-    // unless it is one of them.
-    fn retained_by(&self, owner: u16, extra: Option<(&Cid, u64)>) -> u64 {
+    // The bytes `owner` retains, each root counted once however many names and pins retain it; with the roots of
+    // `extra` added unless it holds them already.
+    fn retained_by(&self, owner: u16, extra: &[([u8; cid::BYTES], u64)]) -> u64 {
         let mut total = 0;
         for (k, (root, size)) in self.owned(owner).enumerate() {
             if !self.owned(owner).take(k).any(|(r, _)| r == root) { total += size; }
         }
-        if let Some((cid, size)) = extra { if !self.owned(owner).any(|(r, _)| r == cid.to_bytes()) { total += size; } }
+        for (k, (root, size)) in extra.iter().enumerate() {
+            if !self.owned(owner).any(|(r, _)| r == *root) && !extra[..k].iter().any(|(r, _)| r == root) { total += size; }
+        }
         total
     }
 
     /// What `owner` retains and may retain.
     pub fn usage(&self, owner: u16) -> Usage {
         Usage {
-            retained: self.retained_by(owner, None),
+            retained: self.retained_by(owner, &[]),
             quota: self.quota,
             names: self.heads[..self.names].iter().filter(|h| !h.removed() && h.latest().owner == owner).count() as u32,
             pins: self.pins[..self.pinned].iter().filter(|p| p.owner == owner).count() as u32,
@@ -640,7 +731,7 @@ impl<'a, D: Device> Store<'a, D> {
         // Room first: a collection it starts may free blocks of `root` whose lease ended, and the check below sees it.
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, Some((root, size))) > self.quota { return Err(Error::Quota); }
+        if self.retained_by(owner, &[(root.to_bytes(), size)]) > self.quota { return Err(Error::Quota); }
         let previous = self.find(name).ok().and_then(|i| self.heads[i].latest().root());
         let v = Version { version: current + 1, owner, root: root.to_bytes(), points: true, size };
         self.claim(lba, 1);
@@ -668,6 +759,71 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(v.version)
     }
 
+    /// Changes up to COMMIT_MAX names for `owner` at once, all or none (MC-4.10): each from the version it expects, to
+    /// a complete root or to a removal, within the owner's quota. One record holds every change and one digest covers
+    /// it, so a mount finds all of them or none; returns the new versions after the device has flushed it.
+    pub fn commit(&mut self, updates: &[Update], owner: u16) -> Result<[u64; COMMIT_MAX], Error> {
+        let n = updates.len();
+        if n == 0 || n > COMMIT_MAX { return Err(Error::Invalid); }
+        for (k, u) in updates.iter().enumerate() {
+            if !valid_name(u.name) || updates[..k].iter().any(|w| w.name == u.name) { return Err(Error::Invalid); }
+        }
+        if !self.dev.writable() { return Err(Error::ReadOnly); }
+        let mut new = 0;
+        for u in updates {
+            let current = match self.find(u.name) {
+                Ok(i) if u.root.is_none() && self.heads[i].removed() => return Err(Error::NotFound),
+                Ok(i) => self.heads[i].latest().version,
+                Err(_) if u.root.is_none() => return Err(Error::NotFound),
+                Err(_) => { new += 1; 0 }
+            };
+            if u.expected != current { return Err(Error::Conflict); }
+        }
+        if self.names + new > self.heads.len() { return Err(Error::Full); }
+        // Room first: a collection it starts may free blocks whose lease ended, and the checks below see it.
+        let lba = self.room(1 + n as u64)?;
+        let mut extra = [([0u8; cid::BYTES], 0u64); COMMIT_MAX];
+        for (k, u) in updates.iter().enumerate() {
+            if let Some(root) = u.root {
+                let size = self.walk(&root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
+                extra[k] = (root.to_bytes(), size);
+            }
+        }
+        // A removal adds a zero root of no size: it changes nothing.
+        if self.retained_by(owner, &extra[..n]) > self.quota { return Err(Error::Quota); }
+        let mut versions = [0u64; COMMIT_MAX];
+        let record = &mut self.buffer[..(1 + n) * SECTOR];
+        record.fill(0);
+        record[..8].copy_from_slice(TXN_MAGIC);
+        record[8..10].copy_from_slice(&LAYOUT.to_le_bytes());
+        record[10..12].copy_from_slice(&(n as u16).to_le_bytes());
+        for (k, u) in updates.iter().enumerate() {
+            let head = self.heads[..self.names].binary_search_by(|h| h.name().cmp(u.name)).ok().map(|i| &self.heads[i]);
+            let previous = head.and_then(|h| h.latest().root());
+            versions[k] = head.map_or(0, |h| h.latest().version) + 1;
+            let v = Version { version: versions[k], owner, root: u.root.map_or([0; cid::BYTES], |r| r.to_bytes()), points: u.root.is_some(), size: extra[k].1 };
+            let mut entry = name_record(u.name, &v, previous);
+            entry[..8].fill(0);
+            entry[160..NAME_RECORD].fill(0);
+            record[(1 + k) * SECTOR..(2 + k) * SECTOR].copy_from_slice(&entry);
+        }
+        let check = txn_digest(record);
+        record[16..48].copy_from_slice(&check);
+        self.claim(lba, 1 + n as u64);
+        if !self.dev.write(lba, &self.buffer[..(1 + n) * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }
+        for (k, u) in updates.iter().enumerate() {
+            let v = Version { version: versions[k], owner, root: u.root.map_or([0; cid::BYTES], |r| r.to_bytes()), points: u.root.is_some(), size: extra[k].1 };
+            self.keep_version(u.name, v)?;
+        }
+        Ok(versions)
+    }
+
+    /// The current version and root of each name, read between two requests (no root: removed; version 0: none).
+    pub fn snapshot(&self, name: &[u8]) -> Result<(u64, Option<Cid>), Error> {
+        if !valid_name(name) { return Err(Error::Invalid); }
+        Ok(self.find(name).map_or((0, None), |i| (self.heads[i].latest().version, self.heads[i].latest().root())))
+    }
+
     /// Pins the object `root` for `owner` until it unpins it, once every block of it is stored and within the owner's
     /// quota; returns the pin's id after the device has flushed it.
     pub fn pin(&mut self, root: &Cid, owner: u16) -> Result<u32, Error> {
@@ -675,7 +831,7 @@ impl<'a, D: Device> Store<'a, D> {
         if self.pinned == self.pins.len() { return Err(Error::Full); }
         let lba = self.room(1)?;
         let size = self.walk(root, |s, cid| if s.contains(cid) { Ok(()) } else { Err(dag::Error::NotFound) })?;
-        if self.retained_by(owner, Some((root, size))) > self.quota { return Err(Error::Quota); }
+        if self.retained_by(owner, &[(root.to_bytes(), size)]) > self.quota { return Err(Error::Quota); }
         let pin = Pin { id: self.next_pin, owner, root: root.to_bytes(), lba, size };
         self.claim(lba, 1);
         if !self.dev.write(lba, &pin_record(&pin)) || !self.dev.flush() { return Err(Error::Device); }
@@ -740,7 +896,7 @@ impl<'a, D: Device> Store<'a, D> {
         record[HEADER..HEADER + data.len()].copy_from_slice(data);
         // Only a header sector starts with a record's magic, so a scan that resumes after a damaged sector cannot take
         // a client's bytes for a record of any kind.
-        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC, PIN_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
+        if record.chunks(SECTOR).skip(1).any(|s| [RECORD_MAGIC, NAME_MAGIC, FREE_MAGIC, PIN_MAGIC, TXN_MAGIC].contains(&s[..8].try_into().unwrap())) { return Err(Error::Invalid); }
         // The sectors are taken even if the write fails: they may hold part of it now, and are not written again.
         self.claim(lba, n);
         if !self.dev.write(lba, &self.buffer[..n as usize * SECTOR]) || !self.dev.flush() { return Err(Error::Device); }

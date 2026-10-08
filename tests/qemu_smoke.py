@@ -2502,6 +2502,32 @@ def store_suite(vm):
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store retention: a name keeps its versions, an owner its quota, a pin its object until unpinned; "
           "a removed name retains nothing and mounts again as removed", flush=True)
+    # 304-STO-0007: several names at once, all or none, read at one point between commits.
+    require(vm.command("write ram:left.txt left"), "WROTE 5 BYTES")
+    left = cid_raw(b"left\n")
+    require(blocks("put ram:left.txt"), f"PUT {left} SIZE 5")
+    done = blocks(f"commit copy 1 {left} pair 0 {root}")
+    for line in ("COMMITTED copy VERSION 2", "COMMITTED pair VERSION 1"):
+        require(done, line)
+    logged = f"[BLOCKSTORE] COMMITTED pair VERSION 1 ROOT {root}"
+    require(vm.service_logs("blockstore", logged), logged)
+    # A stale version, or a root never stored, beside a valid change: nothing changes.
+    require(blocks(f"commit copy 1 {root} pair 1 {left}"), "blocks: commit: Conflict")
+    require(blocks(f"commit copy 2 {root} ghost 0 {cid_raw(b'never stored')}"), "blocks: commit: Incomplete")
+    snap = blocks("snapshot copy pair ghost obj")
+    for line in (f"copy VERSION 2 ROOT {left}", f"pair VERSION 1 ROOT {root}", "ghost NONE", "obj VERSION 4 REMOVED"):
+        require(snap, line)
+    # A removal and a change in one commit, found whole by a new instance.
+    done = blocks(f"commit pair 1 - copy 2 {root}")
+    for line in ("COMMITTED pair VERSION 2 REMOVED", "COMMITTED copy VERSION 3"):
+        require(done, line)
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NAMES=3 SECTORS="), "CORRUPT=0 DAMAGED=0")
+    snap = blocks("snapshot copy pair")
+    for line in (f"copy VERSION 3 ROOT {root}", "pair VERSION 2 REMOVED"):
+        require(snap, line)
+    print("PASS: block store commits: two names change at once or not at all (a stale version, a missing root), a "
+          "snapshot reads them at one point, a commit with a removal is found whole after a restart", flush=True)
 
 
 def free_port():
@@ -2616,9 +2642,24 @@ def store_faults_suite(vm):
     require(blocks(f"check {root} pattern"), "blocks: check: NotFound")
     require(blocks("pattern 100000"), f"PUT {root} SIZE 100000")
     require(blocks(f"check {root} pattern"), "CHECKED 100000 BYTES = PATTERN")
+    # A damaged commit (304-STO-0007): a byte of its first entry; a new instance applies none of it, and counts its
+    # header and both entries damaged.
+    for path, text in (("ram:c1.txt", "first change"), ("ram:c2.txt", "second change")):
+        require(vm.command(f"write {path} {text}"), f"WROTE {len(text) + 1} BYTES")
+        require(blocks(f"put {path}"), f"PUT {cid_raw(text.encode() + bytes([10]))} SIZE {len(text) + 1}")
+    first, other = cid_raw(b"first change\n"), cid_raw(b"second change\n")
+    done = blocks(f"commit obj 1 {first} aux 0 {other}")
+    for line in ("COMMITTED obj VERSION 2", "COMMITTED aux VERSION 1"):
+        require(done, line)
+    txn = b"MIND-TXN" + (2).to_bytes(2, "little") + (2).to_bytes(2, "little") + bytes(4)
+    assert poke(vm, txn, 512 + 100, GDB_PORT) >= 1
+    require(restart(), f"CORRUPT=0 DAMAGED={34 + 3}")
+    snap = blocks("snapshot obj aux")
+    for line in (f"obj VERSION 1 ROOT {root}", "aux NONE"):
+        require(snap, line)
     print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
           "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
-          "header loses its record alone", flush=True)
+          "header loses its record alone; a damaged commit changes no name", flush=True)
 
 
 def escrow_check(vm):

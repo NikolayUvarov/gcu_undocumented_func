@@ -3,7 +3,7 @@
 // Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
 // Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
-// logged. Leases are measured on the monotonic clock (303-STO-0001). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
+// logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
@@ -17,7 +17,7 @@ use mind::idl::blockstore::{self, Collected, Error, Head as Current, Kept, Pinne
 use mind::idl::codec::List;
 use mind::idl::wire;
 use mind::ipc::Endpoint;
-use store::{Device, Entry, Extent, Head, Pin, Store, BLOCK_MAX, BUFFER, SECTOR};
+use store::{Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, SECTOR};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
@@ -119,6 +119,8 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Unpin { .. }, call)) if refused(Operation::Unpin) => blockstore::reply_unpin(call, Err(Error::Rights)),
             Ok((Request::Pins, call)) if refused(Operation::Pins) => blockstore::reply_pins(call, Err(Error::Rights)),
             Ok((Request::Usage, call)) if refused(Operation::Usage) => blockstore::reply_usage(call, Err(Error::Rights)),
+            Ok((Request::Commit { .. }, call)) if refused(Operation::Commit) => blockstore::reply_commit(call, Err(Error::Rights)),
+            Ok((Request::Snapshot { .. }, call)) if refused(Operation::Snapshot) => blockstore::reply_snapshot(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -203,6 +205,39 @@ fn main(_info: &'static BootInfo) {
                     n
                 });
                 blockstore::reply_pins(call, n.map(|n| &list[..n]))
+            }
+            Ok((Request::Commit { updates }, call)) => {
+                let updates = updates.as_slice();
+                // An empty root removes the name; any other must be a supported CID.
+                let mut changes = [Update { name: &[], expected: 0, root: None }; COMMIT_MAX];
+                let parsed = updates.iter().zip(changes.iter_mut()).try_for_each(|(u, c)| {
+                    let root = if u.root.is_empty() { None } else { Some(parse(u.root.as_slice())?) };
+                    *c = Update { name: u.name.as_str().as_bytes(), expected: u.expected, root };
+                    Ok(())
+                });
+                let versions = parsed.and_then(|()| {
+                    let s = store.as_mut().map_err(|e| *e)?;
+                    let versions = s.commit(&changes[..updates.len()], badge).map_err(error)?;
+                    for (u, v) in updates.iter().zip(versions) {
+                        match changes.iter().find(|c| c.name == u.name.as_str().as_bytes()).and_then(|c| c.root) {
+                            Some(root) => mind::println!("[BLOCKSTORE] COMMITTED {} VERSION {} ROOT {} BY PID {}", u.name, v, root, pid),
+                            None => mind::println!("[BLOCKSTORE] COMMITTED {} VERSION {} REMOVED BY PID {}", u.name, v, pid),
+                        }
+                    }
+                    Ok(versions)
+                });
+                blockstore::reply_commit(call, versions.as_ref().map(|v| &v[..updates.len()]).map_err(|e| *e))
+            }
+            Ok((Request::Snapshot { names }, call)) => {
+                let mut heads = [Current::default(); COMMIT_MAX];
+                let read = store.as_ref().map_err(|e| *e).and_then(|s| {
+                    for (h, name) in heads.iter_mut().zip(names.as_slice()) {
+                        let (version, root) = s.snapshot(name.as_str().as_bytes()).map_err(error)?;
+                        *h = Current { version, root: root.map(|r| List::from_slice(&r.to_bytes()).unwrap_or_default()).unwrap_or_default() };
+                    }
+                    Ok(names.len())
+                });
+                blockstore::reply_snapshot(call, read.map(|n| &heads[..n]))
             }
             Ok((Request::Usage, call)) => {
                 let usage = store.as_ref().map_err(|e| *e).map(|s| {
