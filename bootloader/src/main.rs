@@ -5,7 +5,6 @@ use core::panic::PanicInfo;
 use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
-use uefi::proto::media::fs::SimpleFileSystem;
 #[cfg(target_arch = "x86_64")]
 use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
@@ -144,12 +143,13 @@ fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buf
 }
 
 #[entry]
-fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
+fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {
-            let sfs_handle = boot_services.get_handle_for_protocol::<SimpleFileSystem>().map_err(|_| ("boot volume", "no file system"))?;
-            let mut sfs = boot_services.open_protocol_exclusive::<SimpleFileSystem>(sfs_handle).map_err(|_| ("boot volume", "cannot open"))?;
+            // The volume this loader was read from (211-KRN-0012), not the first one the firmware lists: that may be
+            // another disk's EFI partition, such as a Mac's internal disk.
+            let mut sfs = boot_services.get_image_file_system(image).map_err(|_| ("boot volume", "no file system on the loader's device"))?;
             let mut root = sfs.open_volume().map_err(|_| ("boot volume", "cannot open"))?;
             let file_buf_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, FILE_BUFFER_PAGES).map_err(|_| ("file buffer", "out of memory"))?;
             let file_buf = unsafe { core::slice::from_raw_parts_mut(file_buf_addr as *mut u8, FILE_BUFFER_PAGES * 4096) };

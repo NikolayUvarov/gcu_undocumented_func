@@ -27,6 +27,20 @@ On a PC with an ESP on another disk, or a USB stick attached, the kernel may be 
 
 With two FAT disks attached, the system reads its kernel and its programs from the disk it booted from, on x86 and aarch64. A bootloader and kernel of different versions stop with a message.
 
+## Progress
+
+**2026-10-08: the bootloader reads its own volume** (requested first, to try a Mac booted from a USB disk).
+
+- `bootloader/src/main.rs` opens the file system of `LoadedImage.DeviceHandle` (`get_image_file_system`), not the first SimpleFileSystem the firmware lists.
+- **Test:**
+  - The `boot` suite (x86) and `tests/aarch64_smoke.py` attach a second FAT disk, with only `EFI/APPLE`, ahead of the boot disk on the same bus.
+  - The firmware fails to boot from it and starts the loader from the second disk.
+  - The loader before this change stops with `BOOT ERROR: kernel.elf: file not found` on both architectures. Now x86 reaches `MIND>` and aarch64 reaches `[INIT] READY`.
+- **Measured, still open:** in that test `vfs_server` mounts the first disk's volume (`[VFS] MOUNTED FAT16 FROM ATA`), so `ls` shows its files, not ours.
+  - It mounts only a FAT partition of an MBR partition table, the first one among the block drivers.
+  - A GPT disk (protective MBR, type `0xEE`), such as a Mac's internal disk, is skipped. This follows from the code and has not been tried on a Mac.
+- **Left:** the identity in `BootInfo` (ABI 4), the kernel's check of the bootloader's version, and the mount by identity.
+
 ## Related
 
 [211](211-intel-pc-from-a-sata-ssd.md), [211-DRV-0002](211-DRV-0002-ahci-every-port.md), [351](351-self-update.md), issue 006.

@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.0 (2026-10-08) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.1 (2026-10-08) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -95,7 +95,7 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - either inside the PC on its first SATA port (`SATA0`/`SATA1` on the board);
 - or still in its USB adapter on a rear USB port.
 
-For the first test, disconnect the PC's other disks and USB sticks (section 8 says why).
+For the first test, disconnect the PC's other disks and USB sticks: the programs may be read from another disk's FAT volume (section 8).
 
 **Start it** from the firmware's boot menu (often F8, F11 or F12) by choosing the disk's UEFI entry, or by putting it first in the boot order.
 
@@ -119,7 +119,8 @@ cat data/hello             # after the reboot: the file survived
 | What you see | Likely cause | What to do |
 |---|---|---|
 | `BOOT ERROR: display: …` | The firmware gives no linear framebuffer (GOP) | Another video output, or the integrated graphics; report it |
-| `BOOT ERROR: kernel.elf: …` or `BOOT ERROR: boot volume: …` | The bootloader opened another disk's FAT volume ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Disconnect the other disks and sticks |
+| `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Write the disk again (section 5) |
+| The shell runs, but `ls` shows another disk's files | `vfs_server` mounted the first FAT volume with an MBR partition table, which may be on another disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Disconnect the other disks and sticks |
 | Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). `x2APIC is not supported yet` is the first suspect ([211-PRT-0002](../issues/211-PRT-0002-x2apic.md)) | Photograph the screen. For x2APIC, turn it off in the firmware if it has the switch |
 | The bootloader's text, then a frozen screen with nothing from the kernel | The kernel cannot reach the framebuffer, or stopped before it took it | A serial cable on COM1, if the board has one, shows the reason |
 | The shell runs, but `ls` is empty or `[INIT] ahci NOT STARTED` | SATA is in RAID/RST/VMD mode, or the disk is not on the first SATA port ([211-DRV-0002](../issues/211-DRV-0002-ahci-every-port.md)) | AHCI mode; the first port |

@@ -50,11 +50,12 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
         # and line ends came in the middle of lines the guest printed.
+        # `decoy`: a directory served as another FAT disk ahead of the boot disk, on the same bus (211-KRN-0012).
         self.disk = disk
         self.qmp_path = Path(tempfile.mkdtemp(prefix="mind-qmp-")) / "qmp.sock"
         self.qmp_file = None
@@ -76,6 +77,8 @@ class VM:
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
                    if getattr(args, "disk", None) == "nvme" else ["-drive", source])
+        if decoy:
+            storage = ["-drive", f"format=raw,file=fat:{decoy.replace(',', ',,')}", *storage]
         self.arch = getattr(args, "arch", "x86_64")  # usb_image_smoke.py passes no architecture
         if self.arch == "aarch64":
             # QEMU virt (issue 202): AAVMF in pflash with its own variable store, the ECAM below 4 GiB, ramfb for the
@@ -4923,6 +4926,13 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(original)
     print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
+    # kernel and the services from its own volume.
+    with tempfile.TemporaryDirectory(prefix="smoke-decoy-", dir=ROOT / IMAGE) as decoy:
+        (Path(decoy) / "EFI/APPLE").mkdir(parents=True)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), decoy=Path(decoy).relative_to(ROOT).as_posix())
+        vm.close()
+    print("PASS: bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
