@@ -6,7 +6,7 @@ use crate::pcicfg::{read, write};
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -94,7 +94,7 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 let bars = bars(bus, device, function);
                 if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
-                devices.push(Device { class, id, bars, irq, bus, device, function });
+                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false });
             }
         }
     }

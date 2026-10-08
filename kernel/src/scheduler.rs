@@ -564,8 +564,22 @@ impl Scheduler {
             PLATFORM_DEVICE_BAR => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
+                if bar.io { unsafe { pci::enable(&device); } return Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)); }
+                // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI, 211-KRN-0021):
+                // other kinds of device there go to no other driver once this one is granted, nor this one after theirs.
+                let (start, end) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096));
+                let mut sharers = self.devices.iter().enumerate().filter(|&(i, d)| i != a && d.class != device.class
+                    && d.bars.iter().any(|b| !b.io && b.size != 0 && b.base < end && b.base + b.size > start));
+                if let Some((_, other)) = sharers.clone().find(|(_, d)| d.granted) {
+                    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} AT {:X} NOT GRANTED: ITS PAGE HOLDS REGISTERS OF {:06X}, ALREADY GRANTED\n", b, device.location(), bar.base, other.location()));
+                    return Err(ERR_RIGHTS);
+                }
+                if let Some((_, other)) = sharers.next() {
+                    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} AT {:X} SHARES ITS PAGE WITH {:06X} (CLASS {:06X}), WHICH NO OTHER DRIVER GETS\n", b, device.location(), bar.base, other.location(), other.class));
+                }
+                self.devices[a].granted = true;
                 unsafe { pci::enable(&device); }
-                if bar.io { Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)) } else { Ok(Capability::Mmio(bar.base as usize, (bar.size as usize).div_ceil(4096) * 4096)) }
+                Ok(Capability::Mmio(bar.base as usize, (end - bar.base) as usize))
             }
             PLATFORM_DEVICE_IRQ => match self.devices.get(a).ok_or(ERR_NOT_FOUND)?.irq { 0 | 2 => Err(ERR_NOT_FOUND), irq => Ok(Capability::Interrupt(irq)) },
             // An MSI-X vector for table entry `b` of device `a`, aimed at the BSP; the entry is programmed here, so a
@@ -1175,9 +1189,11 @@ impl Scheduler {
                     Some(Capability::Mmio(physical, size)) => (physical, size, true, true),
                     _ => (0, 0, false, false),
                 };
+                // Registers that start inside a page: the page is mapped, the address of the first register returned.
+                let within = if device { physical % 4096 } else { 0 };
                 if size == 0 { Err(ERR_RIGHTS) } else {
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // mapping size for the client
-                    task.heap.map_shared(&mut task.space, physical, size, device, writable, node).ok_or(ERR_NO_MEMORY)
+                    task.heap.map_shared(&mut task.space, physical - within, size + within, device, writable, node).map(|address| address + within).ok_or(ERR_NO_MEMORY)
                 }
             }
             SYSCALL_MEM_PHYS => match self.cap(slot, request.arg1) { Some(Capability::Dma(physical, _)) => Ok(physical), _ => Err(ERR_RIGHTS) },

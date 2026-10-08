@@ -204,7 +204,7 @@ impl Init {
                 // behind them; each its BAR0 and its own DMA region.
                 for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
                     let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
-                    let Ok(bar) = Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) else { continue };
+                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => { mind::println!("[INIT] EHCI {}: REGISTERS NOT GRANTED ({:?})", nth, e); continue } };
                     grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
                 }
             }

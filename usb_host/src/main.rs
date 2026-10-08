@@ -529,7 +529,14 @@ fn main(_info: &'static BootInfo) {
     // EHCI controllers init granted (211-DRV-0004): their own registers and DMA regions.
     let buses: &'static mut [Option<ehci::Bus>; 2] = unsafe { &mut *core::ptr::addr_of_mut!(EHCI_BUSES) };
     for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
-        let (Ok(mmio), Ok(dma)) = (Mmio::map(bar_slot), Dma::map(dma_slot)) else { continue };
+        if mind::dev::cap_info(bar_slot).0 != mind::abi::CAP_KIND_MMIO { continue; }
+        // Which controller, and where its registers are: a BAR of 1 KiB may start inside a page (211-KRN-0021).
+        let config = |offset| mind::dev::device_config(bar_slot, offset).unwrap_or(0);
+        mind::println!("[USB] EHCI {}: {:04X}:{:04X}, REGISTERS AT {:08X}", nth, config(0) & 0xFFFF, config(0) >> 16, config(0x10) & !0xF);
+        let (mmio, dma) = match (Mmio::map(bar_slot), Dma::map(dma_slot)) {
+            (Ok(mmio), Ok(dma)) => (mmio, dma),
+            (mmio, dma) => { mind::println!("[USB] EHCI {}: NOT MAPPED (REGISTERS {:?}, DMA {:?})", nth, mmio.err(), dma.err()); continue }
+        };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
     let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
