@@ -147,6 +147,8 @@ ls log:                    # the log partition: a BOOTNNNN.LOG for each boot
 | `MIND CORE KERNEL: NO TICK FROM THE PIT`, or everything waits forever (programs that sleep, time not moving) | No timer interrupt reaches the kernel. The line `MIND CORE KERNEL: TICK: …` says where the tick comes from: the LAPIC timer, or the PIT where the firmware lists no ACPI PM timer ([211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done)) | Photograph the lines and report it |
 | The keyboard does nothing | Only PS/2 and USB keyboards on the first USB 3 (xHCI) controller work; on Intel 7–9 series chipsets the kernel first moves the USB ports there from EHCI | Another USB port (rear, on the chipset) or a PS/2 keyboard |
 
+While real machines are diagnosed, two screens stay for 5 seconds on a machine without a hypervisor, so they can be photographed: the bootloader's `MIND CORE BOOT:` lines (`A PAUSE OF 5 S FOR A PHOTO OF THESE LINES`), and the kernel's grey lines before the compositor takes the screen. QEMU does not pause.
+
 ## 9. What to send back
 
 For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether it worked or not:

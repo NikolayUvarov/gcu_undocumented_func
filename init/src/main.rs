@@ -508,6 +508,18 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
+// The pause for a photo of the boot screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
+const PHOTO_PAUSE_MS: usize = 5000;
+
+// No hypervisor bit in CPUID: a real machine, not QEMU, whose tests need no pause.
+fn bare_metal() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    #[allow(unused_unsafe)]
+    { PHOTO_PAUSE_MS > 0 && unsafe { core::arch::x86_64::__cpuid(1) }.ecx >> 31 == 0 }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
@@ -516,6 +528,11 @@ fn main(info: &'static BootInfo) {
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
     for index in order {
+        // On a real machine, time for a photo of the kernel's lines before the compositor takes the screen (211-PRT-0004).
+        if unit_name(index) == "compositor" && bare_metal() {
+            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", PHOTO_PAUSE_MS / 1000);
+            mind::time::sleep(PHOTO_PAUSE_MS);
+        }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.programs[unit_image(index).0].len == 0 { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
         match init.start(index) {

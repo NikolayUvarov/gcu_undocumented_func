@@ -54,6 +54,18 @@ fn drawable(info: &ModeInfo) -> bool {
 struct ConsoleOutDevice { _opaque: u8 }
 
 // A line of the loader's progress on the text console (211-KRN-0016): without COM1 it shows where a boot stops.
+// The pause for a photo of the screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
+const PHOTO_PAUSE_S: usize = 5;
+
+// No hypervisor bit in CPUID: a real machine, not QEMU, whose tests need no pause.
+fn bare_metal() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    #[allow(unused_unsafe)]
+    { PHOTO_PAUSE_S > 0 && unsafe { core::arch::x86_64::__cpuid(1) }.ecx >> 31 == 0 }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
     let mut console = unsafe { system_table.unsafe_clone() };
     let _ = writeln!(console.stdout(), "MIND CORE BOOT: {}", args);
@@ -387,6 +399,11 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
         let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
+    // On a machine without a hypervisor, time for a photo of these lines before the screen changes (211-PRT-0004).
+    if bare_metal() {
+        say(&system_table, format_args!("{} CPUS; A PAUSE OF {} S FOR A PHOTO OF THESE LINES", cpu_count, PHOTO_PAUSE_S));
+        system_table.boot_services().stall(PHOTO_PAUSE_S * 1_000_000);
+    }
     say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
