@@ -53,6 +53,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` (open) | P1 | 351-UPD-0006 | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` (open) | P2 | 351-UPD-0007 | track C |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD` (open), with `PRT` | P3 | 351-UPD-0006 | track C |
+| [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable medium for the store (track A); 351-UPD-0007 | track B, C |
 | [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | Trial boot: the flag in `BootInfo`, confirmation by `init`, a restart deadline, the updater's grants | `KRN` | P1 | 351-UPD-0006, 211-KRN-0012 | track C |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0006, 351-KRN-0014 | Assurance |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers | `ASR` (open) | P2 | 351-UPD-0005 | Assurance |
@@ -64,7 +65,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0011](600-APL-0011-first-run-on-a-mac.md) | The first run on an Apple Silicon Mac under HVF, by hand: RNDR, device accesses, ITS, CPUs, memory; recorded in the guide and the profile | `APL` (open) | P2 | a person with an Apple Silicon Mac | track H |
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second; `update` in the shell for 351); [requests-NET.md](requests-NET.md) (HTTPS downloads for a service, an SSH client, a persistent device key, for 351); [requests-STO.md](requests-STO.md) (releases as pinned objects, for 351).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second; `update` in the shell for 351); [requests-NET.md](requests-NET.md) (HTTPS downloads for a service, an SSH client, a persistent device key, for 351).
 
 
 ## Finished tasks (`issues-done/`)
