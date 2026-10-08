@@ -32,6 +32,7 @@ mod arch;
 use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
+mod firmware;
 mod frames;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
@@ -100,6 +101,7 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
             cpu::halt_here();
         }
         trial::start(&info.boot_slot);
+        firmware::init(info.efi_runtime);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");

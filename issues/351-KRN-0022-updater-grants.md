@@ -9,7 +9,8 @@
 - TLS, for the release download;
 - the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md));
 - a network grant;
-- restarting the machine through `init`.
+- restarting the machine through `init`;
+- the firmware variable privilege (`SLOT_FIRMWARE`, [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done)), for `BootNext` and `BootOrder` ([351-UPD-0010](351-UPD-0010-updating-the-bootloader.md)).
 
 ## Plan
 
@@ -18,7 +19,7 @@
 
 ## Acceptance criteria
 
-The updater gets exactly these four authorities and no other, and a program that asks for any of them is refused (an `isolation` case).
+The updater gets exactly these five authorities and no other, and a program that asks for any of them is refused (an `isolation` case).
 
 ## Related
 

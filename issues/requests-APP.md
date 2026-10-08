@@ -124,3 +124,20 @@ Disk images now have a log partition, mounted as `log:`. On it `vfs_server` keep
 ### Acceptance criteria
 
 The `tools` suite finds `log:` in `help` where the image has the partition. `fm` lists `log:` and shows a boot log in its viewer, in the USB image test or a suite booted from an image with the partition.
+
+## `efivar` in the tools guide and `help` (351)
+
+**Recorded by:** the kernel track (KRN), 2026-10-08, for [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done).
+
+### Problem
+
+`efivar` is a new console program. It lists the firmware's boot variables (`BootCurrent`, `BootNext`, `BootOrder`, `Boot####`) and sets `BootNext` and `BootOrder`. The shell lends it the firmware privilege only after the user agrees, and a script must declare `firmware`. The kernel track wrote it to test its system call. The tools guide (`docs/tools`, EN and RU) and the shell's `help` do not name it, nor the `firmware` word for scripts.
+
+### Plan (a proposal; the tools track decides)
+
+- A row in `docs/tools/README.md` and `README_RU.md`: what `efivar` shows, its three write forms, the consent prompt, and that it works on x86 for now (351-KRN-0028).
+- The scripting guide names `firmware` among the authorities a script may declare.
+
+### Acceptance criteria
+
+The guide and `help efivar` describe it. The `tools` suite runs `efivar --help`.

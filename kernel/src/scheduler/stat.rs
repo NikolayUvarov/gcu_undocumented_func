@@ -183,7 +183,7 @@ impl Scheduler {
                             Capability::Input => (CAP_KIND_INPUT, 0, 0, 0), Capability::Display => (CAP_KIND_DISPLAY, 0, 0, 0),
                             Capability::Spawn => (CAP_KIND_SPAWN, 0, 0, 0), Capability::Reply(..) => (CAP_KIND_REPLY, 0, 0, 0),
                             Capability::Platform => (CAP_KIND_PLATFORM, 0, 0, 0), Capability::Control => (CAP_KIND_CONTROL, 0, 0, 0),
-                            Capability::Restart => (CAP_KIND_RESTART, 0, 0, 0), Capability::Observe => (CAP_KIND_OBSERVE, 0, 0, 0), Capability::Escrow(kind) => (CAP_KIND_ESCROW, kind as u32, 0, 0),
+                            Capability::Restart => (CAP_KIND_RESTART, 0, 0, 0), Capability::Observe => (CAP_KIND_OBSERVE, 0, 0, 0), Capability::Escrow(kind) => (CAP_KIND_ESCROW, kind as u32, 0, 0), Capability::Firmware => (CAP_KIND_FIRMWARE, 0, 0, 0),
                         };
                         let generation = if index < SLOT_DYNAMIC { 0 } else { task.generations[index] };
                         out.push(StatCap { slot: index as u32, generation, kind: kind as u32, rights, size, badge, endpoint, node: task.nodes[index].id, parent: task.nodes[index].parent });

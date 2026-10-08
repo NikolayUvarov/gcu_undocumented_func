@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed.
@@ -169,6 +169,16 @@ pub fn commit_in_front(endpoint: Endpoint, session: u32) -> Result<core::result:
     Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
 }
 
+/// Gives the new program a copy of the firmware variable privilege `cap` in SLOT_FIRMWARE, where a launcher lends
+/// it with the user's consent for REQUEST_FIRMWARE (351-KRN-0027, 1.6).
+pub fn grant_firmware(endpoint: Endpoint, session: u32, cap: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [11 | MAJOR << 8 | ((session) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, Some((cap, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -182,6 +192,7 @@ pub enum Request {
     InspectRequests { name: Text<64> },
     GrantMemory { session: u32, slot: u8, cap: usize },
     CommitInFront { session: u32 },
+    GrantFirmware { session: u32, cap: usize },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -252,6 +263,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::CommitInFront { session: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
+        11 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_FIRMWARE, true)?;
+            Ok((Request::GrantFirmware { session: wire::field(&words, 0, 16, 32) as u32, cap: cap }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -294,4 +309,8 @@ pub fn reply_grant_memory(call: Call, value: core::result::Result<(), Error>) ->
 pub fn reply_commit_in_front(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, ((value) as usize) << 0])
+}
+pub fn reply_grant_firmware(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

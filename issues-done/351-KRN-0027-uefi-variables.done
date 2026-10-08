@@ -1,0 +1,52 @@
+# 351-KRN-0027 — UEFI variables from the running system: BootNext, BootOrder and the boot entries — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.3, MC-3.3, MC-3.11, MC-11.4
+
+The update track's request "UEFI variables for the updater" in `issues/requests-KRN.md`, for [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md) (a new bootloader tried once through `BootNext`, then made the default through `BootOrder`) and the `dbx` updates of [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md).
+
+## Problem
+
+A new bootloader is tried once through `BootNext` and made the default through `BootOrder`; a revoked one goes into `dbx`. These are UEFI variables, set through the firmware's runtime services. The kernel did not call runtime services, so nothing in the running system could set them.
+
+## Plan
+
+- The bootloader passes the runtime services table in `BootInfo` (ABI 4, which is not on `main` yet, so the field joins that version).
+- The kernel calls `GetVariable` and `SetVariable` in its identity map, where the runtime regions keep their physical addresses, since it frees only conventional memory after `ExitBootServices`.
+- A system call, `FIRMWARE_VARIABLE`, takes a new privilege, `CAP_KIND_FIRMWARE`. `init` mints it in escrow for the shell, and the shell lends it to a program that asks for `REQUEST_FIRMWARE` once the user agrees, as with the camera (MC-11.4). The updater's grant waits for the updater (351-KRN-0022).
+- A program, `efivar`, lists the boot variables and sets `BootNext` and `BootOrder`.
+
+## Acceptance criteria
+
+In QEMU with OVMF, a program with the grant sets `BootNext` to a second boot entry and the next boot starts that entry once; a program without it is refused.
+
+## Resolution
+
+Done on 2026-10-08 for x86. aarch64 and authenticated writes (`dbx`) are split into [351-KRN-0028](../issues/351-KRN-0028-uefi-variables-aarch64-and-dbx.md).
+
+- **ABI 4** (`common/abi.rs`):
+  - `BootInfo.efi_runtime`: the bootloader's `system_table.runtime_services()`, zeroed in the copy each task gets.
+  - `SYSCALL_FIRMWARE_VARIABLE` (61), `FIRMWARE_GET`, `FIRMWARE_SET`, `FIRMWARE_BUFFER` (8192) and `FIRMWARE_HEADER` (26).
+  - `CAP_KIND_FIRMWARE` (16); `SLOT_FIRMWARE` 27, so `SLOT_DYNAMIC` moves to 28.
+  - `REQUEST_FIRMWARE` (65536) in `libmind::process`.
+- **The kernel** (`kernel/src/firmware.rs`):
+  - It takes the table only if it lies in the identity map and carries the `RUNTSERV` signature. It calls a function only if that function lies in the identity map too.
+  - Calls run one CPU at a time, under the scheduler lock with interrupts off, after `fninit` and the default MXCSR.
+  - The system call copies the request in, checks that `arg1` names a `Firmware` capability, and copies the answer out. `ERR_NOT_FOUND` covers a variable not set or no runtime services; `ERR_INVALID` with the needed length in `arg2` covers a buffer too small.
+- **Grants.**
+  - `init` gives the shell the privilege in escrow (a service spawn turns it into the privilege).
+  - The shell asks `<NAME> ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?` every time, and a script must declare `firmware`.
+  - It lends the privilege through `loader.wit` 1.6 `grant-firmware`: `grant` takes endpoints only, and the IDL generator gained the `firmware` handle kind. The loader keeps it only for `SLOT_FIRMWARE`.
+- **`libmind::firmware`**: `get` and `set` with ASCII names, `GLOBAL`, `BOOT_VARIABLE`.
+- **`efivar`**: `efivar [boot]` (`BootCurrent`, `BootNext`, `BootOrder`, `Boot0000`–`Boot0020` with their descriptions), `efivar bootnext <hex>`, `efivar bootorder <hex>,…`, `efivar delete bootnext`.
+- **Tests.**
+  - `boot` suite, `efivar_check`:
+    - refused, efivar says the variables were not granted;
+    - allowed, it lists OVMF's entries;
+    - `bootnext` to the `EFI Internal Shell` entry boots OVMF's shell once (`Shell>` on the serial line);
+    - after the shell's `reset`, MIND Core boots from the same entry as before with `BootNext` gone.
+  - `isolation` case `k`: `FIRMWARE_VARIABLE` without the privilege, and with an endpoint in `arg1`, is refused.
+- **TCB.** The firmware's variable services now run in ring 0 after `ExitBootServices`, on behalf of the privilege's holder. `docs/profile/tcb.md` names them in memory isolation, and adds a row for the boot settings. `docs/api`, `docs/idl` and the profile's Article 9 row say what is provided.
+
+## Related
+
+[351-KRN-0022](../issues/351-KRN-0022-updater-grants.md) (the updater's grant of the privilege), [351-KRN-0028](../issues/351-KRN-0028-uefi-variables-aarch64-and-dbx.md), [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md).

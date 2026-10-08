@@ -124,6 +124,7 @@ USER_CRATES=(
     "pins:pins:pins.elf"
     "pins:pinmap:pinmap.elf"
     "camera:camera:camera.elf"
+    "efivar:efivar:efivar.elf"
 )
 
 # The kernel, every service and program, and the UEFI bootloader build in parallel, a log each (000-KRN-0020).

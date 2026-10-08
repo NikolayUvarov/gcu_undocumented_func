@@ -39,7 +39,9 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // keep their places across versions, so each side finds the other's version where it expects it.
 pub const ABI_VERSION: u32 = 4;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
-    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, }
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, }
+// BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
+// variable services in the identity map (no SetVirtualAddressMap) and gives tasks 0 (ABI 4, 351-KRN-0027).
 // The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
 // kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
 // partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.
@@ -185,6 +187,9 @@ pub const CAP_KIND_OBSERVE: usize = 14; // read-only statistics: STAT, TASK_LIST
 // A privilege held in escrow (issue 170): its holder cannot use it, only grant it at a service spawn, where the child
 // gets the privilege itself; `rights` in STAT and CAP_INFO's arg2 name the privilege's kind.
 pub const CAP_KIND_ESCROW: usize = 15;
+// Reading and writing the firmware's variables (FIRMWARE_VARIABLE): BootNext, BootOrder, Boot####; init gives it to
+// the shell, which lends it once the user agrees, and later to the updater (ABI 4, 351-KRN-0027).
+pub const CAP_KIND_FIRMWARE: usize = 16;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -276,8 +281,11 @@ pub const SLOT_BLOCKSTORE: usize = 25;
 // The shell's block store client with the get badge alone, which it lends for REQUEST_BLOCKSTORE_READ to the program's
 // SLOT_BLOCKSTORE: a program that only reads holds a client that cannot put or publish (ABI 4, 300-KRN-0024).
 pub const SLOT_BLOCKSTORE_READ: usize = 26;
+// The firmware variable privilege (CAP_KIND_FIRMWARE): the shell's, which it lends for REQUEST_FIRMWARE to the
+// program's same slot once the user agreed (ABI 4, 351-KRN-0027).
+pub const SLOT_FIRMWARE: usize = 27;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 27;
+pub const SLOT_DYNAMIC: usize = 28;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
@@ -338,7 +346,7 @@ pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take
 // ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
 // (the loader) names the task it starts the program for.
 pub const SPAWN_FOREGROUND: usize = 4;
-pub const SPAWN_GRANTS_MAX: usize = 24;
+pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;
@@ -466,6 +474,17 @@ pub const SYSCALL_REBOOT: usize = 55;
 // restarts the machine at the deadline; writing the confirmed boot record is the updater's (351-UPD-0007, 0008).
 // -> 1 if the boot was on trial, 0 if not (ABI 4, 351-KRN-0014).
 pub const SYSCALL_BOOT_CONFIRM: usize = 60;
+// FIRMWARE_VARIABLE (a CAP_KIND_FIRMWARE privilege in arg1; ABI 4, 351-KRN-0027): arg2 = FIRMWARE_GET or FIRMWARE_SET,
+// msg[0] = a buffer in the caller's memory, msg[1] = its length (at most FIRMWARE_BUFFER): the GUID (16 bytes), the
+// attributes (u32), the name's length in UTF-16 units without the terminator (u16), the data's length (u32), then
+// the name (UTF-16LE) and the data. GET writes the attributes, the data's length and the data back in place and
+// returns the length; ERR_NOT_FOUND for a variable not set, or a firmware without runtime variable services;
+// ERR_INVALID with the needed length in arg2 when the data does not fit; ERR_RIGHTS when the firmware refuses a write.
+pub const SYSCALL_FIRMWARE_VARIABLE: usize = 61;
+pub const FIRMWARE_GET: usize = 0;
+pub const FIRMWARE_SET: usize = 1;
+pub const FIRMWARE_BUFFER: usize = 8192;
+pub const FIRMWARE_HEADER: usize = 26;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;

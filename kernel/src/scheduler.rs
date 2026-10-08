@@ -42,7 +42,7 @@ impl Accounting {
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8) }
+pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8), Firmware }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -57,7 +57,7 @@ enum Source<'a> { Boot(usize), Image(&'a [u8]) }
 impl Capability {
     // A privilege by its kind (the escrowable ones).
     fn privilege(kind: usize) -> Option<Self> {
-        match kind { CAP_KIND_INPUT => Some(Self::Input), CAP_KIND_DISPLAY => Some(Self::Display), CAP_KIND_SPAWN => Some(Self::Spawn), CAP_KIND_CONTROL => Some(Self::Control), CAP_KIND_OBSERVE => Some(Self::Observe), _ => None }
+        match kind { CAP_KIND_INPUT => Some(Self::Input), CAP_KIND_DISPLAY => Some(Self::Display), CAP_KIND_SPAWN => Some(Self::Spawn), CAP_KIND_CONTROL => Some(Self::Control), CAP_KIND_OBSERVE => Some(Self::Observe), CAP_KIND_FIRMWARE => Some(Self::Firmware), _ => None }
     }
     fn overlaps(self, physical: usize, size: usize) -> bool {
         match self { Self::Memory(p, s, _) | Self::Dma(p, s) => p < physical + size && physical < p + s, _ => false }
@@ -544,6 +544,40 @@ impl Scheduler {
         self.endpoints = used;
     }
 
+    // FIRMWARE_VARIABLE (351-KRN-0027): the request is copied in, the firmware sees only kernel memory, the answer is
+    // copied back.
+    unsafe fn firmware_variable(&mut self, slot: usize, ptr: *mut SyscallMailbox, request: &SyscallMailbox) -> Result<usize, usize> {
+        let space = &self.tasks[slot].as_ref().unwrap().space;
+        let (address, length) = (request.msg[0], request.msg[1]);
+        if !(FIRMWARE_HEADER..=FIRMWARE_BUFFER).contains(&length) || !space.validate_read(address, length) { return Err(ERR_INVALID); }
+        let mut buffer = alloc::vec![0u8; length];
+        for (i, byte) in buffer.iter_mut().enumerate() { *byte = core::ptr::read_volatile(space.readable(address + i).unwrap() as *const u8); }
+        let guid: [u8; 16] = buffer[..16].try_into().unwrap();
+        let attributes = u32::from_le_bytes(buffer[16..20].try_into().unwrap());
+        let (units, data_length) = (u16::from_le_bytes(buffer[20..22].try_into().unwrap()) as usize, u32::from_le_bytes(buffer[22..26].try_into().unwrap()) as usize);
+        let name_end = FIRMWARE_HEADER + units * 2;
+        if units == 0 || name_end > length { return Err(ERR_INVALID); }
+        let mut name: alloc::vec::Vec<u16> = buffer[FIRMWARE_HEADER..name_end].chunks_exact(2).map(|u| u16::from_le_bytes([u[0], u[1]])).collect();
+        name.push(0);
+        match request.arg2 {
+            FIRMWARE_GET => match crate::firmware::get(&name, &guid, &mut buffer[name_end..]) {
+                Ok((attributes, got)) => {
+                    buffer[16..20].copy_from_slice(&attributes.to_le_bytes()); buffer[22..26].copy_from_slice(&(got as u32).to_le_bytes());
+                    if copy_out(space, address, &buffer[..name_end + got]) { Ok(got) } else { Err(ERR_INVALID) }
+                }
+                Err((crate::firmware::BUFFER_TOO_SMALL, needed)) => { core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), needed); Err(ERR_INVALID) }
+                Err((crate::firmware::NOT_FOUND, _)) => Err(ERR_NOT_FOUND),
+                Err(_) => Err(ERR_INVALID),
+            },
+            FIRMWARE_SET if name_end + data_length <= length => match crate::firmware::set(&name, &guid, attributes, &buffer[name_end..name_end + data_length]) {
+                Ok(()) => Ok(0),
+                Err(crate::firmware::NOT_FOUND) => Err(ERR_NOT_FOUND),
+                Err(_) => Err(ERR_RIGHTS),
+            },
+            _ => Err(ERR_INVALID),
+        }
+    }
+
     // The PCI function with a BAR covering physical (or port) address `base`.
     fn device_at(&self, base: u64) -> Option<&pci::Device> { self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)) }
 
@@ -629,7 +663,7 @@ impl Scheduler {
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
-        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; // which images exist, not where; no CPU addresses
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; // which images exist, not where; no CPU or firmware addresses
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -1100,6 +1134,7 @@ impl Scheduler {
                 }
             }
             SYSCALL_BOOT_CONFIRM => if self.holds(slot, Capability::Platform) { Ok(crate::trial::confirm() as usize) } else { Err(ERR_RIGHTS) },
+            SYSCALL_FIRMWARE_VARIABLE => if !matches!(self.cap(slot, request.arg1), Some(Capability::Firmware)) { Err(ERR_RIGHTS) } else { self.firmware_variable(slot, ptr, &request) },
             SYSCALL_MEMORY_RESERVE => {
                 let bytes = request.arg1.checked_next_multiple_of(4096);
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) }
@@ -1298,6 +1333,7 @@ impl Scheduler {
                     Some(Capability::Control) => (CAP_KIND_CONTROL, 0, 0),
                     Some(Capability::Restart) => (CAP_KIND_RESTART, 0, 0),
                     Some(Capability::Observe) => (CAP_KIND_OBSERVE, 0, 0),
+                    Some(Capability::Firmware) => (CAP_KIND_FIRMWARE, 0, 0),
                     Some(Capability::Escrow(kind)) => (CAP_KIND_ESCROW, kind as usize, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);

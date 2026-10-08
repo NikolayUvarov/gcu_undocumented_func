@@ -20,6 +20,7 @@ pub mod control;
 pub mod dag;
 pub mod dev;
 pub mod fs;
+pub mod firmware;
 pub mod gfx;
 pub mod gpio;
 pub mod heap;

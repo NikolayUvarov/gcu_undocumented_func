@@ -5079,6 +5079,39 @@ def store_disk_check(args, disk):
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
 
 
+def efivar_check(args, disk):
+    """351-KRN-0027: efivar reads the firmware's boot variables through the kernel's UEFI runtime services, only after
+    the user allows it; BootNext set to the firmware's own shell boots that shell once, and the boot after it is MIND
+    Core again, with BootNext consumed by the firmware."""
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True)
+
+    def efivar(line, answer):
+        vm.send(line + "\n")
+        vm.expect("ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW? (Y/N)", timeout=20)
+        vm.send_bytes(answer)
+        return vm.expect("MIND> ", timeout=20)
+
+    try:
+        require(efivar("efivar", b"n"), "efivar: the firmware's variables were not granted")
+        listing = efivar("efivar", b"y")
+        current = re.search(r"BootCurrent: ([0-9A-F]{4})", listing)
+        shell = re.search(r"Boot([0-9A-F]{4}) EFI Internal Shell", listing)
+        assert current and shell and "BootNext: not set" in listing and "BootOrder:" in listing, listing
+        require(efivar(f"efivar bootnext {shell[1]}", b"y"), f"BootNext SET TO {shell[1]}")
+        vm.send("reboot\n")
+        vm.expect("Shell>", timeout=90)
+        vm.send_bytes(b"reset\r")
+        vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+        vm.expect("MIND>", timeout=60)
+        time.sleep(1); vm.collect(); vm.output = ""
+        listing = efivar("efivar", b"y")
+        assert f"BootCurrent: {current[1]}" in listing and "BootNext: not set" in listing, listing
+    finally:
+        vm.close()
+    print(f"PASS: efivar lists the boot entries after the user allows it (refused without); BootNext {shell[1]} boots the "
+          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed", flush=True)
+
+
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
@@ -5281,6 +5314,7 @@ def boot_suite(args, disk):
     if args.trial_kernel:
         trial_check(args, disk)
     store_disk_check(args, disk)
+    efivar_check(args, disk)
 
 
 def main():

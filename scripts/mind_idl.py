@@ -16,7 +16,7 @@ IDL_DIR = ROOT / "idl"
 OUT_DIR = ROOT / "libmind" / "src" / "idl"
 
 INTEGERS = {"bool": 1, "u8": 8, "u16": 16, "u32": 32, "u64": 64}
-HANDLES = {"memory": "CAP_KIND_MEMORY", "endpoint": "CAP_KIND_ENDPOINT"}
+HANDLES = {"memory": "CAP_KIND_MEMORY", "endpoint": "CAP_KIND_ENDPOINT", "firmware": "CAP_KIND_FIRMWARE"}
 WORD0_START, WORD_BITS = 16, 64  # word calls: method:8 | major:8 | fields
 BUFFER_MAX = 64 * 1024  # largest request or reply of a buffer call
 PAGE = 4096
