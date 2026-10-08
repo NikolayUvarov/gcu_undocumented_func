@@ -3432,9 +3432,43 @@ def vfs_suite(args):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
+        disks_check(args, image, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
           f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
+
+
+def disks_check(args, boot, temp):
+    """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
+    disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
+    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks."""
+    models, store = temp / "models-disk.img", temp / "store-disk.img"
+    (temp / "models-tree").mkdir()
+    (temp / "models-tree" / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(models), str(temp / "models-tree")], check=True, capture_output=True)
+    with store.open("wb") as f:
+        f.truncate(8 << 20)  # the store formats it at start: about 10 s on aarch64 (polled VirtIO under TCG) for 8 MiB
+    extra = ["-drive", f"if=none,id=models,format=raw,readonly=on,file={models}", "-device", "virtio-blk-pci,drive=models",
+             "-drive", f"if=none,id=store,format=raw,file={store}", "-device", "virtio-blk-pci,drive=store"]
+    vm = VM(args, boot.relative_to(ROOT).as_posix(), raw=True, extra=extra)
+    try:
+        routed = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \(BLANK\)", vm.command("dmesg -s init", raw=True))
+        assert routed, vm.log[-3000:]
+        mounted = vm.command("dmesg -s vfs_server", raw=True)
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
+        require(mounted, "[VFS] THE BOOT VOLUME:")
+        require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS:")
+        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.command("df"), re.M), vm.log[-2000:]
+        for _ in range(60):
+            if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
+                break
+            time.sleep(2)
+        assert re.search(r"SECTORS=\d+/16384", vm.command("blocks stat", raw=True)), vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-disks-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: disks: the boot disk on {BOOT_DRIVE}, a model disk and a blank store disk on VirtIO: the store's goes to the "
+          f"block store ({routed[1]}), the model disk to vfs_server as models:, the boot volume as before", flush=True)
 
 
 def edit_check(vm):

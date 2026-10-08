@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -55,18 +55,19 @@ pub fn run(endpoint: Endpoint, name: &str) -> Result<u64> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u64 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
-/// The boot services and their further instances in boot order (1.1; up to 32 since issue 205).
-pub fn list(endpoint: Endpoint) -> Result<core::result::Result<List<Service, 32>, Error>> {
-    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+/// The boot services and their further instances in boot order (1.1; up to 32 since issue 205, 64 since 1.2: a
+/// third VirtIO disk made 33, 251-KRN-0031).
+pub fn list(endpoint: Endpoint) -> Result<core::result::Result<List<Service, 64>, Error>> {
+    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
     let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 2626, false, false)?;
+    let length = wire::buffer_reply(&reply, 5250, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Service, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Service, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Stops a running service; init does not restart it until it is started again, and its clients' calls fail with
@@ -136,7 +137,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         }
         2 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 2626, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 5250, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::List, call))
@@ -171,7 +172,7 @@ pub fn reply_run(call: Call, value: Result<u64>) -> Result<()> {
 }
 pub fn reply_list(call: Call, value: core::result::Result<&[Service], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
-    wire::reply_buffer(call, |w| codec::encode_slice::<Service, 32>(value, w))
+    wire::reply_buffer(call, |w| codec::encode_slice::<Service, 64>(value, w))
 }
 pub fn reply_stop(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

@@ -44,7 +44,7 @@ The same day, the maintainer also decided that any free licence is allowed. Term
    - `03_run_qemu.sh` attaches `$MIND_MODELS_DISK` as a read-only virtio disk, and a QEMU check reads a model file and compares its SHA-256 with the manifest.
 3. **A second virtio disk** (aarch64, where the boot disk is already virtio): `virtio_blk` serves each device as its own instance (`virtio_blk#1`), as `virtio_net` does.
    - This is the drivers track's task, open and without an owner, so the tools track does it for this one (AGENTS.md, section 5).
-   - `init` then has to give `vfs_server` the second instance's client, which is a request to the kernel track ([requests-KRN.md](requests-KRN.md)).
+   - `init` then has to give `vfs_server` the second instance's client, which is a request to the kernel track. Done: [211-DRV-0009](../issues-done/211-DRV-0009-virtio-blk-every-disk.done) (`virtio_blk#1`) and [251-KRN-0031](../issues-done/251-KRN-0031-model-disk-next-to-the-store-disk.done) (`virtio_blk#2`; with a store disk too, each disk reaches its own service, on x86 and aarch64).
 4. **Models as memory objects.** A recognizer or synthesizer maps a model file read-only and shares it ([150](../issues-done/150-user-memory-beyond-the-arena.done)). Its hash is checked once against `MANIFEST.json` before use.
 5. **The block store** (track B, storage track). A model disk is imported into the store as named, pinned objects, one name per model id, and models are read from the store by name and CID. Requested from the storage track ([requests-STO.md](requests-STO.md)).
 

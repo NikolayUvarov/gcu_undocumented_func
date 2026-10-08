@@ -119,7 +119,7 @@ impl Init {
     fn store_disk(&mut self) -> Option<&'static str> {
         if let Some(found) = self.store { return found; }
         let mut found = None;
-        for name in ["virtio_blk", "virtio_blk#1"] {
+        for name in ["virtio_blk", "virtio_blk#1", "virtio_blk#2"] {
             if !self.running(service_index(name)) { continue; }
             let Ok(keeper) = self.keeper(name) else { continue };
             let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { continue };
@@ -280,7 +280,7 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
                 let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
-                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "nvme"] {
+                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
                     if Some(driver) == store { continue; }
                     if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
