@@ -1,0 +1,28 @@
+# 211-KRN-0018 — The compositor's memory quota fits the screen — done
+
+**Type:** kernel (init policy) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.5, MC-12.1
+
+## Problem
+
+On the MacBook Pro's 2880 × 1800 panel the compositor logged `NO MEMORY FOR SHADOW`, exited, was restarted three times and was quarantined, so the shell never showed.
+
+Its shadow copy of the framebuffer takes stride × height × 4 bytes: about 20 MiB there. A service's default memory quota is 16 MiB (`HEAP_MAX_BYTES`).
+
+## Plan
+
+init gives the compositor the default quota plus the framebuffer's size.
+
+## Acceptance criteria
+
+The shell shows on a 2880 × 1800 screen. Nothing changes on smaller ones.
+
+## Related
+
+[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0017](211-KRN-0017-logs-on-the-boot-screen.done).
+
+## Resolution
+
+- **`init/src/main.rs`.** `screen_mib` is the framebuffer's size in MiB, from `BootInfo`. The compositor's quota is `HEAP_MAX_BYTES` + `screen_mib` (about 36 MiB on the MacBook Pro).
+- **Measured.** The MacBook Pro shows the shell's screen.
+- **QEMU.** The suites run with their 1280 × 800 screen.
+- **Not changed.** The window broker's 128 MiB was sized for 1920 × 1200 pixel windows (issue 163). At 2880 × 1800 a full-screen pixel window takes 20 MiB, so fewer of them fit. That is left for APP or a later task.

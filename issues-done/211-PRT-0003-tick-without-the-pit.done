@@ -1,0 +1,43 @@
+# 211-PRT-0003 — A tick that does not depend on the 8254 — done
+
+**Type:** porting (kernel, x86-64) · **Owner:** `PRT` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-5.6, MC-12.1
+
+## Problem
+
+The 100 Hz tick comes from the PIT through the 8259 into the boot CPU's LAPIC (ExtINT), and the TSC is calibrated against the PIT (`docs/profile/clocks.md`). Some recent chipsets gate the PIT's clock. There the tick would stop, and with it `WAIT`, timeouts and time slices. That is an assumption to check on real hardware; QEMU always has a PIT.
+
+## Plan
+
+- Check at boot that the PIT counts. Calibrate the TSC against the ACPI PM timer, or CPUID leaf 0x15 where present, if it does not.
+- Take the tick from the boot CPU's LAPIC timer (TSC-deadline mode where present), calibrated against the TSC. The PIT path remains as the fallback.
+- Leave the HPET and the I/O APIC for their own issue.
+- `docs/profile/clocks.md` says which source was used on which machine. The kernel's boot line names it.
+
+## Acceptance criteria
+
+In QEMU the tick runs from the LAPIC timer, and the suites pass with it, including the CPU-budget checks of `busy`. With the PIT disabled in QEMU (`-machine pit=off`), the system still boots and ticks.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), `docs/profile/clocks.md`.
+
+## Resolution
+
+- **ACPI** (`kernel/src/arch/x86_64/acpi.rs`). The FADT's PM timer port is kept: `X_PM_TMR_BLK` when it is in I/O space, else `PM_TMR_BLK`, with `TMR_VAL_EXT` for a 32-bit counter.
+- **The tick** (`clock::start_tick`, called from `interrupts::init` before interrupts are on).
+  - With a PM timer that counts, the TSC and the boot CPU's LAPIC timer (divided by 16) are measured over 50 ms of it.
+  - The LAPIC timer then runs periodically at 100 Hz on vector 0x20. IRQ 0 is masked at the 8259, and the tick skips its EOI there.
+  - Without a PM timer the PIT ticks as before. `calibrate` waits at most about 10^10 TSC cycles for its first tick and reports `NO TICK FROM THE PIT` instead of waiting forever.
+  - The boot line `MIND CORE KERNEL: TICK: …` names the source, the LAPIC count per tick, the TSC rate, and whether the PIT's counter moves.
+- **QEMU.**
+  - Every x86 suite runs with the LAPIC tick: the local gate's x86 groups pass, `busy`'s CPU budget included.
+  - A new group runs `normal` and `busy` with `-machine pit=off` (`--machine` now adds properties on x86). There the boot line says `PIT NOT COUNTING`, and the suites pass.
+- **The MacBook Pro of 211-PRT-0004.**
+  - It stopped after `INIT STARTED` before this change: the PIT counts there, but its interrupt does not reach the CPU. HPET legacy routing is a likely reason, not checked.
+  - With it, it boots: `TICK: LAPIC TIMER, 62357 PER TICK, MEASURED ON THE ACPI PM TIMER; TSC 2294 MHZ; PIT COUNTING`.
+- **Not done.**
+  - TSC-deadline mode.
+  - CPUID leaf 0x15.
+  - A check that the LAPIC timer keeps running in deep C-states (ARAT). Idle CPUs use `HLT` (C1), where it runs.
+- **Docs.** `docs/profile/clocks.md`, `tcb.md`, `docs/legacy.md`, the README and the troubleshooting tables of `docs/write-disk.md` (EN, RU).
+

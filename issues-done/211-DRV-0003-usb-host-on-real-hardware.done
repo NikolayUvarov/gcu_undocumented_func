@@ -1,0 +1,45 @@
+# 211-DRV-0003 — `usb_host` on real hardware: endpoint 0 after a stall, and reports of what failed — done
+
+**Type:** driver · **Owner:** `DRV` (open track; done for 211 by `KRN`/`PRT`) · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1
+
+## Problem
+
+On the MacBook Pro a Logitech receiver (`046D:C534`, a keyboard and a mouse) was set up and claimed as a keyboard, yet no key reached the shell. Nothing in the log said why, and a device on root port 1 was given up after one failed port reset.
+
+## Plan
+
+- Log what `usb_host` does with each port and endpoint.
+- Find the cause.
+- Fix it.
+
+## Acceptance criteria
+
+The receiver's keys reach the shell on the MacBook Pro. A device that cannot be set up says at which step, with the controller's completion code.
+
+## Related
+
+[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), issue 164, [211-DRV-0004](../issues/211-DRV-0004-ehci.md).
+
+## Resolution
+
+- **The cause.**
+  - Real HID devices may stall `SET_IDLE`. The receiver's mouse interface does: `REQUEST 21 0A 0000: COMPLETION 6`.
+  - A stall halts endpoint 0 on an xHCI controller. `usb_host` never reset it, so each later request to the device waited 30 s in vain.
+  - `usb_hid` sat in the mouse interface's setup and never polled the keyboard.
+  - QEMU's devices never stall, so the suites could not show this.
+- **The fix** (`usb_host/src/xhci.rs`). After a failed control transfer, endpoint 0 runs again:
+  - Reset Endpoint when it halted, Stop Endpoint when the device did not answer;
+  - then Set TR Dequeue past the abandoned TD.
+  - A control transfer waits at most 5 s (USB 2.0 9.2.6.4). Bulk transfers keep 30 s.
+- **Reports** (in the system log):
+  - the failing step of a device's setup, with the completion code and PORTSC;
+  - each failed control request;
+  - the start of polling of each interrupt endpoint, its first report and a failed transfer;
+  - the Intel EHCI-to-xHCI routing registers, and each root port's PORTSC at start;
+  - every connect and disconnect;
+  - in `usb_hid`, each interface it claims and an error from `REPORTS`.
+- **Three tries per root port connection.** A device that cannot be set up at once gets two more tries, a scan apart.
+- **Measured on the MacBook Pro.** The receiver's keys and mouse work: `MOUSE`, `POLLED`, `FIRST REPORT`, and text typed at the prompt.
+  - The device on root port 1 was most likely the USB-SATA adapter on its USB 2 lines. After the reset it came up on SuperSpeed port 5.
+  - The internal keyboard and trackpad do not appear on the xHCI controller at all ([211-DRV-0004](../issues/211-DRV-0004-ehci.md)).
+- **QEMU.** The `usb` suite passes.

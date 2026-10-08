@@ -1,0 +1,32 @@
+# 211-KRN-0017 — Service logs on the boot screen until the compositor's first frame — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
+
+## Problem
+
+On the MacBook Pro (211-PRT-0004) the screen stopped at `MIND CORE KERNEL: INIT STARTED`. On x86 the services' logs reach no output until the shell runs. A machine without COM1 that stops in user space shows nothing past that line.
+
+## Plan
+
+While no task draws on the framebuffer, the kernel draws every LOG system call's bytes as boot lines too. It stops when the compositor draws its first frame, not when it is given the framebuffer.
+
+## Acceptance criteria
+
+On a machine without COM1, the services' lines are on the screen until the shell's screen replaces them. The screen suites pass unchanged.
+
+## Related
+
+[211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.done), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md).
+
+## Resolution
+
+- **`kernel/src/scheduler.rs`, `SYSCALL_LOG`.**
+  - While `screen::showing()`, the bytes go to `screen::print_bytes` in chunks of up to 256.
+  - Valid UTF-8 is drawn as is, and any other byte as `?`.
+- **When the kernel lets go.** `screen::take()` moved from minting `PLATFORM_FRAMEBUFFER`, which init does when it starts the compositor, to the first `COMPOSITOR_PULL` that hands the compositor a screen.
+  - The compositor writes nothing before that.
+  - Its first frame covers every pixel, because its shadow copy is not valid yet.
+- **Measured on the MacBook Pro.**
+  - The first version stopped at `virtio_input NOT STARTED`, where init starts the compositor.
+  - After the move, every service's line up to `[VIDEO] NO CAMERA` was on the screen. That showed the compositor's own failure (211-KRN-0018).
+- **QEMU.** The `boot`, `display`, `normal`, `busy`, `smp` and `shell` suites pass on x86, and `normal` and `shell` on aarch64.
