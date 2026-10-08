@@ -207,7 +207,7 @@ impl Host {
             let changed = self.xhci.acknowledge(port);
             let connected = self.xhci.connected(port);
             let present = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent.is_none() && d.root as usize == port));
-            if changed { self.root_failed &= !(1 << (port - 1)); }
+            if changed { self.root_failed &= !(1 << (port - 1)); mind::println!("[USB] PORT {}: {} (PORTSC {:08X})", port, if connected { "CONNECTED" } else { "DISCONNECTED" }, self.xhci.port_status(port)); }
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
             if !connected || self.root_failed & 1 << (port - 1) != 0 { continue; }
             self.step = "PORT RESET"; self.xhci.last = 0;
@@ -413,6 +413,14 @@ fn main(_info: &'static BootInfo) {
     let (Ok(mmio), Ok(dma)) = (Mmio::map(SLOT_DEV0), Dma::map(SLOT_MEM)) else { mind::println!("[USB] NO CONTROLLER OR DMA REGION"); return };
     let Some(xhci) = Xhci::init(mmio, dma) else { mind::println!("[USB] CONTROLLER DID NOT START"); return };
     mind::println!("[USB] XHCI: {} PORTS, {} SLOTS", xhci.ports(), xhci.slots);
+    // Intel 7-9 series: the ports the kernel moved from EHCI (XUSB2PR, USB3_PSSEN) and those the firmware lets move
+    // (their masks); a port left on EHCI is not seen here (211-PRT-0004).
+    let config = |offset| mind::dev::device_config(SLOT_DEV0, offset).unwrap_or(0);
+    if config(0) & 0xFFFF == 0x8086 {
+        mind::println!("[USB] INTEL ROUTING: USB 2 {:X} OF MASK {:X}, USB 3 {:X} OF MASK {:X}", config(0xD0), config(0xD4), config(0xD8), config(0xDC));
+    }
+    // Every root port's status at start: bit 0 a device, bits 10-13 its speed, bits 5-8 the link state.
+    for port in 1..=xhci.ports() { mind::println!("[USB] PORT {} PORTSC {:08X}", port, xhci.port_status(port)); }
     let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "" };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
