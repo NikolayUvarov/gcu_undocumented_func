@@ -19,6 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [171-APP-0008](171-APP-0008-memory-check-every-cpu-count.md) | `applications_until_memory_ends` with every CPU count: the 8-CPU limit can go (16 CPUs pass locally on x86 and aarch64) | `APP` | P2 | — | 171 |
 | [000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.md) | IPC back-pressure without starvation: a client beyond a full endpoint queue retries without order (8.5 s for `date` behind 120 clocks) | `KRN` | P2 | — | stage II |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
@@ -34,7 +35,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (`applications_until_memory_ends` with more than 8 CPUs; clocks asking the RTC service 10 times a second).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second).
 
 
 ## Finished tasks (`issues-done/`)

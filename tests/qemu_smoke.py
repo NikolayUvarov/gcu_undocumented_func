@@ -735,7 +735,7 @@ def normal_suite(vm):
     pool_covers_free_ram(vm)
     memory = gibibytes(getattr(vm.args, "memory", None))
     # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80. With
-    # more than 8 CPUs on a 4-core host the shell answers slower than the 8 s waits at the peak (requests-APP.md).
+    # more than 8 CPUs it is not run yet (171-APP-0008).
     if memory <= 1 and vm.cpus <= 8:
         applications_until_memory_ends(vm)
     if memory > 4:

@@ -4,26 +4,6 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-## `applications_until_memory_ends` with more than 8 CPUs
-
-### Problem
-
-[171-KRN-0008](../issues-done/171-KRN-0008-wake-ipis-with-many-cpus.done) fixed the 16-CPU stall from `requests-KRN.md`. [171-KRN-0009](../issues-done/171-KRN-0009-sixteen-cpus-at-the-peak.done) then cut the work under the scheduler lock. Updated 2026-10-08.
-
-With 16 CPUs (TCG, 4 host cores), the `normal` suite with this check switched on passed locally on both architectures (the condition removed in a local copy only):
-- x86: 78 clocks, 133 s for the suite;
-- aarch64: 171 clocks, 547 s.
-
-At the peak, x86 answers `ps` in 0.2 s and aarch64 starts a clock in about 4.6 s. Both are inside the 8 s waits.
-
-### Plan (a proposal; the tools track decides)
-
-Drop the `vm.cpus <= 8` condition and its comment in `normal_suite`. The "16 CPUs" groups then take about 7 minutes longer on aarch64.
-
-### Acceptance criteria
-
-The check runs with every CPU count in CI.
-
 ## Clocks ask the RTC service 10 times a second
 
 ### Problem
