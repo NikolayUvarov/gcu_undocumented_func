@@ -4,7 +4,7 @@ use crate::memory::Region;
 use crate::task_state::{self, State};
 use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 mod stat;
 
@@ -154,6 +154,35 @@ static LOCK: AtomicBool = AtomicBool::new(false);
 struct Guard; impl Drop for Guard { fn drop(&mut self) { LOCK.store(false, Ordering::Release); } }
 fn locked<T>(f: impl FnOnce() -> T) -> T { interrupts::without(|| { while LOCK.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() { while LOCK.load(Ordering::Relaxed) { core::hint::spin_loop(); } } let _guard = Guard; f() }) }
 
+// The mailbox of the task each CPU runs (0: idle), and the system calls answered there without the lock since the
+// CPU last selected: they are added to the task and the CPU at the next select (000-KRN-0011).
+static MAILBOX: [AtomicUsize; cpu::MAX] = [const { AtomicUsize::new(0) }; cpu::MAX];
+static FAST_CALLS: [AtomicU64; cpu::MAX] = [const { AtomicU64::new(0) }; cpu::MAX];
+// System calls that read only clocks, answered before the scheduler lock: with many CPUs they queued for it behind
+// work they do not touch (000-KRN-0011). The running task's mailbox stays while it runs: reap skips current tasks.
+unsafe fn unlocked_syscall(cpu: usize, sp: usize) -> Option<usize> {
+    let mailbox = MAILBOX[cpu].load(Ordering::Acquire) as *mut SyscallMailbox;
+    if mailbox.is_null() { return None; }
+    let value = clock_syscall(core::ptr::read_volatile(core::ptr::addr_of!((*mailbox).syscall_num)), mailbox)?;
+    core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).result), value);
+    FAST_CALLS[cpu].fetch_add(1, Ordering::Relaxed);
+    Some(sp)
+}
+
+// RDTSC, UPTIME and CLOCK: the result, with CLOCK's resolution and TSC rate written into the mailbox; None for others.
+unsafe fn clock_syscall(number: usize, mailbox: *mut SyscallMailbox) -> Option<usize> {
+    Some(match number {
+        SYSCALL_RDTSC => cpu::cycles() as usize,
+        SYSCALL_UPTIME => interrupts::milliseconds() as usize,
+        SYSCALL_CLOCK => {
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).arg2), crate::clock::resolution_ns() as usize);
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).msg[2]), crate::clock::tsc_hz() as usize);
+            crate::clock::now_ns() as usize
+        }
+        _ => return None,
+    })
+}
+
 unsafe fn scheduler() -> &'static mut Scheduler { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap() }
 
 fn frame_bytes(info: &BootInfo) -> usize { (info.stride * info.height * 4).div_ceil(4096) * 4096 }
@@ -196,7 +225,8 @@ impl Scheduler {
         // Time since the last switch on this CPU goes to the task that ran or to idle.
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
         if current == 0 { self.accounting.idle_ns[cpu] += elapsed; } else { self.accounting.busy_ns[cpu] += elapsed; }
-        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; unsafe { context::save(sp, task.context.ptr() as usize); } }
+        let fast = FAST_CALLS[cpu].swap(0, Ordering::Relaxed); self.accounting.interrupts[cpu] += fast;
+        if current == 0 { self.idle_sp[cpu] = sp; } else { let task = self.tasks[current].as_mut().unwrap(); task.run_ns += elapsed; task.consumed += elapsed; task.calls += fast; unsafe { context::save(sp, task.context.ptr() as usize); } }
         // Only this CPU's tasks: three passes over every task of every CPU held the lock long with many (171-KRN-0009).
         let mut mine = core::mem::take(&mut self.on_cpu[cpu]);
         mine.retain(|&slot| slot < self.tasks.len() && self.tasks[slot].as_ref().is_some_and(|t| t.cpu == cpu));
@@ -215,6 +245,7 @@ impl Scheduler {
         let (pid, name) = if next == 0 { (0, [0u8; 16]) } else { let task = self.tasks[next].as_ref().unwrap(); let mut name = [0u8; 16]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]); (task.pid, name) };
         for (word, value) in cpu::RUNNING[cpu].iter().zip([pid, u64::from_le_bytes(name[..8].try_into().unwrap()), u64::from_le_bytes(name[8..].try_into().unwrap())]) { word.store(value, Ordering::Relaxed); }
         if next != current { self.accounting.switches[cpu] += 1; }
+        MAILBOX[cpu].store(if next == 0 { 0 } else { self.mailbox(next) as usize }, Ordering::Release);
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
     // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again.
@@ -977,7 +1008,7 @@ impl Scheduler {
         let tasks: *mut Table<Task> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
         let result: Result<usize, usize> = match request.syscall_num {
-            SYSCALL_RDTSC => Ok(cpu::cycles() as usize),
+            SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
             // The legacy byte of the next event that has one (events without a byte are skipped).
             SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 => break event_byte(event) as usize, Some(_) => {} } }),
             SYSCALL_READ_INPUT => Ok(task.input.pop().unwrap_or(0)),
@@ -993,12 +1024,6 @@ impl Scheduler {
                     }
                     Ok(length)
                 }
-            }
-            SYSCALL_UPTIME => Ok(interrupts::milliseconds() as usize),
-            SYSCALL_CLOCK => {
-                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), crate::clock::resolution_ns() as usize);
-                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), crate::clock::tsc_hz() as usize);
-                Ok(crate::clock::now_ns() as usize)
             }
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
                 Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
@@ -1307,6 +1332,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         match event {
             Event::Stop => cpu::halt_here(),
             Event::KernelFault { code, pc, error } => { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(code); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(pc); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(error); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
+            Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
         }
         locked(|| {
