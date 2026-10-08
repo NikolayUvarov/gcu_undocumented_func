@@ -19,7 +19,7 @@ Only the shell may use `tls` (`SLOT_TLS`; there is no `REQUEST_TLS`). The shell'
 
 ### Acceptance criteria
 
-A service other than the shell downloads a 30 MiB file over HTTPS into a `vfs` file, with resume after a cut connection, in QEMU against the test server of [351-UPD-0005](351-UPD-0005-release-and-publish.md).
+A service other than the shell downloads a 30 MiB file over HTTPS into a `vfs` file, with resume after a cut connection, in QEMU against the test server of [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done).
 
 ## An SSH client (351, phase 3)
 

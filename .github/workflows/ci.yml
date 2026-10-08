@@ -38,6 +38,7 @@ jobs:
           python3 tests/idl_test.py
           python3 tests/font_test.py
           python3 tests/manifest_test.py
+          python3 tests/release_test.py
           python3 tests/test_usb_writer.py
 
   # TLA+ models of revoke and MOVE checked by TLC (issue 167, docs/assurance).

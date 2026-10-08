@@ -1,0 +1,55 @@
+# 351-UPD-0005 — The release bundle, the server layout and publishing over SSH — done
+
+**Type:** update (host tools) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.2, MC-9.6, MC-9.7
+
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
+
+## Problem
+
+Nothing turns a build into something a device can fetch and check.
+
+## Plan
+
+- **`scripts/release.py`** turns `usb_root/` (x86) and `aarch64_root/` into a release:
+  - every file under `blobs/<sha256>`;
+  - the manifest of 350 for each architecture;
+  - a version: monotonic, never reused.
+- **`scripts/publish_release.py`:**
+  - signs the channel file `channels/<name>.json` (latest version, minimum version, expiry, manifest hash) with the release key, read from outside the repository;
+  - uploads with the system's OpenSSH (`rsync -e ssh`), blobs first and the channel file last, so a reader never sees a channel that names missing files;
+  - takes the host, user and directory from the command line or a config file outside the repository. The upload credential is never the release key.
+- **A local test server for CI and `scripts/ci_local.sh`:** a directory served over HTTPS with the test CA the TLS suite already makes, and over SSH by OpenSSH on the host if present. The test release key is labelled as such.
+- **`docs/update.md`** (English and Russian) describes the layout, how to set up a server, and key custody.
+
+## Acceptance criteria
+
+`publish_release.py` against a local directory yields a layout whose signatures and hashes a host-side checker verifies. Publishing twice the same version is refused. The order of uploads leaves no channel naming a missing blob.
+
+## Related
+
+[351](../issues/351-self-update.md), [350](../issues/350-signed-boot-images.md).
+
+## Resolution
+
+Done by the storage session at the maintainer's request (2026-10-08), in the `UPD` track.
+
+- **`scripts/release.py`** (one script with the three steps the plan named):
+  - `stage VERSION OUT` checks each built volume's manifest, then copies the manifests and every listed file (`blobs/<sha256>`);
+  - `publish STAGED DEST` refuses a version not above the channel's or already on the server. It uploads the blobs (never overwriting), then the manifests, then the channel in one rename. DEST is a directory or `host:dir` over the system's OpenSSH (`rsync -e ssh`);
+  - `check DEST` verifies the channel's signature, encoding and expiry, every manifest it names (hash and boot signature), and every blob (size and hash).
+- **The channel** is one line of canonical JSON (version, minimum, expiry, each architecture's manifest hash), then `ed25519 <hex>` signed with the release key. It is one file, so the pair changes in one rename. The release key is apart from the boot key, and its test key is derived from public text.
+- **`scripts/serve_release.py`**: the test server, a directory over HTTPS (TLS 1.3) with the certificate a test gives.
+- **Tests:** `tests/release_test.py` (8), in the host tests of CI and `scripts/ci_local.sh`:
+  - a published release verifies, and files are stored once;
+  - a version not above the channel's is refused, and so is the same version twice;
+  - an upload cut before the channel leaves the old channel whole;
+  - a changed channel, an expired channel, a changed manifest and a changed blob are each refused;
+  - a channel signed with the boot key is refused;
+  - an unverified volume is not staged;
+  - a release fetched over HTTPS equals the published bytes;
+  - the built volumes, as a release.
+- **Docs:** [docs/update/publishing.md](../docs/update/publishing.md) and [publishing_RU.md](../docs/update/publishing_RU.md): the layout, the commands, the keys and who holds them, a server.
+- **Not done:**
+  - an SSH test server: there is no OpenSSH server on this machine or on the runners, so the `host:dir` path is written but not tested;
+  - a monotonic version kept anywhere but in the channel itself. A publisher that loses the server's channel could reuse a version; 351-UPD-0009 owns the policy.
+
