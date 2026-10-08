@@ -1,0 +1,41 @@
+# 251-APP-0009 — The model cache on the host: manifest, fetch, pack, model disk — done
+
+**Type:** tools (host) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [251](../issues/251-model-cache-and-model-disk.md) · **Roadmap:** track G · **Constitution:** MC-4.2, MC-9.2
+
+## Problem
+
+The speech models of 250 and 252 are too large for git. The maintainer wants a local store of them that can be copied and carried, and a disk of models for the system (251).
+
+## Plan
+
+A manifest in the repository pins every model file by revision, size and SHA-256. A tool fills a cache from the network or from another copy, checks every file, packs a selection into one file, and writes a FAT32 disk of a selection.
+
+## Acceptance criteria
+
+- `fetch`, `verify`, `pack`, `fetch --from` and `disk` work, and a file whose SHA-256 differs is never kept.
+- The disk image is a valid FAT32 volume that other tools read back byte for byte.
+
+## Resolution
+
+- **`models/manifest.toml`**: the four recognition models of 250 and 252.
+  - Russian `compact`: `asr-ru-vosk-0.54`, 73 MB.
+  - Russian `quality`: `asr-ru-gigaam-v3-rnnt`, 229 MB.
+  - English `compact`: `asr-en-zipformer-gigaspeech`, 74 MB.
+  - English `quality`: `asr-multi-parakeet-tdt-0.6b-v3`, 671 MB.
+
+  For each one the manifest gives its licence, its terms, what was measured, its revision and every file's SHA-256. The synthesis models follow once chosen (252).
+- **`scripts/models.py`**: `list`, `fetch` (with `--from` a cache, a pack or a mounted disk), `verify`, `pack`, `disk` and `pin`.
+  - Python 3.11 standard library only.
+  - Downloads go through a partial file and are kept only when their SHA-256 matches.
+  - A source is a Hugging Face repository at a revision, or a zip archive with its own SHA-256.
+- **`scripts/fat32.py`:** an MBR with one FAT32 partition at 1 MiB, holding contiguous files with long names.
+  - Fixed timestamps and volume id, so the same models give the same image. The file is sparse.
+  - QEMU's `vvfat` refuses more than about 516 MB, so it does not serve here.
+- **Tested on this host:**
+  - `fetch` of the Russian Vosk model from Hugging Face, `verify`, `pack`, then `fetch --from` the pack into a second cache, which verified clean;
+  - `disk`: `mtools` lists `MANIFEST.json` and the model, and `fsck.fat -n` finds no error;
+  - a test volume of 305 files, nested directories and Cyrillic names with spaces came back byte for byte through `mcopy`.
+
+## Related
+
+[251](../issues/251-model-cache-and-model-disk.md), [250](../issues/250-voice-dictation.md).

@@ -46,6 +46,16 @@ Everything else was written for this project, including the 8×8 bitmap font in 
 
 MPL-2.0 is a file-level copyleft: it applies to those crates' own files, not to MIND Core. The exact versions are pinned in each `Cargo.lock`.
 
+## Speech models (fetched, not in this repository)
+
+The recognition and synthesis models of main tasks 250, 251 and 252 are not committed. `scripts/models.py` fetches them into a model cache and writes them to a model disk. [`models/manifest.toml`](models/manifest.toml) pins each one to a revision and records every file's SHA-256 with the model's source, licence and terms. The cache and the disk carry the same record in `MANIFEST.json`.
+
+Any free model may be used (the maintainer, 2026-10-08), so these licences differ from MIND Core's:
+
+- some weights are under CC BY 4.0, which requires attribution wherever they go;
+- some models were trained on data licensed for non-commercial use only (for example GigaSpeech), and their `terms` say so;
+- a distribution of a model disk or of an image that includes models must keep each model's licence and terms.
+
 ## Tools used at build or test time (not distributed)
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.

@@ -77,3 +77,27 @@ So no program can hold a client that may only read. The service's refusals by ba
 
 - With the extra disk, `[BLOCKSTORE] READY` names a medium that survives a reboot of the VM; without it, the RAM disk as today.
 - `vfs_server` holds no client of the store's disk.
+
+## A model disk for `vfs_server`, next to the store's disk
+
+**Recorded by:** the tools track (APP), 2026-10-08, for main task [251](251-model-cache-and-model-disk.md) at the maintainer's request.
+
+### Problem
+
+Speech models (25 MB to 3 GB) come on a disk of their own: a FAT32 volume labelled `MIND MODELS`, made by `scripts/models.py disk` (251). `vfs_server` will mount it as `models:` and read-only, whatever the device allows. The tools track does that part.
+
+On x86 the boot disk is on `ata`, so a model disk on `virtio_blk` already reaches `vfs_server`. On aarch64 the boot disk is itself on `virtio_blk`, so the model disk is a second VirtIO block device, as the store's durable disk in the request above is. `init` then has to tell the two apart and send each to its service.
+
+### Plan (a proposal; the kernel track decides)
+
+- The drivers track's side: `virtio_blk` serves each device as an instance (`virtio_blk#1`, as `virtio_net#1`). Each instance reads its device's serial with `VIRTIO_BLK_T_GET_ID`.
+  - The drivers track has no owner, so the tools track does this as `251-DRV-0003` if no one has taken it first (AGENTS.md, section 5).
+- The QEMU harness names the role in the serial: `-device virtio-blk-pci,serial=MIND-MODELS` and `serial=MIND-STORE`.
+- `init` routes by serial:
+  - `MIND-STORE` gives its write client to `blockstore`, never to `vfs_server` (the request above);
+  - `MIND-MODELS` gives a read client to `vfs_server`;
+  - any other disk is handled as today.
+
+### Acceptance criteria
+
+On aarch64 and on x86 (QEMU), a model disk and a store disk attached together each reach their own service, and the boot disk still mounts as before.
