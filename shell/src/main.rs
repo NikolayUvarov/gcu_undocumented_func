@@ -775,11 +775,12 @@ fn main(info: &'static BootInfo) {
     let mut shell = new_shell(term, own);
     // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN).
     for index in 0..CONSOLES { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
-    shell.log_next = Some(0); shell.show_log(true);
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
+    // The boot's log after the banner, which stays the first line of the scrollback.
+    shell.log_next = Some(0); shell.show_log(true);
     shell.beat.0 = shell.term.position().line;
     shell.prompt();
     let mut vt = Vt::new();
