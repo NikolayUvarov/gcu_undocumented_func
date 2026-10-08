@@ -182,7 +182,7 @@ pub unsafe fn event(sp: usize) -> Event {
         0x31 => Event::Stop,
         0..=31 if r[18] & 3 == 0 => Event::KernelFault { code: vector, pc: r[17], error: r[16] },
         0..=31 => Event::Fault { code: vector, error: r[16], pc: r[17], address: if vector == 14 { cpu::fault_address() } else { 0 } },
-        32 => { interrupts::advance(); interrupts::pic_eoi(0); cpu::eoi(); cpu::tick_others(); Event::Tick }
+        32 => { interrupts::advance(); if interrupts::tick_from_pit() { interrupts::pic_eoi(0); } cpu::eoi(); cpu::tick_others(); Event::Tick }
         33..=47 => { let line = vector as u8 - 32; interrupts::set_irq_masked(line, true); interrupts::pic_eoi(line); cpu::eoi(); Event::Irq(line as usize) }
         0x40..=0x4F => { cpu::eoi(); Event::Irq(MSI_FIRST + vector as usize - 0x40) }
         48 => { cpu::eoi(); Event::Tick }

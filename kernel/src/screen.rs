@@ -38,7 +38,26 @@ pub unsafe fn init(info: &BootInfo) {
 pub fn take() { TAKEN.store(true, Relaxed); }
 
 /// A boot line, while no task holds the screen.
-pub fn print(text: &str) { if !TAKEN.load(Relaxed) && !FATAL.load(Relaxed) { draw(text, BOOT); } }
+pub fn print(text: &str) { if showing() { draw(text, BOOT); } }
+
+/// Whether the boot lines are still on the screen: no task holds it and no fatal report owns it.
+pub fn showing() -> bool { BASE.load(Relaxed) != 0 && !TAKEN.load(Relaxed) && !FATAL.load(Relaxed) }
+
+/// A service's log bytes as boot lines (211-KRN-0017): UTF-8 as it is, other bytes as '?'.
+pub fn print_bytes(bytes: &[u8]) {
+    if !showing() { return; }
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        match core::str::from_utf8(rest) {
+            Ok(text) => { draw(text, BOOT); break; }
+            Err(error) => {
+                let (good, bad) = rest.split_at(error.valid_up_to());
+                draw(unsafe { core::str::from_utf8_unchecked(good) }, BOOT); draw("?", BOOT);
+                rest = &bad[error.error_len().unwrap_or(bad.len()).min(bad.len())..];
+            }
+        }
+    }
+}
 
 /// The start of a fatal report: below the boot lines while they are on the screen, else from its top, over whatever a
 /// task drew there.

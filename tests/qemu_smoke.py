@@ -96,7 +96,7 @@ class VM:
                        "-drive", f"if=pflash,format=raw,readonly=on,file={args.aavmf_code}", "-drive", f"if=pflash,format=raw,file={variables}",
                        "-device", "ramfb", *([] if usb_input else ["-device", "virtio-keyboard-pci"]), *([] if "virtio-tablet-pci" in extra or usb_input else ["-device", "virtio-tablet-pci"])]
         else:
-            machine = ["-bios", args.firmware, *(["-machine", "pc,i8042=off"] if usb_input else [])]
+            machine = ["-bios", args.firmware, *(["-machine", "pc,i8042=off"] if usb_input else []), *(["-machine", m] if (m := getattr(args, "machine", None)) else [])]
         self.process = subprocess.Popen(
             [args.qemu, *machine, *storage,
              *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
@@ -598,6 +598,11 @@ def normal_suite(vm):
     assert "gpio" not in vm.services()
     if vm.arch == "aarch64":
         require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+    else:
+        # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
+        tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",
+                         ANSI.sub("", vm.log).replace("\r", ""))
+        assert tick and ("pit=off" not in (getattr(vm.args, "machine", None) or "")) == ("NOT COUNTING" not in tick[0]), vm.log[-3000:]
     baseline = heap_used(vm)
     require(vm.command("list"), "clock")
     require(vm.command("run clock &"), "PID=1 NAME=clock BACKGROUND")
@@ -5138,7 +5143,7 @@ def main():
     parser.add_argument("--arch", choices=("x86_64", "aarch64"), default="x86_64", help="aarch64: QEMU virt with the aarch64_root build (scripts/build_aarch64.sh)")
     parser.add_argument("--qemu", default=os.environ.get("QEMU"))
     parser.add_argument("--cpus", type=int)
-    parser.add_argument("--machine", help="aarch64: QEMU -machine (default virt,gic-version=3,highmem=off; issue 205: highmem=on, gic-version=2)")
+    parser.add_argument("--machine", help="QEMU -machine; aarch64: in place of virt,gic-version=3,highmem=off (issue 205: highmem=on, gic-version=2); x86: added properties (211-PRT-0003: pit=off)")
     parser.add_argument("--memory", help="QEMU -m (default 512; e.g. 6G: RAM above 4 GiB)")
     parser.add_argument("--disk", choices=("default", "nvme"), default="default", help="the boot disk's bus: nvme puts it on an NVMe controller (issue 205)")
     parser.add_argument("--aavmf-code", default="/usr/share/AAVMF/AAVMF_CODE.fd")

@@ -69,6 +69,7 @@ X86_GROUPS=(
     "x86: one CPU|$X86 --cpus 1 --suites smp,isolation,heap,services"
     "x86: AVX state|$X86 --cpu-model max --suites busy,smp"
     "x86: AVX state, one CPU|$X86 --cpu-model max --cpus 1 --suites busy,smp"
+    "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
     "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py"

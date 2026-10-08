@@ -164,6 +164,14 @@ pub unsafe fn lapic_init(bsp: bool) {
     eoi();
 }
 
+// The LAPIC timer divided by 16 (211-PRT-0003): periodic on the tick vector, or a masked one-shot count to measure it.
+pub unsafe fn lapic_timer(initial: u32, periodic: bool) {
+    write(0x3e0, 3);
+    write(0x320, if periodic { 1 << 17 | 0x20 } else { 1 << 16 | 0x20 });
+    write(0x380, initial);
+}
+pub unsafe fn lapic_timer_count() -> u32 { read(0x390) }
+
 pub unsafe fn ipi(target: u32, command: u32) {
     // x2APIC: one write of the ICR, the 32-bit destination above the command; there is no delivery status to wait for.
     if X2APIC.load(Ordering::Relaxed) { return crate::interrupts::without(|| wrmsr(0x830, (target as u64) << 32 | command as u64)); }
