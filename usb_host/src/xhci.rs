@@ -18,7 +18,7 @@ pub const DMA_BYTES: usize = POOL + POOL_PAGES * PAGE;
 
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
-const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_SET_DEQUEUE: u32 = 16;
+const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
@@ -48,8 +48,11 @@ pub struct Xhci {
 }
 
 /// Busy-poll, then sleep: QEMU completes commands at once, transfers asynchronously; about 30 s in all.
-pub fn wait(mut done: impl FnMut() -> bool) -> bool {
-    for attempt in 0..4_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
+pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
+
+// Polls `done`: a thousand times at once, then every 10 ms; `attempts` 1500 is about 5 s, 4000 about 30 s.
+fn wait_for(attempts: usize, mut done: impl FnMut() -> bool) -> bool {
+    for attempt in 0..attempts { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
     false
 }
 
@@ -177,12 +180,14 @@ impl Xhci {
     }
 
     /// TRBs on `ring` of endpoint `dci`, then its completion: Ok(residue), or Err(completion code; 0: no answer).
-    pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> {
+    pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> { self.transfer_for(4_000, slot, dci, ring, trbs) }
+
+    fn transfer_for(&mut self, attempts: usize, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> {
         self.done.iter_mut().filter(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).for_each(|d| *d = None); // stale ones
         for &(parameter, status, control) in trbs { Self::enqueue(&mut self.dma, ring, parameter, status, control); }
         self.doorbell(slot, dci as u32);
         let mut result = None;
-        wait(|| {
+        wait_for(attempts, || {
             self.pump();
             if let Some(entry) = self.done.iter_mut().find(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)) { result = entry.take(); }
             result.is_some()
@@ -199,8 +204,12 @@ impl Xhci {
         let data = self.dma.physical(SMALL);
         let setup_trb = (setup, 8, TYPE_SETUP << 10 | IDT | transfer_type << 16);
         let status_trb = (0, 0, TYPE_STATUS << 10 | IOC | ((!input || length == 0) as u32) << 16);
-        let residue = if length == 0 { self.transfer(slot, 1, ring, &[setup_trb, status_trb])? }
-                      else { self.transfer(slot, 1, ring, &[setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16), status_trb])? };
+        // At most 5 s (USB 2.0 9.2.6.4). A device that stalls a request (SET_IDLE, often) halts endpoint 0 on the
+        // controller, and one that does not answer leaves it running: either way it is reset to after this transfer, or
+        // every later request would wait in vain (211-DRV-0003).
+        let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16), status_trb];
+        let result = if length == 0 { self.transfer_for(1_500, slot, 1, ring, &[setup_trb, status_trb]) } else { self.transfer_for(1_500, slot, 1, ring, &trbs) };
+        let residue = result.inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?;
         // The status stage completes the transfer; a short data stage reports its residue on the data TRB only when it
         // asks (ISP), so the length is taken as asked, less any residue reported.
         Ok((length as u32).saturating_sub(residue) as usize)
@@ -262,8 +271,12 @@ impl Xhci {
     pub fn evaluate(&mut self, slot: u8) -> Option<()> { let input = self.dma.physical(INPUT); self.command(input, TYPE_EVALUATE << 10 | (slot as u32) << 24).map(drop) }
 
     /// After a stall: reset the endpoint and move its dequeue pointer past what it left on the ring.
-    pub fn recover(&mut self, slot: u8, dci: u8, ring: &Ring) {
-        let _ = self.command(0, TYPE_RESET_ENDPOINT << 10 | (dci as u32) << 16 | (slot as u32) << 24);
+    pub fn recover(&mut self, slot: u8, dci: u8, ring: &Ring) { self.restart(slot, dci, ring, true) }
+
+    /// Makes endpoint `dci` run again from `ring`'s next TRB: a halted one is reset, a running one stopped first.
+    pub fn restart(&mut self, slot: u8, dci: u8, ring: &Ring, halted: bool) {
+        let kind = if halted { TYPE_RESET_ENDPOINT } else { TYPE_STOP_ENDPOINT };
+        let _ = self.command(0, kind << 10 | (dci as u32) << 16 | (slot as u32) << 24);
         let dequeue = self.dma.physical(ring.page + ring.index * TRB) | ring.cycle as u64;
         let _ = self.command(dequeue, TYPE_SET_DEQUEUE << 10 | (dci as u32) << 16 | (slot as u32) << 24);
     }

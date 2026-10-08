@@ -60,8 +60,9 @@ impl Host {
     fn control(&mut self, index: usize, request_type: u8, request: u8, value: u16, windex: u16, length: u16) -> core::result::Result<usize, u32> {
         let Some(device) = self.devices[index].as_mut() else { return Err(0) };
         let mut ring = device.ep0;
-        let result = self.xhci.control(device.slot, &mut ring, request_type, request, value, windex, length);
+        let (slot, result) = (device.slot, self.xhci.control(device.slot, &mut ring, request_type, request, value, windex, length));
         if let Some(device) = self.devices[index].as_mut() { device.ep0 = ring; }
+        if let Err(code) = result { mind::println!("[USB] SLOT {} REQUEST {:02X} {:02X} {:04X}: COMPLETION {}", slot, request_type, request, value, code); }
         result
     }
 
