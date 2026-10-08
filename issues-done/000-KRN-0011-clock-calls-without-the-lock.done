@@ -1,0 +1,37 @@
+# 000-KRN-0011 — System calls that read only clocks, without the scheduler lock — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** stage II · **Constitution:** MC-5.2, MC-5.6
+
+## Problem
+
+Every system call took the one scheduler lock, even those that read only a clock: `UPTIME`, `CLOCK` and `RDTSC`.
+
+With 16 CPUs under load the lock was held almost all the time ([171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done)). A task that only wanted the time waited behind scheduling work it does not touch. With 60 clocks on x86, `UPTIME` was called 1 500 times a second, most of it from `libmind`'s `ERR_BUSY` retries, which [000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.done) removed. Each call measured 28 µs under the lock with 16 CPUs.
+
+## Plan
+
+- Each CPU publishes the mailbox of the task it runs (`MAILBOX`), set at `select`.
+- A system call entry reads the number from there before taking the lock. `RDTSC`, `UPTIME` and `CLOCK` are answered at once from the clocks, through the same function the locked path uses (`clock_syscall`).
+- The running task's mailbox stays valid while it runs, because `reap` skips current tasks.
+- The calls answered this way are counted per CPU (`FAST_CALLS`). They are added to the task's `calls` and the CPU's `interrupts` at the CPU's next `select`.
+- A task killed while it runs stops at the CPU's next tick or wake IPI, as before. The locked path did not stop it at an `UPTIME` either: that call returned without `select`.
+- Port I/O stays under the lock. Its capability check reads a capability table that another CPU may grow or change.
+
+## Acceptance criteria
+
+- The three calls give what they gave before. The suites that use them pass: `normal`, `busy`, `smp` and `isolation` on x86 and aarch64, with 1, 4 and 16 CPUs as the gate runs them.
+- `STAT`'s per-task `calls` and per-CPU `interrupts` still count them.
+
+## Related
+
+[171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done), [000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.done).
+
+## Resolution
+
+- **Code:** `kernel/src/scheduler.rs`: `MAILBOX`, `FAST_CALLS`, `unlocked_syscall` and `clock_syscall`, the entry in `interrupt`, and the counts added in `select`.
+- **Counts.** On x86 with 4 CPUs, `app` makes one `RDTSC` and one `WAIT` a loop. Over 3 s `STAT` counted:
+  - this kernel: 103 runs and 309 system calls;
+  - the kernel before (ffc3d46): 103 and 309.
+- **Measured.** With 16 CPUs at the peak (x86, 78 clocks): a clock starts in 0.4 s, `ps` 0.2 s, `uptime` 0.3 s, `date` 0.1 s. That is 000-KRN-0010 and this task together; before both, 0.4, 0.2, 0.4 and 0.1 s. At this load `UPTIME` came mostly from the retries 000-KRN-0010 removed, so this change does not show here.
+- **Gate:** the full local run (`scripts/ci_local.sh`, every group, in three parts) on the commit that took this to `main`. It runs `normal`, `busy`, `smp` and `isolation` on x86 and aarch64 with 1, 4 and 16 CPUs.
+- **Profile:** `docs/profile/clocks.md` says these calls are answered without the lock and when their counts reach `STAT`.
