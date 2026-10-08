@@ -20,7 +20,7 @@ Since 171-KRN-0003 an idle CPU gets no tick and sleeps until a wake IPI. `wake_i
 
 The request's criteria: "With 16 CPUs on x86 and aarch64, clocks start until the frame pool refuses one, and the shell answers throughout. The tools track then runs its check with every CPU count."
 
-This task meets the stall part. With 16 CPUs on x86 and aarch64, clocks start until the frame pool refuses one, and every command is answered when the harness waits without a limit. The rest is [171-KRN-0009](../issues/171-KRN-0009-sixteen-cpus-at-the-peak.md):
+This task meets the stall part. With 16 CPUs on x86 and aarch64, clocks start until the frame pool refuses one, and every command is answered when the harness waits without a limit. The rest is [171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done):
 
 - answers within the harness's waits at the peak;
 - a check in CI;
@@ -48,4 +48,4 @@ This task meets the stall part. With 16 CPUs on x86 and aarch64, clocks start un
   | aarch64, `uptime` | 18.2 s | 1.8 s |
   | aarch64, `date` | 2.3–4.3 s | 0.1 s |
 
-  This file first said the delay was in waking emulated CPUs on a busy host. That was a guess. [171-KRN-0009](../issues/171-KRN-0009-sixteen-cpus-at-the-peak.md) measured the cause: the scheduler lock is held almost all the time. The tools track's `applications_until_memory_ends` stays limited to 8 CPUs for now (`requests-APP.md`).
+  This file first said the delay was in waking emulated CPUs on a busy host. That was a guess. [171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done) measured the cause: the scheduler lock is held almost all the time. The tools track's `applications_until_memory_ends` stays limited to 8 CPUs for now (`requests-APP.md`).

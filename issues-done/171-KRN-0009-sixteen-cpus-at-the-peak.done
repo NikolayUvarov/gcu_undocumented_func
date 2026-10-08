@@ -1,0 +1,90 @@
+# 171-KRN-0009 — 16 CPUs at the peak: the scheduler lock — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-1.7, MC-5.1, MC-12.1
+
+## Problem
+
+This is the rest of the tools track's request that [171-KRN-0008](171-KRN-0008-wake-ipis-with-many-cpus.done) began. 171-KRN-0008 removed the stall: with 16 CPUs, clocks now start until the frame pool refuses one. At that peak, though, 16 emulated CPUs (TCG, 4 host cores) answer 10–40 times slower than 4. The tools track's check waits 8 s for each prompt, so it still runs only up to 8 CPUs, and no CI check starts clocks with 16 CPUs.
+
+### Measured cause
+
+The kernel was built with temporary timers (not committed). They counted the time spent waiting for and holding the scheduler lock, the parts of that time, and the wake latency.
+
+In one 5 s window on x86 with 60 clocks:
+
+| | 4 CPUs | 16 CPUs |
+|---|---|---|
+| lock acquisitions | 105 000 | 34 000 |
+| time the lock is held | 62 % | about 100 % |
+| time CPUs spent waiting for it | 2.6–3.0 s | 83 s, summed over CPUs |
+| one hold, on average | 28 µs | 92–155 µs |
+| wake IPI to `select` | 0.2 ms | 3–5.5 ms |
+
+- At the 60-clock peak with 16 CPUs, the lock is held almost all the time, and every CPU spends almost all its time waiting for it. So commands are slow even though most CPUs sit in `hlt`: 345 of 400 samples at 60 clocks.
+- One hold costs 3–5 times more with 16 CPUs than with 4: even the trivial `UPTIME` system call measured 28 µs under the lock. The emulated CPU that holds the lock shares 4 host cores with 15 others spinning for it. That makes this a property of this test configuration (16 emulated CPUs, 4 host cores) as much as of the kernel. The single lock turns it into a collapse.
+- What the holder spent its time on, with 4 CPUs:
+  - `wake_idle`, a pass over all tasks after every event: 41 %;
+  - system calls: 33 %. Of these, `STAT` cost 1.4 ms a call. `sysmon` reads it every 100 ms, and `STAT_ENDPOINTS` passed over every task's capabilities once per endpoint;
+  - `select`, which passes over all tasks: 15 %.
+
+## Plan
+
+1. Cut the lock's work after every event:
+   - `wake_idle` looks only at CPUs marked when a task became ready for them. The full pass runs once per tick of the boot CPU, which also bounds a missed mark to one tick.
+   - `STAT_ENDPOINTS` makes one pass over the capabilities for all endpoints.
+   - `receivable` looks at the endpoint's creator first.
+2. Add a check in the "16 CPUs" groups, x86 and aarch64 (`clocks_on_many_cpus`): 40 clocks with screens, every command answered within the harness's 8 s wait, the clocks on more than 8 CPUs.
+3. Cut `select` and `STAT_TASKS`, measured next on aarch64. With 4 CPUs and 120 clocks the lock was held 98 % of the time: 39 % of it in `select`, 26 % in `STAT` at 5 ms a call.
+   - Each CPU keeps its task slots in order (`on_cpu`). `select`, the budget refill and the idle check look only at these.
+   - `STAT_TASKS` counts every task's quota use in one pass.
+
+## Acceptance criteria
+
+The request's criteria still hold:
+
+- With 16 CPUs on x86 and aarch64, clocks start until the frame pool refuses one, and the shell answers throughout within the harness's waits.
+- The tools track then runs its check with every CPU count.
+- A check in CI starts clocks with 16 CPUs.
+
+## Resolution
+
+- **Code:**
+  - `kernel/src/scheduler.rs`: `readied`, `wake_idle`, `on_cpu`, `select`, `reap`, `receivable`;
+  - `kernel/src/scheduler/stat.rs`: `STAT_ENDPOINTS`, `STAT_TASKS`;
+  - `kernel/src/task_state.rs`: `next_in`, with a host test in `tests/runtime.rs` that it picks as `next_by` did.
+- **Check:** `clocks_on_many_cpus` in the `normal` suite with more than 8 CPUs.
+  - It passes on x86 and aarch64.
+  - On the kernel before 171-KRN-0008 (308c0e1), it fails on x86: `run clock &` gets no prompt within 8 s.
+- **Measured at the peak.** Clocks start until the frame pool refuses one. Commands are sent with no time limit:
+
+  | | before | after |
+  |---|---|---|
+  | x86, 16 CPUs (78 clocks): `run clock &`, the last ten | — | 0.4 s |
+  | x86, 16 CPUs: `ps` | 8.9–12.7 s | 0.2 s |
+  | x86, 16 CPUs: `uptime` | 4.9–7.3 s | 0.4 s |
+  | x86, 16 CPUs: `date` | 1.0–2.5 s | 0.1 s |
+  | aarch64, 16 CPUs (171 clocks): `run clock &`, the last ten | 12.5–15.3 s | 4.6 s |
+  | aarch64, 16 CPUs: `uptime` | 14.8–18.2 s | 4.6 s |
+  | aarch64, 16 CPUs: `date` | 2.0–4.3 s | 0.2–2.1 s |
+  | x86, 4 CPUs (79 clocks): `ps` | 0.5 s | 0.1 s |
+
+- **The `normal` suite with 16 CPUs, with the tools track's `applications_until_memory_ends` switched on in a local copy.** It passed:
+  - x86: 78 clocks, 133 s for the suite;
+  - aarch64: 171 clocks, 547 s.
+
+  With 4 CPUs on x86 it passed too, including `main`'s check that the kernel heap is back at its baseline. A first version of `on_cpu` failed that check, because a CPU's list kept slots and room after its tasks ended. `reap` now removes the slot and keeps the list sized to its tasks.
+- **Gate:** the full local run (`scripts/ci_local.sh`, every group, in three parts) on the commit that took this to `main`.
+
+### Acceptance criteria
+
+- **16 CPUs on x86 and aarch64: met.** Clocks start until the frame pool refuses one, and the shell answers within the harness's waits. The tools track's own check passed with 16 CPUs on both.
+- **A check in CI: met.** `clocks_on_many_cpus` runs in the "16 CPUs" groups.
+- **The tools track runs its check with every CPU count: not done here.** That is the tools track's own step. `requests-APP.md` asks for it and gives the runs above.
+
+### Not done
+
+These are left, with the measurements that point to them:
+
+- **System calls that need no scheduler state still take the lock** (`UPTIME`, `CLOCK`, `RDTSC`, port I/O).
+- **A full endpoint queue answers `ERR_BUSY`, and `libmind` retries every 10 ms.** Behind 120 busy clients, a `date` waited 8.5 s for a slot. Recorded as [000-KRN-0010](../issues/000-KRN-0010-ipc-back-pressure-without-starvation.md).
+- **Each clock asks the RTC service for the time 10 times a second**, and `sysmon` reads every task and endpoint every 100 ms. Both are the tools track's (`requests-APP.md`).
