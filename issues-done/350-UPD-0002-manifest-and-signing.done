@@ -1,0 +1,44 @@
+# 350-UPD-0002 — A versioned boot manifest, signed with Ed25519 — done
+
+**Type:** tools (update) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track C "signed manifests and launch records" · **Constitution:** MC-9.1, MC-9.2, MC-9.7, MC-3.11
+
+Part of main task [350](../issues/350-signed-boot-images.md). Done by the storage session at the maintainer's request (2026-10-08).
+
+## Problem
+
+Nothing described what a boot volume holds or who authorized it. MC-9.2 binds an executable image to a dependency manifest, its required authorities and its build; MC-3.11 says such a manifest requests and never grants.
+
+## Plan
+
+- A text manifest, format 1:
+  - the signing key's identity, the commit, the toolchain and a digest of every `Cargo.lock`;
+  - one line per shipped file: size, SHA-256, and what a program's `.mind_request` asks for.
+- `scripts/sign_manifest.py` signs it with Ed25519 (RFC 8032), using a seed from `$MIND_BOOT_SIGNING_KEY` outside the repository, or the public test key.
+- The builds sign their staged volumes, and the USB image carries the manifest and the signature.
+
+## Acceptance criteria
+
+- The signing script's Ed25519 gives RFC 8032's vectors and an independent library's signatures; a changed file, a changed manifest and another key's signature are refused by its own check.
+- `02_build.sh` and `scripts/build_aarch64.sh` sign `usb_root/` and `aarch64_root/`.
+
+## Related
+
+[350-UPD-0003](350-UPD-0003-verification-at-boot.done), [docs/update](../docs/update/README.md).
+
+## Resolution
+
+- **`scripts/sign_manifest.py`** (new):
+  - Ed25519 signing and verification in Python, with no dependency;
+  - the manifest, and `sign_volume` and `verify_volume`;
+  - the requests of a program read from its `.mind_request` section, as the loader reads them;
+  - the test seed (the SHA-256 of a fixed text), whose public key is `bootloader/keys/test.pub`.
+- **Builds:** `02_build.sh` and `scripts/build_aarch64.sh` sign at the end of staging. `scripts/make_usb_image.py` packages `MANIFEST` and `MANIFEST.SIG`, and now every licence file in `LICENSES/`: the BSD-3-Clause and ISC notices were missing from USB images.
+- **Tests:** `tests/manifest_test.py` (7) is in the host tests of CI and `scripts/ci_local.sh`:
+  - RFC 8032 tests 1 to 3;
+  - a scalar past the group order refused;
+  - eight signatures equal to `cryptography`'s (skipped where it is not installed);
+  - the manifest's lines, and only shipped files listed;
+  - a changed file, a changed manifest and another key refused;
+  - a program's requests;
+  - the bootloader's test key.
+- **Docs:** [docs/update/README.md](../docs/update/README.md); `THIRD_PARTY.md` (the crates the bootloader now uses).

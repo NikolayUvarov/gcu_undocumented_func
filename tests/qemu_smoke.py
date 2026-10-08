@@ -21,11 +21,16 @@ import socketserver
 import ssl
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+# Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
+# nothing its manifest does not describe.
+sys.path.insert(0, str(ROOT / "scripts"))
+import sign_manifest  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -3125,6 +3130,7 @@ def raw_fat_image(temp, replace=None, extra=None):
     for name, data in (extra or {}).items():
         (files / name).parent.mkdir(parents=True, exist_ok=True)
         (files / name).write_bytes(data)
+    sign_manifest.sign_volume(files)
     subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
     return image, start, fs_sectors
 
@@ -5015,13 +5021,36 @@ def boot_suite(args, disk):
             target.unlink()
         else:
             target.write_bytes(data)
+        # Signed again, so the bootloader gets past the manifest to the ELF it checks.
+        sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
         finally:
             vm.close()
         target.write_bytes(original)
+    sign_manifest.sign_volume(disk)
     print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    # 350-UPD-0003: nothing is loaded that the signed manifest does not describe. A changed image, a changed manifest,
+    # a manifest signed by another key or no signature: the bootloader names the file and stops.
+    manifest, rtc = (disk / "MANIFEST").read_bytes(), (disk / "rtc.elf").read_bytes()
+    cases = [("kernel.elf", lambda: (disk / "kernel.elf").write_bytes(kernel[:-1] + bytes([kernel[-1] ^ 1])), "not as the manifest says"),
+             ("rtc.elf", lambda: (disk / "rtc.elf").write_bytes(rtc + b"\0"), "not as the manifest says"),
+             ("MANIFEST", lambda: (disk / "MANIFEST").write_bytes(manifest.replace(b"toolchain ", b"toolchain-")), "bad signature"),
+             ("MANIFEST", lambda: sign_manifest.sign_volume(disk, sign_manifest.hashlib.sha256(b"not the key").digest()), "bad signature"),
+             ("MANIFEST.SIG", lambda: (disk / "MANIFEST.SIG").unlink(), "file not found")]
+    for name, change, reason in cases:
+        change()
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        try:
+            vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
+        finally:
+            vm.close()
+        (disk / "kernel.elf").write_bytes(kernel)
+        (disk / "rtc.elf").write_bytes(rtc)
+        sign_manifest.sign_volume(disk)
+    print("PASS: signed boot volume: a changed kernel or service, a changed manifest, another key's signature and no "
+          "signature each stop the bootloader before anything is loaded", flush=True)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
@@ -5038,6 +5067,7 @@ def boot_suite(args, disk):
         # A kernel panic reports message, location, CPU and the running task, even inside the scheduler lock.
         target = disk / "kernel.elf"
         target.write_bytes(Path(args.panic_kernel).read_bytes())
+        sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             deadline, pattern = time.monotonic() + 30, re.compile(r"KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init\n")
@@ -5047,17 +5077,20 @@ def boot_suite(args, disk):
         finally:
             vm.close()
         target.write_bytes(kernel)
+        sign_manifest.sign_volume(disk)
         print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
         target.write_bytes(Path(args.abi_kernel).read_bytes())
+        sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect("INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)", timeout=60)
         finally:
             vm.close()
         target.write_bytes(kernel)
+        sign_manifest.sign_volume(disk)
         print("PASS: a kernel of another ABI version: init refuses to run (ABI MISMATCH, exit 126) and the system halts", flush=True)
 
 
@@ -5161,6 +5194,7 @@ def main():
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
             elif suite == "memory":
                 large_bss(disk / "app2.elf")
+            sign_manifest.sign_volume(disk)
             if suite == "boot":
                 boot_suite(args, disk)
                 continue

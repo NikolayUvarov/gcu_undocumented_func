@@ -1,0 +1,47 @@
+# 350-UPD-0003 — The bootloader checks the signed manifest and every image it loads — done
+
+**Type:** bootloader (update) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track C · **Constitution:** MC-9.1, MC-9.2
+
+Part of main task [350](../issues/350-signed-boot-images.md). Done by the storage session at the maintainer's request (2026-10-08). `bootloader/` is listed under `UPD` in [TRACKS.md](../TRACKS.md), with `KRN`. The change is a module of its own (`verify.rs`) and four calls in `main.rs`, and it does not touch the ABI or the kernel.
+
+## Problem
+
+The bootloader loaded whatever kernel and services the boot volume held (MC-9.1: at boot, the authorization of the selected image is verified).
+
+## Plan
+
+- `bootloader/src/verify.rs`: the manifest's Ed25519 signature checked against a public key built in, and each image's size and SHA-256 against the manifest.
+- `bootloader/build.rs`: the key from `$MIND_BOOT_PUBLIC_KEY`, or the test key.
+- `main.rs`:
+  - before anything is loaded: read and check the manifest;
+  - check the kernel and each boot service before parsing or keeping them;
+  - stop with `BOOT ERROR: <file>: <reason>` on any mismatch;
+  - print the launch record on the serial line.
+- The test harnesses sign every volume they build. The `boot` suite checks the refusals.
+
+## Acceptance criteria
+
+- A signed volume boots on x86 and aarch64.
+- On x86, the boot stops before anything is loaded for each of: a changed kernel, a changed service, a changed manifest, another key's signature, a missing signature.
+
+## Related
+
+[350-UPD-0002](350-UPD-0002-manifest-and-signing.done), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md) (what would check the bootloader itself).
+
+## Resolution
+
+- **`bootloader/`:**
+  - `src/verify.rs`: `Manifest::verified` (`verify_strict`), `check`, `key` and `digest`;
+  - `build.rs` and `keys/test.pub`;
+  - `.cargo/config.toml` picks curve25519-dalek's portable backend;
+  - `Cargo.toml` adds `ed25519-dalek` 2 and `sha2` 0.10 (no default features), the versions `keystore` already uses;
+  - `main.rs` reads `MANIFEST.SIG` and `MANIFEST` into a 64 KiB buffer and checks every image read.
+- **Harnesses:** `tests/qemu_smoke.py` signs each volume it builds: the suites' copies, `raw_fat_image`, and the boot suite after each change it means to test. `tests/aarch64_smoke.py` signs its volumes too.
+- **`boot` suite** (x86): the corrupt-ELF cases still reach the ELF checks, because the volume is signed again. New cases, each stopping with the file named:
+  - one bit of the kernel changed, and a byte added to `rtc.elf`: `not as the manifest says`;
+  - a byte of the manifest changed, and a manifest signed by another key: `bad signature`;
+  - `MANIFEST.SIG` removed: `file not found`.
+- **Runs** (local):
+  - x86 `boot,normal`: the launch record `BOOT: MANIFEST … KEY fd9adafc8d461c37 (THE TEST KEY) VERIFIED, 30 IMAGES CHECKED`;
+  - aarch64 `normal,shell`: `… VERIFIED, 27 IMAGES CHECKED` (the kernel and the 26 services built for `virt`); `aarch64_smoke.py`: 26, since it leaves out `shell.elf`.
+- **Docs:** `docs/update` (Verification at boot, Trust model); the profile's Article 9 rows (x86 now partial), TCB (correct program images) and threat model; evidence rows.

@@ -1,0 +1,30 @@
+# 350-UPD-0001 — A reproducible build check — done
+
+**Type:** tools (update) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track C "reproducible toolchain" · **Constitution:** MC-9.5, MC-9.7
+
+Part of main task [350](../issues/350-signed-boot-images.md). Done by the storage session at the maintainer's request (2026-10-08).
+
+## Problem
+
+MC-9.5 includes build reproducibility and toolchain provenance in the trust evidence, and MC-9.7 asks that the conditions affecting a claimed reproducible build be recorded. Nobody had checked whether two builds of one commit give the same bytes.
+
+## Plan
+
+A script that builds one commit twice from fresh checkouts and compares every staged file, run in `scripts/ci_local.sh`. It records what differs and why.
+
+## Acceptance criteria
+
+- The check runs in CI or in `scripts/ci_local.sh`.
+- What still differs is recorded with its cause.
+
+## Related
+
+[350-UPD-0002](350-UPD-0002-manifest-and-signing.done) (the manifest records the commit, the toolchain and the locks), [docs/update](../docs/update/README.md) (Reproducible builds).
+
+## Resolution
+
+- **`scripts/reproducible.sh`:** builds the commit with `02_build.sh` twice, each time in a fresh `git worktree` at the same path, and compares the SHA-256 of every staged file. Any difference fails the check. `--other-path` builds once more at a different path and lists what differs there; `--arch aarch64` checks the aarch64 build. `scripts/ci_local.sh` runs it as "x86: reproducible build" (two cold builds, about 14 min).
+- **Found and fixed:** at one path every file was identical but the bootloader. `lld-link` stamps a PE with the link time and names a PDB with a fresh GUID. `bootloader/.cargo/config.toml` now passes `/Brepro` and `/DEBUG:NONE`, and two links of the bootloader are byte-identical on x86 and aarch64.
+- **Recorded (docs/update, MC-9.7):** the conditions are the commit, the toolchain, every `Cargo.lock`, the architecture, the signing key and the **checkout path**. Programs depend on `libmind` through a path outside their own Cargo workspace. Cargo hashes that absolute path into each crate's metadata, which names symbols and steers code layout, so builds at different paths differ in most programs. The machine's absolute paths also appear in panic messages of `libmind` code.
+- **Runs** (local): on f76ed95, the first run found only the bootloader different (two builds of 401 s and 412 s, 84 files). The run on the commit with the fix is in the local gate.
+- **Not done:** builds identical across paths (one Cargo workspace, or path remapping with stable crate metadata); a record of the host tools beyond Rust; the check on GitHub CI.

@@ -7,6 +7,9 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 uefi = "=0.27.0"
+# Boot manifests (350-UPD-0003): verification only (.cargo/config.toml picks the portable backend).
+ed25519-dalek = { version = "2", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
 
 [profile.release]
 panic = "abort"

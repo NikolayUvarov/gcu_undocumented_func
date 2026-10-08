@@ -1,0 +1,8 @@
+# Boot manifests (350-UPD-0003): the portable 64-bit backend of curve25519-dalek, as keystore uses; no runtime CPU
+# feature probing in firmware. /Brepro and /DEBUG:NONE: the PE's timestamp comes from its content and no PDB is
+# named in it, so a rebuild is byte-identical (350-UPD-0001).
+[target.x86_64-unknown-uefi]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\"", "-C", "link-arg=/Brepro", "-C", "link-arg=/DEBUG:NONE"]
+
+[target.aarch64-unknown-uefi]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\"", "-C", "link-arg=/Brepro", "-C", "link-arg=/DEBUG:NONE"]

@@ -38,4 +38,6 @@ if [[ "${1:-}" == --fixtures ]]; then
         -C link-arg=-T"$ROOT/app/linker.ld" -C link-arg=-pie -C link-arg=-zmax-page-size=4096 \
         -C link-arg=--no-dynamic-linker -C link-arg=-znotext "$ROOT/tests/busy_app.rs" -o "$OUT/fixture-busy_app.elf"
 fi
+# The boot manifest and its signature, over everything staged (350-UPD-0002).
+python3 "$ROOT/scripts/sign_manifest.py" "$OUT"
 echo ">>> aarch64 build ready: $OUT"

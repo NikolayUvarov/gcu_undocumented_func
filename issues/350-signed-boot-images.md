@@ -16,6 +16,19 @@ The tasks below are planned; the `UPD` track numbers them itself.
 - `350-UPD-0004` — a launch record. The kernel or `init` makes the manifest's hash and the verification result readable: a `STAT` class, or a log line `init` publishes. The record is evidence, not authority.
 - Later main tasks: A/B activation with last-known-good (MC-9.3, 9.4) and key roles and rotation (MC-9.6).
 
+## Progress (2026-10-08)
+
+Taken by the storage session at the maintainer's request (2026-10-08).
+
+- **Done:**
+  - `350-UPD-0001` ([done](../issues-done/350-UPD-0001-reproducible-build-check.done)): `scripts/reproducible.sh`, in `scripts/ci_local.sh`;
+  - `350-UPD-0002` ([done](../issues-done/350-UPD-0002-manifest-and-signing.done)): the manifest and `scripts/sign_manifest.py`;
+  - `350-UPD-0003` ([done](../issues-done/350-UPD-0003-verification-at-boot.done)): verification in the bootloader, the refusals in the `boot` suite;
+  - the profile's Article 9 rows (x86 and aarch64) state the trust model.
+- **Open:** [`350-UPD-0004`](350-UPD-0004-launch-record.md). The serial record is done; the record readable in the system waits for the kernel track.
+
+The acceptance criteria below are met; the main task stays open until 350-UPD-0004 is done.
+
 ## Acceptance criteria
 
 - The reproducible build check runs in CI or in `scripts/ci_local.sh`.

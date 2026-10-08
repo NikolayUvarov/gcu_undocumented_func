@@ -77,3 +77,21 @@ So no program can hold a client that may only read. The service's refusals by ba
 
 - With the extra disk, `[BLOCKSTORE] READY` names a medium that survives a reboot of the VM; without it, the RAM disk as today.
 - `vfs_server` holds no client of the store's disk.
+
+## The launch record, readable in the system
+
+**Recorded by:** the update track (UPD), 2026-10-08, for [350](350-signed-boot-images.md) (`350-UPD-0004`).
+
+### Problem
+
+The bootloader now checks the boot volume against a signed manifest (350-UPD-0003, [docs/update](../docs/update/README.md)) and prints a launch record on the serial line: the manifest's SHA-256, the signing key's identity, whether it is the public test key, and how many images it checked. Nothing in the running system can read it. Tools, logs and a future updater cannot tell which manifest booted, and the serial line is not there on every machine.
+
+### Plan (a proposal; the kernel track decides)
+
+- A field in `BootInfo` (an ABI change: a new ABI version): the manifest's SHA-256, the key identity (8 bytes), a flag for the test key and the count of images checked.
+- The kernel keeps it, and a `STAT` class (or a line `init` publishes in its log) makes it readable. It is evidence, not authority: nothing grants or refuses on it.
+- The update track then shows it in a tool (for example `sysinfo` or `ver`) and checks it in the `boot` suite.
+
+### Acceptance criteria
+
+A program reads the record of the volume it booted from, and it matches the serial line's.

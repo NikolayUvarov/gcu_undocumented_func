@@ -10,12 +10,15 @@ import atexit
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "aarch64_root"
+sys.path.insert(0, str(ROOT / "scripts"))
+import sign_manifest  # noqa: E402
 # What each fault-test variant does and the exception class (ESR_EL1.EC) the kernel reports for it.
 CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined": 0x00}
 
@@ -62,6 +65,7 @@ def disk_with(rtc=None):
     shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
+    sign_manifest.sign_volume(disk)  # signed as the build signs it (350-UPD-0002)
     return disk
 
 

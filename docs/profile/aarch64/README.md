@@ -79,7 +79,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | MC-6.10–6.12 checkpoints | partial | As on x86: the checkpoint format and protocol of `mind::checkpoint`, with the pilot `tally`. Evidence: `store` suite on `virt`. |
 | MC-10.5 side channels | not claimed | As on x86; no speculation barriers, no PAN (the kernel reaches task memory through its identity map only). |
 | Article 4 storage | partial | As on x86: the block store runs at boot over `ramdisk#1`, with names that keep their history and can be removed, commits of several names, pins, quotas per owner and collection by reachability. Evidence: `store` and `storefaults` suites on `virt`. |
-| Article 9 boot and update | not met — declared | As on x86: boot images are not signed or measured. |
+| Article 9 boot and update | partial | As on x86: `scripts/build_aarch64.sh` signs `aarch64_root/`, and `BOOTAA64.EFI` checks the manifest's signature and every image it loads (the services built for this platform) before loading. Evidence: every aarch64 suite and `aarch64_smoke.py` boot from signed volumes; the refusal cases run on x86 only. The trust model and what is not met are x86's. |
 | FP/SIMD state | not provided | Programs are built soft-float; `CPACR_EL1` traps FP/SIMD, and no FP state is saved. |
 | Legacy devices | none | No port I/O, no ISA devices, no legacy VirtIO interface: `ata`, `ps2_kbd` and `audio_gw` are not built; `docs/legacy.md` lists nothing for this platform. |
 

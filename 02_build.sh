@@ -158,6 +158,9 @@ mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/voice"
 cp "$BUILD_SCRIPT_DIR"/voice/model.bin "$BUILD_SCRIPT_DIR"/voice/commands.txt "$BUILD_SCRIPT_DIR/usb_root/voice/"
+# The boot manifest and its signature: the bootloader loads only what it lists (350-UPD-0002, docs/update/README.md).
+STEP="signing the boot volume"
+python3 "$BUILD_SCRIPT_DIR/scripts/sign_manifest.py" "$BUILD_SCRIPT_DIR/usb_root"
 
 trap - ERR
 finish

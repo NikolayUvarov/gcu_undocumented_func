@@ -24,7 +24,7 @@
 
 - **DMA-capable drivers and devices.** Without an IOMMU, `ahci`, `usb_host`, `audio_gw` and the devices they program can access all physical memory. A compromise of any of them defeats every memory guarantee (MC-1.5).
 - `init` and the platform privilege: `init` can mint device capabilities, DMA regions and privileges; it is trusted.
-- Firmware, the UEFI bootloader, physical access, malicious hardware, supply chain of the toolchain.
+- Firmware, the UEFI bootloader, physical access, malicious hardware, supply chain of the toolchain. The bootloader checks the kernel and boot services against a signed manifest (350-UPD-0003), but nothing checks the bootloader: whoever can write the boot volume can replace it with its key.
 - Side channels (caches, timing, speculative execution) and SMT interference.
 - Denial of service by CPU consumption: there are no budgets; a busy task only shares its CPU round-robin.
 

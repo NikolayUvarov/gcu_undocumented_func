@@ -27,11 +27,12 @@ ARCHES = {
 APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
 # Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font (THIRD_PARTY.md).
-LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", "LICENSES/CC-BY-SA-4.0.txt", "LICENSES/CMUdict-BSD.txt",
-            "LICENSES/OFL-1.1.txt")
+LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", *sorted(f"LICENSES/{p.name}" for p in (ROOT / "LICENSES").glob("*.txt")))
+# The boot manifest and its signature: the bootloader refuses a volume without them (350-UPD-0002).
+SIGNED = ("MANIFEST", "MANIFEST.SIG")
 # The voice recognizer's model and grammar (hear and voice, issues 078-079).
 VOICE = ("voice/model.bin", "voice/commands.txt")
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE)
+FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE, *SIGNED)
 SECTOR = 512
 
 
@@ -42,7 +43,7 @@ def files(arch):
         return FILES
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"])
     apps = tuple(sorted(p.name for p in (ROOT / spec["root"]).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
-    return (spec["efi"], "kernel.elf", *boot, *apps, *LICENSES, *VOICE)
+    return (spec["efi"], "kernel.elf", *boot, *apps, *LICENSES, *VOICE, *SIGNED)
 
 
 def find_qemu_img(requested):
@@ -81,7 +82,7 @@ def read_payloads(source, arch="x86_64"):
         if not 0 < file.stat().st_size <= 4 * 1024 * 1024:
             raise ValueError(f"Invalid size of {file}: expected 1..4194304 bytes.")
         data = file.read_bytes()
-        if name in LICENSES or name in VOICE:
+        if name in LICENSES or name in VOICE or name in SIGNED:
             pass
         elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:

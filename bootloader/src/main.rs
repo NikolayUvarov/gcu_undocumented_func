@@ -10,11 +10,12 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::proto::pi::mp::MpServices;
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, ProgramImage, StatPhys, ABI_VERSION, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc;
+use abi::{BootInfo, ProgramImage, StatPhys, ABI_VERSION, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
 const FILE_BUFFER_PAGES: usize = 1024; // 4 MiB: the largest boot image
+const MANIFEST_PAGES: usize = 16; // 64 KiB: the largest boot manifest (350-UPD-0003)
 
 // Boot errors go to the serial line (COM1, or the PL011 of QEMU's aarch64 `virt`) and the UEFI console, then the
 // machine stops: never a silent hang.
@@ -139,7 +140,7 @@ fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buf
     let handle = root.open(path, FileMode::Read, FileAttribute::empty()).map_err(|_| "file not found")?;
     let FileType::Regular(mut file) = handle.into_type().map_err(|_| "unreadable")? else { return Err("not a regular file") };
     let size = file.read(buffer).map_err(|_| "read error")?;
-    if size == buffer.len() { return Err("file larger than 4 MiB"); }
+    if size == buffer.len() { return Err("file larger than its buffer"); }
     Ok(&buffer[..size])
 }
 
@@ -153,18 +154,36 @@ fn main(_image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             let mut root = sfs.open_volume().map_err(|_| ("boot volume", "cannot open"))?;
             let file_buf_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, FILE_BUFFER_PAGES).map_err(|_| ("file buffer", "out of memory"))?;
             let file_buf = unsafe { core::slice::from_raw_parts_mut(file_buf_addr as *mut u8, FILE_BUFFER_PAGES * 4096) };
+            // Nothing is loaded before the manifest's signature checks; each image is checked against it (350-UPD-0003).
+            let manifest_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MANIFEST_PAGES).map_err(|_| ("MANIFEST", "out of memory"))?;
+            let manifest_buf = unsafe { core::slice::from_raw_parts_mut(manifest_addr as *mut u8, MANIFEST_PAGES * 4096) };
+            let mut signature = [0u8; 128];
+            let signature = read_file(&mut root, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
+            let text = read_file(&mut root, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
+            let manifest = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?;
             let kernel = read_file(&mut root, "kernel.elf", file_buf).map_err(|e| ("kernel.elf", e))?;
+            manifest.check("kernel.elf", kernel).map_err(|e| ("kernel.elf", e))?;
             let kernel_entry = load_elf(boot_services, kernel).map_err(|e| ("kernel.elf", e))?;
+            let mut checked = 1;
             // Only system services are loaded into memory; loader reads applications from disk later.
             let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES];
             for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) {
                 match read_file(&mut root, name, file_buf) {
-                    Ok(data) => *image = keep_program(boot_services, data),
+                    Ok(data) => {
+                        manifest.check(name, data).map_err(|e| (name, e))?;
+                        *image = keep_program(boot_services, data);
+                        checked += 1;
+                    }
                     // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
                     Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
                     Err(e) => return Err((name, e)),
                 }
             }
+            // The launch record: which manifest, signed by which key, covered what was loaded (MC-9.5).
+            let digest = manifest.digest();
+            let _ = write!(Serial, "\r\nBOOT: MANIFEST ");
+            for b in &digest[..8] { let _ = write!(Serial, "{:02x}", b); }
+            let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if verify::TEST_KEY { " (THE TEST KEY)" } else { "" }, checked);
             Ok((kernel_entry, programs))
         })()
     };
