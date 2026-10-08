@@ -1,8 +1,8 @@
 # 351-UPD-0008 — An update zone in `vfs_server`
 
-**Type:** update (storage service) · **Owner:** `UPD` track (open); `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) (the layout) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
+**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) (the layout) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
 
-Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
 ## Problem
 

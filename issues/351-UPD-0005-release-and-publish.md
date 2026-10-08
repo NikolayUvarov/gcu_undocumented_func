@@ -1,8 +1,8 @@
 # 351-UPD-0005 — The release bundle, the server layout and publishing over SSH
 
-**Type:** update (host tools) · **Owner:** `UPD` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 350-UPD-0002 (manifest and signing tool, planned in [350](350-signed-boot-images.md)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.2, MC-9.6, MC-9.7
+**Type:** update (host tools) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** 350-UPD-0002 (manifest and signing tool, planned in [350](350-signed-boot-images.md)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.2, MC-9.6, MC-9.7
 
-Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
 ## Problem
 

@@ -1,8 +1,8 @@
 # 351-UPD-0009 — Rollback policy, metadata expiry, key roles and rotation
 
-**Type:** update (policy) · **Owner:** `UPD` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0007](351-UPD-0007-updater-service.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
+**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0007](351-UPD-0007-updater-service.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
 
-Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
 ## Problem
 
@@ -13,7 +13,7 @@ A signature alone lets an attacker replay an old, signed, vulnerable release (MC
 - **The minimum version.**
   - The highest confirmed version and the channel's minimum are kept in the boot records, and the bootloader refuses a slot below them.
   - The profile states the limit plainly: without a hardware counter (TPM NV index, authenticated UEFI variable), someone with the disk can roll back.
-  - A hardware counter is a later issue.
+  - The hardware floor is [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md), with Secure Boot under our own keys, [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).
 - **Expiry.** Channel metadata past its expiry is refused. The policy for a device that has been offline longer than the expiry is defined: it keeps running, and refuses to update until fresh metadata comes.
 - **Roles, after TUF and Appendix B.5:**
   - a root key set that signs the other keys, kept offline, with a threshold;
