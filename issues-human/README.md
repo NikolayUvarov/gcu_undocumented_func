@@ -26,3 +26,10 @@ CI (`.github/workflows/ci.yml`) runs on every push. To stop a red build from rea
 - [ ] **Settings** → **Rules** → **Rulesets** → new branch ruleset for `main`: require status checks `build` and the `QEMU (...)` jobs; block force pushes.
 
 Note: agents currently update `main` by fast-forward pushes after CI is green on their branch; with required checks they keep working the same way, because the checked commit is the one pushed.
+
+## 4. A Mac with Apple Silicon to test on
+
+The Apple Silicon track `APL` ([TRACKS.md](../TRACKS.md)) needs a person with an Apple Silicon Mac: nothing in this repository has run on one, and the agents have none. An M1 first; an M2, M3 or later is welcome too.
+
+- [ ] **The virtual machine** (main task [600](../issues/600-apple-silicon-mac-vm-host.md)): follow [docs/apple-silicon.md](../docs/apple-silicon.md) ([Russian](../docs/apple-silicon_RU.md)) on the Mac and send back the terminal output, the Mac's model and chip, `sw_vers` and `qemu-system-aarch64 --version` (tasks [600-APL-0011](../issues/600-APL-0011-first-run-on-a-mac.md) and [600-APL-0012](../issues/600-APL-0012-aarch64-suites-on-a-mac.md)). Nothing but Homebrew's packages and rustup needs to be installed on the Mac.
+- [ ] **Natively** (main task [210](../issues/210-apple-silicon-native.md)), later: a Mac that may get m1n1 and U-Boot through the Asahi installer, which means lowering, once and in recoveryOS, the boot security of the boot entry it adds (a spare Mac is best); and, for the console, a way to reach its UART over USB-C: a second Apple Silicon Mac with Asahi's `macvdmtool`, or a serial adapter made for it (task [210-APL-0006](../issues/210-APL-0006-samsung-style-uart-console.md)).
