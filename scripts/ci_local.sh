@@ -91,7 +91,7 @@ host_tests() {
         rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
     done
     rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1
-    python3 tests/idl_test.py && python3 tests/font_test.py
+    python3 tests/idl_test.py && python3 tests/font_test.py && python3 tests/test_usb_writer.py
 }
 x86_fixtures() {
     local f
