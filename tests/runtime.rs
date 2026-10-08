@@ -167,3 +167,22 @@ fn pixels_reach_every_framebuffer_format() {
     // A 5:6:5 layout keeps the high bits of each channel.
     assert_eq!(pixel_to_device(0x00FF_FFFF, PIXEL_BITMASK, [0xF800, 0x07E0, 0x001F]), 0xFFFF);
 }
+
+#[test]
+fn round_robin_over_a_cpus_slots_picks_as_over_the_whole_table() {
+    // 171-KRN-0009: select picks among one CPU's sorted slots (next_in) what the pass over every slot picked (next_by).
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut random = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+    for _ in 0..2000 {
+        let len = 1 + (random() % 96) as usize;
+        let cpu_of: Vec<u64> = (0..len).map(|_| random() % 4).collect();
+        let ready: Vec<bool> = (0..len).map(|slot| slot != 0 && random() % 3 == 0).collect();
+        let cpu = random() % 4;
+        let mine: Vec<usize> = (1..len).filter(|&slot| cpu_of[slot] == cpu).collect();
+        let current = (random() % len as u64) as usize;
+        let on_cpu = |slot: usize| slot < len && cpu_of[slot] == cpu && ready[slot];
+        assert_eq!(task_state::next_in(&mine, current, on_cpu), task_state::next_by(len, current, on_cpu), "{len} {current}");
+        // A cursor past the table (it shrank since) starts from the first slot.
+        assert_eq!(task_state::next_in(&mine, len + 5, on_cpu), mine.iter().copied().find(|&slot| on_cpu(slot)).unwrap_or(0));
+    }
+}

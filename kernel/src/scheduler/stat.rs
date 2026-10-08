@@ -78,26 +78,41 @@ impl Scheduler {
             (pid, holders)
         };
         match class {
-            STAT_TASKS => for (index, task) in self.tasks.iter().enumerate().skip(1) {
-                let Some(task) = task else { continue };
-                let (wait, wait_on) = wait_of(task.state, self.current.contains(&index), &self.tasks);
-                let mut name = [0u8; NAME_MAX]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
-                let alive = task.state != State::Exited;
-                out.push(StatTask {
-                    pid: task.pid, parent: task.parent.map_or(0, |p| p.1), name, wait, cpu: task.cpu as u8, service: task.service as u8, screen: task.screen.is_some() as u8, wait_on,
-                    run_ns: task.run_ns, runs: task.runs, ticks: task.ticks, calls: task.calls, sends: task.sends, receives: task.receives, started_ns: task.started_ns,
-                    heap_bytes: task.heap.bytes() as u64, heap_blocks: task.heap.block_count() as u32, caps: task.cspace.iter().flatten().count() as u32,
-                    shared_bytes: task.heap.shared_bytes() as u64, retained_bytes: task.heap.retained as u64,
-                    image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64, screen_bytes: task.screen.as_ref().map_or(0, |s| s.len() as u64),
-                    quota_tasks: task.quota_tasks as u16, used_tasks: if alive { self.used_tasks(index) as u16 } else { 0 },
-                    quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { self.used_endpoints(index) as u16 } else { 0 },
-                    band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
-                    budget_ns: task.budget_ns, period_ns: task.period_ns,
-                    kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096
-                        + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * 4 + task.nodes.capacity() * core::mem::size_of::<Node>()) as u64,
-                    memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
-                });
-            },
+            STAT_TASKS => {
+                // Quota use of every task in one pass, as used_tasks and used_endpoints count it: those pass over every
+                // task each, and a pass per task held the scheduler lock long with many tasks (171-KRN-0009).
+                let len = self.tasks.len();
+                let (mut tasks_used, mut endpoints_used): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
+                if tasks_used.try_reserve_exact(len).is_err() || endpoints_used.try_reserve_exact(len).is_err() { return Err(ERR_NO_MEMORY); }
+                tasks_used.resize(len, 0); endpoints_used.resize(len, 0);
+                let owner = |(slot, pid): (usize, u64)| (slot < len && self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid)).then_some(slot);
+                for task in self.tasks.iter().flatten().filter(|t| t.state != State::Exited) {
+                    if let Some(parent) = task.parent.and_then(owner) { tasks_used[parent] += 1 + task.quota_tasks; endpoints_used[parent] += task.quota_endpoints; }
+                }
+                for ep in (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e]) {
+                    if let Some(creator) = self.endpoint_owner[ep].and_then(owner) { endpoints_used[creator] += 1; }
+                }
+                for (index, task) in self.tasks.iter().enumerate().skip(1) {
+                    let Some(task) = task else { continue };
+                    let (wait, wait_on) = wait_of(task.state, self.current.contains(&index), &self.tasks);
+                    let mut name = [0u8; NAME_MAX]; name[..task.name.len as usize].copy_from_slice(&task.name.bytes[..task.name.len as usize]);
+                    let alive = task.state != State::Exited;
+                    out.push(StatTask {
+                        pid: task.pid, parent: task.parent.map_or(0, |p| p.1), name, wait, cpu: task.cpu as u8, service: task.service as u8, screen: task.screen.is_some() as u8, wait_on,
+                        run_ns: task.run_ns, runs: task.runs, ticks: task.ticks, calls: task.calls, sends: task.sends, receives: task.receives, started_ns: task.started_ns,
+                        heap_bytes: task.heap.bytes() as u64, heap_blocks: task.heap.block_count() as u32, caps: task.cspace.iter().flatten().count() as u32,
+                        shared_bytes: task.heap.shared_bytes() as u64, retained_bytes: task.heap.retained as u64,
+                        image_bytes: task._image.len() as u64, stack_bytes: task._stack.len() as u64, screen_bytes: task.screen.as_ref().map_or(0, |s| s.len() as u64),
+                        quota_tasks: task.quota_tasks as u16, used_tasks: if alive { tasks_used[index] as u16 } else { 0 },
+                        quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { endpoints_used[index] as u16 } else { 0 },
+                        band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
+                        budget_ns: task.budget_ns, period_ns: task.period_ns,
+                        kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096
+                            + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * 4 + task.nodes.capacity() * core::mem::size_of::<Node>()) as u64,
+                        memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
+                    });
+                }
+            }
             STAT_CPUS => for index in 0..cpu::COUNT.load(Ordering::Acquire) {
                 let a = &self.accounting;
                 out.push(StatCpu { apic_id: cpu::apic_id(index), online: cpu::ONLINE[index].load(Ordering::Acquire) as u32, ticks: cpu::TICKS[index].load(Ordering::Relaxed),
