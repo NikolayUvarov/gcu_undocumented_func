@@ -80,7 +80,7 @@ X86_GROUPS=(
 A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
-    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb"
+    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb,devicetree"
     "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"

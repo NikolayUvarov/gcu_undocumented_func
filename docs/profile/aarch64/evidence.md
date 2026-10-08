@@ -5,6 +5,7 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | Statement | Evidence |
 |---|---|
 | The system boots to `[INIT] READY` with the services that need no devices; RNDR gives the device key | `tests/aarch64_smoke.py` (without the shell and without PCI) |
+| On `virt` without ACPI the bootloader passes the firmware's device tree and the kernel finds a valid FDT header at that address; with ACPI no tree is passed (210-KRN-0029) | `devicetree` suite (the kernel's line read from the screen), `tests/aarch64_smoke.py` |
 | A task that reads kernel memory, writes its code, executes its stack or runs an undefined instruction is ended with that exception class; init restarts it and quarantines it after three restarts; the rest keeps running | `aarch64_smoke.py`, fault cases (`tests/aarch64_fault.rs`) |
 | Programs and instances, foreground and Ctrl+Z (from the VirtIO keyboard), task limits, heap baseline after teardown; the idle CPUs wait in WFI | `normal` suite (the idle check measures QEMU's processor time: the monitor shows no WFI state) |
 | Line editing, history, completion and Cyrillic input from the UART and the VirtIO keyboard (through the PS/2 decoder) | `shell` suite |

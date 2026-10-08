@@ -5112,6 +5112,38 @@ def efivar_check(args, disk):
           f"firmware's shell once, then Boot{current[1]} again with BootNext consumed", flush=True)
 
 
+def devicetree_suite(args, disk):
+    """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
+    bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
+    it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
+    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen."""
+    if args.arch != "aarch64":
+        print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
+        return
+    machine = (args.machine or "virt,gic-version=3,highmem=off") + ",acpi=off"
+    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine}), disk.relative_to(ROOT).as_posix(), prompt=False)
+    try:
+        deadline = time.monotonic() + 90
+        while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
+            time.sleep(0.02)
+            vm.collect()
+        vm.hmp("stop")
+        assert loader, vm.log[-3000:]
+        kernel = None
+        for _ in range(500):
+            kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
+            if kernel:
+                break
+            vm.hmp("cont")
+            time.sleep(0.01)
+            vm.hmp("stop")
+        assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
+    finally:
+        vm.close()
+    print(f"PASS: devicetree: on virt without ACPI the bootloader passes the device tree at {loader[1]} ({loader[2]} bytes) "
+          f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
+
+
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
@@ -5338,7 +5370,7 @@ def main():
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5442,6 +5474,9 @@ def main():
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)
+                continue
+            if suite == "devicetree":
+                devicetree_suite(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt

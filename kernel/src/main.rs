@@ -102,6 +102,7 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         }
         trial::start(&info.boot_slot);
         firmware::init(info.efi_runtime);
+        firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");

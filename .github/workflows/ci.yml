@@ -162,7 +162,8 @@ jobs:
           - group: boot and fault containment
             smoke: true
           - group: programs, shell and four CPUs
-            suites: normal,shell,smp,busy,usb
+            # devicetree: virt without ACPI (210-KRN-0029)
+            suites: normal,shell,smp,busy,usb,devicetree
           - group: files, network and TLS
             suites: vfs,store,storefaults,net,tls
           - group: RAM, ACPI and PCI above 4 GiB

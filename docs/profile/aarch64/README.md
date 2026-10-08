@@ -27,6 +27,8 @@ QEMU `virt,gic-version=3,highmem=off`, `-cpu max`, `-smp 4`, 512 MiB, AAVMF (EDK
 
 The kernel reads the machine's layout from ACPI (`arch/aarch64/board.rs`, printed as `MIND CORE KERNEL: BOARD …`): the ECAM from the MCFG; the CPUs (MPIDRs), the GIC's version and addresses (distributor, redistributors — each CPU finds its own by its affinity in `GICR_TYPER` — or GICv2 CPU interface, ITS or GICv2m frame) from the MADT; the console UART and its interrupt from the SPCR; the virtual timer's PPI from the GTDT; PSCI's conduit (HVC or SMC) from the FADT. Only the PL031 stays at `virt`'s address (`0x0901_0000`, SPI 2): it is not in ACPI's static tables. `virt`'s values are the defaults: GICv3 at `0x0800_0000`, ITS at `0x0808_0000`, redistributors from `0x080A_0000`, PL011 at `0x0900_0000` (SPI 1).
 
+Without ACPI (`virt,acpi=off`, as a board with only a device tree), the firmware hands over a flattened device tree. The bootloader passes its address in `BootInfo.device_tree`, and the kernel checks its header (`MIND CORE KERNEL: DEVICE TREE AT …`, 210-KRN-0029). The kernel does not read the board from it yet (210-APL-0002). Such a machine boots to init with `virt`'s defaults, no PCI and no console, and only its screen shows the logs.
+
 Variants tested as stand-ins for boards (issue 205): `highmem=on` with 6 GiB (RAM, ACPI tables, the ECAM and 64-bit PCI windows above 4 GiB), `gic-version=2` (a GICv2 with GICv2m, the Raspberry Pi 4's kind of GIC), and the boot disk on NVMe.
 
 ## What the kernel does here

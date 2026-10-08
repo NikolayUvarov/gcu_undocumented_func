@@ -56,6 +56,7 @@ mod tests {
             boot_slot: Default::default(),
             launch: Default::default(),
             efi_runtime: 0,
+            device_tree: 0,
         }
     }
 

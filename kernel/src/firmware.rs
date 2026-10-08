@@ -1,6 +1,7 @@
-// UEFI runtime variables (351-KRN-0027): GetVariable and SetVariable of the firmware's runtime services, called in the
-// identity map without SetVirtualAddressMap (the firmware's runtime regions keep their physical addresses), one CPU at
-// a time. Callers hold the scheduler lock, so interrupts are off; the caller's FP state was saved on kernel entry.
+// What the firmware hands over besides ACPI: its runtime variable services (351-KRN-0027) and a device tree (210-KRN-0029).
+// GetVariable and SetVariable are called in the identity map without SetVirtualAddressMap (the firmware's runtime
+// regions keep their physical addresses), one CPU at a time. Callers hold the scheduler lock, so interrupts are off;
+// the caller's FP state was saved on kernel entry.
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static RUNTIME: AtomicU64 = AtomicU64::new(0);
@@ -52,4 +53,18 @@ pub fn set(name: &[u16], guid: &[u8; 16], attributes: u32, data: &[u8]) -> Resul
     let Some(f) = function(SET_VARIABLE) else { return Err(NOT_FOUND) };
     let status = call(|| unsafe { core::mem::transmute::<usize, SetVariable>(f)(name.as_ptr(), guid, attributes, data.len(), data.as_ptr()) });
     if status == 0 { Ok(()) } else { Err(status) }
+}
+
+const FDT_MAGIC: u32 = 0xd00d_feed;
+
+/// The device tree the bootloader found (210-KRN-0029): its header checked and named; the board code reads it (210-APL-0002).
+pub fn device_tree(address: u64) -> Option<(u64, usize)> {
+    if address == 0 { return None; }
+    let header = |offset: u64| unsafe { u32::from_be(core::ptr::read_unaligned((address + offset) as *const u32)) };
+    let valid = address < crate::mmu::IDENTITY_END && header(0) == FDT_MAGIC;
+    let size = if valid { header(4) as usize } else { 0 };
+    let mut out = crate::PanicSerial;
+    let _ = if valid { core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: DEVICE TREE AT {:#x}, {} BYTES, VERSION {}\n", address, size, header(20))) }
+            else { core::fmt::Write::write_fmt(&mut out, format_args!("MIND CORE KERNEL: DEVICE TREE AT {:#x}: NO FDT HEADER, IGNORED\n", address)) };
+    valid.then_some((address, size))
 }

@@ -1,0 +1,41 @@
+# 210-KRN-0029 — The device tree's address in BootInfo — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P3 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [210](../issues/210-apple-silicon-native.md) · **Constitution:** MC-1.3, MC-12.4
+
+The kernel's part of [210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md), which named it as its blocker: an ABI change only `KRN` makes.
+
+## Problem
+
+On a Mac, U-Boot gives the system a flattened device tree (FDT) instead of ACPI. So does QEMU `virt` with `acpi=off`. The bootloader passed `acpi_rsdp` and nothing for a device tree, so no kernel code could read one.
+
+## Plan
+
+- `BootInfo.device_tree`: the address from the UEFI configuration table (the device tree's GUID, `b1b621d5-f19c-41a5-830b-d9152c69aae0`), 0 without one. ABI 4 is not on `main` yet, so the field joins that version instead of making a fifth.
+- The bootloader names it on its console. The kernel checks the header (magic, size, version) and says what it found. Reading the tree stays with 210-APL-0002.
+- Tasks get 0, as with every firmware address.
+
+## Acceptance criteria
+
+On QEMU `virt` without ACPI the bootloader passes the device tree's address and the kernel finds a valid FDT header there. With ACPI no tree is passed.
+
+## Resolution
+
+Done on 2026-10-08.
+
+- **`common/abi.rs`:** `BootInfo.device_tree: u64`, after `efi_runtime` (ABI 4).
+- **The bootloader** takes it from the configuration table and prints `BOOT: DEVICE TREE AT <address>, <n> BYTES`.
+- **The kernel:**
+  - `firmware::device_tree` checks the address is in the identity map and the magic is `0xd00dfeed`;
+  - it prints `MIND CORE KERNEL: DEVICE TREE AT …, <n> BYTES, VERSION <v>`, or that the header is missing and the tree is ignored;
+  - spawned tasks get `device_tree = 0`.
+- **Tests:**
+  - `devicetree` suite (aarch64; CI group "programs, shell and four CPUs"): on `virt,acpi=off` the loader's address and size match the kernel's line, with FDT version 17.
+    - That kernel has no console without ACPI, and the services soon write over its lines on the screen. So the suite stops the machine when the loader names the tree and runs it in 10 ms steps until the kernel's line is on the screen.
+    - Passed on GICv3 and GICv2.
+  - `tests/aarch64_smoke.py`: with ACPI no device tree is passed.
+- **Not done here:** the FDT reader and the board from it (210-APL-0002). Without ACPI such a machine boots to init with `virt`'s defaults, no PCI and no console.
+- `docs/api` and the aarch64 profile (README, evidence) say what is provided.
+
+## Related
+
+[210-APL-0002](../issues/210-APL-0002-board-from-the-device-tree.md), [210](../issues/210-apple-silicon-native.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done) (the field before it).

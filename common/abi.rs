@@ -39,9 +39,11 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // keep their places across versions, so each side finds the other's version where it expects it.
 pub const ABI_VERSION: u32 = 4;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
-    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, }
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, }
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
 // variable services in the identity map (no SetVirtualAddressMap) and gives tasks 0 (ABI 4, 351-KRN-0027).
+// BootInfo.device_tree: the flattened device tree in the firmware's configuration table (a board without ACPI: U-Boot on
+// a Mac, QEMU virt with acpi=off), 0 without one; the kernel checks its header and gives tasks 0 (ABI 4, 210-KRN-0029).
 // The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
 // kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
 // partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.

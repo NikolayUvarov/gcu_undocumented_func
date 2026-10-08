@@ -99,6 +99,8 @@ def main():
     serial = re.search(r"BOOT: MANIFEST (\S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED)", output)
     assert serial, output[-3000:]
     require(output, f"[INIT] LAUNCH: MANIFEST {serial[1]}; THE VOLUME'S ROOT")
+    # 210-KRN-0029: with ACPI the firmware hands over no device tree (the devicetree suite boots without ACPI).
+    assert "DEVICE TREE" not in output, output[-3000:]
     entropy = "[KEYSTORE] DEVICE KEY READY" in output
     print(f"PASS: aarch64 boot to [INIT] READY on the PL011 console; logd, loader, keystore ({'device key from RNDR' if entropy else 'no RNDR'}) and sysmon run", flush=True)
 
