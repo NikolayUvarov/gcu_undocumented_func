@@ -1,6 +1,6 @@
 # 351-KRN-0014 — A trial boot: the flag, the confirmation, the deadline and the updater's grants
 
-**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) (the records), [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (the `BootInfo` change it rides on) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-3.11, MC-11.1
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the records: done), [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (the `BootInfo` change it rides on) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-3.11, MC-11.1
 
 ## Problem
 

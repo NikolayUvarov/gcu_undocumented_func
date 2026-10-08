@@ -11,7 +11,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, ProgramImage, StatPhys, ABI_VERSION, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc; mod verify;
+use abi::{BootInfo, ProgramImage, StatPhys, ABI_VERSION, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB}; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -199,15 +199,148 @@ fn processors(_boot_services: &BootServices) -> (usize, [u32; 8], usize) {
     (0, ids, 1)
 }
 
+// `dir` and `name` as one UEFI path: "" for the volume's root, or a directory ending in a backslash.
+fn path16<'b>(dir: &str, name: &str, buf: &'b mut [u16; 64]) -> Result<&'b uefi::CStr16, &'static str> {
+    let mut n = 0;
+    for c in dir.chars().chain(name.chars()) {
+        if n + 1 >= buf.len() || !c.is_ascii() { return Err("bad file name"); }
+        buf[n] = c as u16;
+        n += 1;
+    }
+    buf[n] = 0;
+    uefi::CStr16::from_u16_with_nul(&buf[..=n]).map_err(|_| "bad file name")
+}
+
 // Reads a whole file of the boot volume into `buffer`.
-fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buffer: &'a mut [u8]) -> Result<&'a [u8], &'static str> {
-    let mut name_buf = [0u16; 32];
-    let path = uefi::CStr16::from_str_with_buf(name, &mut name_buf).map_err(|_| "bad file name")?;
+fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, dir: &str, name: &str, buffer: &'a mut [u8]) -> Result<&'a [u8], &'static str> {
+    let mut name_buf = [0u16; 64];
+    let path = path16(dir, name, &mut name_buf)?;
     let handle = root.open(path, FileMode::Read, FileAttribute::empty()).map_err(|_| "file not found")?;
     let FileType::Regular(mut file) = handle.into_type().map_err(|_| "unreadable")? else { return Err("not a regular file") };
     let size = file.read(buffer).map_err(|_| "read error")?;
     if size == buffer.len() { return Err("file larger than its buffer"); }
     Ok(&buffer[..size])
+}
+
+// Overwrites a boot record in place and flushes it to the disk (351-UPD-0006).
+fn write_record(root: &mut uefi::proto::media::file::Directory, name: &str, data: &[u8]) -> Result<(), &'static str> {
+    let mut name_buf = [0u16; 64];
+    let path = path16("", name, &mut name_buf)?;
+    let handle = root.open(path, FileMode::CreateReadWrite, FileAttribute::empty()).map_err(|_| "cannot open")?;
+    let mut file = handle.into_regular_file().ok_or("not a regular file")?;
+    file.set_position(0).map_err(|_| "cannot seek")?;
+    file.write(data).map_err(|_| "write error")?;
+    file.flush().map_err(|_| "flush error")
+}
+
+const RECORD_FILES: [&str; 2] = ["MIND\\BOOT0", "MIND\\BOOT1"];
+fn slot_dir(slot: u8) -> &'static str { if slot == b'A' { "MIND\\A\\" } else { "MIND\\B\\" } }
+
+// Reads the kernel and the boot services from `dir` ("" or a slot's directory), checks each against the signed
+// manifest there and loads them; on an error nothing stays allocated but a kernel that failed to relocate.
+fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Directory, dir: &str, file_buf: &mut [u8], manifest_buf: &mut [u8])
+    -> Result<(u64, [ProgramImage; abi::BOOT_IMAGES]), (&'static str, &'static str)> {
+    // Nothing is loaded before the manifest's signature checks; each image is checked against it (350-UPD-0003).
+    let mut signature = [0u8; 128];
+    let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
+    let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
+    let manifest = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?;
+    // Only system services are loaded into memory; loader reads applications from disk later.
+    let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES];
+    let mut checked = 0;
+    let loaded = (|| {
+        for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) {
+            match read_file(root, dir, name, file_buf) {
+                Ok(data) => {
+                    manifest.check(name, data).map_err(|e| (name, e))?;
+                    *image = keep_program(services, data);
+                    checked += 1;
+                }
+                // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
+                Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
+                Err(e) => return Err((name, e)),
+            }
+        }
+        // The kernel last: its pages are the only ones not given back on an error.
+        let kernel = read_file(root, dir, "kernel.elf", file_buf).map_err(|e| ("kernel.elf", e))?;
+        manifest.check("kernel.elf", kernel).map_err(|e| ("kernel.elf", e))?;
+        checked += 1;
+        load_elf(services, kernel).map_err(|e| ("kernel.elf", e))
+    })();
+    let kernel_entry = match loaded {
+        Ok(entry) => entry,
+        Err(e) => {
+            for image in programs.iter().filter(|p| p.len > 0) { let _ = unsafe { services.free_pages(image.data as u64, image.len.div_ceil(4096)) }; }
+            return Err(e);
+        }
+    };
+    // The launch record: which manifest, signed by which key, covered what was loaded (MC-9.5).
+    let digest = manifest.digest();
+    let _ = write!(Serial, "\r\nBOOT: MANIFEST ");
+    for b in &digest[..8] { let _ = write!(Serial, "{:02x}", b); }
+    let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if verify::TEST_KEY { " (THE TEST KEY)" } else { "" }, checked);
+    Ok((kernel_entry, programs))
+}
+
+// The slots (351-UPD-0006): follows the newer valid boot record, counts down a trial's tries on the disk before the
+// slot runs, and falls back to the other slot when one is not confirmed in time or does not verify. Returns the slot
+// loaded and whether it runs on trial; None for a volume without boot records, which boots from its root.
+fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Directory, file_buf: &mut [u8], manifest_buf: &mut [u8])
+    -> Option<Result<(u64, [ProgramImage; abi::BOOT_IMAGES], u8, bool), (&'static str, &'static str)>> {
+    let mut present = [false; 2];
+    let mut records = [None; 2];
+    for (k, name) in RECORD_FILES.iter().enumerate() {
+        let mut data = [0u8; slots::RECORD + 1];
+        let damaged = match read_file(root, "", name, &mut data) {
+            Err("file not found") => continue,
+            Err(_) => true,
+            // A record never written is all zeros: empty, not damaged.
+            Ok(data) => { records[k] = slots::Record::parse(data); records[k].is_none() && data.iter().any(|&b| b != 0) }
+        };
+        present[k] = true;
+        if damaged { let _ = writeln!(Serial, "\r\nBOOT: RECORD {} DAMAGED, IGNORED\r", name); }
+    }
+    if present == [false; 2] { return None; }
+    let plan = slots::plan(records);
+    let mut order = plan.order;
+    let mut written = None;
+    match plan.chosen {
+        None => { let _ = writeln!(Serial, "\r\nBOOT: NO VALID BOOT RECORD; TRYING SLOT A, THEN B\r"); }
+        Some(k) => {
+            let r = records[k].unwrap();
+            let _ = writeln!(Serial, "\r\nBOOT: RECORD {} SEQUENCE {}: SLOT {}, {}, {} TRIES LEFT\r", RECORD_FILES[k], r.sequence, r.slot as char,
+                             if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, r.tries);
+            if !r.confirmed && r.tries == 0 { let _ = writeln!(Serial, "BOOT: SLOT {} NOT CONFIRMED, NO TRIES LEFT\r", r.slot as char); }
+        }
+    }
+    if let Some((file, record)) = plan.write {
+        match write_record(root, RECORD_FILES[file], &record.encode()) {
+            Ok(()) => written = Some((file, record)),
+            // A try that cannot be counted could repeat for ever: the fallback boots, or with none the slot, not on trial.
+            Err(e) => {
+                let _ = writeln!(Serial, "BOOT: CANNOT RECORD THE TRY ({}); SLOT {} NOT ON TRIAL\r", e, order[0] as char);
+                order = if order[1] != 0 { [order[1], 0] } else { [order[0], 0] };
+            }
+        }
+    }
+    let mut last = ("boot volume", "no slot to boot");
+    for (k, &slot) in order.iter().enumerate() {
+        if slot == 0 { continue; }
+        let trial = k == 0 && written.is_some();
+        match load_set(services, root, slot_dir(slot), file_buf, manifest_buf) {
+            Ok((entry, programs)) => return Some(Ok((entry, programs, slot, trial))),
+            Err((file, reason)) => {
+                let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: {}: {}\r", slot as char, file, reason);
+                last = (file, reason);
+                // A trial slot that does not verify has no tries left.
+                if let (true, Some(w)) = (trial, written) {
+                    let (file, record) = slots::spent(w);
+                    let _ = write_record(root, RECORD_FILES[file], &record.encode());
+                }
+            }
+        }
+    }
+    Some(Err(last))
 }
 
 #[entry]
@@ -224,40 +357,20 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             let mut root = sfs.open_volume().map_err(|_| ("boot volume", "cannot open"))?;
             let file_buf_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, FILE_BUFFER_PAGES).map_err(|_| ("file buffer", "out of memory"))?;
             let file_buf = unsafe { core::slice::from_raw_parts_mut(file_buf_addr as *mut u8, FILE_BUFFER_PAGES * 4096) };
-            // Nothing is loaded before the manifest's signature checks; each image is checked against it (350-UPD-0003).
             let manifest_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MANIFEST_PAGES).map_err(|_| ("MANIFEST", "out of memory"))?;
             let manifest_buf = unsafe { core::slice::from_raw_parts_mut(manifest_addr as *mut u8, MANIFEST_PAGES * 4096) };
-            let mut signature = [0u8; 128];
-            let signature = read_file(&mut root, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
-            let text = read_file(&mut root, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
-            let manifest = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?;
-            let kernel = read_file(&mut root, "kernel.elf", file_buf).map_err(|e| ("kernel.elf", e))?;
-            manifest.check("kernel.elf", kernel).map_err(|e| ("kernel.elf", e))?;
-            let kernel_entry = load_elf(boot_services, kernel).map_err(|e| ("kernel.elf", e))?;
-            let mut checked = 1;
-            // Only system services are loaded into memory; loader reads applications from disk later.
-            let mut programs = [ProgramImage { data: core::ptr::null(), len: 0 }; abi::BOOT_IMAGES];
-            for (image, name) in programs.iter_mut().zip(abi::BOOT_FILES) {
-                match read_file(&mut root, name, file_buf) {
-                    Ok(data) => {
-                        manifest.check(name, data).map_err(|e| (name, e))?;
-                        *image = keep_program(boot_services, data);
-                        checked += 1;
-                    }
-                    // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
-                    Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
-                    Err(e) => return Err((name, e)),
-                }
+            // A volume with boot records boots a slot; one without, as before them, its root (351-UPD-0006).
+            match load_slots(boot_services, &mut root, file_buf, manifest_buf) {
+                Some(slot) => slot.map(|(entry, programs, slot, trial)| (entry, programs, Some((slot, trial)))),
+                None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs)| (entry, programs, None)),
             }
-            // The launch record: which manifest, signed by which key, covered what was loaded (MC-9.5).
-            let digest = manifest.digest();
-            let _ = write!(Serial, "\r\nBOOT: MANIFEST ");
-            for b in &digest[..8] { let _ = write!(Serial, "{:02x}", b); }
-            let _ = writeln!(Serial, " KEY {}{} VERIFIED, {} IMAGES CHECKED\r", manifest.key(), if verify::TEST_KEY { " (THE TEST KEY)" } else { "" }, checked);
-            Ok((kernel_entry, programs))
         })()
     };
-    let (kernel_entry, programs) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
+    let (kernel_entry, programs, slot) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
+    if let Some((slot, trial)) = slot {
+        let _ = writeln!(Serial, "BOOT: SLOT {} LOADED{}\r", slot as char, if trial { " ON TRIAL" } else { "" });
+        say(&system_table, format_args!("SLOT {}{}", slot as char, if trial { ", ON TRIAL" } else { "" }));
+    }
     say(&system_table, format_args!("KERNEL AND {} SERVICES READ", programs.iter().filter(|p| p.len > 0).count()));
     let display = select_display(&system_table);
     let (fb_ptr, mode) = match display { Ok(display) => display, Err(reason) => fail(&mut system_table, "display", reason) };

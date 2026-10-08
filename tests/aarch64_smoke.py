@@ -19,29 +19,30 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "aarch64_root"
 sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
+import boot_slots_check  # noqa: E402
 # What each fault-test variant does and the exception class (ESR_EL1.EC) the kernel reports for it.
 CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined": 0x00}
 
 
-def boot(args, disk, until, timeout=90, decoy=None):
+def boot(args, disk, until, timeout=90, decoy=None, raw=False):
     """Boots QEMU on `disk` and returns the console output once `until` appears (or the timeout passes). AAVMF under
     TCG now and then stalls before it loads the bootloader; a boot that shows no kernel line is tried once more.
-    `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012)."""
-    output = boot_once(args, disk, until, timeout, decoy)
+    `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012). `raw`: `disk` is a disk image."""
+    output = boot_once(args, disk, until, timeout, decoy, raw)
     if "MIND CORE KERNEL" not in output and "BdsDxe: starting" not in output:
         print("NOTE: the firmware stalled before loading the bootloader; booting again", flush=True)
-        output = boot_once(args, disk, until, timeout, decoy)
+        output = boot_once(args, disk, until, timeout, decoy, raw)
     return output
 
 
-def boot_once(args, disk, until, timeout, decoy=None):
+def boot_once(args, disk, until, timeout, decoy=None, raw=False):
     variables = Path(tempfile.mkdtemp()) / "vars.fd"
     shutil.copyfile(args.vars, variables)
     process = subprocess.Popen(
         [args.qemu, "-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512", "-nographic", "-no-reboot",
          "-drive", f"if=pflash,format=raw,readonly=on,file={args.code}", "-drive", f"if=pflash,format=raw,file={variables}",
          *(["-drive", f"format=raw,file=fat:{decoy},readonly=on"] if decoy else []),
-         "-drive", f"format=raw,file=fat:rw:{disk}", "-device", "ramfb", "-nic", "none"],
+         "-drive", f"format=raw,file={disk}" if raw else f"format=raw,file=fat:rw:{disk}", "-device", "ramfb", "-nic", "none"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     output, deadline = b"", time.monotonic() + timeout
     try:
@@ -107,6 +108,11 @@ def main():
     require(output, "[INIT] READY")
     assert "BOOT ERROR" not in output, output[-3000:]
     print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+
+    # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
+    slots = Path(tempfile.mkdtemp(prefix="mind-slots-"))
+    atexit.register(shutil.rmtree, slots, True)
+    boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64")
 
     for case, code in CASES.items():
         output = boot(args, disk_with(case), "QUARANTINED", timeout=120)

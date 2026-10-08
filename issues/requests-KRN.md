@@ -95,3 +95,21 @@ The bootloader now checks the boot volume against a signed manifest (350-UPD-000
 ### Acceptance criteria
 
 A program reads the record of the volume it booted from, and it matches the serial line's.
+
+## UEFI variables for the updater
+
+**Recorded by:** the update track (UPD), 2026-10-08, for [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) (and the dbx updates of [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md)).
+
+### Problem
+
+A new bootloader is tried once through `BootNext`, then made the default through `BootOrder`; a revoked one is added to `dbx` by an authenticated update signed with our KEK. These are UEFI variables, set through the firmware's runtime services. The kernel does not call runtime services today, so nothing in the running system can set them.
+
+### Plan (a proposal; the kernel track decides)
+
+- The bootloader passes the runtime services table and the memory map entries they need (an ABI change: a new `BootInfo` field), and the kernel keeps the runtime regions mapped after `ExitBootServices` (`SetVirtualAddressMap`, or calls in the identity map where the firmware allows).
+- A system call, or a platform-privileged service, that gets and sets variables by GUID and name: `BootNext`, `BootOrder` and `Boot####` of the global variable GUID, and an authenticated write of `dbx`. Granted only to `updater` (with 351-KRN-0014's grants).
+- On aarch64, the same through the same table; a board without runtime variable services says so.
+
+### Acceptance criteria
+
+In QEMU with OVMF, a program with the grant sets `BootNext` to a second boot entry and the next boot starts that entry once; a program without it is refused.

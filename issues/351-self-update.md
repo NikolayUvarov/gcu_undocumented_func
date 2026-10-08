@@ -46,7 +46,7 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [350](350-signed-boot-images.md) | `UPD` | Manifest, signing tool, verification in the bootloader, launch record (planned there) |
-| [351-UPD-0006](351-UPD-0006-slots-and-boot-records.md) | `UPD`, with `PRT` and `KRN` for the bootloader | Slots A and B, the two boot records, the trial try and the fallback in the bootloader |
+| [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) | `UPD`, with `PRT` and `KRN` for the bootloader | Slots A and B, the two boot records, the trial try and the fallback in the bootloader: done, tested in QEMU ([slots.md](../docs/update/slots.md)) |
 | [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | `KRN` | The trial flag in `BootInfo`, the confirmation from `init`, a deadline that restarts an unconfirmed trial, the updater's grants |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | `ASR` (open) | Power cut at every step of staging and activation in QEMU; the system always comes back on a slot that verifies |
 

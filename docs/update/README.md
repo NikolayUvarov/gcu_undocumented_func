@@ -2,7 +2,7 @@
 
 **Version:** 0.1 (2026-10-08) · **Track:** `UPD` ([TRACKS.md](../../TRACKS.md)), main task [350](../../issues/350-signed-boot-images.md) · **Roadmap:** track C · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 9, MC-3.11
 
-This document describes how a boot volume is signed and checked, as built. What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 9"). Anything not marked implemented here is plan (MC-12.3).
+This document describes how a boot volume is signed and checked, as built. Slots A and B, the boot records and the trial are in [slots.md](slots.md) (351-UPD-0006). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 9"). Anything not marked implemented here is plan (MC-12.3).
 
 ## The manifest — implemented (350-UPD-0002)
 

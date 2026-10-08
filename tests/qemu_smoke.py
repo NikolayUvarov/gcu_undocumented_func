@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # nothing its manifest does not describe.
 sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
+import boot_slots_check  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -5075,6 +5076,15 @@ def boot_suite(args, disk):
     finally:
         vm.close()
     print("PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console", flush=True)
+    # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
+    def boot_image(image, until):
+        vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
+        try:
+            return vm.expect(until, timeout=60)
+        finally:
+            vm.close()
+    with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
+        boot_slots_check.run(boot_image, temp, disk, "x86")
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
