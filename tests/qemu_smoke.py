@@ -7,6 +7,7 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import codecs
+import hashlib
 import json
 import http.server
 import math
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
+import serve_release  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -4105,6 +4107,59 @@ def _msix_only(vm):
     assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
 
 
+def download_check(args, disk):
+    """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
+    the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
+    and resumed by the next run; what the grant, the server and the file's directory refuse. On x86 the boot disk is on
+    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB."""
+    files = Path(tempfile.mkdtemp(prefix="mind-download-"))
+    big, small = os.urandom(30 << 20), os.urandom(200_000)
+    (files / "big.bin").write_bytes(big)
+    (files / "small.bin").write_bytes(small)
+    # The release server, the first response for each file cut short (a test hook).
+    release = serve_release.serve(files, cuts={"/big.bin": 10 << 20, "/small.bin": 50_000})
+    port = release.server_address[1]
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "netpolicy.txt").write_text(f"# download may reach the release server, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 600 {64 << 20}\n")
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        download_runs(vm, release, port, big, small)
+    finally:
+        vm.close()
+        release.shutdown()
+        shutil.rmtree(files, ignore_errors=True)
+        (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def download_runs(vm, release, port, big, small):
+    url = f"http://10.0.2.2:{port}"
+
+    def run(command, until, timeout=8):
+        # The program's lines, up to the prompt after its last one.
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=until)
+    digest = hashlib.sha256(big).hexdigest()
+    out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {10 << 20} OF {30 << 20}, RESUMING", f"DOWNLOAD: DONE {30 << 20} BYTES IN"):
+        require(out, line)
+    assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={10 << 20}-")], release.requests
+    out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
+    require(out, f"DOWNLOAD: RESUMING data/big.bin AT {30 << 20}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {30 << 20} BYTES")
+    print("PASS: download: 30 MiB over HTTP through its own grant, the connection cut at 10 MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
+    out = run(f"download data/small.bin {url}/small.bin --tries 1", "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 50000 BYTES")
+    require(out, "DOWNLOAD: CONNECTION CUT AT 50000 OF 200000, RESUMING")
+    small_digest = hashlib.sha256(small).hexdigest()
+    out = run(f"download data/small.bin {url}/small.bin --sha256 {small_digest}", f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    require(out, "DOWNLOAD: RESUMING data/small.bin AT 50000")
+    assert release.requests[-1] == ("/small.bin", "bytes=50000-"), release.requests
+    require(run(f"download data/x.bin {url}/missing.bin", "DOWNLOAD: HTTP: Status(404)"), "DOWNLOAD: HTTP: Status(404)")
+    require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
+    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: HTTPS"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT")
+    require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 600 S, {64 << 20} BYTES")
+    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -4216,6 +4271,7 @@ def net_suite(args, disk):
         vm.close()
         web.shutdown(); dns.close()
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
+    download_check(args, disk)
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
     # and one driver's restart leaves the other card working and gives the new instance its own card back.
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)

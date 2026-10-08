@@ -159,6 +159,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | `gfx` | `Screen`: pixels, text, rectangles on the task's screen |
 | `fs`, `audio`, `tts`, `rtc` | clients of the VFS (`File`; `Dir` with `list`, `rename`, `remove`, `volume`, `check`, `scope`; `list`), audio, speech and clock services (`rtc::unix_time`) |
 | `network` | badges of network stack clients (operator, policy, flow grants) and of the key service's signer |
+| `http` | HTTP/1.1 downloads (351-NET-0001, [docs/network/downloads.md](../network/downloads.md)): `Url::parse`, `get` (a GET from an offset, `Range` when not 0, the body into a `Sink` over the caller's `Transport`), `Got` (how far it got: a cut is not an error, the caller resumes from `end`); a chunked body, a redirect or another status is refused |
 | `window` | window surfaces (issue 157): the layout the window broker lends to a program and its manager — header, title, input events, cells or pixels, the changed rectangle (`Surface`) |
 | `random` | random bytes from RDRAND (`available`, `u64`, `fill`); no fallback: callers fail closed |
 | `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |

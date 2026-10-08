@@ -56,7 +56,7 @@ Nothing of it exists (survey of 2026-10-08):
 |---|---|---|
 | [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done) | `UPD` | Release bundle and server layout; `scripts/publish_release.py` signs and uploads over SSH; a test server for CI |
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | `UPD` (`vfs_server` has no owner) | An update zone: a badge that may write only the inactive slot and the boot records |
-| `requests-NET.md`: HTTPS downloads | `NET` | HTTPS for a service besides the shell; a streaming GET with resume into a file; the update server's trust (root store or pinned key); names and larger volumes in `netpolicy` |
+| [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [351-NET-0002](351-NET-0002-https-for-programs.md), [351-NET-0003](351-NET-0003-names-in-the-network-policy.md) | `NET` | A streaming GET with resume into a file (`mind::http`, `download`); HTTPS for programs and the update server's trust (root store or pinned key); names in `netpolicy` |
 | [351-UPD-0007](351-UPD-0007-updater-service.md) | `UPD` | The `updater` service: check the channel, verify, fetch into the inactive slot, verify every file, write the trial record, ask to restart, report |
 | `requests-APP.md`: `update` | `APP` | `update check / fetch / apply / status / rollback` in the shell and `msh`, with a confirmation |
 
@@ -64,8 +64,8 @@ Nothing of it exists (survey of 2026-10-08):
 
 | Task | Track | What |
 |---|---|---|
-| `requests-NET.md`: SSH client | `NET` | An SSH client: curve25519-sha256, ssh-ed25519, chacha20-poly1305; public-key login with the device key; SFTP reads. The updater fetches the same files over it |
-| `requests-NET.md`: a persistent device key | `NET` | `keystore` keeps the device key across boots in sealed storage, and gains a purpose for SSH login |
+| [351-NET-0004](351-NET-0004-ssh-client.md) | `NET` | An SSH client: curve25519-sha256, ssh-ed25519, chacha20-poly1305; public-key login with the device key; SFTP reads. The updater fetches the same files over it |
+| [351-NET-0005](351-NET-0005-persistent-device-key.md) | `NET` | `keystore` keeps the device key across boots in sealed storage, and gains a purpose for SSH login |
 
 **Phase 4 — rollback policy, keys, the bootloader itself, storage.**
 
