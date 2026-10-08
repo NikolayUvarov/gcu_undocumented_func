@@ -88,6 +88,7 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 - An SMMU, so the DMA drivers leave the TCB.
 - FP/SIMD state, so programs are soft-float; sound (virtio-snd); `virtio_rng` for machines without RNDR.
 - PAN (Privileged Access Never): not enabled yet; the kernel reaches task memory only through its identity map, never through user addresses.
+- Apple Silicon Macs. Natively: issue [210](../../../issues/210-apple-silicon-native.md), track `APL` (no UEFI or ACPI, the AIC, a spin table, DARTs). In a virtual machine under the Mac's hypervisor (`-accel hvf -cpu host`, [docs/apple-silicon.md](../../apple-silicon.md)): not tested, no evidence (issue [600](../../../issues/600-apple-silicon-mac-vm-host.md)); the evidence of this profile does not carry over to it.
 
 ## Evidence
 

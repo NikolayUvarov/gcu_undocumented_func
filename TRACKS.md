@@ -1,6 +1,6 @@
 # Track registry
 
-**Version:** 1.1 (2026-10-07): an open track's task can be done by an agent whose own task needs it.
+**Version:** 1.2 (2026-10-08): the Apple Silicon track `APL`, main tasks 600–649, takes 210 from `PRT`; 1.1 (2026-10-07): an open track's task can be done by an agent whose own task needs it.
 
 MIND Core is developed in parallel **tracks**. Each track has its own code, its own directories and its own task numbers. **Tracks can be taken and worked on in parallel**: a session (an agent or a person) that takes a track works only in that track's directories, numbers only its own tasks and reaches `main` through the gate. How to work in a track: [AGENTS.md](AGENTS.md). The open tasks themselves: [issues/README.md](issues/README.md).
 
@@ -26,7 +26,7 @@ Requests to another track: `issues/requests-<TRK>.md`. Only the owning track num
 | Code | Track | Roadmap | Main tasks | Directories (mainly) | Owner and branch | Status | Start with |
 |---|---|---|---|---|---|---|---|
 | `KRN` | kernel | A (kernel side), II | 150–199 | `kernel/` (generic part), `common/abi.rs`, `init`, `loader`, the core of `libmind` | kernel session, `claude/youthful-mendel-mf1soy` | active | — (171 done; requests in `issues/requests-KRN.md` when other tracks file them) |
-| `PRT` | porting | H | 200–249 | `kernel/src/arch/`, `bootloader/` (architecture lines), `hwdocs/`, `gpio` | kernel session, `claude/youthful-mendel-mf1soy` | active | [205](issues/205-aarch64-boards.md), [207](issues/207-gpio-service.md) (runs on boards), [210](issues/210-apple-silicon-native.md) (Apple Silicon) |
+| `PRT` | porting | H | 200–249 | `kernel/src/arch/`, `bootloader/` (architecture lines), `hwdocs/`, `gpio` | kernel session, `claude/youthful-mendel-mf1soy` | active | [205](issues/205-aarch64-boards.md), [207](issues/207-gpio-service.md) (runs on boards) |
 | `NET` | network | D | 100–149 | `virtio_net`, `netstack`, `netpolicy`, `tls`, `keystore` | network session | active | the next step of track D in the roadmap |
 | `APP` | tools | G | 250–299 (before: `u001`–`u017`) | user tools: `wm`, `fm`, `edit`, `view`, `monitor`, `pins`, voice, shell commands | tools session, `claude/wizardly-franklin-kec1a9` | active | [u017](issues/u017-pins-view.md) |
 | `DRV` | drivers | A | 550–599 | ring-3 drivers: `ahci`, `nvme`, `ata`, `virtio_blk`, `virtio_input`, `usb_host`, `usb_storage`, `usb_hid`, `audio_gw`, `video_gw` | — | **open** | [158](issues/158-video-capture.md): UVC cameras over `usb_host` (isochronous transfers) |
@@ -35,8 +35,9 @@ Requests to another track: `issues/requests-<TRK>.md`. Only the owning track num
 | `MRN` | Marain | E | 400–449 | `marain/` (host tools), the RFC through the maintainer | — | **open** | [400](issues/400-marain-m0-m2-host-bench.md) |
 | `SAF` | safety plane | F | 450–499 | control actors and limits | — | **later** (after stage II) | — |
 | `ASR` | assurance | Assurance | 500–549 | `docs/assurance/`, fuzzing and fault injection under `tests/` | — | **open** | [500](issues/500-fuzzing-abi-and-idl.md) |
+| `APL` | Apple Silicon | H | 600–649; 210 (numbered before) | `docs/apple-silicon.md` and `apple-silicon_RU.md`; the macOS side of `scripts/build_aarch64.sh` and `03_run_qemu_aarch64.sh`, and Apple's devices in `kernel/src/arch/aarch64/` (device tree, AIC, spin table, DART, watchdog, UART), together with `PRT`; `BootInfo`, DMA regions and the QEMU test harness through `KRN`; `usb_host` for the Type-C ports as `DRV` tasks | — | **open**; its tasks need a person with a Mac ([issues-human](issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)) | [600](issues/600-apple-silicon-mac-vm-host.md) (a virtual machine on a Mac; guide: [docs/apple-silicon.md](docs/apple-silicon.md)), [210](issues/210-apple-silicon-native.md) (natively) |
 
-New tracks get a code and a range from 600, in blocks of 50, from the maintainer (AGENTS.md, section 2).
+New tracks get a code and a range from 600, in blocks of 50, from the maintainer (AGENTS.md, section 2); the next free block is 650–699.
 
 ## Taking a track
 
