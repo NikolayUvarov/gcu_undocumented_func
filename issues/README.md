@@ -55,7 +55,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` | P2 | 351-UPD-0007 | track C |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD`, with `PRT` | P3 | 351-UPD-0006 | track C |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | A version floor in a TPM 2.0 counter, kept by the bootloader (rollback with the disk in hand) | `UPD`, with `PRT` | P2 | 351-UPD-0009, 0012 | track C |
-| [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked | `UPD`, with `PRT` | P2 | 350-UPD-0003 | track C |
+| [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked through dbx: done and tested in QEMU (OVMF), the run on a real PC remains | `UPD`, with `PRT` | P2 | the maintainer's PC (issues-human 5) | track C |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable disk for the store ([requests-KRN.md](requests-KRN.md)); 351-UPD-0007 | track B, C |
 | [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | Trial boot: the flag in `BootInfo`, confirmation by `init`, a restart deadline, the updater's grants | `KRN` | P1 | 351-UPD-0006, 211-KRN-0012 | track C |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0006, 351-KRN-0014 | Assurance |

@@ -126,6 +126,12 @@ jobs:
         run: |
           python3 scripts/make_usb_image.py --no-build --force
           python3 tests/usb_image_smoke.py --firmware /usr/share/ovmf/OVMF.fd
+      # OVMF's Secure Boot build with test keys enrolled for the run: our signed bootloader only (351-UPD-0012).
+      - name: Secure Boot with our keys
+        if: ${{ matrix.usb }}
+        run: |
+          sudo apt-get install -y --no-install-recommends sbsigntool python3-virt-firmware
+          python3 tests/secure_boot_smoke.py
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4
