@@ -36,7 +36,7 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64 }
+struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 3], root_failed: u64, scanned: u64, step: &'static str }
 
 fn speed_name(speed: u8) -> &'static str { match speed { 1 => "FULL", 2 => "LOW", 3 => "HIGH", 4 => "SUPER", _ => "?" } }
 fn dci(address: u8) -> u8 { (address & 0xF) * 2 + (address >> 7) }
@@ -69,7 +69,9 @@ impl Host {
 
     /// Sets up the device on a port: address, descriptors, configuration, its endpoints or, for a hub, its ports.
     fn enumerate(&mut self, root: u8, route: u32, depth: u8, speed: u8, parent: Option<(usize, u8)>) -> Option<usize> {
+        self.step = "NO FREE DEVICE";
         let index = self.devices.iter().position(Option::is_none)?;
+        self.step = "ENABLE SLOT";
         let slot = self.xhci.enable_slot()?;
         let Some(output) = self.xhci.alloc() else { self.discard(slot, &[]); return None };
         let Some(ep0) = self.xhci.ring(false) else { self.discard(slot, &[output]); return None };
@@ -78,6 +80,7 @@ impl Host {
         self.xhci.input_reset(0b11);
         self.xhci.slot_context(route, speed, 1, root, None, tt);
         self.xhci.endpoint_context(1, EP_CONTROL, match speed { 4 => 512, 3 => 64, _ => 8 }, 0, ep0);
+        self.step = "ADDRESS DEVICE";
         if self.xhci.address(slot).is_none() { self.discard(slot, &[output, ep0.page]); return None; }
         self.generation = self.generation.wrapping_add(1).max(1);
         self.devices[index] = Some(Device { slot, root, route, depth, speed, parent, tt, hub_ports: 0, failed: 0, status: 0, pending: 0, generation: self.generation, output, ep0,
@@ -90,6 +93,7 @@ impl Host {
         let device = self.devices[index]?;
         let slot = device.slot;
         // Endpoint 0's real packet size is in the first 8 bytes of the device descriptor (8 to 64 at full speed).
+        self.step = "DEVICE DESCRIPTOR";
         self.control(index, 0x80, 6, 0x0100, 0, 8).ok()?;
         let packet = self.small(8)[7] as u16;
         if device.speed == 1 && packet != 8 && matches!(packet, 16 | 32 | 64) {
@@ -100,6 +104,7 @@ impl Host {
         self.control(index, 0x80, 6, 0x0100, 0, 18).ok()?;
         let descriptor: [u8; 18] = self.small(18).try_into().ok()?;
         let (class, vendor, product) = (descriptor[4], u16::from_le_bytes([descriptor[8], descriptor[9]]), u16::from_le_bytes([descriptor[10], descriptor[11]]));
+        self.step = "CONFIGURATION DESCRIPTOR";
         self.control(index, 0x80, 6, 0x0200, 0, 9).ok()?;
         let total = u16::from_le_bytes([self.small(4)[2], self.small(4)[3]]).clamp(9, CONTROL_MAX as u16);
         self.control(index, 0x80, 6, 0x0200, 0, total).ok()?;
@@ -127,11 +132,13 @@ impl Host {
             }
             at += length;
         }
+        self.step = "SET CONFIGURATION";
         self.control(index, 0x00, 9, config[5] as u16, 0, 0).ok()?; // SET_CONFIGURATION
         let hub = class == CLASS_HUB || interfaces[..count].iter().any(|i| i.info.class == CLASS_HUB);
         mind::println!("[USB] {:04X}:{:04X} ON PORT {} ({} SPEED){}", vendor, product, Path(device.root, device.route), speed_name(device.speed), if hub { " HUB" } else { "" });
         // A USB 2 hub: its ports, think time and power-on delay (a SuperSpeed hub's USB 2 side is used instead).
         let hub = if !hub || device.speed == 4 || device.depth >= MAX_DEPTH { None } else {
+            self.step = "HUB DESCRIPTOR";
             self.control(index, 0xA0, 6, 0x2900, 0, 9).ok()?;
             let descriptor: [u8; 9] = self.small(9).try_into().ok()?;
             Some((descriptor[2].min(15), ((descriptor[3] >> 5) & 3) as u8, descriptor[5] as u64 * 2))
@@ -163,6 +170,7 @@ impl Host {
             for (&(target, kind, packet, interval), &(_, ring)) in planned[..ring_count].iter().zip(&rings[..ring_count]) {
                 self.xhci.endpoint_context(target, kind, packet, interval, ring);
             }
+            self.step = "CONFIGURE ENDPOINT";
             self.xhci.configure(slot)?;
         }
         if let Some((ports, _, power)) = hub {
@@ -202,9 +210,11 @@ impl Host {
             if changed { self.root_failed &= !(1 << (port - 1)); }
             if let Some(index) = present { if !connected || changed { self.remove(index); } else { continue; } }
             if !connected || self.root_failed & 1 << (port - 1) != 0 { continue; }
+            self.step = "PORT RESET"; self.xhci.last = 0;
             let set_up = self.xhci.enable_port(port).and_then(|speed| self.enumerate(port as u8, 0, 0, speed, None));
             self.xhci.acknowledge(port); // the reset's own change bits are not a new connection
-            if set_up.is_none() { self.root_failed |= 1 << (port - 1); mind::println!("[USB] PORT {}: DEVICE NOT SET UP", port); }
+            // The step that failed, the controller's completion code and the port's status (211-PRT-0004: a Mac's ports).
+            if set_up.is_none() { self.root_failed |= 1 << (port - 1); mind::println!("[USB] PORT {}: DEVICE NOT SET UP AT {} (COMPLETION {}, PORTSC {:08X})", port, self.step, self.xhci.last, self.xhci.port_status(port)); }
         }
         for hub in 0..MAX_DEVICES {
             let Some(device) = self.devices[hub] else { continue };
@@ -225,13 +235,14 @@ impl Host {
                 let connected = status & 1 != 0;
                 if let Some(index) = child { if !connected || change & 1 != 0 { self.remove(index); } else { continue; } }
                 if !connected || self.devices[hub].is_none_or(|d| d.failed & bit != 0) { continue; }
+                self.step = "HUB PORT RESET"; self.xhci.last = 0;
                 let set_up = self.reset_hub_port(hub, port).and_then(|speed| {
                     let hub_device = self.devices[hub]?;
                     let route = hub_device.route | (port as u32) << (4 * hub_device.depth as u32);
                     self.enumerate(hub_device.root, route, hub_device.depth + 1, speed, Some((hub, port)))
                 });
                 if self.hub_port(hub, port).is_some_and(|(_, change)| change & 1 != 0) { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); }
-                if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] PORT {}.{}: DEVICE NOT SET UP", Path(device.root, device.route), port); }
+                if set_up.is_none() { if let Some(d) = self.devices[hub].as_mut() { d.failed |= bit; } mind::println!("[USB] PORT {}.{}: DEVICE NOT SET UP AT {} (COMPLETION {})", Path(device.root, device.route), port, self.step, self.xhci.last); }
             }
         }
     }
@@ -402,7 +413,7 @@ fn main(_info: &'static BootInfo) {
     let (Ok(mmio), Ok(dma)) = (Mmio::map(SLOT_DEV0), Dma::map(SLOT_MEM)) else { mind::println!("[USB] NO CONTROLLER OR DMA REGION"); return };
     let Some(xhci) = Xhci::init(mmio, dma) else { mind::println!("[USB] CONTROLLER DID NOT START"); return };
     mind::println!("[USB] XHCI: {} PORTS, {} SLOTS", xhci.ports(), xhci.slots);
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0 };
+    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None], root_failed: 0, scanned: 0, step: "" };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     host.scan();

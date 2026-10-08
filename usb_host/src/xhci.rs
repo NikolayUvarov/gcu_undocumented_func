@@ -44,6 +44,7 @@ const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 pub struct Xhci {
     mmio: Mmio, pub dma: Dma, op: usize, runtime: usize, doorbells: usize, context: usize, ports: usize, pub slots: usize,
     command: Ring, event: Ring, free: u64, completion: Option<(u32, u32)>, done: [Option<Done>; MAX_DONE], interrupts: [Option<Interrupt>; MAX_INTERRUPTS],
+    pub last: u32, // completion code of the last command or transfer (0: no answer), for reports
 }
 
 /// Busy-poll, then sleep: QEMU completes commands at once, transfers asynchronously; about 30 s in all.
@@ -80,7 +81,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS] };
+            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -170,6 +171,7 @@ impl Xhci {
         self.doorbell(0, 0);
         let mut result = None;
         wait(|| { self.pump(); result = self.completion.take(); result.is_some() });
+        self.last = result.map_or(0, |r| r.0);
         let (code, slot) = result?;
         (code == SUCCESS).then_some(slot)
     }
@@ -185,6 +187,7 @@ impl Xhci {
             if let Some(entry) = self.done.iter_mut().find(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)) { result = entry.take(); }
             result.is_some()
         });
+        self.last = result.map_or(0, |d| d.code);
         match result { Some(d) if matches!(d.code, SUCCESS | SHORT_PACKET) => Ok(d.residue), Some(d) => Err(d.code), None => Err(0) }
     }
 
@@ -206,6 +209,7 @@ impl Xhci {
     // PORTSC of root port `port` (1-based).
     fn portsc(&self, port: usize) -> usize { self.op + 0x400 + 0x10 * (port - 1) }
     pub fn connected(&self, port: usize) -> bool { self.mmio.read32(self.portsc(port)) & 1 != 0 }
+    pub fn port_status(&self, port: usize) -> u32 { self.mmio.read32(self.portsc(port)) }
     /// Clears a root port's change bits; true if the connection changed.
     pub fn acknowledge(&self, port: usize) -> bool {
         let register = self.portsc(port); let value = self.mmio.read32(register);
