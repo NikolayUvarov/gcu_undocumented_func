@@ -85,6 +85,15 @@ struct Task {
     exit_reason: usize, // why it ended (EXIT_*), for a watch that comes after the exit
     handed_by: Option<(usize, u64)>, // the task in front that started it with SPAWN_FOREGROUND: the focus returns there (issue 160)
 }
+// A set of CPUs, one bit each.
+#[derive(Clone, Copy)]
+struct Cpus([u64; cpu::MAX.div_ceil(64)]);
+impl Cpus {
+    const NONE: Self = Self([0; cpu::MAX.div_ceil(64)]);
+    fn mark(&mut self, cpu: usize) { self.0[cpu / 64] |= 1 << (cpu % 64); }
+    fn has(&self, cpu: usize) -> bool { self.0[cpu / 64] & 1 << (cpu % 64) != 0 }
+    fn is_empty(&self) -> bool { self.0.iter().all(|&word| word == 0) }
+}
 // A driver bound to an interrupt line (IRQ_BIND): its endpoint, the binder, an interrupt it has not received yet, and
 // one it has not acknowledged. A shared line stays masked until every binder acknowledged (issue 159).
 #[derive(Clone, Copy, PartialEq)]
@@ -124,7 +133,7 @@ struct Scheduler {
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
     ended: [(u64, usize); EXIT_STATUSES], ended_next: usize, // (PID, reason) of the last tasks that ended (EXIT_STATUS)
-    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], // woken: a wake IPI is on its way to that CPU
+    dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
     orphans: Vec<Orphan>, // memory freed or detached by its owner that is still mapped or held via a capability
     exits: Vec<(usize, u64, usize)>, // undelivered exit notices: endpoint, PID, reason
@@ -163,7 +172,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
     Ok(())
 }
 
@@ -178,8 +187,8 @@ impl Scheduler {
         let current = self.current[cpu]; self.woken[cpu] = false;
         // Every select reloads CR3, which completes a pending TLB flush of this CPU.
         if core::mem::take(&mut self.flush[cpu]) && !self.flush.iter().any(|&f| f) {
-            for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; } }
-            self.wake_idle(cpu);
+            for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedFlush { task.state = State::Ready; self.readied.mark(task.cpu); } }
+            self.wake_idle(cpu, false);
         }
         // Time since the last switch on this CPU goes to the task that ran or to idle.
         let now = crate::clock::now_ns(); let elapsed = now.saturating_sub(core::mem::replace(&mut self.accounting.last_switch[cpu], now));
@@ -201,20 +210,22 @@ impl Scheduler {
         if next != current { self.accounting.switches[cpu] += 1; }
         if next == 0 { unsafe { paging::activate(paging::kernel_root()); } self.idle_sp[cpu] } else { let task = self.tasks[next].as_mut().unwrap(); task.runs += 1; unsafe { paging::activate(task.space.root()); } task.sp }
     }
-    // Other CPUs that sit idle while one of their tasks became ready get a wake IPI.
-    // One IPI until that CPU selects again, and one pass over the tasks for all CPUs: every event on every CPU calls
-    // this under the lock, and with 16 CPUs repeated IPIs and a pass per CPU starved them all (requests-KRN.md).
-    fn wake_idle(&mut self, this: usize) {
+    // Other CPUs that sit idle while one of their tasks became ready get a wake IPI, one until that CPU selects again.
+    // After an event only the CPUs in `readied` are looked at; the boot CPU's tick looks at every task (`every`), which
+    // also finds a task whose budget period ended and bounds a missed mark to one tick. A pass over the tasks after
+    // every event held the lock most of the time with 16 CPUs (171-KRN-0009).
+    fn wake_idle(&mut self, this: usize, every: bool) {
         let count = cpu::COUNT.load(Ordering::Acquire);
-        let waiting = |s: &Self, other: usize| other != this && s.current[other] == 0 && !s.woken[other];
-        if !(0..count).any(|other| waiting(self, other)) { return; }
-        let mut ready = [0u64; cpu::MAX.div_ceil(64)];
-        // A task out of budget counts once its period ends: select refills it, and an idle CPU has no tick to.
-        let now = crate::clock::now_ns();
-        let runnable = |t: &&Task| t.state == State::Ready && t.cpu < count && (t.budget_ns == 0 || t.consumed < t.budget_ns || now >= t.period_start + t.period_ns);
-        for t in self.tasks.iter().flatten().filter(runnable) { ready[t.cpu / 64] |= 1 << (t.cpu % 64); }
+        let mut ready = core::mem::replace(&mut self.readied, Cpus::NONE);
+        if every {
+            // A task out of budget counts once its period ends: select refills it, and an idle CPU has no tick to.
+            let now = crate::clock::now_ns();
+            let runnable = |t: &&Task| t.state == State::Ready && t.cpu < count && (t.budget_ns == 0 || t.consumed < t.budget_ns || now >= t.period_start + t.period_ns);
+            for t in self.tasks.iter().flatten().filter(runnable) { ready.mark(t.cpu); }
+        }
+        if ready.is_empty() { return; }
         for other in 0..count {
-            if waiting(self, other) && ready[other / 64] & 1 << (other % 64) != 0 { self.woken[other] = true; unsafe { cpu::wake(other); } }
+            if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
         }
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
@@ -288,7 +299,7 @@ impl Scheduler {
             let mut listener = self.listeners[index].unwrap(); listener.down = pressed; self.listeners[index] = Some(listener);
             if self.tasks[listener.slot].as_ref().is_some_and(|t| t.pid == listener.pid) && self.live(listener.slot) {
                 let task = self.tasks[listener.slot].as_mut().unwrap(); task.input.push(owner);
-                if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
+                if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; self.readied.mark(task.cpu); }
             }
             return;
         }
@@ -297,7 +308,7 @@ impl Scheduler {
         let task = self.tasks[target].as_mut().unwrap();
         if event_key(event) == KEY_POINTER && !task.pointer { return; } // only tasks that asked for the pointer (INPUT_POINTER)
         task.input.push(event);
-        if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; }
+        if matches!(task.state, State::Sleeping(_)) { task.state = State::Ready; self.readied.mark(task.cpu); }
     }
 
     fn mailbox(&self, slot: usize) -> *mut SyscallMailbox { unsafe { self.tasks[slot].as_ref().unwrap().abi.ptr().add(4096).cast() } }
@@ -312,7 +323,7 @@ impl Scheduler {
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
         for other in 1..self.tasks.len() {
             let Some(State::BlockedSend(ep)) = self.tasks[other].as_ref().map(|t| t.state) else { continue };
-            if !self.receivable(ep) { let sender = self.tasks[other].as_mut().unwrap(); sender.pending_cap = None; sender.state = State::Ready; unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(other)).result), ERR_PEER); } }
+            if !self.receivable(ep) { let sender = self.tasks[other].as_mut().unwrap(); sender.pending_cap = None; sender.state = State::Ready; self.readied.mark(sender.cpu); unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(other)).result), ERR_PEER); } }
         }
         for other in 1..self.tasks.len() { if self.tasks[other].as_ref().is_some_and(|t| t.state == State::BlockedReply(slot)) { self.fail_reply(other); } }
         if self.foreground == slot {
@@ -355,7 +366,7 @@ impl Scheduler {
             // A late reply finds the caller no longer waiting for this call number and fails with ERR_PEER.
             if let State::BlockedSend(ep) | State::BlockedRecv(ep) = task.state { self.accounting.endpoint[ep].timeouts += 1; }
             let task = self.tasks[slot].as_mut().unwrap();
-            task.state = State::Ready; task.pending_cap = None; task.deadline = 0; woken = true;
+            task.state = State::Ready; task.pending_cap = None; task.deadline = 0; woken = true; self.readied.mark(task.cpu);
             unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), ERR_TIMEOUT); }
         }
         woken
@@ -367,7 +378,7 @@ impl Scheduler {
     fn fail_reply(&mut self, slot: usize) {
         let mailbox = self.mailbox(slot);
         unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!((*mailbox).result), ERR_PEER); }
-        self.tasks[slot].as_mut().unwrap().state = State::Ready;
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::Ready; self.readied.mark(task.cpu);
     }
     fn find(&self, pid: u64) -> Option<usize> { (1..self.tasks.len()).find(|&i| { self.tasks[i].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) }) }
     // A free endpoint index; the tables double when full (issue 171), unless the kernel heap cannot grow them.
@@ -580,7 +591,7 @@ impl Scheduler {
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
         self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
-        self.next_pid = next_pid; Ok(pid)
+        self.readied.mark(cpu); self.next_pid = next_pid; Ok(pid)
     }
 
     fn cap(&self, slot: usize, handle: usize) -> Option<Capability> { self.index(slot, handle).and_then(|index| self.tasks[slot].as_ref().unwrap().cspace[index]) }
@@ -666,9 +677,13 @@ impl Scheduler {
         }
     }
     fn blocked(&self, state: State) -> Option<usize> { (1..self.tasks.len()).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == state)) }
-    // Someone alive can still receive on the endpoint (otherwise a send would wait forever).
+    // Someone alive can still receive on the endpoint (otherwise a send would wait forever). Its creator, the usual
+    // receiver, first: a send to a busy service passed over every task's capabilities each time (171-KRN-0009).
     fn receivable(&self, ep: usize) -> bool {
-        self.tasks.iter().flatten().any(|t| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
+        let reads = |t: &Task| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0));
+        let creator = self.endpoint_owner.get(ep).copied().flatten().filter(|&(slot, _)| slot < self.tasks.len());
+        if creator.is_some_and(|(slot, pid)| self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && reads(t))) { return true; }
+        self.tasks.iter().flatten().any(reads) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
     }
 
     // Delivers the message of a blocked or current sender to the receiver.
@@ -680,13 +695,13 @@ impl Scheduler {
         (*to_mb).arg2 = badge as usize; // the badge of the capability the sender used
         if let (true, Some(pending)) = (delivered, cap) { self.place(from, to, receive, pending); }
         let receiver = self.tasks[to].as_mut().unwrap();
-        (*to_mb).msg[0] = delivered as usize; (*to_mb).result = 0; receiver.state = State::Ready; receiver.receives += 1;
+        (*to_mb).msg[0] = delivered as usize; (*to_mb).result = 0; receiver.state = State::Ready; receiver.receives += 1; self.readied.mark(receiver.cpu);
         let seq = if call { let sender = self.tasks[from].as_mut().unwrap(); sender.call_seq += 1; sender.call_seq } else { 0 };
         let receiver = self.tasks[to].as_mut().unwrap();
         let previous = if call { receiver.reply_to.replace((from, pid, seq)) } else { None };
         if let Some((old, old_pid, old_seq)) = previous { if self.awaits_reply(old, old_pid, old_seq, to) { self.fail_reply(old); } }
         let sender = self.tasks[from].as_mut().unwrap();
-        if call { sender.state = State::BlockedReply(to); } else { (*from_mb).result = 0; sender.state = State::Ready; }
+        if call { sender.state = State::BlockedReply(to); } else { (*from_mb).result = 0; sender.state = State::Ready; self.readied.mark(sender.cpu); }
     }
     // Exit notice for a lifecycle owner: delivered to a waiting receiver at once, otherwise kept (bounded).
     fn post_exit(&mut self, ep: usize, pid: u64, reason: usize) {
@@ -696,13 +711,13 @@ impl Scheduler {
     unsafe fn notify_exit(&mut self, to: usize, pid: u64, reason: usize) {
         let mb = self.mailbox(to); let lost = core::mem::take(&mut self.exits_lost);
         (*mb).msg = [0, MSG_FLAG_EXIT, pid as usize, reason | lost << 32]; (*mb).arg1 = 0; (*mb).arg2 = 0; (*mb).result = 0;
-        self.tasks[to].as_mut().unwrap().state = State::Ready;
+        let task = self.tasks[to].as_mut().unwrap(); task.state = State::Ready; self.readied.mark(task.cpu);
     }
     // IRQ notification from the kernel: sender PID 0, no capability.
     unsafe fn notify_irq(&mut self, to: usize, irq: usize) {
         let mb = self.mailbox(to);
         (*mb).msg = [0, MSG_FLAG_IRQ, irq, 0]; (*mb).arg1 = 0; (*mb).arg2 = 0; (*mb).result = 0;
-        self.tasks[to].as_mut().unwrap().state = State::Ready;
+        let task = self.tasks[to].as_mut().unwrap(); task.state = State::Ready; self.readied.mark(task.cpu);
     }
 
     // Line interrupt: already masked; wakes the driver or records the event.
@@ -719,7 +734,7 @@ impl Scheduler {
             return;
         }
         let mut woken = false;
-        for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedIrq(irq as u8) { task.state = State::Ready; woken = true; } }
+        for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedIrq(irq as u8) { task.state = State::Ready; woken = true; self.readied.mark(task.cpu); } }
         if !woken { self.irq_pending[irq] = true; }
     }
 
@@ -769,7 +784,7 @@ impl Scheduler {
         (*mb).arg2 = 0; // replies carry no badge
         if let (true, Some(pending)) = (delivered, cap) { self.place(slot, caller, receive, pending); }
         let task = self.tasks[caller].as_mut().unwrap();
-        (*mb).msg[0] = delivered as usize; (*mb).msg[1] = 0; (*mb).result = 0; task.state = State::Ready;
+        (*mb).msg[0] = delivered as usize; (*mb).msg[1] = 0; (*mb).result = 0; task.state = State::Ready; self.readied.mark(task.cpu);
         Ok(0)
     }
     fn ports(&self, slot: usize, index: usize, port: usize, width: usize) -> bool {
@@ -1287,8 +1302,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 Event::Tick => {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
                     // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
-                    // tasks that makes ready get a wake IPI below (issue 171).
-                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); }
+                    // tasks that makes ready get a wake IPI (issue 171).
+                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); s.wake_idle(cpu, true); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }
@@ -1304,7 +1319,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     s.syscall(slot, sp, cpu)
                 }
             })();
-            s.wake_idle(cpu);
+            s.wake_idle(cpu, false);
             next
         })
     }

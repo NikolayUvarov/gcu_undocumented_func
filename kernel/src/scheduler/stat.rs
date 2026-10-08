@@ -175,20 +175,38 @@ impl Scheduler {
                     }
                 }
             }
-            STAT_ENDPOINTS => for ep in (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e]) {
-                let live = || self.tasks.iter().flatten().filter(|t| t.state != State::Exited);
-                let c = self.accounting.endpoint[ep];
-                out.push(StatEndpoint {
-                    index: ep as u32,
-                    receivers: live().filter(|t| t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0))).count() as u32,
-                    waiting_senders: live().filter(|t| t.state == State::BlockedSend(ep)).count() as u32,
-                    waiting_receivers: live().filter(|t| t.state == State::BlockedRecv(ep)).count() as u32,
-                    creator: self.endpoint_owner[ep].map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
-                    server: holder(&|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0)).0,
-                    holders: holder(&|c| matches!(c, Capability::Endpoint(id, ..) if *id == ep)).1,
-                    irq: self.irq_bind.iter().position(|line| line.iter().flatten().any(|b| b.ep == ep)).map_or(0, |line| line as u32),
-                });
-            },
+            // One pass over every live task's capabilities for all endpoints: a pass per endpoint held the scheduler lock
+            // for milliseconds with many tasks (171-KRN-0009). Per task, as `holder` counts: tasks, not copies.
+            STAT_ENDPOINTS => {
+                #[derive(Clone, Copy)]
+                struct Seen { receivers: u32, holders: u32, senders: u32, receiving: u32, newest: u64, server: u64, reader: usize, holder: usize }
+                const NONE: Seen = Seen { receivers: 0, holders: 0, senders: 0, receiving: 0, newest: 0, server: 0, reader: usize::MAX, holder: usize::MAX };
+                let mut seen: Vec<Seen> = Vec::new();
+                if seen.try_reserve_exact(self.endpoints.len()).is_err() { return Err(ERR_NO_MEMORY); }
+                seen.resize(self.endpoints.len(), NONE);
+                for (slot, task) in self.tasks.iter().enumerate() {
+                    let Some(task) = task.as_ref().filter(|t| t.state != State::Exited) else { continue };
+                    if let State::BlockedSend(ep) = task.state { seen[ep].senders += 1; }
+                    if let State::BlockedRecv(ep) = task.state { seen[ep].receiving += 1; }
+                    for (index, cap) in task.cspace.iter().enumerate() {
+                        let Some(Capability::Endpoint(ep, rights, _)) = *cap else { continue };
+                        let Some(s) = seen.get_mut(ep) else { continue };
+                        if s.holder != slot { s.holder = slot; s.holders += 1; }
+                        if rights & CAP_READ == 0 { continue; }
+                        if s.reader != slot { s.reader = slot; s.receivers += 1; }
+                        if task.nodes[index].id >= s.newest { s.newest = task.nodes[index].id; s.server = task.pid; }
+                    }
+                }
+                for ep in (FIRST_ENDPOINT..self.endpoints.len()).filter(|&e| self.endpoints[e]) {
+                    let (c, s) = (self.accounting.endpoint[ep], seen[ep]);
+                    out.push(StatEndpoint {
+                        index: ep as u32, receivers: s.receivers, waiting_senders: s.senders, waiting_receivers: s.receiving,
+                        creator: self.endpoint_owner[ep].map_or(0, |o| o.1), messages: c.messages, busy: c.busy, timeouts: c.timeouts,
+                        server: s.server, holders: s.holders,
+                        irq: self.irq_bind.iter().position(|line| line.iter().flatten().any(|b| b.ep == ep)).map_or(0, |line| line as u32),
+                    });
+                }
+            }
             // PIC lines 1..15, then the MSI-X vectors handed out (lines 16..31).
             STAT_IRQS => for line in (1..16u8).filter(|&l| l != 2).chain((0..MSI_VECTORS).filter(|&i| self.msi[i].is_some()).map(|i| (MSI_FIRST + i) as u8)) {
                 let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));

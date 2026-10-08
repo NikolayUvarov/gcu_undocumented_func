@@ -528,6 +528,26 @@ def monitors_every_cpu(vm):
     print(f"PASS: top shows {len(bars)} CPUs, load {len(graphs)} CPU graphs", flush=True)
 
 
+def clocks_on_many_cpus(vm):
+    """171-KRN-0008: with more than 8 CPUs, 40 clocks with screens, past the 25 after which the shell stopped answering
+    while wake IPIs were sent again and again under the scheduler lock. Every command is answered within the harness's
+    wait, the clocks run on more than 8 CPUs, and the system answers once they are killed."""
+    pids = []
+    for _ in range(40):
+        started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))
+        assert started, "a clock starts"
+        pids.append(int(started[1]))
+    clocks = {pid: row for pid, row in task_rows(vm).items() if row[0] == "clock"}
+    assert len(clocks) == len(pids), (len(clocks), len(pids))
+    cpus = {int(row[3]) for row in clocks.values()}
+    assert len(cpus) > 8, cpus
+    for pid in pids:
+        require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    assert not any(row[0] == "clock" for row in task_rows(vm).values()), "every clock ended"
+    assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system answers"
+    print(f"PASS: 40 clocks on {len(cpus)} of {vm.cpus} CPUs, every command answered within the harness's wait", flush=True)
+
+
 def pool_covers_free_ram(vm):
     """Issue 171 (171-KRN-0005): the frame pool takes every free range of the firmware map (at least 2 MiB, from 1 MiB
     up; above 4 GiB on x86 whole 2 MiB pages), however many there are: its size is their sum."""
@@ -711,6 +731,7 @@ def normal_suite(vm):
     print(f"PASS: instances, concurrent progress, fg, Ctrl+Z/UART+PS2, Esc, kill, logs, invalid input, reuse, heap, HLT, {vm.cpus} CPUs", flush=True)
     if vm.cpus > 8:
         monitors_every_cpu(vm)
+        clocks_on_many_cpus(vm)
     pool_covers_free_ram(vm)
     memory = gibibytes(getattr(vm.args, "memory", None))
     # Filling a larger machine takes a thousand programs and more: the default machine runs out after about 80. With

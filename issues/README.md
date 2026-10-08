@@ -19,6 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.md) | 16 CPUs at the peak: the scheduler lock held almost all the time; `wake_idle`, `STAT_ENDPOINTS` and `receivable` cut (done), a 16-CPU clocks check; per-CPU run queues open | `KRN` | P1 | — | 171 |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
