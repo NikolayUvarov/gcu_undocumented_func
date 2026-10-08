@@ -141,7 +141,7 @@ impl Ipc {
     fn endpoints_view(&mut self, grid: &mut Grid, theme: &Theme) {
         let (w, h) = (grid.cols, grid.rows);
         let total: u64 = self.endpoints.iter().map(|e| e.messages).sum();
-        grid.text(1, 2, &format!("{} endpoints, {} messages, a queue holds at most {} senders", self.endpoints.len(), text::count(total), ENDPOINT_QUEUE), theme.header);
+        grid.text(1, 2, &format!("{} endpoints, {} messages, senders wait in order (ABI 3)", self.endpoints.len(), text::count(total)), theme.header);
         grid.fill(Rect::new(0, 4, w, 1), ' ', theme.menu);
         grid.text(1, 4, "  EP  SERVER                  HOLDERS  QUEUE  RECV   MESSAGES    BUSY  TIMEOUTS  IRQ  CREATOR", theme.menu);
         self.height = h.saturating_sub(7);
@@ -153,7 +153,7 @@ impl Ipc {
             let style = if i == list.selected { theme.selected } else if e.senders > 0 { theme.accent } else { theme.panel };
             grid.fill(Rect::new(0, y, w, 1), ' ', style);
             let irq = if e.irq == 0 { String::from("—") } else { format!("{}", e.irq) };
-            grid.text_max(1, y, &format!("{:>4}  {:<22} {:>7}  {:>2}/{}  {:>4}  {:>9}  {:>6}  {:>8}  {:>3}  {}", e.index, self.who(e.server), e.holders, e.senders, ENDPOINT_QUEUE,
+            grid.text_max(1, y, &format!("{:>4}  {:<22} {:>7}  {:>5}  {:>4}  {:>9}  {:>6}  {:>8}  {:>3}  {}", e.index, self.who(e.server), e.holders, e.senders,
                                          e.receiving, text::count(e.messages), text::count(e.busy), text::count(e.timeouts), irq, self.who(e.creator)), w.saturating_sub(2), style);
         }
         drop(rows);

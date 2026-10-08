@@ -75,19 +75,10 @@ impl Endpoint {
 
 }
 
-// A full endpoint queue (ERR_BUSY) is back-pressure: wait a tick and try again, within the caller's timeout.
+// A send waits in the endpoint's order until received or the timeout (ABI 3: no ERR_BUSY retries, 000-KRN-0010).
 // The timeout rides above the receive slot in arg2 (issue 172: handles are 64 bits).
 fn queued(number: usize, handle: usize, receive: usize, ms: u32, message: &Message) -> crate::sys::Raw {
-    let ms = ms as usize;
-    let start = call(SYSCALL_UPTIME, 0, 0);
-    loop {
-        let elapsed = call(SYSCALL_UPTIME, 0, 0).wrapping_sub(start);
-        if ms != 0 && elapsed >= ms { return crate::sys::Raw { result: ERR_TIMEOUT, arg1: 0, arg2: 0, msg: [0; 4] }; }
-        let left = if ms == 0 { 0 } else { ms - elapsed };
-        let raw = syscall(number, handle, receive | left << IPC_TIMEOUT_SHIFT, [message.cap, message.mask(), message.data[0], message.data[1]]);
-        if raw.result != ERR_BUSY { return raw; }
-        call(SYSCALL_WAIT, 10, 0);
-    }
+    syscall(number, handle, receive | (ms as usize) << IPC_TIMEOUT_SHIFT, [message.cap, message.mask(), message.data[0], message.data[1]])
 }
 
 /// Replies to the client of the last received `call`.

@@ -86,5 +86,5 @@ The request's criteria still hold:
 These are left, with the measurements that point to them:
 
 - **System calls that need no scheduler state still take the lock** (`UPTIME`, `CLOCK`, `RDTSC`, port I/O).
-- **A full endpoint queue answers `ERR_BUSY`, and `libmind` retries every 10 ms.** Behind 120 busy clients, a `date` waited 8.5 s for a slot. Recorded as [000-KRN-0010](../issues/000-KRN-0010-ipc-back-pressure-without-starvation.md).
+- **A full endpoint queue answers `ERR_BUSY`, and `libmind` retries every 10 ms.** Behind 120 busy clients, a `date` waited 8.5 s for a slot. Recorded as [000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.done).
 - **Each clock asks the RTC service for the time 10 times a second**, and `sysmon` reads every task and endpoint every 100 ms. Both are the tools track's (`requests-APP.md`).

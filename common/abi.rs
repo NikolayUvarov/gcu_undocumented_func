@@ -32,9 +32,10 @@ const fn channel(value: u32, mask: u32) -> u32 {
     let scaled = if width >= 8 { value << (width - 8) } else { value >> (8 - width) };
     (scaled << shift) & mask
 }
-// The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles; the kernel writes it into every task's
-// BootInfo and libmind refuses to run a program built for another one.
-pub const ABI_VERSION: u32 = 2;
+// The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
+// ERR_BUSY (000-KRN-0010); the kernel writes it into every task's BootInfo and libmind refuses to run a program built
+// for another one.
+pub const ABI_VERSION: u32 = 3;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32, }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
@@ -277,8 +278,9 @@ pub const CAP_TRANSFER_MOVE: usize = 1 << 8;
 // (0: wait without limit; 10 ms granularity; issue 172: before, the timeout was in arg1). On expiry the call fails with ERR_TIMEOUT: a waiting send leaves the queue with its
 // capability, a caller stops waiting and the server's later reply fails with ERR_PEER.
 pub const IPC_TIMEOUT_SHIFT: usize = 32;
-// Senders waiting on one endpoint; one more fails with ERR_BUSY at once (back-pressure).
-pub const ENDPOINT_QUEUE: usize = 4;
+// Senders wait on an endpoint in the order they sent, each until received or its timeout (back-pressure, MC-2.5,
+// MC-5.2): a task has at most one send waiting, so the wait is bounded by the tasks. ABI 3 (000-KRN-0010): before, a
+// fifth sender got ERR_BUSY (ENDPOINT_QUEUE, 4) and retried without order.
 // At the receiver: arg1=sender PID, msg[0]=1 if a capability was received, msg[1]=flags.
 pub const MSG_FLAG_CALL: usize = 1;
 pub const MSG_FLAG_IRQ: usize = 2;

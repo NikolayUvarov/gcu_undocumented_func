@@ -20,7 +20,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [171-APP-0008](171-APP-0008-memory-check-every-cpu-count.md) | `applications_until_memory_ends` with every CPU count: the 8-CPU limit can go (16 CPUs pass locally on x86 and aarch64) | `APP` | P2 | — | 171 |
-| [000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.md) | IPC back-pressure without starvation: a client beyond a full endpoint queue retries without order (8.5 s for `date` behind 120 clocks) | `KRN` | P2 | — | stage II |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
@@ -210,6 +209,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-KRN-0007](../issues-done/171-KRN-0007-stat-pages.done) | STAT from a given record on: callers page through any number of records (171) | done (2026-10-06) |
 | [171-KRN-0008](../issues-done/171-KRN-0008-wake-ipis-with-many-cpus.done) | Wake IPIs with many CPUs: one per idle period, one pass over the tasks; the 16-CPU stall (171) | done (2026-10-07) |
 | [171-KRN-0009](../issues-done/171-KRN-0009-sixteen-cpus-at-the-peak.done) | 16 CPUs at the peak: less work under the scheduler lock (`wake_idle` by marks, `select` over the CPU's own tasks, `STAT` in one pass); a 16-CPU clocks check (171) | done (2026-10-08) |
+| [000-KRN-0010](../issues-done/000-KRN-0010-ipc-back-pressure-without-starvation.done) | IPC back-pressure without starvation: senders wait in order, no `ERR_BUSY` for a long queue (ABI 3) | done (2026-10-08) |
 | [172](../issues-done/172-64-bit-handles-and-abi-version.done) | 64-bit capability handles (32-bit generation), the IPC timeout in `arg2`, 16-byte grants, ABI version 2 checked at program start | done (2026-10-07) |
 | [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done) | The block store starts at boot over `ramdisk#1`; the shell's client in slot 25; `REQUEST_BLOCKSTORE` (requested by STO) | done (2026-10-06) |
 | [300-STO-0001](../issues-done/300-STO-0001-content-identifiers.done) | Content identifiers: CIDv1 (`raw`, SHA-256) and SHA-256 in `libmind`, unsupported and non-canonical forms refused (MC-4.2, 4.13) | done (2026-10-06) |

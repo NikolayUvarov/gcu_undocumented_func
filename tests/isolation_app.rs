@@ -48,18 +48,12 @@ unsafe fn spawn_child(mb: *mut SyscallMailbox, endpoint: usize) {
 }
 // A child's first call: its reply carries the mode (and maybe a capability, received in slot 2).
 unsafe fn child(mb: *mut SyscallMailbox) {
-    let hello = loop {
-        match ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 2, [0; 4]) { abi::ERR_BUSY => { call(mb, abi::SYSCALL_WAIT, 10, 0); } result => break result }
-    };
+    let hello = ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 2, [0; 4]);
     if hello == abi::ERR_PEER { return; } // case 'f': the parent died while the call was still queued
     if hello != 0 { fail(); }
-    let (mode, got_cap) = ((*mb).msg[2], (*mb).msg[0]);
+    let (mode, got_cap, number) = ((*mb).msg[2], (*mb).msg[0], (*mb).msg[3]);
     match mode {
-        1 => match ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 3 * SECONDS, [0, 0, 1, 0]) {
-            0 => {}
-            abi::ERR_BUSY => { sleep(mb, 1000); if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 2, 0]) != 0 { fail(); } }
-            _ => fail(),
-        },
+        1 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 10 * SECONDS, [0, 0, 1, number]) != 0 { fail(); },
         2 => {
             if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 200 << abi::IPC_TIMEOUT_SHIFT, [0, 0, 3, 0]) != abi::ERR_TIMEOUT { fail(); }
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 4, 0]) != 0 { fail(); }
@@ -389,8 +383,9 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 return;
             }
             b'q' => {
-                // Queue bound (MC-2.5): five children send at once while we do not receive; ENDPOINT_QUEUE wait, one
-                // gets ERR_BUSY and reports later with a 2.
+                // Senders wait in order (MC-2.5, MC-5.2, 000-KRN-0010): five children, more than the former bound of
+                // four, are let go one after another while we do not receive; none is refused, and their messages come
+                // in the order they were sent.
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 for _ in 0..5 { spawn_child(mb, endpoint); }
                 let mut replies = [0usize; 5];
@@ -398,15 +393,14 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 { fail(); }
                     *reply = call(mb, abi::SYSCALL_IPC_SAVE_REPLY, 0, 0);
                 }
-                for reply in replies { if ipc(mb, abi::SYSCALL_IPC_REPLY, reply, 0, [0, 0, 1, 0]) != 0 { fail(); } }
-                sleep(mb, 600);
-                let mut queued = 0;
-                loop {
-                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 { fail(); }
-                    match (*mb).msg[2] { 1 => queued += 1, 2 => break, _ => fail() }
+                for (number, reply) in replies.into_iter().enumerate() {
+                    if ipc(mb, abi::SYSCALL_IPC_REPLY, reply, 0, [0, 0, 1, number]) != 0 { fail(); }
+                    sleep(mb, 400); // the child sends and waits before the next is let go
                 }
-                if queued != abi::ENDPOINT_QUEUE { fail(); }
-                print(mb, b"QUEUE BOUND OK\r\n");
+                for number in 0..5 {
+                    if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 1 || (*mb).msg[3] != number { fail(); }
+                }
+                print(mb, b"QUEUE ORDER OK\r\n");
                 return;
             }
             b'j' => {

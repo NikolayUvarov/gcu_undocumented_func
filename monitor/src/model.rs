@@ -64,7 +64,7 @@ pub struct Irq { pub count: u64, pub line: u32, pub holder: u64, pub endpoint: u
 pub struct Device { pub bars: [u64; 6], pub class: u32, pub irq: u32, pub holder: u64, pub index: u32, pub location: u32, pub io_bars: u32 }
 
 /// An endpoint (StatEndpoint): the index is a label, not an authority; the server is the task with the newest receive
-/// right; `senders` wait to be received (at most ENDPOINT_QUEUE), `receiving` wait for a message; `irq` is the bound line.
+/// right; `senders` wait to be received, in the order they sent, `receiving` wait for a message; `irq` is the bound line.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EndpointInfo { pub index: u32, pub creator: u64, pub server: u64, pub holders: u32, pub receivers: u32, pub senders: u32, pub receiving: u32, pub messages: u64, pub busy: u64, pub timeouts: u64, pub irq: u32 }
 

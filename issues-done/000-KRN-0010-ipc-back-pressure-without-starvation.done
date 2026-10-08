@@ -1,0 +1,73 @@
+# 000-KRN-0010 — IPC back-pressure without starvation — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** stage II (bounded queues and progress) · **Constitution:** MC-2.10, MC-5.2
+
+## Problem
+
+At most `ENDPOINT_QUEUE` (4) senders wait on an endpoint. Beyond that, a send gets `ERR_BUSY`, and `libmind::ipc` waits 10 ms and tries again within the caller's timeout. The retries do not keep order: a client that has waited longest has no better chance than one that just came.
+
+[171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done) measured it. On aarch64 with 16 CPUs and 120 clocks, each clock asks the RTC service for the time 10 times a second. A `date` from the shell then took 8.5 s to get one of the four places. The retries are themselves system calls under the scheduler lock. With 60 clocks on x86, `UPTIME` alone was called 1 500 times a second, mostly by these loops.
+
+MC-5.2 asks that budget exhaustion lead to a defined outcome, such as refusal or bounded waiting, and that overload not be compensated for by unbounded accumulation. MC-2.10 asks for progress conditions on protocols. The queue is bounded, but a client's wait for a place is not.
+
+## Plan (as first written)
+
+- **Measure first.** Count retries per send and the longest wait for a place, per endpoint, in `STAT_ENDPOINTS` (it has `busy` already).
+- **Options:**
+  - Senders beyond the queue wait in order in the kernel, bounded by the sender's own task quota, so the queue stays bounded by the tasks that exist rather than by 4.
+  - Or keep `ERR_BUSY` and give each endpoint a ticket order that the retry presents.
+  - Either way the outcome is defined: refusal at the caller's timeout, or service in order.
+- **Interface.** `ENDPOINT_QUEUE` and `ERR_BUSY` are in `common/abi.rs`. A change to their meaning is an ABI change and takes a new ABI version (MC-12.4).
+
+## Acceptance criteria
+
+- With 120 clocks on aarch64 and 16 CPUs, a `date` from the shell is answered within a bound stated in `docs/profile`.
+- A test shows a waiting client served before later ones.
+
+## Related
+
+[171-KRN-0009](171-KRN-0009-sixteen-cpus-at-the-peak.done), `requests-APP.md` (the clocks' polling).
+
+## Resolution
+
+**Chosen: senders wait in order, with no refusal for a long queue.**
+
+- A blocked sender holds no kernel buffer: its message stays in its own mailbox. A task has at most one send waiting, so the wait set is bounded by the tasks, which quotas bound (MC-2.5).
+- A waiting sender is received after at most the senders that were waiting before it, or it fails at its own timeout with `ERR_TIMEOUT`. That is the defined outcome MC-5.2 asks for, and it needs no retry.
+- The ticket alternative kept the bound of 4 but added state for refused senders that the kernel would have to expire. It was not taken.
+
+**Code:**
+
+- `kernel/src/scheduler.rs`: the `ENDPOINT_QUEUE` refusal in `ipc_send` is gone. `ipc_recv` already took the oldest sender (`send_seq`).
+- `common/abi.rs`: `ENDPOINT_QUEUE` removed, `ABI_VERSION` 3.
+- `libmind/src/ipc.rs`: the 10 ms retry loop and its `UPTIME` calls are gone.
+
+**Transition (MC-12.4):**
+
+- A program built for ABI 2 stops with `ABI MISMATCH` (exit 126) until it is rebuilt.
+- `docs/api` describes the change.
+- The `busy` counter in `STAT_ENDPOINTS` and `sysinfo` stays in its place and counts no more refusals.
+- `monitor`'s `ipc` view (tools track) showed "n/4". It now shows the number waiting; the change was needed to build. Its docs (EN and RU) and the tools suite's check of the header follow.
+
+**Test:** `isolation` case `q`.
+
+- Five children are let go one after another while nobody receives. None is refused, and their messages come in the order they were sent.
+- It passes on x86 with 4 CPUs and with 1.
+- With ABI 2 the fifth child's first call got `ERR_BUSY`, which the case now counts as a failure.
+
+**Measured.** aarch64, 16 CPUs (TCG, 4 host cores), 120 clocks:
+
+| | `date` | `ps` | `help` |
+|---|---|---|---|
+| at the start of 171-KRN-0009 | 8.5 s | — | — |
+| after this task | 0.06 s | 0.03 s | 0.05 s |
+| an idle system | 0.06 s | 0.03 s | 0.06 s |
+
+A build ran on the host during part of the measurement.
+
+**Gate:** the full local run (`scripts/ci_local.sh`, every group, in three parts) on the commit that took this to `main`.
+
+### Acceptance criteria
+
+- **Met:** a `date` behind 120 clocks is answered, and the bound is stated in `docs/profile/README.md` (MC-2.5 row): received after the senders already waiting, or `ERR_TIMEOUT`.
+- **Met:** `isolation` case `q` shows waiting clients served in the order they sent.

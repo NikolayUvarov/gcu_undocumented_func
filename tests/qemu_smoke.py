@@ -1373,9 +1373,9 @@ def monitors_check(vm):
     time.sleep(.3)
     screen = screen_text(vm)
     vm.serial()  # Enter: the holders of the selected (first) endpoint
-    assert table_row(screen, r"\d+ endpoints, .* messages, a queue holds at most 4 senders"), screen
+    assert table_row(screen, r"\d+ endpoints, .* messages, senders wait in order"), screen
     for service in ("vfs_server", "loader", "sysmon", "logd", "rtc"):
-        assert table_row(screen, fr"^ +\d+ +{service} \(PID \d+\) +\d+ +\d/4 "), (service, screen)
+        assert table_row(screen, fr"^ +\d+ +{service} \(PID \d+\) +\d+ +\d+ "), (service, screen)
     status = tool_status(vm, "[IPC] VIEW=ENDPOINTS SORT=INDEX")
     first, holders = int(re.search(r"SELECTED=(\d+)", status)[1]), int(re.search(r"HOLDERS=(\d+)", status)[1])
     time.sleep(.3)
@@ -1879,7 +1879,7 @@ def isolation_suite(vm):
         rows, faults = task_rows(vm), vm.command("faults")
         assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
         return pid, faults
-    for key, children, done in [("q", 5, "QUEUE BOUND OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
+    for key, children, done in [("q", 5, "QUEUE ORDER OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
     # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).

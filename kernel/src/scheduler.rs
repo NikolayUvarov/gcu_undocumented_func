@@ -760,7 +760,6 @@ impl Scheduler {
         let receiver = self.blocked(State::BlockedRecv(ep));
         if receiver.is_none() && !self.receivable(ep) { return Err(ERR_PEER); }
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
-        if receiver.is_none() && self.tasks.iter().flatten().filter(|t| t.state == State::BlockedSend(ep)).count() >= ENDPOINT_QUEUE { self.accounting.endpoint[ep].busy += 1; return Err(ERR_BUSY); }
         self.accounting.endpoint[ep].messages += 1;
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
         self.send_seq += 1; let seq = self.send_seq;
