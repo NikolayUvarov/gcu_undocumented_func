@@ -42,3 +42,23 @@ The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will hav
 
 The commands drive the updater against the test server in QEMU, and the tools suite checks them.
 
+## A Wi-Fi setup program (550)
+
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request.
+
+### Problem
+
+With the 802.11 station that the network track is asked for ([requests-NET.md](requests-NET.md)), the system could join a Wi-Fi network, but nothing lets a person choose one and type its passphrase.
+
+### Plan (a proposal; the tools track decides)
+
+- `wifi` (proposed name): a program in a `wm` window or on a full screen, and the same as shell commands. It:
+  - lists the networks found with their name (SSID), signal, security (open, WPA2, WPA3, enterprise) and channel, and refreshes the list;
+  - connects with a passphrase typed without echo;
+  - offers to remember the passphrase, and stores it through `keystore`, never in a file;
+  - shows the state (connecting; connected, with the address; failed, with the reason) and forgets a remembered network.
+- It talks only to the station's Wi-Fi configuration interface. It never sees frames, or keys once the passphrase is handed over.
+
+### Acceptance criteria
+
+The tools suite checks the program against a station stand-in with fixed scan results (QEMU has no Wi-Fi). On the MacBook Pro, it lists the networks around and joins a WPA2-PSK one.

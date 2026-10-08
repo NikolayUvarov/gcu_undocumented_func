@@ -64,7 +64,8 @@ Later, as their own issues when a run shows the need:
 - TRIM;
 - RST and VMD;
 - the HPET and the I/O APIC;
-- a GPT disk with a data partition.
+- a GPT disk with a data partition;
+- the network, on the MacBook Pro first: [550](550-network-on-real-hardware.md).
 
 Installing from inside the running system comes with self-update ([351](351-self-update.md)), which writes boot slots.
 
