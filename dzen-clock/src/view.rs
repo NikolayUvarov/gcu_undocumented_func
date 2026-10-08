@@ -52,6 +52,8 @@ mod tests {
             acpi_rsdp: 0,
             cpu_features: 0,
             abi_version: crate::abi::ABI_VERSION,
+            boot_volume: Default::default(),
+            boot_slot: Default::default(),
         }
     }
 

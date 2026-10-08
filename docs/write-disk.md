@@ -109,7 +109,7 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
 - **The internal disk.** It keeps its own EFI partition:
-  - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md));
+  - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
   - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
 - **No COM1.** Two things show what happened instead:
   - the bootloader's progress and errors, in text ([211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done), [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done));
@@ -137,8 +137,8 @@ ls log:                    # the log partition: a BOOTNNNN.LOG for each boot
 | What you see | Likely cause | What to do |
 |---|---|---|
 | `BOOT ERROR: display: …` | The firmware gives no linear framebuffer (GOP) | Another video output, or the integrated graphics; report it |
-| `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Write the disk again (section 5) |
-| The shell runs, but `ls` shows another disk's files | `vfs_server` mounted the first FAT volume with an MBR partition table, which may be on another disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Disconnect the other disks and sticks |
+| `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done)) | Write the disk again (section 5) |
+| The shell runs, but programs do not start or `ls` is empty; `logs` of `vfs_server` (its PID from `ps`) says `THE BOOT VOLUME (…) IS ON NO BLOCK DEVICE` | `vfs_server` mounts only the volume the bootloader was read from, and no driver shows that disk (for example a controller MIND Core has no driver for) ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done)) | Attach the disk to another port or bus (USB on a rear port, the first SATA port) |
 | Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). | Photograph the screen |
 | The firmware's picture (a Mac's spinner) stays, and no `MIND CORE BOOT:` line appears | The firmware did not start the bootloader, or its console did not switch to text | Report it, with the boot menu entry you chose |
 | `MIND CORE BOOT:` lines end at `STARTED; READING …` | The bootloader stopped while the firmware read the files from the disk | Another USB port or adapter; report it with a photo |

@@ -15,7 +15,7 @@ Only the shell may use `tls` (`SLOT_TLS`; there is no `REQUEST_TLS`). The shell'
 - A client for programs: an HTTP/1.1 GET with `Range` and resume, streaming into a `vfs` file through the caller's own vfs client. It goes in `libmind` or a small session service; it does not belong in the shell.
 - Trust for the update server: either a root store shipped with the release and covered by its signature, or the server's key pinned in the channel configuration.
 - `netpolicy`: names (resolved at grant time), and a grant volume large enough for a release (about 30 MiB today).
-- The grant flag that lets `init` give `updater` TLS is a kernel task: [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md).
+- The grant flag that lets `init` give `updater` TLS is a kernel task: [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done).
 
 ### Acceptance criteria
 

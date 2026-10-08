@@ -1099,6 +1099,7 @@ impl Scheduler {
                     }
                 }
             }
+            SYSCALL_BOOT_CONFIRM => if self.holds(slot, Capability::Platform) { Ok(crate::trial::confirm() as usize) } else { Err(ERR_RIGHTS) },
             SYSCALL_MEMORY_RESERVE => {
                 let bytes = request.arg1.checked_next_multiple_of(4096);
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) }
@@ -1366,7 +1367,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
                     // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
                     // tasks that makes ready get a wake IPI (issue 171).
-                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); s.wake_idle(cpu, true); }
+                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); s.wake_idle(cpu, true); crate::trial::check(now); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }

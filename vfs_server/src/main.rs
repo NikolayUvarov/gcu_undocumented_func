@@ -408,18 +408,58 @@ fn start_journal(volumes: &mut [Mounted]) -> Option<(usize, Journal)> {
     Some((index, journal))
 }
 
+// Whether `volume` is the one the bootloader read the system from: on the partition the firmware named (an MBR disk's
+// signature and the start; a GPT partition's start), holding the boot manifest the bootloader verified.
+fn is_boot_volume(volume: &mut Volume<Shared>, first: &[u8; fat::SECTOR], info: &BootInfo) -> bool {
+    let identity = &info.boot_volume;
+    let start = volume.start() as u64;
+    let place = match identity.kind { VOLUME_MBR => first[440..444] == identity.signature[..4] && start == identity.start, VOLUME_GPT => start == identity.start, _ => true };
+    if !place { return false; }
+    let expected = info.boot_slot.manifest;
+    if expected == [0; 32] { return true; }
+    let path = match info.boot_slot.slot { BOOT_SLOT_A => "MIND/A/MANIFEST", BOOT_SLOT_B => "MIND/B/MANIFEST", _ => "MANIFEST" };
+    let root = volume.root();
+    let Ok(node) = volume.lookup(&root, path) else { return false };
+    let mut hash = mind::sha256::Sha256::new();
+    let (mut at, mut chunk) = (0u32, [0u8; 4096]);
+    while at < node.size {
+        let Ok(n) = volume.read(&node, at, &mut chunk) else { return false };
+        if n == 0 { return false; }
+        hash.update(&chunk[..n]);
+        at += n as u32;
+    }
+    hash.finish() == expected
+}
+
+// The boot volume as the bootloader named it.
+fn describe(identity: &BootVolume) -> String {
+    let s = &identity.signature;
+    match identity.kind {
+        VOLUME_MBR => alloc::format!("MBR DISK {:02X}{:02X}{:02X}{:02X}, PARTITION {} AT LBA {}", s[3], s[2], s[1], s[0], identity.partition, identity.start),
+        VOLUME_GPT => alloc::format!("GPT PARTITION {} AT LBA {}", identity.partition, identity.start),
+        _ => String::from("A VOLUME THE FIRMWARE DID NOT NAME"),
+    }
+}
+
 fn device_name(kind: usize) -> &'static str { match kind { BLOCK_KIND_ATA => "ATA", BLOCK_KIND_AHCI => "AHCI", BLOCK_KIND_USB => "USB", BLOCK_KIND_VIRTIO => "VIRTIO", BLOCK_KIND_NVME => "NVME", mind::block::KIND_RAM => "RAM", _ => "?" } }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+fn main(info: &'static BootInfo) {
     let mut volumes = Vec::new();
-    // The boot disk: the first drive with a FAT volume (order: ata, ahci, usb_storage).
-    for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
+    // The boot volume: the one the bootloader read the system from, on whichever drive shows it (211-KRN-0012).
+    'disks: for slot in SLOT_BLOCK_FIRST..SLOT_BLOCK_FIRST + BLOCK_DEVICES {
         if mind::dev::cap_info(slot).0 != CAP_KIND_ENDPOINT { continue; }
         let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new).map(Shared::new) else { continue };
-        if let Ok(volume) = Volume::mount(disk.clone()) {
+        let mut first = [0u8; fat::SECTOR];
+        if !fat::Sectors::read(&mut disk.clone(), 0, &mut first) { continue; }
+        // A GPT partition is found by the start the firmware named; MBR ones are listed in the table.
+        let gpt = (info.boot_volume.kind == VOLUME_GPT).then(|| u32::try_from(info.boot_volume.start).ok()).flatten();
+        for start in gpt.into_iter().chain(fat::fat_starts(&mut disk.clone()).into_iter().flatten()) {
+            let Ok(mut volume) = Volume::mount_at(disk.clone(), start) else { continue };
+            if !is_boot_volume(&mut volume, &first, info) { continue; }
             mind::println!("[VFS] MOUNTED FAT{} FROM {} AT LBA {}{}", volume.bits(), device_name(volume.disk.kind()), volume.start(),
                            if volume.writable() { " (DEVICE WRITABLE)" } else { " (READ-ONLY DEVICE)" });
+            mind::println!("[VFS] THE BOOT VOLUME: {}, AND THE MANIFEST THE BOOTLOADER VERIFIED", describe(&info.boot_volume));
             let boot = volume.start();
             volumes.push(Mounted { name: "", volume });
             // The log partition on the same disk, by its label (211-KRN-0019).
@@ -430,10 +470,11 @@ fn main(_info: &'static BootInfo) {
                 volumes.push(Mounted { name: "log", volume: log });
                 break;
             }
-            break;
+            break 'disks;
         }
     }
-    if volumes.is_empty() { mind::println!("[VFS] NO FAT VOLUME ON ANY BLOCK DEVICE"); }
+    // Another volume would give programs and data/ of another system: none is mounted in its place.
+    if volumes.is_empty() { mind::println!("[VFS] THE BOOT VOLUME ({}) IS ON NO BLOCK DEVICE: NONE MOUNTED", describe(&info.boot_volume)); }
     // The RAM disk: formatted when blank (its contents never outlive the boot).
     if mind::dev::cap_info(SLOT_RAMDISK).0 == CAP_KIND_ENDPOINT {
         if let Some(mut disk) = mind::block::Device::open(Endpoint(SLOT_RAMDISK)).ok().and_then(Disk::new) {

@@ -37,7 +37,7 @@ The image was written to the 860 PRO in a USB-SATA adapter (`7825:A2A4`) and sta
 
 1. **A frozen firmware spinner after "EFI Boot".**
    - The bootloader took the first GOP and the first file system the firmware listed, and its errors could not show on a Mac's console.
-   - Fixed by [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (its bootloader part), [211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done) and [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done).
+   - Fixed by [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (its bootloader part), [211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done) and [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done).
 2. **`INIT STARTED`, then nothing.**
    - The PIT counts there, but its interrupt never reaches the CPU, so the kernel waited for a first tick forever.
    - [211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done): the tick now comes from the LAPIC timer. The boot line reads `TICK: LAPIC TIMER, 62357 PER TICK, MEASURED ON THE ACPI PM TIMER; TSC 2294 MHZ; PIT COUNTING`.

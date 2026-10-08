@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
+import boot_slots  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -5036,6 +5037,50 @@ def display_suite(args, disk):
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
 
 
+def trial_check(args, disk):
+    """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
+    confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
+    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the kernel restarts the
+    machine at the deadline, and the next boot falls back to slot A."""
+    with tempfile.TemporaryDirectory(prefix="mind-trial-") as temp:
+        temp = Path(temp)
+        volume = temp / "volume"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        image = boot_slots.Image.create(temp / "trial.img", boot_slots.layout(volume, temp / "slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+        vm = VM(args, str(image.path), raw=True, prompt=False)
+        try:
+            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
+            for line in ("BOOT: SLOT B LOADED ON TRIAL", "MIND CORE KERNEL: SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT"):
+                require(out, line)
+            # init's lines go to the system log, not COM1; logs 1 is the shell's own command (init is PID 1).
+            require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED")
+            time.sleep(18)
+            vm.collect()
+            assert vm.process.poll() is None and "RESTARTING" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+        boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+        with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
+            ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
+                    "-device", "usb-storage,bus=ehci.0,drive=trial,bootindex=0")
+            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
+            try:
+                require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
+                require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
+                vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
+                require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            finally:
+                vm.close()
+    print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
+          "restarts at the deadline, and the next boot falls back to slot A", flush=True)
+
+
 def boot_suite(args, disk):
     # The bootloader names a broken or missing boot file instead of hanging silently.
     kernel = (disk / "kernel.elf").read_bytes()
@@ -5081,11 +5126,21 @@ def boot_suite(args, disk):
           "signature each stop the bootloader before anything is loaded", flush=True)
     # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
     # kernel and the services from its own volume.
+    # The decoy is on IDE, served by ata, the first block driver; the boot disk on AHCI. vfs_server mounts the volume
+    # the bootloader names in BootInfo, holding the manifest it verified, not the first one it sees (211-KRN-0012).
     with tempfile.TemporaryDirectory(prefix="smoke-decoy-", dir=ROOT / IMAGE) as decoy:
         (Path(decoy) / "EFI/APPLE").mkdir(parents=True)
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), decoy=Path(decoy).relative_to(ROOT).as_posix())
-        vm.close()
-    print("PASS: bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=True, decoy=Path(decoy).relative_to(ROOT).as_posix())
+        try:
+            require(ANSI.sub("", vm.log), "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
+            vfs = vm.command("dmesg -s vfs_server", raw=True)
+            require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
+            require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            require(vm.command("ls"), "kernel.elf")
+        finally:
+            vm.close()
+    print("PASS: the bootloader reads its own volume when the firmware lists another disk's FAT volume first, and names it "
+          "in BootInfo: vfs_server mounts that one (AHCI), not the other disk ahead of it (IDE)", flush=True)
     # 211-KRN-0016: two GPUs, the first listed without a linear framebuffer (virtio-gpu): the loader takes the GOP of a
     # console output that has one. Its progress lines name each step on the console (COM1 here, through the firmware).
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-vga", "none", "-device", "virtio-gpu-pci", "-device", "VGA"])
@@ -5154,6 +5209,26 @@ def boot_suite(args, disk):
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
         print("PASS: a kernel of another ABI version: init refuses to run (ABI MISMATCH, exit 126) and the system halts", flush=True)
+    abi = int(re.search(r"pub const ABI_VERSION: u32 = (\d+);", (ROOT / "common/abi.rs").read_text())[1])
+    if args.loader_abi_kernel:
+        # 211-KRN-0012: a kernel and a bootloader of different ABI versions: the kernel stops at once and says why.
+        target = disk / "kernel.elf"
+        target.write_bytes(Path(args.loader_abi_kernel).read_bytes())
+        sign_manifest.sign_volume(disk)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        line = f"KERNEL STOPPED: THE BOOTLOADER IS OF ABI {abi}, THIS KERNEL OF ABI {abi + 1}. WRITE BOTH FROM ONE BUILD."
+        try:
+            out = vm.expect(line, timeout=60)
+            assert "INIT STARTED" not in out, out[-2000:]
+            screen = "\n".join(screen_text(vm))
+            assert line in screen, screen
+        finally:
+            vm.close()
+        target.write_bytes(kernel)
+        sign_manifest.sign_volume(disk)
+        print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
+    if args.trial_kernel:
+        trial_check(args, disk)
 
 
 def main():
@@ -5174,6 +5249,8 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
+    parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
+    parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
     parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")

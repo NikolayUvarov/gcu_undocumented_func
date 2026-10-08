@@ -12,6 +12,8 @@ linked_list_allocator = "0.10.5"
 # Test-only kernel: panics on the first LOG system call (inside the scheduler lock) to check the panic report.
 panic-test = []
 abi-test = [] # tasks see ABI_VERSION + 1 (issue 172): init must refuse to run
+loader-abi-test = [] # expects ABI_VERSION + 1 from the bootloader (211-KRN-0012): stops at once
+trial-test = [] # a trial boot's deadline is at most 15 s (351-KRN-0014)
 x2apic-test = [] # the boot CPU switches to x2APIC before the kernel reads the mode, as many PCs' firmware leaves it (211-PRT-0002)
 
 [profile.release]

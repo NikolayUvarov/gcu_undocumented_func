@@ -1,6 +1,6 @@
 # 212 — Disk tools: partitions and file systems on real disks (plan)
 
-**Type:** main task (plan) · **Owner:** `PRT`, with `KRN` (the service side) and `APP` (the commands) · **Priority:** P3 · **Status:** open (a plan) · **Blocked by:** [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (which disk is which) · **Roadmap:** track H · **Constitution:** MC-3.4, MC-12.1
+**Type:** main task (plan) · **Owner:** `PRT`, with `KRN` (the service side) and `APP` (the commands) · **Priority:** P3 · **Status:** open (a plan) · **Blocked by:** [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (which disk is which) · **Roadmap:** track H · **Constitution:** MC-3.4, MC-12.1
 
 ## Problem
 

@@ -33,10 +33,28 @@ const fn channel(value: u32, mask: u32) -> u32 {
     (scaled << shift) & mask
 }
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
-// ERR_BUSY (000-KRN-0010); the kernel writes it into every task's BootInfo and libmind refuses to run a program built
-// for another one.
-pub const ABI_VERSION: u32 = 3;
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32, }
+// ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
+// BOOT_CONFIRM ends a trial. The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
+// into every task's BootInfo, and libmind refuses to run a program built for another one. Fields up to abi_version
+// keep their places across versions, so each side finds the other's version where it expects it.
+pub const ABI_VERSION: u32 = 4;
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, }
+// The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
+// kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
+// partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct BootVolume { pub kind: u32, pub partition: u32, pub start: u64, pub sectors: u64, pub signature: [u8; 16] }
+pub const VOLUME_UNKNOWN: u32 = 0;
+pub const VOLUME_MBR: u32 = 1;
+pub const VOLUME_GPT: u32 = 2;
+// Which copy of the system runs (351-KRN-0014): BOOT_SLOT_ROOT (a volume without boot records), BOOT_SLOT_A or _B; trial
+// nonzero for a slot booted on trial, which the kernel restarts after deadline_s seconds unless init confirms it
+// (BOOT_CONFIRM); manifest: the SHA-256 of the boot manifest the bootloader verified and loaded from.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct BootSlot { pub slot: u32, pub trial: u32, pub deadline_s: u32, pub manifest: [u8; 32] }
+pub const BOOT_SLOT_ROOT: u32 = 0;
+pub const BOOT_SLOT_A: u32 = 1;
+pub const BOOT_SLOT_B: u32 = 2;
+pub const TRIAL_DEADLINE_S: u32 = 120;
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
@@ -437,6 +455,10 @@ pub const SYSCALL_DEVICE_CONFIG: usize = 54;
 // machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
 // return when it works.
 pub const SYSCALL_REBOOT: usize = 55;
+// BOOT_CONFIRM (platform privilege: init, before it drops it): the boot is good. On a trial boot the kernel no longer
+// restarts the machine at the deadline; writing the confirmed boot record is the updater's (351-UPD-0007, 0008).
+// -> 1 if the boot was on trial, 0 if not (ABI 4, 351-KRN-0014).
+pub const SYSCALL_BOOT_CONFIRM: usize = 60;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;

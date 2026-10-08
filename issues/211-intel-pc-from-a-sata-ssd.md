@@ -48,7 +48,7 @@ These are the steps of 211-PRT-0004, which records the result.
 | [211-PRT-0005](../issues-done/211-PRT-0005-windows-writer-default-image.done) | `PRT` | The Windows writer's default image under `powershell -File` (Windows PowerShell 5.1) |
 | [211-PRT-0002](../issues-done/211-PRT-0002-x2apic.done) | `PRT` | The local APIC in x2APIC mode, as firmware leaves it |
 | [211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done) | `PRT` | A tick that does not depend on the 8254: the LAPIC timer, with the PIT only where it counts |
-| [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) | `KRN` | The bootloader loads from its own device and names that volume in `BootInfo`; `vfs_server` mounts that one |
+| [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) | `KRN` | The bootloader loads from its own device and names that volume in `BootInfo`; `vfs_server` mounts that one |
 | [211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done) | `KRN` | The kernel's boot line and fatal messages on the screen too, not only on COM1 |
 | [211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done) | `KRN` | Bootloader errors and panics readable on a Mac's screen (Apple's console control in text mode) |
 | [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done) | `KRN` | The bootloader takes the screen's GOP (a console output's), not the first listed, and prints its progress on the text console |

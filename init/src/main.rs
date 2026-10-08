@@ -114,6 +114,15 @@ impl Init {
     // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
     // slot of its own for it (only badged clients are minted and kept).
     fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
+    fn boot_volume_mounted(&mut self) -> bool {
+        let Ok(keeper) = self.keeper("vfs_server") else { return false };
+        let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { return false };
+        let endpoint = Endpoint(client);
+        let mounted = match mind::idl::vfs::root(endpoint, "") { Ok(Ok(handle)) => { let _ = mind::idl::vfs::close(endpoint, handle); true } _ => false };
+        let _ = ipc::drop_cap(client);
+        mounted
+    }
     fn badged(&mut self, minted: &mut Minted, name: &str, badge: u16) -> Result<usize> { let keeper = self.keeper(name)?; minted.badged(keeper, CLIENT, badge) }
     // The keyboard service the shell's keymap talks to: the PS/2 driver if the machine has the controller, else the USB
     // HID driver, else the VirtIO one.
@@ -527,6 +536,7 @@ fn main(info: &'static BootInfo) {
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
         // On a real machine, time for a photo of the kernel's lines before the compositor takes the screen (211-PRT-0004).
         if unit_name(index) == "compositor" && bare_metal() {
@@ -543,7 +553,7 @@ fn main(info: &'static BootInfo) {
             }
             Ok(_) => {}
             Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", unit_name(index)); }
-            Err(error) => mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error),
+            Err(error) => { healthy = false; mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error) }
         }
     }
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
@@ -554,6 +564,14 @@ fn main(info: &'static BootInfo) {
     }
     // No process control: init ends services and applications as their ancestor, the kernel's lifecycle rule (issue 170).
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
+    // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
+    // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
+    let mounted = init.boot_volume_mounted();
+    if healthy && mounted {
+        if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
+    } else if info.boot_slot.trial != 0 {
+        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
+    }
     match platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_RESTART, 0) {
         Ok(_) => { let _ = ipc::drop_cap(SLOT_DEV0); mind::println!("[INIT] PLATFORM PRIVILEGE DROPPED"); }
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
