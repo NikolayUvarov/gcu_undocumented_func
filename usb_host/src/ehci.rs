@@ -135,7 +135,7 @@ impl Ehci {
         let eps = match speed { 1 => 0, 2 => 1, _ => 2 };
         let mut characteristics = address as u32 | (endpoint as u32 & 0xF) << 8 | eps << 12 | (packet as u32 & 0x7FF) << 16;
         if kind == Kind::Control { characteristics |= 1 << 14; if speed != 3 { characteristics |= 1 << 27; } }
-        if kind != Kind::Interrupt { characteristics |= 4 << 28; } // NAK reload
+        if kind != Kind::Interrupt && speed == 3 { characteristics |= 4 << 28; } // NAK reload: high speed only, zero for a split
         let (hub, port) = if speed == 3 { (0, 0) } else { tt.unwrap_or((0, 0)) };
         let mut capabilities = 1 << 30 | (hub as u32) << 16 | (port as u32) << 23;
         // Interrupt: a start in microframe 0 of every frame, and for a split its completions in microframes 2 to 4.
