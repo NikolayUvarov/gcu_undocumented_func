@@ -993,8 +993,9 @@ def shell_suite(vm):
     vm.collect()
     assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
     vm.output = ""
-    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back.
-    for _ in range(6):
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Three helps push it off
+    # every screen and keep it within the 400 lines kept, with the boot log's last lines below it (211-PRT-0004).
+    for _ in range(3):
         vm.command("help")
     assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
     for _ in range(12):
@@ -1769,16 +1770,29 @@ def busy_suite(vm):
     share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
     assert 0.12 < share < 0.35, share
     require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
-    # Over 3 s, as with the budget. On one CPU the compositor's copy of the screen takes its share too (about a fifth
-    # under TCG; the capture dot's code in its loop once made that a third, and the loop's 0.57).
-    start_run, start = run_ms(), time.monotonic()
+    # Without a budget the loop takes all the time its CPU has that other tasks leave, over 3 s: its run time against
+    # the CPU's busy plus idle time less the other tasks' run time there. The share of the host's wall clock is not
+    # checked: under TCG a slow or busy host makes the compositor's copy of the screen and the other tasks take more
+    # of it, and the loop's share of it ranged 0.52-0.73 (requests-KRN.md, 000-KRN-0026).
+    def sample():
+        tasks, cpus = vm.command("stat tasks", raw=True), vm.command("stat cpus", raw=True)
+        rows = {int(m[1]): (m[2], int(m[3]), int(m[4])) for m in re.finditer(r"^(\d+) PARENT=\d+ (\S+) WAIT=\S+ CPU=(\d+) RUN_MS=(\d+)", tasks, re.M)}
+        return rows, {int(m[1]): int(m[2]) + int(m[3]) for m in re.finditer(r"^CPU (\d+) APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", cpus, re.M)}
+    (tasks0, cpus0), start = sample(), time.monotonic()
     time.sleep(3)
-    share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
-    assert share > 0.6, ("no budget: the loop takes most of its CPU", share)
+    tasks1, cpus1 = sample()
+    loop = next(pid for pid, row in tasks1.items() if row[0] == "app2")
+    cpu = tasks1[loop][1]
+    others = sum(row[2] - tasks0[pid][2] for pid, row in tasks1.items() if pid != loop and pid in tasks0 and row[1] == cpu == tasks0[pid][1])
+    left = (cpus1[cpu] - cpus0[cpu]) - others
+    share = (tasks1[loop][2] - tasks0[loop][2]) / left
+    wall = (tasks1[loop][2] - tasks0[loop][2]) / ((time.monotonic() - start) * 1000)
+    assert share > 0.9, ("no budget: the loop takes the time other tasks leave on its CPU", share, left, others, wall)
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
+    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
+          f"without one the loop takes {share:.2f} of the time other tasks leave its CPU ({wall:.2f} of the wall clock)", flush=True)
 
 
 def avx_expected(vm, fixture=None):

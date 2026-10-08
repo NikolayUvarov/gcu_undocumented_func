@@ -23,22 +23,6 @@ Before the kernel track took 171, the tools branch had a version of the first po
 - Spawning until memory runs out stops at the frame pool, not at the arena, in a machine of 512 MiB and of 6 GiB (QEMU).
 - A spawner's memory quota bounds the kernel memory its children take.
 
-## The busy suite's share check on one CPU depends on the host
-
-### Problem
-
-`busy_suite` checks that without a budget the busy loop gets more than 0.6 of its one CPU, measured against the host's wall clock over 3 s. Under TCG a host that deschedules the emulated CPU takes that time from the loop. In a full local run (`--cpu-model max --cpus 1`, nothing else running in the session) it measured 0.52 once and failed; a rerun passed. Eight runs each on `main` (ed08bed) and on the tools branch (909be4f) gave the same spread: 0.62–0.73, mean 0.69. So the margin above 0.6 is small and host noise can cross it.
-
-On 2026-10-07 the same host was slower, and the check failed in two full local runs in a row (0.584, 0.572); GitHub CI passed it on the same commits. Thirteen more runs (`--cpu-model max --cpus 1 --suites busy`, nothing else running) gave 0.554–0.648. Four of them on images of the tools branch before a merge of `main` (bbb113c), alternating with four after it (21c2738), gave the same values: 0.648, 0.593, 0.588, 0.616 before and 0.637, 0.585, 0.590, 0.585 after. So the code did not move the share; the host's wall clock did.
-
-### Plan
-
-The kernel track decides: measure the loop's share against the guest's own time (the CPU's busy plus idle time from `STAT_CPUS` over the same interval) rather than the host's wall clock, or another way that keeps the check as strict.
-
-### Acceptance criteria
-
-The check keeps its meaning (no budget: the loop takes most of its CPU) and does not fail when the host is busy.
-
 ## UEFI variables for the updater
 
 **Recorded by:** the update track (UPD), 2026-10-08, for [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) (and the dbx updates of [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md)).
