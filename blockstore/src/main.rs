@@ -3,7 +3,8 @@
 // Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
 // Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
-// logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
+// logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007).
+// A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
 // store.rs names these as crate::cid, crate::dag and crate::sha256, so the host tests build it from the libmind files.
@@ -141,9 +142,12 @@ fn main(_info: &'static BootInfo) {
                 blockstore::reply_has(call, held)
             }
             Ok((Request::Stat, call)) => {
-                let s = store.as_ref().map(|s| s.stats()).unwrap_or_default();
-                let stats = Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity, names: s.names };
-                blockstore::reply_stat(call, Ok(&stats))
+                // Unmounted, the store says why rather than report an empty store (305-STO-0008).
+                let stats = store.as_ref().map_err(|e| *e).map(|s| {
+                    let s = s.stats();
+                    Stats { blocks: s.blocks, bytes: s.bytes, used: s.used, sectors: s.sectors, corrupt: s.corrupt, damaged: s.damaged, capacity: s.capacity, names: s.names }
+                });
+                blockstore::reply_stat(call, stats.as_ref().map_err(|e| *e))
             }
             Ok((Request::Collect, call)) => {
                 let collected = store.as_mut().map_err(|e| *e).and_then(|s| s.collect().map_err(error)).map(|c| {

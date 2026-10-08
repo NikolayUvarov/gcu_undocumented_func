@@ -1,0 +1,36 @@
+# 305 — Recovery without the main store (track B, sixth step) — done
+
+**Type:** main task · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B "a recovery set usable without the main store" · **Constitution:** MC-6.8, MC-4.8, Appendix B.4
+
+## Problem
+
+Appendix B.4: "the bootstrap/recovery set is available without a functioning main storage service". MC-6.8: boot and recovery dependencies, including access to images, storage and keys, must not form an unresolvable cycle, and a failed component has a recovery boundary or a degradation mode. Neither was stated or tested for the block store.
+- A crash of `blockstore` was not tested.
+- An unmountable medium left the service answering `stat` with an empty store, as if all was well.
+
+## Plan
+
+- `305-STO-0008` — **the store outside the boot path**:
+  - state the recovery set: what the system needs to start and to restart the store, and where it lives;
+  - `stat` answers the mount error like every other request;
+  - QEMU: a killed store restarted by `init`, and a medium it cannot mount, with the rest of the system going on.
+
+## Acceptance criteria
+
+- `docs/storage` states the recovery set, the crash boundary and the degradation mode, and what is not provided.
+- QEMU (x86 and aarch64): a killed store is restarted and mounts its medium again. With an unmountable medium, every request is answered with the reason, and a program still starts from the boot volume.
+- The profile's supervision row says it.
+
+## Related
+
+[docs/storage](../docs/storage/README.md) (Recovery without the main store); [351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md).
+
+## Resolution
+
+Done by [305-STO-0008](305-STO-0008-store-outside-the-boot-path.done).
+
+Not done:
+- a tool that repairs or re-creates an unmountable store;
+- copies on another medium (MC-4.8).
+
+Both need a durable medium first. On the RAM disk, a reset is the only recovery, and it loses the store's contents.

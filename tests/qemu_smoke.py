@@ -2660,6 +2660,33 @@ def store_faults_suite(vm):
     print("PASS: block store damage injected on its medium: a chunk refused when read and when mounting, a collection "
           "refused meanwhile, a put repairs it; a damaged name record reported, the version before it stands; a damaged "
           "header loses its record alone; a damaged commit changes no name", flush=True)
+    # 305-STO-0008: a crash. init restarts the killed store within its budget, and the new instance mounts the medium.
+    old = vm.services()["blockstore"]
+    starts = int(re.search(r"^blockstore\s+\d+\s+(\d+)", vm.command("svc", raw=True), re.M)[1])
+    vm.command(f"kill {old}", raw=True)
+    for _ in range(40):
+        if vm.services().get("blockstore", old) != old:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("init did not restart the block store")
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] READY"), "CORRUPT=0 DAMAGED=37")
+    assert re.search(fr"^blockstore\s+\d+\s+{starts + 1}\s+running", vm.command("svc", raw=True), re.M)
+    require(blocks("snapshot obj"), f"obj VERSION 1 ROOT {root}")
+    # A medium it cannot mount (sector 0's digest damaged): the store stays up and answers every request with the
+    # reason, and the system, started from the boot volume, goes on without it (MC-6.8, Appendix B.4).
+    superblock = b"MIND-STO" + (2).to_bytes(2, "little") + (512).to_bytes(2, "little")
+    assert poke(vm, superblock, 20, GDB_PORT) >= 1
+    require(vm.command("svc restart blockstore"), "blockstore restarted: PID")
+    require(vm.service_logs("blockstore", "NOT MOUNTED"), "[BLOCKSTORE] NOT MOUNTED: Foreign")
+    require(blocks("stat"), "blocks: stat: Device")
+    require(blocks("resolve obj"), "blocks: resolve obj: Device")
+    require(blocks("pattern 10"), "blocks: pattern: Store (the store: Device)")
+    started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))
+    assert started, "a program from the boot volume does not start while the store is down"
+    vm.command(f"kill {started[1]}")
+    print("PASS: block store recovery: a killed store is restarted by init and mounts its medium again; a medium it "
+          "cannot mount leaves it answering every request with the reason while programs start from the boot volume", flush=True)
 
 
 def escrow_check(vm):
