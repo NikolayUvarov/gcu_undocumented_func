@@ -344,6 +344,12 @@ pub fn cycles() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
 pub unsafe fn fault_address() -> u64 { let address: u64; asm!("mov {}, cr2", out(reg) address); address }
 /// Enters the scheduler from kernel mode, as a system call does.
 pub unsafe fn reschedule() { asm!("int 0x80"); }
+/// Writes the cache lines of [start, start + len) back to memory: the kernel's text on a write-back framebuffer.
+pub unsafe fn write_back(start: usize, len: usize) {
+    let mut line = start & !63;
+    while line < start + len { asm!("clflush [{}]", in(reg) line); line += 64; }
+    asm!("mfence");
+}
 /// Sleeps until an interrupt with interrupts enabled only meanwhile.
 pub unsafe fn wait_for_interrupt() { asm!("sti", "hlt", "cli"); }
 pub unsafe fn disable_interrupts() { asm!("cli"); }

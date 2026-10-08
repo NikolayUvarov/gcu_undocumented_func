@@ -356,7 +356,7 @@ impl Scheduler {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None; task.exit_reason = reason;
         self.ended[self.ended_next] = (pid, reason); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
-        if task.parent.is_none() { for &b in b"INIT EXITED: SYSTEM HALTED (REASON=" { unsafe { serial_write_byte(b); } } unsafe { serial_hex(reason as u64); } for &b in b")\r\n" { unsafe { serial_write_byte(b); } } cpu::halt_all(); }
+        if task.parent.is_none() { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "INIT EXITED: SYSTEM HALTED (REASON={:016X})\n", reason); cpu::halt_all(); }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
         // Messages queued for an instance that no longer exists are not handed to the next one (MC-6.4).
         for other in 1..self.tasks.len() {
@@ -584,7 +584,7 @@ impl Scheduler {
                 self.msi[index] = Some((a, entry));
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
-            PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
+            PLATFORM_FRAMEBUFFER => { crate::screen::take(); Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)) }
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
                 let bytes = a.checked_next_multiple_of(4096).filter(|&n| n > 0).ok_or(ERR_INVALID)?;
@@ -1331,7 +1331,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         let event = context::event(sp);
         match event {
             Event::Stop => cpu::halt_here(),
-            Event::KernelFault { code, pc, error } => { for &b in b"KERNEL EXCEPTION VECTOR=" { serial_write_byte(b); } serial_number(code); for &b in b" RIP=" { serial_write_byte(b); } serial_hex(pc); for &b in b" ERROR=" { serial_write_byte(b); } serial_hex(error); for &b in b"\r\n" { serial_write_byte(b); } cpu::halt_all(); }
+            Event::KernelFault { code, pc, error } => { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error); cpu::halt_all(); }
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
         }
@@ -1365,8 +1365,6 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
     }
 }
 
-unsafe fn serial_hex(number: u64) { for shift in (0..16).rev() { let digit = ((number >> (shift * 4)) & 15) as u8; serial_write_byte(if digit < 10 { b'0' + digit } else { b'A' + digit - 10 }); } }
-unsafe fn serial_number(mut number: u64) { let mut buffer = [0; 20]; let mut at = buffer.len(); loop { at -= 1; buffer[at] = b'0' + (number % 10) as u8; number /= 10; if number == 0 { break; } } for &byte in &buffer[at..] { serial_write_byte(byte); } }
 // Called from the BSP idle loop: reclaims memory of exited tasks.
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 

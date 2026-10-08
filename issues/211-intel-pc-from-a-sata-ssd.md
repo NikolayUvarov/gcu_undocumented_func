@@ -48,7 +48,7 @@ These are the steps of 211-PRT-0004, which records the result.
 | [211-PRT-0002](211-PRT-0002-x2apic.md) | `PRT` | The local APIC in x2APIC mode, as firmware leaves it |
 | [211-PRT-0003](211-PRT-0003-tick-without-the-pit.md) | `PRT` | A tick that does not depend on the 8254: the LAPIC timer, with the PIT only where it counts |
 | [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) | `KRN` | The bootloader loads from its own device and names that volume in `BootInfo`; `vfs_server` mounts that one |
-| [211-KRN-0013](211-KRN-0013-fatal-messages-on-the-screen.md) | `KRN` | The kernel's boot line and fatal messages on the screen too, not only on COM1 |
+| [211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done) | `KRN` | The kernel's boot line and fatal messages on the screen too, not only on COM1 |
 | [211-DRV-0002](211-DRV-0002-ahci-every-port.md) | `DRV` (open) | `ahci`: every port with a disk and every controller; the boot disk found by 211-KRN-0012's identity |
 | [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) | `PRT`, with the maintainer | The first run on the maintainer's PC and 860 PRO, recorded; the profile gets the machine as its own configuration |
 

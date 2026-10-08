@@ -59,6 +59,9 @@ pub unsafe fn activate(root: usize) {
 // Whether a memory map entry is RAM (UEFI types 1-10 and 14: everything but reserved, unusable, MMIO and PAL code).
 fn ram(kind: u32) -> bool { matches!(kind, 1..=10 | 14) }
 
+/// Whether the kernel's identity map reaches [start, start + len) for its own writes (the framebuffer of 211-KRN-0013).
+pub unsafe fn reach_device(start: usize, len: usize) -> bool { (start + len) as u64 <= IDENTITY_END }
+
 /// The identity map of the first TiB, its memory types from the firmware's memory map.
 pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     // The RAM bytes in [start, end).

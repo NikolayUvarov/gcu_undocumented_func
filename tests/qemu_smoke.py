@@ -4945,10 +4945,13 @@ def boot_suite(args, disk):
             while not pattern.search(vm.output.replace("\r", "")):
                 assert time.monotonic() < deadline and vm.process.poll() is None, vm.output[-2000:]
                 vm.collect(); time.sleep(.05)
+            # 211-KRN-0013: the boot line and the report are on the screen too, for a machine without a serial port.
+            screen = "\n".join(line.rstrip() for line in screen_text(vm))
+            assert re.search(r"MIND CORE KERNEL: INIT STARTED\n(.*\n)*KERNEL PANIC: panic test at src/scheduler\.rs:\d+:\d+ CPU=\d+ PID=\d+ NAME=init", screen), screen
         finally:
             vm.close()
         target.write_bytes(kernel)
-        print("PASS: kernel panic report names message, source location, CPU and running task", flush=True)
+        print("PASS: kernel panic report names message, source location, CPU and running task, on COM1 and on the screen", flush=True)
     if args.abi_kernel:
         # Issue 172: programs built for another ABI version stop at once; init does (exit code 126), so the system halts.
         target = disk / "kernel.elf"
@@ -4956,6 +4959,8 @@ def boot_suite(args, disk):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect("INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)", timeout=60)
+            screen = "\n".join(screen_text(vm))
+            assert "INIT EXITED: SYSTEM HALTED (REASON=0000000000007E00)" in screen, screen
         finally:
             vm.close()
         target.write_bytes(kernel)
