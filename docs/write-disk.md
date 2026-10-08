@@ -88,7 +88,6 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - boot mode **UEFI**; CSM or "Legacy" **off**;
 - **Secure Boot off**: the bootloader is not signed yet (issue [350](../issues/350-signed-boot-images.md));
 - SATA mode **AHCI**, not RAID, Intel RST or VMD;
-- **x2APIC off**, if the firmware offers the switch (section 8).
 
 **The disk:**
 
@@ -134,7 +133,7 @@ cat data/hello             # after the reboot: the file survived
 | `BOOT ERROR: display: …` | The firmware gives no linear framebuffer (GOP) | Another video output, or the integrated graphics; report it |
 | `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Write the disk again (section 5) |
 | The shell runs, but `ls` shows another disk's files | `vfs_server` mounted the first FAT volume with an MBR partition table, which may be on another disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Disconnect the other disks and sticks |
-| Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). `x2APIC is not supported yet` is the first suspect ([211-PRT-0002](../issues/211-PRT-0002-x2apic.md)) | Photograph the screen. For x2APIC, turn it off in the firmware if it has the switch |
+| Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). | Photograph the screen |
 | The firmware's picture (a Mac's spinner) stays, and no `MIND CORE BOOT:` line appears | The firmware did not start the bootloader, or its console did not switch to text | Report it, with the boot menu entry you chose |
 | `MIND CORE BOOT:` lines end at `STARTED; READING …` | The bootloader stopped while the firmware read the files from the disk | Another USB port or adapter; report it with a photo |
 | `MIND CORE BOOT:` lines end at `… EXITING BOOT SERVICES`, and nothing from the kernel follows | The kernel stopped before it took the screen, or the GOP the bootloader chose (`USING GOP`) is not the screen's; the `GOP` lines list every one the firmware has ([211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done)) | Photograph the lines. A serial cable on COM1, if the board has one, shows the reason |
