@@ -37,7 +37,7 @@ struct Done { slot: u8, dci: u8, code: u32, residue: u32 }
 
 const QUEUE: usize = 8;
 /// An interrupt IN endpoint being polled and the reports it gave since they were last taken.
-pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool }
+pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool }
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
@@ -272,7 +272,7 @@ impl Xhci {
     pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16) -> bool {
         let Some(index) = self.interrupts.iter().position(Option::is_none) else { return false };
         let length = (packet as u32).min(REPORT_BYTES as u32).max(1);
-        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false });
+        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
         for _ in 0..ARMED { self.queue_report(index); }
         self.doorbell(slot, dci as u32);
         true
@@ -294,7 +294,9 @@ impl Xhci {
     fn report(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(interrupt) = self.interrupts[index].as_mut() else { return };
         let code = status >> 24;
-        if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; return; }
+        // The first report and a failure are logged: a keyboard that sends nothing shows which (211-DRV-0003).
+        if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; mind::println!("[USB] SLOT {} ENDPOINT {}: INTERRUPT TRANSFER FAILED (COMPLETION {})", interrupt.slot, interrupt.dci, code); return; }
+        if !interrupt.reported { interrupt.reported = true; mind::println!("[USB] SLOT {} ENDPOINT {}: FIRST REPORT ({} BYTES)", interrupt.slot, interrupt.dci, interrupt.length.saturating_sub(status & 0xFF_FFFF)); }
         let at = (pointer.wrapping_sub(self.dma.physical(interrupt.ring.page)) / TRB as u64) as usize;
         let buffer = interrupt.ring.page + REPORT_AREA + (at % REPORT_BUFFERS) * REPORT_BYTES;
         let length = interrupt.length.saturating_sub(status & 0xFF_FFFF) as usize;

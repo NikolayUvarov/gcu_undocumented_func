@@ -378,6 +378,7 @@ impl Host {
             None => {
                 let ring = device.rings[..device.ring_count].iter().find(|r| r.0 == target).ok_or(Error::Invalid)?.1;
                 if !self.xhci.arm(device.slot, target, ring, endpoint.packet) { return Err(Error::NoMemory); }
+                mind::println!("[USB] SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", device.slot, target, endpoint.packet, endpoint.interval);
                 self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }
         };

@@ -20,18 +20,20 @@ const CLAIM_MS: u64 = 500; // how often new devices are looked for
 const MAX_DEVICES: usize = 4;
 
 enum Kind { Keyboard(Keyboard), Pointer(Pointer) }
-struct Device { handle: u32, endpoint: u8, kind: Kind }
+struct Device { handle: u32, endpoint: u8, kind: Kind, complained: bool }
 
 // Sets up a claimed HID interface: the boot protocol for a boot keyboard; for anything else the report descriptor
 // says where X and Y are (the boot protocol for a boot mouse whose descriptor cannot be read).
 fn setup(host: &mut Host, handle: u32, info: &Interface) -> Option<Device> {
     let endpoint = info.endpoints().iter().find(|e| e.is_interrupt() && e.is_in())?.address;
     let number = info.number as u16;
+    // Each interface claimed, for a machine whose keys do not arrive (211-DRV-0003).
+    mind::println!("[USB_HID] {:04X}:{:04X} INTERFACE {}: SUBCLASS {} PROTOCOL {}, ENDPOINT {:02X}", info.vendor, info.product, number, info.subclass, info.protocol, endpoint);
     let _ = host.control(handle, 0x21, 0x0A, 0, number, 0); // SET_IDLE 0: reports only on change
     if info.subclass == 1 && info.protocol == 1 {
         host.control(handle, 0x21, 0x0B, 0, number, 0).ok()?; // SET_PROTOCOL boot
         mind::println!("[USB_HID] {:04X}:{:04X} KEYBOARD", info.vendor, info.product);
-        return Some(Device { handle, endpoint, kind: Kind::Keyboard(Keyboard::new()) });
+        return Some(Device { handle, endpoint, kind: Kind::Keyboard(Keyboard::new()), complained: false });
     }
     let length = host.control(handle, 0x81, 6, 0x2200, number, 1024).ok(); // the report descriptor
     let pointer = length.and_then(|n| Pointer::parse(&host.buffer()[..n]));
@@ -41,7 +43,7 @@ fn setup(host: &mut Host, handle: u32, info: &Interface) -> Option<Device> {
         None => { mind::println!("[USB_HID] {:04X}:{:04X} NEITHER KEYBOARD NOR POINTER, LEFT ALONE", info.vendor, info.product); return None }
     };
     mind::println!("[USB_HID] {:04X}:{:04X} {}", info.vendor, info.product, if pointer.absolute { "TABLET" } else { "MOUSE" });
-    Some(Device { handle, endpoint, kind: Kind::Pointer(pointer) })
+    Some(Device { handle, endpoint, kind: Kind::Pointer(pointer), complained: false })
 }
 
 mind::entry!(main);
@@ -75,6 +77,7 @@ fn main(_info: &'static BootInfo) {
             }
             if let Kind::Keyboard(keyboard) = &mut device.kind { keyboard.repeat(now, &mut |byte| deliver(&mut decoder, byte)); }
             // Gone (unplugged, or usb_host restarted): its keys are released and the handle forgotten.
+            if let Err(error) = result { if !device.complained && !matches!(error, Error::NotFound | Error::Peer) { device.complained = true; mind::println!("[USB_HID] REPORTS: {:?}", error); } }
             if matches!(result, Err(Error::NotFound | Error::Peer)) {
                 if let Kind::Keyboard(keyboard) = &mut device.kind { keyboard.release_all(&mut |byte| deliver(&mut decoder, byte)); }
                 mind::println!("[USB_HID] DEVICE GONE");
