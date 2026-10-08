@@ -204,6 +204,10 @@ chmod +x 02_build.sh
 ./02_build.sh
 
 ```
+The crates build in parallel, as many at once as there are processors (`MIND_BUILD_JOBS=2 ./02_build.sh` sets how many). Each
+writes its own log, `code_handoff/build/<crate>.log` (aarch64: `code_handoff/build-aarch64/`). The script prints a
+line as each one ends, and for each one that failed, its errors and the path of its log; `code_handoff/build.log`
+keeps that summary.
 
 
 3. Launch the environment in QEMU, pointing it to your UEFI firmware and the generated root directory:

@@ -12,15 +12,34 @@ X86_ONLY=" ata ps2_kbd audio_gw " # crate directories: port I/O (docs/legacy.md)
 mapfile -t CRATES < <(sed -n '/^USER_CRATES=(/,/^)/{s/^ *"\([^"]*\)"$/\1/p}' "$ROOT/02_build.sh")
 [[ ${#CRATES[@]} -gt 20 ]] || { echo "USER_CRATES not found in 02_build.sh" >&2; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice"
-(cd "$ROOT/bootloader" && cargo build --release --target aarch64-unknown-uefi)
+# The bootloader and every crate build in parallel, a log each (000-KRN-0020).
+source "$ROOT/scripts/build_jobs.sh"
+JOBS=$(build_jobs)
+LOGS="$ROOT/code_handoff/build-aarch64"
+echo ">>> Building the bootloader, the kernel, the services and the programs for aarch64, $JOBS at a time (logs: $LOGS/)..."
+declare -A SEEN=()
+for entry in "${CRATES[@]}"; do
+    crate=${entry%%:*}
+    [[ "$X86_ONLY" == *" $crate "* ]] && continue
+    # Without its aarch64 section a program links as a fixed-address executable the loaders refuse.
+    grep -q "aarch64-unknown-none-softfloat" "$ROOT/$crate/.cargo/config.toml" || { echo "$crate/.cargo/config.toml has no [target.aarch64-unknown-none-softfloat] section" >&2; exit 1; }
+done
+if ! {
+    printf 'bootloader\t%s\t%s\n' "$ROOT/bootloader" "cargo build --release --target aarch64-unknown-uefi"
+    for entry in "${CRATES[@]}"; do
+        crate=${entry%%:*}
+        [[ "$X86_ONLY" == *" $crate "* || -n "${SEEN[$crate]:-}" ]] && continue
+        SEEN[$crate]=1
+        features=""; [[ "$crate" == virtio_net ]] && features=" --no-default-features"
+        printf '%s\t%s\t%s\n' "$crate" "$ROOT/$crate" "cargo build --release --target $TARGET$features"
+    done
+} | run_jobs "$LOGS" "$JOBS"; then
+    echo "!!! aarch64 build failed: the failed builds are named above" >&2; exit 1
+fi
 cp "$ROOT/bootloader/target/aarch64-unknown-uefi/release/bootloader.efi" "$OUT/EFI/BOOT/BOOTAA64.EFI"
 for entry in "${CRATES[@]}"; do
     crate=${entry%%:*}; rest=${entry#*:}; bin=${rest%%:*}; out=${rest#*:}
     [[ "$X86_ONLY" == *" $crate "* ]] && continue
-    # Without its aarch64 section a program links as a fixed-address executable the loaders refuse.
-    grep -q "aarch64-unknown-none-softfloat" "$ROOT/$crate/.cargo/config.toml" || { echo "$crate/.cargo/config.toml has no [target.aarch64-unknown-none-softfloat] section" >&2; exit 1; }
-    features=(); [[ "$crate" == virtio_net ]] && features=(--no-default-features)
-    (cd "$ROOT/$crate" && cargo build --release --target "$TARGET" "${features[@]}")
     cp "$ROOT/$crate/target/$TARGET/release/$bin" "$OUT/$out"
 done
 cp "$ROOT"/LICENSE-MIT "$ROOT"/LICENSE-APACHE "$ROOT"/THIRD_PARTY.md "$ROOT"/LICENSES/*.txt "$OUT/LICENSES/"
