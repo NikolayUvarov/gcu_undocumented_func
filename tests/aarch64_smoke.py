@@ -81,7 +81,8 @@ def main():
 
     output = boot(args, disk_with(), "[INIT] READY")
     log.write_text(output)
-    for line in ("MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
+    for line in ("MIND CORE BOOT: USING GOP ", "MIND CORE BOOT: 1 CPUS; EXITING BOOT SERVICES",  # 211-KRN-0016
+                 "MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
                  "[INIT] STARTED keystore", "[INIT] STARTED sysmon", "[INIT] READY", "[SYSMON] READY",
                  # 300-KRN-0001: the block store over its own RAM disk.
                  "[INIT] STARTED ramdisk#1", "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"):

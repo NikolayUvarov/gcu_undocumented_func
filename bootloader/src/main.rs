@@ -7,7 +7,7 @@ use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 #[cfg(target_arch = "x86_64")]
 use uefi::proto::pi::mp::MpServices;
-use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttributes, OpenProtocolParams};
+use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttributes, OpenProtocolParams, SearchType};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
@@ -47,17 +47,58 @@ fn drawable(info: &ModeInfo) -> bool {
     }
 }
 
+// The mark EDK2 and Apple's firmware put on the handle of each active console output (gEfiConsoleOutDeviceGuid).
+#[repr(C)]
+#[uefi::proto::unsafe_protocol("d3b36f2c-d551-11d4-9a46-0090273fc14d")]
+struct ConsoleOutDevice { _opaque: u8 }
+
+// A line of the loader's progress on the text console (211-KRN-0016): without COM1 it shows where a boot stops.
+fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
+    let mut console = unsafe { system_table.unsafe_clone() };
+    let _ = writeln!(console.stdout(), "MIND CORE BOOT: {}", args);
+}
+
+// A graphics mode and its framebuffer as the progress lines show them.
+struct Shown(ModeInfo, u64);
+impl core::fmt::Display for Shown {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        let format = match self.0.pixel_format() { PixelFormat::Rgb => "RGB", PixelFormat::Bgr => "BGR", PixelFormat::Bitmask => "BITMASK", PixelFormat::BltOnly => "BLT ONLY" };
+        write!(f, "{}x{} STRIDE {} {} FB {:#018X}", self.0.resolution().0, self.0.resolution().1, self.0.stride(), format, self.1)
+    }
+}
+
+// The screen's GOP, as Linux's EFI stub picks it (find_gop): the first of an active console output with a linear
+// framebuffer, else the first with one, else the first. With two GPUs (a MacBook Pro's) or the console splitter's own
+// GOP the first one listed may not be the screen's. Opened without taking it from the console: progress keeps showing.
 // Keeps the firmware's mode if it has a linear framebuffer, else switches to the largest such mode up to 1920x1200.
-fn select_display(services: &BootServices) -> Result<(*mut u32, ModeInfo), &'static str> {
-    let handle = services.get_handle_for_protocol::<GraphicsOutput>().map_err(|_| "no graphics output")?;
-    let mut gop = services.open_protocol_exclusive::<GraphicsOutput>(handle).map_err(|_| "cannot open graphics output")?;
+fn select_display(system_table: &SystemTable<Boot>) -> Result<(*mut u32, ModeInfo), &'static str> {
+    let services = system_table.boot_services();
+    let handles = services.locate_handle_buffer(SearchType::from_proto::<GraphicsOutput>()).map_err(|_| "no graphics output")?;
+    let params = |handle| OpenProtocolParams { handle, agent: services.image_handle(), controller: None };
+    let open = |handle| unsafe { services.open_protocol::<GraphicsOutput>(params(handle), OpenProtocolAttributes::GetProtocol) };
+    say(system_table, format_args!("{} GRAPHICS OUTPUTS", handles.len()));
+    let (mut console, mut linear) = (None, None);
+    for (index, &handle) in handles.iter().enumerate() {
+        let Ok(mut gop) = open(handle) else { say(system_table, format_args!("GOP {}: CANNOT OPEN", index)); continue };
+        // A BltOnly mode has no framebuffer; uefi panics on reading it (the console splitter's GOP with two GPUs).
+        let info = gop.current_mode_info();
+        let fb = if info.pixel_format() == PixelFormat::BltOnly { 0 } else { gop.frame_buffer().as_mut_ptr() as u64 };
+        let is_console = services.test_protocol::<ConsoleOutDevice>(params(handle)).is_ok();
+        say(system_table, format_args!("GOP {}: {}{}", index, Shown(info, fb), if is_console { " CONSOLE" } else { "" }));
+        let usable = info.pixel_format() != PixelFormat::BltOnly && fb != 0;
+        if usable && is_console && console.is_none() { console = Some(index); }
+        if usable && linear.is_none() { linear = Some(index); }
+    }
+    let chosen = console.or(linear).unwrap_or(0);
+    let mut gop = open(*handles.get(chosen).ok_or("no graphics output")?).map_err(|_| "cannot open graphics output")?;
     if !drawable(&gop.current_mode_info()) {
         let area = |mode: &Mode| { let (w, h) = mode.info().resolution(); if w <= 1920 && h <= 1200 { w * h } else { 0 } };
         let best = gop.modes(services).filter(|mode| drawable(mode.info())).max_by_key(area).ok_or("no mode with a linear framebuffer (BltOnly)")?;
         gop.set_mode(&best).map_err(|_| "cannot set a mode with a linear framebuffer")?;
     }
-    let fb_ptr = gop.frame_buffer().as_mut_ptr().cast::<u32>();
-    Ok((fb_ptr, gop.current_mode_info()))
+    let (fb_ptr, info) = (gop.frame_buffer().as_mut_ptr().cast::<u32>(), gop.current_mode_info());
+    say(system_table, format_args!("USING GOP {}: {}", chosen, Shown(info, fb_ptr as u64)));
+    Ok((fb_ptr, info))
 }
 
 fn halt() -> ! {
@@ -171,6 +212,8 @@ fn read_file<'a>(root: &mut uefi::proto::media::file::Directory, name: &str, buf
 #[entry]
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
+    show_text(&system_table);
+    say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {
@@ -196,7 +239,8 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         })()
     };
     let (kernel_entry, programs) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
-    let display = select_display(system_table.boot_services());
+    say(&system_table, format_args!("KERNEL AND {} SERVICES READ", programs.iter().filter(|p| p.len > 0).count()));
+    let display = select_display(&system_table);
     let (fb_ptr, mode) = match display { Ok(display) => display, Err(reason) => fail(&mut system_table, "display", reason) };
     let (pixel_format, pixel_masks) = match (mode.pixel_format(), mode.pixel_bitmask()) {
         (PixelFormat::Rgb, _) => (PIXEL_RGB, [0; 3]),
@@ -205,12 +249,13 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     };
     // The ACPI 2.0 root pointer (or the 1.0 one), for the kernel's reset register.
     let acpi_rsdp = system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI2_GUID).or_else(|| system_table.config_table().iter().find(|e| e.guid == uefi::table::cfg::ACPI_GUID)).map_or(0, |e| e.address as u64);
-    let (boot_info, kernel_stack) = {
+    let (boot_info, kernel_stack, cpu_count) = {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
+    say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);
     let (_system_table, memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     // The final memory map, after boot services are gone, as the kernel will see the machine.

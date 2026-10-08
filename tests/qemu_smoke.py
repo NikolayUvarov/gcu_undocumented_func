@@ -4933,6 +4933,19 @@ def boot_suite(args, disk):
         vm = VM(args, disk.relative_to(ROOT).as_posix(), decoy=Path(decoy).relative_to(ROOT).as_posix())
         vm.close()
     print("PASS: bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+    # 211-KRN-0016: two GPUs, the first listed without a linear framebuffer (virtio-gpu): the loader takes the GOP of a
+    # console output that has one. Its progress lines name each step on the console (COM1 here, through the firmware).
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-vga", "none", "-device", "virtio-gpu-pci", "-device", "VGA"])
+    try:
+        log = ANSI.sub("", vm.log).replace("\r", "")
+        for line in (r"MIND CORE BOOT: STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME\n",
+                     r"MIND CORE BOOT: KERNEL AND \d+ SERVICES READ\n", r"MIND CORE BOOT: \d+ GRAPHICS OUTPUTS\n",
+                     r"MIND CORE BOOT: GOP 0: \d+x\d+ STRIDE \d+ BLT ONLY FB 0x0+ CONSOLE\n",
+                     r"MIND CORE BOOT: USING GOP 1: \d+x\d+ STRIDE \d+ BGR FB 0x[0-9A-F]{16}\n", r"MIND CORE BOOT: \d+ CPUS; EXITING BOOT SERVICES\n"):
+            assert re.search(line, log), (line, log[-3000:])
+    finally:
+        vm.close()
+    print("PASS: bootloader takes the GOP of a console output with a linear framebuffer, not the first listed; its progress lines show on the console", flush=True)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
