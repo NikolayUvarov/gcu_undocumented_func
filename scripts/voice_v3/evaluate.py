@@ -96,6 +96,12 @@ def build():
     if model in ("nemo-ml-fc", "nemo-en-conformer-small", "nemo-en-conformer-medium"):
         m, t = files(model, "model.onnx", "tokens.txt")
         return offline(lambda: O.from_nemo_ctc(m, t, num_threads=1)), [m, t]
+    if model == "gigaam-v3-ctc":
+        m, t = files(model, "model.int8.onnx", "tokens.txt")
+        return offline(lambda: O.from_nemo_ctc(m, t, num_threads=1)), [m, t]
+    if model == "gigaam-v3-rnnt":
+        e, d, j, t = files(model, "encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt")
+        return offline(lambda: O.from_transducer(e, d, j, t, num_threads=1, model_type="nemo_transducer")), [e, d, j, t]
     if model == "parakeet-110m":
         m, t = files(model, "model.onnx", "tokens.txt")
         return offline(lambda: O.from_nemo_ctc(m, t, num_threads=1)), [m, t]

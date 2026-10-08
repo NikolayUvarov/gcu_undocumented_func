@@ -54,3 +54,5 @@
 {"pass": "probe, first 60 sentences", "model": "whisper-tiny-int8-60", "lang": "en", "n": 60, "audio_s": 571.0, "decode_s": 65.0, "rtf": 0.1139, "wer": 23.59, "cer": 13.26, "size_mb": 103.6}
 {"pass": "probe, first 60 sentences", "model": "vosk-zf-streaming-ru-lead05-60", "lang": "ru", "n": 60, "audio_s": 618.2, "decode_s": 37.9, "rtf": 0.0613, "wer": 20.62, "cer": 8.1, "size_mb": 71.7}
 {"pass": "probe, first 60 sentences", "model": "whisper-tiny-fp32-60", "lang": "en", "n": 60, "audio_s": 571.0, "decode_s": 74.4, "rtf": 0.1303, "wer": 10.66, "cer": 5.01, "size_mb": 153.0}
+{"pass": "accuracy", "model": "gigaam-v3-ctc", "lang": "ru", "n": 272, "audio_s": 3067.5, "decode_s": 359.7, "rtf": 0.1173, "wer": 3.31, "cer": 0.87, "size_mb": 224.7}
+{"pass": "accuracy", "model": "gigaam-v3-rnnt", "lang": "ru", "n": 272, "audio_s": 3067.5, "decode_s": 374.9, "rtf": 0.1222, "wer": 3.02, "cer": 0.82, "size_mb": 229.3}
