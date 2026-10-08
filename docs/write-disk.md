@@ -99,6 +99,19 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
 
 **Start it** from the firmware's boot menu (often F8, F11 or F12) by choosing the disk's UEFI entry, or by putting it first in the boot order.
 
+**An Intel Mac** (for example a MacBook Pro of 2012–13; not tried yet, [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md)):
+
+- **Starting it.** Attach the disk by USB, hold Option (⌥) at power-on and choose its `EFI Boot` entry.
+  - Macs before the T2 chip have nothing to change in the firmware.
+  - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
+- **The internal disk.** It keeps its own EFI partition:
+  - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md));
+  - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
+- **No COM1.** Two things show what happened instead:
+  - the bootloader's errors, in text ([211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done));
+  - the kernel's boot lines and stops ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)).
+- **The keyboard and trackpad.** They are USB devices inside the Mac. On Intel 7–9 series chipsets the kernel moves the USB ports from the EHCI controllers to the xHCI one before `usb_host` starts.
+
 ## 7. What a good boot looks like, and what to check
 
 The bootloader loads the kernel and the services from the disk, the screen switches to MIND Core, and the shell's prompt `MIND>` appears. Then:
@@ -125,7 +138,7 @@ cat data/hello             # after the reboot: the file survived
 | The bootloader's text, then a frozen screen with nothing from the kernel | The kernel cannot reach the framebuffer, or stopped before it took it | A serial cable on COM1, if the board has one, shows the reason |
 | The shell runs, but `ls` is empty or `[INIT] ahci NOT STARTED` | SATA is in RAID/RST/VMD mode, or the disk is not on the first SATA port ([211-DRV-0002](../issues/211-DRV-0002-ahci-every-port.md)) | AHCI mode; the first port |
 | Everything waits forever (programs that sleep, time not moving) | The PIT timer may be switched off on this chipset ([211-PRT-0003](../issues/211-PRT-0003-tick-without-the-pit.md)) | Report it |
-| The keyboard does nothing | Only PS/2 and USB keyboards on the first USB 3 (xHCI) controller work | Another USB port (rear, on the chipset) or a PS/2 keyboard |
+| The keyboard does nothing | Only PS/2 and USB keyboards on the first USB 3 (xHCI) controller work; on Intel 7–9 series chipsets the kernel first moves the USB ports there from EHCI | Another USB port (rear, on the chipset) or a PS/2 keyboard |
 
 ## 9. What to send back
 
