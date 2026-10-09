@@ -48,7 +48,7 @@ The same day, the maintainer also decided that any free licence is allowed. Term
 4. **Models as memory objects.** A recognizer or synthesizer maps a model file read-only and shares it ([150](../issues-done/150-user-memory-beyond-the-arena.done)). Its hash is checked once against `MANIFEST.json` before use.
    - Reading must get faster first. On 2026-10-08 `sha256` read `models:` at about 0.2 MB/s: 16 MiB took 82 s under QEMU without KVM (252-APP-0011).
    - At that rate Vosk TTS 0.9's 937 MB would take over an hour. Larger block reads in `vfs_server` and fewer calls per file are the first things to measure.
-5. **The block store** (track B, storage track). A model disk is imported into the store as named, pinned objects, one name per model id, and models are read from the store by name and CID. Requested from the storage track ([requests-STO.md](requests-STO.md)).
+5. **The block store** (track B, storage track). A model disk is imported into the store as named, pinned objects, one name per model id, and models are read from the store by name and CID. The storage track's task is [251-STO-0010](251-STO-0010-speech-models-in-the-store.md), blocked by a durable disk for the store.
 
 Tasks are numbered `251-APP-MMMM` from 0010.
 
