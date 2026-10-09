@@ -1060,6 +1060,16 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
+    # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
+    # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
+    import datetime
+    require(vm.command("date set 2031-05-17 08:30:15"), "CLOCK SET")
+    require(vm.command("date"), "DATE: 2031-05-17 08:30:1")
+    for wrong in ("2031-02-30 08:30", "2100-01-01 00:00", "2031-05-17"):
+        require(vm.command(f"date set {wrong}"), "USAGE: DATE SET YYYY-MM-DD HH:MM[:SS]")
+    require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
+    require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
+    print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
 
 
 def line_faces_check(vm):

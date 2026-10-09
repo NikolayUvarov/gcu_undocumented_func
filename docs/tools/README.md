@@ -50,7 +50,7 @@ Priority: **P0** — requested, or needed by a requested tool; **P1** — next; 
 | `ipc` | Endpoints, who serves and who holds them, queue depth, blocked tasks, wait-for graph with cycles highlighted | `sysinfo` | P1 |
 | `caps` | Capabilities of a task (kind, rights, generation, range, derivation parent); derivation tree; what a revoke would remove | `sysinfo` with a stronger right (the authority graph is sensitive) | P1 |
 | `dmesg` | System log: boot, init, services, faults, with source and time | `logd` (F10) | P1 |
-| `uptime`, `free`, `date` | One-line console summaries | `sysinfo`, `rtc` | P2 |
+| `uptime`, `free`, `date` | One-line console summaries; `date set YYYY-MM-DD HH:MM[:SS]` sets the clock through the shell's setting client (`rtc.wit` 1.2, 211-APP-0042; the clock keeps no time zone) | `sysinfo`, `rtc` | P2 |
 
 ### 2.3 Services and control
 
