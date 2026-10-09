@@ -52,3 +52,7 @@ New tracks get a code and a range from 600, in blocks of 50, from the maintainer
 - **Dependencies go through requests, not through edits.** Examples:
   - a system call for `STO` is a `KRN` task;
   - a change in the bootloader for `UPD` is done together with `KRN`/`PRT`.
+- **The storage session's standing permission (the maintainer, 2026-10-09).**
+  - The storage session (`claude/relaxed-meitner-5bmhpz`) works every track that no other session holds, switching between them as its work needs. That excludes the kernel and tools tracks, which have sessions of their own.
+  - When its own task needs a small change in `KRN`'s or `APP`'s area (grant lines in `init`, a constant in `common/abi.rs` or `libmind`, a shell command), it makes the change as a numbered task of that track. It numbers from `KRN-0040` and `APP-0015`, so as not to meet those sessions' own numbers, and says so in the task.
+  - Everything else for those tracks still goes through their requests.
