@@ -1,6 +1,6 @@
 # 600 — An Apple Silicon Mac as a host: the aarch64 system in a virtual machine with HVF
 
-**Type:** porting (main task) · **Owner:** `APL` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** a person with an Apple Silicon Mac ([issues-human](../issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3, MC-12.9
+**Type:** porting (main task) · **Owner:** `APL` track (open) · **Priority:** P3 (was P2; the maintainer's goal is bare metal, 2026-10-09) · **Status:** parked (2026-10-09: the `APL` track waits for a Mac whose boot chain may be changed; [TRACKS.md](../TRACKS.md)) · **Blocked by:** a person with an Apple Silicon Mac ([issues-human](../issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3, MC-12.9
 
 Opened on 2026-10-08 with the track `APL`, at the maintainer's request: a guide to running on Apple Silicon, and a track for what is not finished. The guide is [docs/apple-silicon.md](../docs/apple-silicon.md) ([Russian](../docs/apple-silicon_RU.md)); running natively is main task [210](210-apple-silicon-native.md).
 

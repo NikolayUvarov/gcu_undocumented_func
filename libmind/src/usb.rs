@@ -120,6 +120,20 @@ impl Host {
         }
         Ok(count)
     }
+    /// The same for reports of up to `longest` bytes, several packets each (usb.wit 1.1, 211-DRV-0018).
+    pub fn reports_up_to(&mut self, handle: u32, address: u8, longest: u16, mut each: impl FnMut(&[u8])) -> Result<usize> {
+        let r = usb::reports_up_to(self.endpoint, handle, address, longest);
+        let count = self.check(r)? as usize;
+        let buffer = self.buffer.as_slice();
+        let mut at = 0;
+        for _ in 0..count {
+            let Some(length) = buffer.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize) else { break };
+            let Some(report) = buffer.get(at + 2..at + 2 + length) else { break };
+            each(report);
+            at += 2 + length;
+        }
+        Ok(count)
+    }
 }
 
 impl Drop for Host { fn drop(&mut self) { let _ = ipc::revoke(self.lease); let _ = ipc::drop_cap(self.lease); } }

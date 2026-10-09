@@ -6,6 +6,7 @@
 use core::arch::global_asm;
 
 pub const SIZE: usize = 304; // 37 words, 16-byte aligned
+pub fn size() -> usize { SIZE }
 const X0: usize = 0; const SP_EL0: usize = 31; const ELR: usize = 32; const SPSR: usize = 33; const ESR: usize = 34; const FAR: usize = 35; const KIND: usize = 36;
 pub const MSI_FIRST: usize = 16;
 // Vector kinds (the pushed KIND word).
@@ -163,6 +164,8 @@ pub fn exit_stub(mailbox: u64) -> [u8; 36] {
 pub unsafe fn prepare_stack(_stack: usize, size: usize) -> usize { crate::paging::USER_STACK + size }
 
 // `destination` is a task's context record.
+/// Never needed on aarch64: no checked read faults (arch/aarch64/report.rs).
+pub unsafe fn resume_at(_sp: usize, _pc: u64) {}
 pub unsafe fn save(sp: usize, destination: usize) { core::ptr::copy(sp as *const u8, destination as *mut u8, SIZE); }
 
 pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {

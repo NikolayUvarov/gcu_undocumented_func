@@ -23,8 +23,11 @@ unsafe fn table(address: u64) -> Option<&'static [u8]> { let header = bytes(addr
 // A device address the kernel can reach (its identity map), else 0: not used.
 fn mapped(address: u64) -> usize { if address != 0 && address < WINDOW { address as usize } else { 0 } }
 
+static RSDP: AtomicU64 = AtomicU64::new(0);
+
 /// Reads the MCFG (the segment-0 ECAM goes to PCI), the MADT, FADT, SPCR and GTDT through the XSDT.
 pub unsafe fn init(rsdp: u64) {
+    RSDP.store(rsdp, Ordering::Relaxed);
     let Some(root) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { serial_print("MIND CORE KERNEL: ACPI: NO RSDP\n"); return };
     let Some(list) = table(u64_at(root, 24)) else { return };
     // QEMU (`virt`): its PL011 and PL031, the SPCR naming the same UART.
@@ -162,4 +165,26 @@ fn report_pins() {
         let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: PINS {} AT {:#x} ({} BYTES)\r", kind, board::get(base), board::get(size));
     }
     if !any { serial_print("MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES\n"); }
+}
+
+/// The RSDP and every table the XSDT lists (itself first), with the DSDT and FACS the FADT points at, for the hardware
+/// report (174-KRN-0038).
+pub fn tables(mut each: impl FnMut(&'static [u8])) {
+    unsafe {
+        let Some(root) = bytes(RSDP.load(Ordering::Relaxed), 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { return };
+        each(root);
+        let Some(list) = table(u64_at(root, 24)) else { return };
+        each(list);
+        for at in (36..list.len().saturating_sub(7)).step_by(8) {
+            let Some(found) = table(u64_at(list, at)) else { continue };
+            each(found);
+            if &found[..4] == b"FACP" {
+                let wide = |at: usize| if found.len() >= at + 8 { u64_at(found, at) } else { 0 };
+                for (x, legacy) in [(140, 40), (132, 36)] {
+                    let address = if wide(x) != 0 { wide(x) } else if found.len() >= legacy + 4 { u32_at(found, legacy) as u64 } else { 0 };
+                    if let Some(pointed) = table(address) { each(pointed); }
+                }
+            }
+        }
+    }
 }

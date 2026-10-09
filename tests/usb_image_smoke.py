@@ -117,9 +117,18 @@ def run(args, booted):
     read = lambda file: subprocess.run(["mtype", "-i", f"{booted}@@{start * 512}", f"::{file}"], check=True, capture_output=True, env=MTOOLS_ENV).stdout
     require(read(name).decode(errors="replace"), "LOG-PARTITION-CHECK")
     assert read("note.txt") == b"written on MIND CORE\n", read("note.txt")
+    # The hardware report (174-KRN-0038): this boot's beside its system log, and the firmware's ACPI tables.
+    report = read(f"hw{name[4:8]}.txt").decode(errors="replace")
+    for section in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "Memory map (the firmware's)", "ACPI tables", "PCI functions", "The kernel's choices", "Kernel lines", "MIND CORE KERNEL: INIT STARTED"):
+        assert section in report, (section, report[:2000])
+    assert re.search(r"USB controller", report), report
+    for table in ("FACP", "DSDT", "APIC"):
+        data = read(f"acpi/{table}.bin")
+        assert data[:4] == table.encode() and len(data) == struct.unpack_from("<I", data, 4)[0], (table, len(data))
+    assert read("acpi/RSDP.bin").startswith(b"RSD PTR ")
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
-          "VFS over xHCI USB mass storage through usb_host; the boot's system log and a file on the log partition, read on the host")
+          "VFS over xHCI USB mass storage through usb_host; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":

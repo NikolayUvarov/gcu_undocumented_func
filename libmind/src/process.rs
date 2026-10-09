@@ -147,7 +147,7 @@ pub const REQUEST_SYSINFO: u32 = 2; // a sysmon client in SLOT_SYSINFO
 pub const REQUEST_FILE: u32 = 4; // the directory of the file named in the arguments (a client confined to it)
 pub const REQUEST_LIFECYCLE: u32 = 8; // service lifecycle control in SLOT_LIFECYCLE
 pub const REQUEST_LOG: u32 = 16; // the system log
-pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, data/), for fm
+pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, log:, data/), for fm
 pub const REQUEST_NETWORK: u32 = 64; // a flow grant from the network policy broker in SLOT_NETWORK (issue 102)
 pub const REQUEST_AUTHORITY: u32 = 128; // the sysmon client with the authority badge in SLOT_SYSINFO: who holds what (issue 081)
 pub const REQUEST_WINDOW: u32 = 256; // a client of the window broker in SLOT_WINDOW: the program shows itself in a window (issue 157)
@@ -159,6 +159,10 @@ pub const REQUEST_CAMERA: u32 = 8192; // the video gateway's client in SLOT_CAME
 pub const REQUEST_BLOCKSTORE: u32 = 16384; // the shell's block store client in SLOT_BLOCKSTORE (300-KRN-0001)
 pub const REQUEST_BLOCKSTORE_READ: u32 = 32768; // a block store client that may only get, in SLOT_BLOCKSTORE (300-KRN-0024)
 pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in SLOT_FIRMWARE, lent once the user agreed (351-KRN-0027)
+/// The badge of init's lifecycle client that may ask `init.wit` `reboot` (the updater's, 351-KRN-0022).
+pub const BADGE_REBOOT: u16 = 1;
+/// The badge of the shell's lifecycle client: set, so no copy of it can be badged for `reboot` (a badge is set once).
+pub const BADGE_LIFECYCLE: u16 = 2;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 

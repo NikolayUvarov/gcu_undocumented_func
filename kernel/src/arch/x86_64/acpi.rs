@@ -21,8 +21,11 @@ fn u64_at(data: &[u8], at: usize) -> u64 { u64::from_le_bytes(data[at..at + 8].t
 // A whole table with signature check, or None.
 unsafe fn table(address: u64) -> Option<&'static [u8]> { let header = bytes(address, 36)?; bytes(address, u32_at(header, 4).max(36) as u64) }
 
+static RSDP: AtomicU64 = AtomicU64::new(0);
+
 /// Finds the FADT through the RSDP the bootloader passed and keeps its reset register, if it has one.
 pub unsafe fn init(rsdp: u64) {
+    RSDP.store(rsdp, Ordering::Relaxed);
     let Some(root) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR ") else { serial_print("MIND CORE KERNEL: ACPI: NO RSDP\n"); return };
     let (list, entry) = if root[15] >= 2 && u64_at(root, 24) != 0 { (u64_at(root, 24), 8) } else { (u32_at(root, 16) as u64, 4) };
     let Some(list) = table(list) else { return };
@@ -31,6 +34,13 @@ pub unsafe fn init(rsdp: u64) {
         let address = if entry == 8 { u64_at(list, at) } else { u32_at(list, at) as u64 };
         let Some(table) = table(address) else { continue };
         if &table[..4] == b"APIC" { processors(table); continue; }
+        // Allocation entries of 16 bytes from offset 44: base, segment, first bus, last bus.
+        if &table[..4] == b"MCFG" {
+            if let Some(entry) = (44..table.len().saturating_sub(15)).step_by(16).find(|&e| u16::from_le_bytes([table[e + 8], table[e + 9]]) == 0) {
+                crate::pcicfg::reserve_ecam(u64_at(table, entry), table[entry + 10], table[entry + 11]);
+            }
+            continue;
+        }
         // Flags bit 10: RESET_REG_SUP; the generic address at 116, the value at 128 (FADT revision 2 and later).
         if &table[..4] != b"FACP" { continue; }
         fadt = true;
@@ -44,6 +54,31 @@ pub unsafe fn init(rsdp: u64) {
         if matches!(space, 0..=2) && register != 0 && register < 1 << 48 { RESET.store((space as u64) << 56 | (table[128] as u64) << 48 | register, Ordering::Release); serial_print("MIND CORE KERNEL: ACPI: RESET REGISTER FOUND\n"); }
     }
     if !fadt { serial_print("MIND CORE KERNEL: ACPI: NO FADT\n"); }
+}
+
+/// The RSDP and every table the RSDT or XSDT lists (itself first), with the DSDT and FACS the FADT points at, for the
+/// hardware report (174-KRN-0038).
+pub fn tables(mut each: impl FnMut(&'static [u8])) {
+    unsafe {
+        let Some(root) = bytes(RSDP.load(Ordering::Relaxed), 20).filter(|r| &r[..8] == b"RSD PTR ") else { return };
+        let root = if root[15] >= 2 { bytes(RSDP.load(Ordering::Relaxed), 36).unwrap_or(root) } else { root };
+        each(root);
+        let (list, entry) = if root.len() >= 36 && u64_at(root, 24) != 0 { (u64_at(root, 24), 8) } else { (u32_at(root, 16) as u64, 4) };
+        let Some(list) = table(list) else { return };
+        each(list);
+        for at in (36..list.len().saturating_sub(entry - 1)).step_by(entry) {
+            let Some(found) = table(if entry == 8 { u64_at(list, at) } else { u32_at(list, at) as u64 }) else { continue };
+            each(found);
+            // X_DSDT at 140, else DSDT at 40; X_FIRMWARE_CTRL at 132, else FIRMWARE_CTRL at 36 (the FACS).
+            if &found[..4] == b"FACP" {
+                let wide = |at: usize| if found.len() >= at + 8 { u64_at(found, at) } else { 0 };
+                for (x, legacy) in [(140, 40), (132, 36)] {
+                    let address = if wide(x) != 0 { wide(x) } else if found.len() >= legacy + 4 { u32_at(found, legacy) as u64 } else { 0 };
+                    if let Some(pointed) = table(address) { each(pointed); }
+                }
+            }
+        }
+    }
 }
 
 /// The ACPI PM timer's port and counter mask, if the FADT names one.

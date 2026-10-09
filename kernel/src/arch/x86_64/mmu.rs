@@ -92,7 +92,15 @@ pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     core::mem::forget(root);
     enable_protection(true);
     activate(kernel_root());
+    protect_from_programs();
     Ok(())
+}
+
+// The boot CPU's SMEP, SMAP and UMIP, on the kernel's page tables (000-KRN-0039).
+unsafe fn protect_from_programs() {
+    let mut cr4: usize;
+    asm!("mov {}, cr4", out(reg) cr4);
+    asm!("mov cr4, {}", in(reg) cr4 | PROTECTION.load(Ordering::Acquire) as usize);
 }
 
 pub unsafe fn enable_protection(bsp: bool) {
@@ -113,22 +121,62 @@ pub unsafe fn enable_protection(bsp: bool) {
     asm!("mov {}, cr4", out(reg) cr4);
     cr4 |= (1 << 9) | (1 << 10);
     // Flush inherited global translations as well. No user FSGSBASE or PCID.
-    cr4 &= !((1 << 7) | (1 << 16) | (1 << 17) | (1 << 18));
-    // XSAVE with x87, SSE and AVX state when the CPU has both (issue 153); the BSP decides, the APs follow.
+    cr4 &= !((1 << 7) | (1 << 16) | (1 << 17) | (1 << 18) | (SMEP | SMAP | UMIP) as usize);
+    // XSAVE with every state component programs can use when the CPU has XSAVE and AVX (issue 153, 174-KRN-0037);
+    // the BSP decides, the APs follow.
     let features = core::arch::x86_64::__cpuid(1).ecx;
     let avx = features & (1 << 26) != 0 && features & (1 << 28) != 0;
     let xsave = if bsp { avx } else { crate::context::XSAVE.load(Ordering::Acquire) };
     if xsave { cr4 |= 1 << 18; }
+    // The kernel never executes (SMEP) nor reads or writes (SMAP) a program's page through the program's address, and
+    // programs cannot read descriptor table addresses (UMIP), where the CPU has them (000-KRN-0039). The APs start on the
+    // kernel's page tables; the BSP sets them in `protect_from_programs`, once off the firmware's, whose pages may be
+    // user pages.
+    if bsp { PROTECTION.store(protection_offered(), Ordering::Release); } else { cr4 |= PROTECTION.load(Ordering::Acquire) as usize; }
     asm!("mov cr4, {}", in(reg) cr4);
-    if xsave {
-        asm!("xsetbv", in("ecx") 0u32, in("eax") XCR0 as u32, in("edx") 0u32);
-        assert!(core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize <= crate::context::AREA, "XSAVE area too large");
+    let xcr0 = if !xsave { 0 } else if bsp { components() } else { crate::context::XCR0.load(Ordering::Acquire) };
+    if xsave { asm!("xsetbv", in("ecx") 0u32, in("eax") xcr0 as u32, in("edx") (xcr0 >> 32) as u32); }
+    let size = if xsave { core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize } else { 512 };
+    if bsp {
+        crate::context::set_area(size);
+        crate::context::XCR0.store(xcr0, Ordering::Release);
+        crate::context::XSAVE.store(xsave, Ordering::Release);
     }
-    if bsp { crate::context::XSAVE.store(xsave, Ordering::Release); }
+    assert!(size <= crate::context::area(), "XSAVE area too large");
 }
 
-/// x87, SSE and AVX state components (XCR0) when XSAVE is used.
-pub const XCR0: u64 = 0b111;
+/// CR4's SMEP, SMAP and UMIP bits.
+pub const SMEP: u64 = 1 << 20;
+pub const SMAP: u64 = 1 << 21;
+pub const UMIP: u64 = 1 << 11;
+// The protection bits set in CR4 (the boot CPU's choice; the others follow).
+static PROTECTION: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub fn protection() -> u64 { PROTECTION.load(Ordering::Acquire) }
+fn protection_offered() -> u64 {
+    if core::arch::x86_64::__cpuid(0).eax < 7 { return 0; }
+    let leaf = core::arch::x86_64::__cpuid_count(7, 0);
+    (if leaf.ebx & 1 << 7 != 0 { SMEP } else { 0 }) | (if leaf.ebx & 1 << 20 != 0 { SMAP } else { 0 }) | (if leaf.ecx & 1 << 2 != 0 { UMIP } else { 0 })
+}
+/// The protections in force, for the boot line and the report.
+pub fn protection_names() -> &'static str {
+    match (protection() & SMEP != 0, protection() & SMAP != 0, protection() & UMIP != 0) {
+        (true, true, true) => "SMEP SMAP UMIP", (true, true, false) => "SMEP SMAP", (true, false, true) => "SMEP UMIP", (true, false, false) => "SMEP",
+        (false, true, true) => "SMAP UMIP", (false, true, false) => "SMAP", (false, false, true) => "UMIP", (false, false, false) => "NONE",
+    }
+}
+
+// x87, SSE and AVX, and where CPUID 0xD lists all of a group: AVX-512's opmask, ZMM_Hi256 and Hi16_ZMM, AMX's
+// XTILECFG and XTILEDATA.
+fn components() -> u64 {
+    let leaf = core::arch::x86_64::__cpuid_count(0xD, 0);
+    let supported = (leaf.edx as u64) << 32 | leaf.eax as u64;
+    let mut xcr0 = 0b111;
+    for group in [AVX512, AMX] { if supported & group == group { xcr0 |= group; } }
+    xcr0
+}
+/// XCR0's AVX-512 and AMX components.
+pub const AVX512: u64 = 0b111 << 5;
+pub const AMX: u64 = 0b11 << 17;
 
 pub unsafe fn activate(root: usize) {
     asm!("mov cr3, {}", in(reg) root);
