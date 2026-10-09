@@ -1,6 +1,6 @@
-# 174-KRN-0038 — A complete hardware report on every boot
+# 174-KRN-0038 — A complete hardware report on every boot — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-1.2, MC-10.2, MC-10.4, MC-12.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [174](../issues/174-full-use-of-pc-hardware.md) · **Constitution:** MC-1.2, MC-10.2, MC-10.4, MC-12.1
 
 ## Problem
 
@@ -83,6 +83,16 @@ Left:
 - the MacBook Pro's report;
 - the later steps of 174: SMBIOS (the bootloader to pass its entry point), the drivers' devices (NVMe identify, USB descriptors, HDA codecs, EDID), and NUMA nodes.
 
+## Resolution
+
+Done as the progress above says. The MacBook Pro's run (MacBookPro10,1, 2026-10-09) met the last criterion.
+- `log:hw0001.txt` (70701 bytes) and 22 tables in `log:acpi/` were on the USB drive after one boot.
+- The PCI section names both GPUs, the Intel HD 4000 (00:02.0, 8086:0166) and the NVIDIA GK107 (01:00.0, 10DE:0FD5, `PMC_BOOT_0` 0E7150A2).
+- It names both EHCI controllers (00:1A.0, 00:1D.0) with their BARs.
+- The kernel's lines include those the screen lost: XHCI routing, the EHCI hand-off, the BAR move.
+
+The later steps of 174 are not this task: SMBIOS, the drivers' own devices (NVMe identify, USB descriptors, HDA codecs, EDID), NUMA nodes.
+
 ## Related
 
-[174](174-full-use-of-pc-hardware.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.md).
+[174](../issues/174-full-use-of-pc-hardware.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.done).

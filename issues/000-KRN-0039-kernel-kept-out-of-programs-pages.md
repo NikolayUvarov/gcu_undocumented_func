@@ -1,6 +1,6 @@
 # 000-KRN-0039 — The kernel kept out of programs' pages: SMEP, SMAP and UMIP on x86, PAN on aarch64
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (done in QEMU; real machines' report lines left) · **Blocked by:** — · **Main task:** none · **Roadmap:** track K (kernel hardening) · **Constitution:** MC-1.2, MC-1.5, MC-12.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (done in QEMU and on the MacBook Pro; a PC with SMAP left) · **Blocked by:** — · **Main task:** none · **Roadmap:** track K (kernel hardening) · **Constitution:** MC-1.2, MC-1.5, MC-12.1
 
 ## Problem
 
@@ -51,8 +51,10 @@ The kernel reaches program memory through physical frames (`paging.rs` `readable
   - **x86 with `qemu64`:** `NONE`, and `sgdt` is allowed.
   - **aarch64 with `-cpu max`:** `PXN PAN`. The normal, smp and busy suites and `aarch64_smoke.py` pass.
 
-**Left:** the line in the hardware report of a run on the MacBook Pro and on a PC (174-KRN-0038 writes it).
+**2026-10-09, the MacBook Pro (i7-3615QM, Ivy Bridge):** `PROTECTION: SMEP` on the boot line and in LOG:hw0001.txt. Ivy Bridge has SMEP; SMAP (Broadwell) and UMIP (Cannon Lake and Zen 2) came later, and the report lists neither in CPUID leaf 7. The system ran as before.
+
+**Left:** a PC with SMAP and UMIP (Broadwell or later, or a Zen), its report line recorded.
 
 ## Related
 
-[knowledge/06](../knowledge/06-apple-security-lessons.md) (SMEP/SMAP row), [174-KRN-0038](174-KRN-0038-hardware-report.md) (the report), `docs/profile/threat-model.md`.
+[knowledge/06](../knowledge/06-apple-security-lessons.md) (SMEP/SMAP row), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the report), `docs/profile/threat-model.md`.

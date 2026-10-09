@@ -67,7 +67,7 @@ The maintainer asked that the mind can use the test MacBook Pro's camera, starte
 
 - **Where the camera sits.** On the MacBook Pro Retina of 2012 the FaceTime HD camera is expected, from Linux reports, to be a USB video class device (05AC:8510) on the internal EHCI side. The later models use a PCIe camera that is not UVC. The hardware report (174-KRN-0038) and `usb_host`'s log will say which.
 - **What it needs, in order:**
-  1. EHCI running on the Mac: [211-DRV-0004](211-DRV-0004-ehci.md), whose registers the kernel refused until [211-KRN-0021](211-KRN-0021-registers-inside-a-page.md) moved them (in `fast-test`, waiting for the maintainer's run);
+  1. EHCI running on the Mac: [211-DRV-0004](211-DRV-0004-ehci.md), whose registers the kernel refused until [211-KRN-0021](../issues-done/211-KRN-0021-registers-inside-a-page.done) moved them (in `fast-test`, waiting for the maintainer's run);
   2. isochronous transfers in `usb_host`, on EHCI (iTD) and on xHCI. QEMU's `usb-audio`, an isochronous device, tests the transfer path without a camera;
   3. the UVC class itself (step 2): the probe and commit of a format, payload headers, frame assembly, and YUY2 and MJPEG into `video_gw`.
 

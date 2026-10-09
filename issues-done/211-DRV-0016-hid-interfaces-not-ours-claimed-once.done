@@ -39,4 +39,4 @@ They lagged by about a second: [211-DRV-0017](../issues/211-DRV-0017-usb-input-d
 
 ## Related
 
-[211-DRV-0004](../issues/211-DRV-0004-ehci.md), [211-KRN-0021](../issues/211-KRN-0021-registers-inside-a-page.md), `usb_hid/src/main.rs`.
+[211-DRV-0004](../issues/211-DRV-0004-ehci.md), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.done), `usb_hid/src/main.rs`.

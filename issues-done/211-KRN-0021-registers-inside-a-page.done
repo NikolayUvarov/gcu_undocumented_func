@@ -1,10 +1,10 @@
-# 211-KRN-0021 — Device registers that start inside a page (Apple's EHCI)
+# 211-KRN-0021 — Device registers that start inside a page (Apple's EHCI) — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-3.9, MC-12.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-3.9, MC-12.1
 
 ## Problem
 
-On the MacBook Pro of [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), `usb_host` logged nothing about its EHCI controllers ([211-DRV-0004](211-DRV-0004-ehci.md)), although init finds two (`00:1a.0`, `00:1d.0`, a BAR of 1 KiB each). The internal keyboard and trackpad sit behind them and stayed silent.
+On the MacBook Pro of [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), `usb_host` logged nothing about its EHCI controllers ([211-DRV-0004](../issues/211-DRV-0004-ehci.md)), although init finds two (`00:1a.0`, `00:1d.0`, a BAR of 1 KiB each). The internal keyboard and trackpad sit behind them and stayed silent.
 
 Every place where that start can fail was silent:
 
@@ -64,6 +64,17 @@ In QEMU every BAR starts on a page.
 
 Left: the acceptance criteria on the MacBook Pro. `usb_host` should log both EHCIs, with their register addresses and ports.
 
+## Resolution
+
+Done as the progress above says.
+
+**QEMU:** the suites pass with BARs that start on a page, and the `bar-move-test` kernel's check moves a packed BAR (81081800 to 81000000) and the card answers there.
+
+**The MacBook Pro (LOG:boot0001.log, 2026-10-09):**
+- The kernel moved AHCI's BAR 5 out of the page it shared with both EHCI controllers: `PCI: BAR 5 OF 0000FA MOVED FROM C1C16000 TO C1100000: ITS PAGE HELD REGISTERS OF 0000D0`. init logged `DEVICE 13 BAR 5: REGISTERS MOVED`, and AHCI then read the internal SSD (490234752 sectors).
+- `usb_host` logged both EHCI controllers, 8086:1E2D at C1C16C00 and 8086:1E26 at C1C16800, with their ports.
+- Behind them it found the internal keyboard and trackpad (05AC:0263), the FaceTime HD camera (05AC:8510) and the Bluetooth module.
+
 ## Related
 
-[211-DRV-0004](211-DRV-0004-ehci.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the log that showed it), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md).
+[211-DRV-0004](../issues/211-DRV-0004-ehci.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log that showed it), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md).
