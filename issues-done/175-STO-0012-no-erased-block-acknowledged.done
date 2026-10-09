@@ -1,0 +1,43 @@
+# 175-STO-0012 — A collection cut by a failure leaves no erased block acknowledged (audit A05) — done
+
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 (P1 before a durable medium) · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) · **Constitution:** MC-4.4, MC-4.5, MC-4.8
+
+Numbered from the kernel track's request in `requests-STO.md` (routing the 2026-10-09 audit), by the storage session.
+
+## Problem
+
+Audit finding A05 ([audit](../issues-audit/2026-10-09-repository-audit.md#a05--an-interrupted-collection-leaves-blockstore-acknowledging-erased-data)), confirmed and reproduced again here with `issues-audit/repro/blockstore_repro.rs`:
+1. A collection's sweep (`pass(true)` in `blockstore/src/store.rs`) erased an unretained block record as it met it, but dropped the index entry only after the whole scan.
+2. A read, write or flush failure later in the scan returned `Device`, and the erased record stayed indexed.
+3. A `put` of the same bytes then took the fast path for a block already held. It returned the CID without writing, and the next `get` found `corrupt`. That breaks `put`'s contract (MC-4.4).
+
+## Plan and resolution
+
+The sweep takes the indexed copy out of the index before it erases the record's sectors. A failure at any later point leaves the index consistent with every erase begun:
+- a block whose erase did not finish is no longer indexed, so its next `put` writes it again;
+- a block the sweep did not reach yet is untouched and still indexed with its record intact.
+
+After a sweep that completes, the final pass over the index drops nothing more in practice. It still drops an unretained entry whose record the scan did not meet.
+
+The runs of blank sectors a failed sweep leaves are those it found before the failure; a record whose erase did not finish is not among them. A free marker left by a cut erase is finished by the next mount or sweep, as before.
+
+## Acceptance criteria
+
+- The index and the free space stay consistent with every erase that completed (the audit's first option).
+- Failures injected throughout sweep and erase, then puts retried on the same instance: every put that succeeds reads back.
+
+## Resolution
+
+Done. `tests/blockstore_host.rs`, `a_collection_cut_by_a_failure_leaves_no_erased_block_acknowledged`:
+- a store holds three blocks whose leases have run out and two still leased;
+- a collection runs once clean, to count its reads and writes;
+- then once for each of them failing in turn, and each such collection is cut;
+- after each, all five blocks are put again on the same instance, and each must read back whole.
+
+The test fails on the old `store.rs`, at the first `get` after a cut collection, and passes on the new one with the other 37 store tests. The audit's probe keeps its assertions, which establish the defect ([issues-audit/README.md](../issues-audit/README.md)); on the fixed store it stops at `has`, since the erased block is no longer indexed.
+
+On the platform nothing can make the RAM disk fail a read in the middle of a collection, so this is host evidence of the logic only (MC-12.1).
+
+## Related
+
+[175](../issues/175-audit-2026-10-09.md), [303](303-retention-and-collection.done), [300-STO-0005](300-STO-0005-corruption-on-the-platform.done).

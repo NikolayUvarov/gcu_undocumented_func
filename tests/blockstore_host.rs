@@ -23,9 +23,9 @@ use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Pin, 
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
-struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize }
+struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize, reads: usize, fail_read_at: Option<usize>, written: usize, fail_write_at: Option<usize> }
 impl Memory {
-    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0 } }
+    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0, reads: 0, fail_read_at: None, written: 0, fail_write_at: None } }
     fn flip(&mut self, sector: u64, byte: usize) { self.data[sector as usize * SECTOR + byte] ^= 0x10; }
 }
 impl Device for &mut Memory {
@@ -33,6 +33,8 @@ impl Device for &mut Memory {
     fn writable(&self) -> bool { self.writable }
     fn read(&mut self, lba: u64, out: &mut [u8]) -> bool {
         assert!(out.len() % SECTOR == 0 && out.len() <= BUFFER, "reads are whole sectors, at most a record");
+        self.reads += 1;
+        if self.fail_read_at == Some(self.reads) { return false; }
         let at = lba as usize * SECTOR;
         out.copy_from_slice(&self.data[at..at + out.len()]);
         true
@@ -40,6 +42,8 @@ impl Device for &mut Memory {
     fn write(&mut self, lba: u64, data: &[u8]) -> bool {
         assert!(self.writable && data.len() % SECTOR == 0 && data.len() <= BUFFER);
         if self.fail_write { return false; }
+        self.written += 1;
+        if self.fail_write_at == Some(self.written) { return false; }
         let at = lba as usize * SECTOR;
         // A block, name, pin or commit record goes only into blank sectors: nothing stored is overwritten.
         if [&b"MIND-BLK"[..], b"MIND-REF", b"MIND-PIN", b"MIND-TXN"].iter().any(|m| data.starts_with(m)) {
@@ -1082,3 +1086,37 @@ fn a_commit_record_goes_once_no_name_keeps_its_versions() {
     assert_eq!((store.snapshot(b"a").unwrap().0, store.snapshot(b"b").unwrap().0, store.stats().damaged), (2 + HISTORY as u64, 2 + HISTORY as u64, 0));
 }
 
+
+#[test]
+fn a_collection_cut_by_a_failure_leaves_no_erased_block_acknowledged() {
+    // Audit A05 (175-STO-0012): a sweep that fails after erasing a record must not leave it indexed, or a put of the
+    // same bytes is acknowledged without a write. Each read and each write of a collection fails in turn; then every
+    // block is put again on the same instance, and each must read back whole.
+    let blocks: Vec<Vec<u8>> = (0..5).map(|i| block(i, 300 + 2000 * i)).collect();
+    // Three blocks whose leases run out, then two put later whose leases still run at the collection; `fail` sets the
+    // device's failing read or write for the collection and gives back how many reads and writes it made.
+    let run = |fail: (Option<usize>, Option<usize>)| -> (bool, usize, usize) {
+        let mut medium = Memory::new(160);
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let mut cids: Vec<Cid> = blocks[..3].iter().map(|b| store.put(Codec::Raw, b).unwrap()).collect();
+        store.set_time(LEASE_NS / 2);
+        cids.extend(blocks[3..].iter().map(|b| store.put(Codec::Raw, b).unwrap()));
+        store.set_time(LEASE_NS + 1);
+        let device = store.device();
+        (device.reads, device.written, device.fail_read_at, device.fail_write_at) = (0, 0, fail.0, fail.1);
+        let cut = store.collect().is_err();
+        let device = store.device();
+        let counts = (device.reads, device.written);
+        (device.fail_read_at, device.fail_write_at) = (None, None);
+        for (b, cid) in blocks.iter().zip(&cids) {
+            assert_eq!(store.put(Codec::Raw, b), Ok(*cid), "{:?}", fail);
+            assert_eq!(get(&mut store, cid).as_deref(), Ok(&b[..]), "{:?}: a put acknowledged what is not there", fail);
+        }
+        (cut, counts.0, counts.1)
+    };
+    let (cut, reads, writes) = run((None, None));
+    assert!(!cut && reads > 1 && writes > 3, "{} reads, {} writes", reads, writes);
+    for k in 1..=reads { assert!(run((Some(k), None)).0, "read {} of {}", k, reads); }
+    for k in 1..=writes { assert!(run((None, Some(k))).0, "write {} of {}", k, writes); }
+}
