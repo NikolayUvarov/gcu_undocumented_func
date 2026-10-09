@@ -19,6 +19,12 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [175](175-audit-2026-10-09.md) | The 2026-10-09 audit's eight findings, fixed in their tracks (main task; routing: `vfs_server` joins `KRN`) | `KRN` | P1 | — | S0 |
+| [175-KRN-0046](175-KRN-0046-ci-fails-on-every-build-failure.md) | CI and the local gate fail on every build failure (audit A06) | `KRN` | P1 | — | S0 |
+| [175-PRT-0007](175-PRT-0007-image-lists-programs-after-the-build.md) | The USB image lists the programs after the build (audit A01) | `PRT` | P1 | — | track H |
+| [175-KRN-0047](175-KRN-0047-fat-failed-growth-gives-clusters-back.md) | A FAT write that fails for space gives its new clusters back (audit A02) | `KRN` | P1 | — | S0 |
+| [175-KRN-0048](175-KRN-0048-fat-case-rename-keeps-the-file.md) | A case-only rename that fails keeps the file (audit A03) | `KRN` | P2 | — | S0 |
+| [175-KRN-0049](175-KRN-0049-fat-clean-only-after-a-good-flush.md) | A FAT volume reads clean only after a flush that succeeded (audit A04; the profile row narrowed) | `KRN` | P2 | — | S0 |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
 | [250](250-voice-dictation.md) | Voice V3, dictation: a Zipformer2 transducer, Russian first with `vosk-model-ru` 0.54 (5.2 % WER on FLEURS, 65M parameters), then English; a quality variant with GigaAM v3 (3.0 %) and Parakeet; models compared by measurement | main task, `APP` | P2 | — | track G |
 | [251](251-model-cache-and-model-disk.md) | Speech models: a cache on the host with a manifest of SHA-256 (done in 251-APP-0009), a FAT32 model disk mounted as `models:`, the block store later | main task, `APP` | P2 | — (block store: [251-STO-0010](251-STO-0010-speech-models-in-the-store.md)) | tracks G, B |
