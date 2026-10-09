@@ -14,7 +14,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-# Services (BOOT_FILES in the ABI) are needed by the bootloader; apps are all other *.elf built by 02_build.sh.
+# Services (BOOT_FILES in the ABI) are needed by the bootloader, those the signed manifest lists; apps are all other
+# *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 # What differs between the architectures: where 02_build.sh puts the files, the bootloader's name, the ELF machine
 # (EM_X86_64, EM_AARCH64), the services built for it (aarch64 has no PS/2, IDE or AC97 driver), the image's name.
@@ -33,7 +34,6 @@ LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_P
 SIGNED = ("MANIFEST", "MANIFEST.SIG")
 # The voice recognizer's model and grammar (hear and voice, issues 078-079).
 VOICE = ("voice/model.bin", "voice/commands.txt")
-FILES = ("EFI/BOOT/BOOTX64.EFI", "kernel.elf", *BOOT_FILES, *APPLICATIONS, *LICENSES, *VOICE, *SIGNED)
 SECTOR = 512
 # The log partition after the boot one (211-PRT-0006): FAT16 with an ordinary MBR type (0x0E, FAT16 LBA), which Windows,
 # macOS and Linux mount and write. vfs_server mounts it as log: by its label and saves each boot's system log there.
@@ -46,13 +46,21 @@ LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.L
               b"of what happened (docs/write-disk.md, section 9). On MIND CORE it is log: (ls log:, cat log:boot0001.log).\r\n")
 
 
-def files(arch):
+def listed(source):
+    """The files the signed manifest in `source` lists, or None without one. A boot service it does not list may be
+    absent, as the bootloader allows: one not built yet, such as the updater (351-KRN-0022)."""
+    manifest = Path(source) / "MANIFEST"
+    if not manifest.is_file():
+        return None
+    return {line.split()[1] for line in manifest.read_text(errors="replace").splitlines() if line.startswith("file ") and len(line.split()) > 1}
+
+
+def files(arch, source=None):
     """The files of the image for `arch`: the bootloader, the kernel, its boot services, the applications, licences, voice."""
     spec = ARCHES[arch]
-    if arch == "x86_64":
-        return FILES
-    boot = tuple(name for name in BOOT_FILES if name not in spec["missing"])
-    apps = tuple(sorted(p.name for p in (ROOT / spec["root"]).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
+    names = listed(source or ROOT / spec["root"])
+    boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
+    apps = APPLICATIONS if arch == "x86_64" else tuple(sorted(p.name for p in (ROOT / spec["root"]).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
     return (spec["efi"], "kernel.elf", *boot, *apps, *LICENSES, *VOICE, *SIGNED)
 
 
@@ -84,7 +92,7 @@ def qemu_path(path, executable):
 def read_payloads(source, arch="x86_64"):
     payloads = {}
     machine = ARCHES[arch]["machine"]
-    for name in files(arch):
+    for name in files(arch, source):
         file = source / name
         if not file.is_file():
             raise ValueError(f"Missing {file}. Run the build without --no-build.")
