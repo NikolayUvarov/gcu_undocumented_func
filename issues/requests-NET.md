@@ -62,7 +62,7 @@ The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DR
 
 ## A TLS client without the device certificate (351)
 
-**Recorded by:** the tools track (APP), 2026-10-09, while doing [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done).
+**Recorded by:** the tools track (APP), 2026-10-09, while doing [351-APP-0028](../issues-done/351-APP-0028-shell-lends-its-tls-client.done).
 
 ### Problem
 

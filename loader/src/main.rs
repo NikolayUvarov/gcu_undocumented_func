@@ -149,7 +149,7 @@ impl Launcher {
         // surface of one window (issue u014), the pin controller's client (issue 207), the video gateway's (issue 158) or the
         // TLS service's (351-KRN-0034).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         self.keep(owner, id, slot)
     }
 

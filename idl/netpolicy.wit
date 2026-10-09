@@ -2,10 +2,16 @@
 /// (MC-11.6). A grant is an endpoint capability of the network stack with its own badge; the stack lets its holder
 /// reach only the destinations, for the term and up to the volume the policy names for the program. Every grant,
 /// refusal and revocation is written to the system log. Its clients are launchers (the shell).
-package mind:netpolicy@1.0.0;
+///
+/// 1.1 (108): the policy can be changed while the system runs. The changed policy is kept in the broker's private
+/// directory of the boot disk (`system/netpolicy/netpolicy.txt`, which only the broker opens), and the broker reads it
+/// in place of the shipped `netpolicy.txt`. Only a launcher holds a client: the shell asks the user before it adds or
+/// removes a line. Grants made before a change keep their rules; the next grant follows the change.
+package mind:netpolicy@1.1.0;
 
 interface netpolicy {
-    enum error { no-policy, no-network, limit, not-found, invalid }
+    /// `unwritable` (1.1): the change could not be stored, so it was not made.
+    enum error { no-policy, no-network, limit, not-found, invalid, unwritable }
 
     /// A live grant: its badge, the program it was made for, rules, milliseconds left, bytes used.
     record grant { badge: u16, program: string<16>, rules: u8, left-ms: u32, used: u64 }
@@ -20,4 +26,11 @@ interface netpolicy {
     revoke: func(program: string<16>) -> result<u32, error>;
     /// The live grants.
     list: func() -> list<grant, 32>;
+    /// The lines of the policy in force, from line `start` (comments and blank lines left out) (1.1).
+    lines: func(start: u32) -> list<string<160>, 16>;
+    /// Adds `line` at the end of the policy; a line that is not a rule, a `dns` line or a `resolver` line is refused
+    /// (invalid) (1.1).
+    add: func(line: string<160>) -> result<_, error>;
+    /// Removes every line equal to `line` (spaces aside); returns how many (1.1).
+    remove: func(line: string<160>) -> result<u32, error>;
 }

@@ -1,0 +1,23 @@
+# 109-NET-0007 — The authority map of the adapters (Airlock) — done
+
+**Type:** network (assurance document) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [109](109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
+
+## Problem
+
+MC-11.11 asks for an authority map of each adapter's stages: transport, cryptographic operations, parsing, policy and application effect. MIND Core had none, so whether a parser of external input also held storage, keys or devices was not written down anywhere.
+
+## Plan
+
+`docs/network/airlock.md`: every adapter of external input, with what it parses, the process, what the process holds, and the verdict against MC-11.11 and B.6. Gaps name their task, or say none exists. The profile's MC-11.3/11.11 row cites it.
+
+## Resolution
+
+Done on 2026-10-09. [docs/network/airlock.md](../docs/network/airlock.md) maps:
+- **The network path stage by stage:** `virtio_net`, `netstack`, `netpolicy`, `tls`, the missing session parser, `download`, and the shell's network commands, which print only printable ASCII of a response.
+- **The other adapters:** FAT in `vfs_server`, USB in the drivers, ELF in the kernel, the boot manifest in the bootloader, media files in the tools, and the updater's metadata.
+
+The gaps it names:
+- the HTTP head parsed by `download`, which holds a writable file client (109-NET-0008, 0009);
+- one `tls` process for every client's sessions;
+- `vfs_server` parsing every volume with write access to every disk (no task yet);
+- ELF parsed in ring 0, with applications not yet checked against the manifest.

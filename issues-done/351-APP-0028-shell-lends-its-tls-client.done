@@ -1,6 +1,8 @@
-# 351-APP-0015 — The shell lends its TLS client for `REQUEST_TLS` — done
+# 351-APP-0028 — The shell lends its TLS client for `REQUEST_TLS` — done
 
 **Type:** tools (shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.3, MC-3.11, MC-11.6
+
+_Numbered 351-APP-0015 in the tools branch's commits until main's own 108-APP-0015 (2026-10-09); renumbered at the merge._
 
 The network track's request in `requests-APP.md` (2026-10-08), for [351-NET-0002](../issues/351-NET-0002-https-for-programs.md). The kernel's part, the flag and the loader's slot, is [351-KRN-0034](351-KRN-0034-a-tls-client-for-programs.done).
 

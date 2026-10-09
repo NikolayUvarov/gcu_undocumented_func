@@ -46,6 +46,26 @@ pub fn common_name(key: &SigningKey) -> FixedBuf<32> {
     out
 }
 
+/// The public key as an OpenSSH `authorized_keys` line starts (351-NET-0005): `ssh-ed25519 <base64 of the key blob>`.
+pub fn openssh(key: &SigningKey) -> FixedBuf<96> {
+    let mut blob = [0u8; 51];
+    blob[..4].copy_from_slice(&11u32.to_be_bytes());
+    blob[4..15].copy_from_slice(b"ssh-ed25519");
+    blob[15..19].copy_from_slice(&32u32.to_be_bytes());
+    blob[19..].copy_from_slice(key.verifying_key().as_bytes());
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = FixedBuf::new();
+    let _ = out.write_str("ssh-ed25519 ");
+    for chunk in blob.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (k, &b)| n | (b as u32) << (16 - 8 * k));
+        for k in 0..4 {
+            let c = if k <= chunk.len() { ALPHABET[(n >> (18 - 6 * k) & 63) as usize] } else { b'=' };
+            let _ = out.write_char(c as char);
+        }
+    }
+    out
+}
+
 /// The certificate, valid from `not_before` (Unix time; clamped to 2000..2049) with no end (99991231235959Z).
 pub fn build(key: &SigningKey, serial: [u8; 16], not_before: u64) -> Vec<u8> {
     let mut serial = serial; serial[0] = serial[0] & 0x7F | 0x40; // positive, no leading zero

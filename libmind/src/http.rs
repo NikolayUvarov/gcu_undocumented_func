@@ -2,6 +2,9 @@
 //! `Range` after a cut. The transport is the caller's (a TCP socket of its flow grant, later a TLS session), so the
 //! network policy that applies to the caller applies to its downloads. Only what a download needs is read: the status,
 //! `Content-Length`, `Content-Range` and `Transfer-Encoding`; a chunked body, a redirect or another status is refused.
+//! The head is parsed by a `Parser`: the parser service `parse` in the system (109-NET-0008, so the program that holds
+//! the network and the file does not parse it), or `Local` in the host tests. `get` checks the typed head against what
+//! it asked for whoever parsed it (MC-11.5).
 
 /// The longest response head read.
 pub const HEAD_MAX: usize = 8192;
@@ -24,7 +27,27 @@ pub enum Error {
     Range,
     /// The sink refused the data.
     Sink,
+    /// The parser could not be asked (109-NET-0008).
+    Parser,
 }
+
+/// What a response head says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Head { pub status: u16, pub length: Option<u64>, pub range: Option<Range>, pub chunked: bool }
+
+/// `Content-Range`: bytes `start` to `end` (inclusive) of `total`, or `*/total` (nothing satisfied the request).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Range { Bytes { start: u64, end: u64, total: u64 }, Unsatisfied { total: u64 } }
+
+/// Who turns the bytes of a response head into a `Head`.
+pub trait Parser {
+    /// The head: the status line and the header lines, without the blank line that ends them.
+    fn head(&mut self, head: &[u8]) -> Result<Head, Error>;
+}
+
+/// The parser in this process (the host tests; the system uses the parser service).
+pub struct Local;
+impl Parser for Local { fn head(&mut self, head: &[u8]) -> Result<Head, Error> { parse_head(head) } }
 
 /// Moves bytes to and from the server.
 pub trait Transport {
@@ -86,18 +109,38 @@ fn number(text: &str) -> Option<u64> {
     text.parse().ok()
 }
 
-// `bytes a-b/total`, or `bytes */total` (no range): (a, b, total).
-fn content_range(value: &str) -> Option<(Option<(u64, u64)>, u64)> {
+// `bytes a-b/total`, or `bytes */total`.
+fn content_range(value: &str) -> Option<Range> {
     let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
     let total = number(total.trim())?;
-    if range.trim() == "*" { return Some((None, total)); }
+    if range.trim() == "*" { return Some(Range::Unsatisfied { total }); }
     let (a, b) = range.trim().split_once('-')?;
-    let (a, b) = (number(a)?, number(b)?);
-    (a <= b && b < total).then_some((Some((a, b)), total))
+    let (start, end) = (number(a)?, number(b)?);
+    (start <= end && end < total).then_some(Range::Bytes { start, end, total })
 }
 
-/// GET `url`'s path from byte `offset` on (`Range: bytes=offset-` when not 0), the body into `sink`.
-pub fn get(transport: &mut impl Transport, url: &Url, offset: u64, sink: &mut impl Sink) -> Result<Got, Error> {
+/// Parses a response head: the status line and the header lines, without the blank line that ends them.
+pub fn parse_head(head: &[u8]) -> Result<Head, Error> {
+    let lines = core::str::from_utf8(head).map_err(|_| Error::Head)?;
+    let mut lines = lines.split("\r\n");
+    let status = lines.next().ok_or(Error::Head)?;
+    let mut words = status.splitn(3, ' ');
+    if !words.next().is_some_and(|v| v == "HTTP/1.1" || v == "HTTP/1.0") { return Err(Error::Head); }
+    let status = words.next().and_then(|c| (c.len() == 3).then(|| c.parse::<u16>().ok()).flatten()).ok_or(Error::Head)?;
+    let (mut length, mut range, mut chunked) = (None, None, false);
+    for line in lines {
+        let (name, value) = line.split_once(':').ok_or(Error::Head)?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") { length = Some(number(value).ok_or(Error::Head)?); }
+        else if name.eq_ignore_ascii_case("content-range") { range = Some(content_range(value).ok_or(Error::Head)?); }
+        else if name.eq_ignore_ascii_case("transfer-encoding") && !value.eq_ignore_ascii_case("identity") { chunked = true; }
+    }
+    Ok(Head { status, length, range, chunked })
+}
+
+/// GET `url`'s path from byte `offset` on (`Range: bytes=offset-` when not 0), the head parsed by `parser`, the body into
+/// `sink`.
+pub fn get(transport: &mut impl Transport, url: &Url, offset: u64, sink: &mut impl Sink, parser: &mut impl Parser) -> Result<Got, Error> {
     let mut request = [0u8; 1536];
     let mut text = Text { buffer: &mut request, len: 0 };
     use core::fmt::Write;
@@ -117,32 +160,20 @@ pub fn get(transport: &mut impl Transport, url: &Url, offset: u64, sink: &mut im
         if n == 0 { return Err(Error::Head); }
         filled += n;
     };
-    let lines = core::str::from_utf8(&head[..end - 4]).map_err(|_| Error::Head)?;
-    let mut lines = lines.split("\r\n");
-    let status = lines.next().ok_or(Error::Head)?;
-    let mut words = status.splitn(3, ' ');
-    if !words.next().is_some_and(|v| v == "HTTP/1.1" || v == "HTTP/1.0") { return Err(Error::Head); }
-    let code = words.next().and_then(|c| (c.len() == 3).then(|| c.parse::<u16>().ok()).flatten()).ok_or(Error::Head)?;
-    let (mut length, mut range, mut chunked) = (None, None, false);
-    for line in lines {
-        let (name, value) = line.split_once(':').ok_or(Error::Head)?;
-        let value = value.trim();
-        if name.eq_ignore_ascii_case("content-length") { length = Some(number(value).ok_or(Error::Head)?); }
-        else if name.eq_ignore_ascii_case("content-range") { range = Some(content_range(value).ok_or(Error::Head)?); }
-        else if name.eq_ignore_ascii_case("transfer-encoding") && !value.eq_ignore_ascii_case("identity") { chunked = true; }
-    }
-    let (start, stop, total) = match code {
+    // Framing only: the head ends at its blank line. What it says is the parser's, checked here (MC-11.5).
+    let Head { status, length, range, chunked } = parser.head(&head[..end - 4])?;
+    let (start, stop, total) = match status {
         200 => { let total = length.ok_or(Error::Length)?; (0, total, total) }
         206 => match range {
-            Some((Some((a, b)), total)) if a == offset && length.is_none_or(|l| l == b - a + 1) => (a, b + 1, total),
+            Some(Range::Bytes { start, end, total }) if start == offset && start <= end && end < total && length.is_none_or(|l| l == end - start + 1) => (start, end + 1, total),
             _ => return Err(Error::Range),
         },
         // Nothing past `offset`: the file is complete when that is its end.
         416 => match range {
-            Some((None, total)) if total == offset && offset > 0 => return Ok(Got { start: offset, end: offset, total }),
+            Some(Range::Unsatisfied { total }) if total == offset && offset > 0 => return Ok(Got { start: offset, end: offset, total }),
             _ => return Err(Error::Status(416)),
         },
-        code => return Err(Error::Status(code)),
+        status => return Err(Error::Status(status)),
     };
     if chunked { return Err(Error::Chunked); }
     sink.begin(start, total)?;

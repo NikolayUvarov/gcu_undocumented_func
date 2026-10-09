@@ -1,10 +1,10 @@
-//! Host tests of HTTP/1.1 downloads (libmind/src/http.rs, issue 351-NET-0001): URLs, the request sent, 200 and 206
-//! bodies into a sink, a cut connection resumed with `Range`, a server that sends the whole file again, a file already
-//! complete (416), and the refusals.
+//! Host tests of HTTP/1.1 downloads (libmind/src/http.rs, issues 351-NET-0001, 109-NET-0008): URLs, the request sent,
+//! 200 and 206 bodies into a sink, a cut connection resumed with `Range`, a server that sends the whole file again, a
+//! file already complete (416), the refusals, the head parser on its own, and `get`'s checks against a parser that lies.
 #[path = "../libmind/src/http.rs"]
 mod http;
 
-use http::{get, Error, Got, Sink, Transport, Url};
+use http::{get, parse_head, Error, Got, Head, Local, Parser, Range, Sink, Transport, Url};
 
 /// A server's response, handed out in pieces of `step` bytes, closed after `cut` bytes.
 struct Scripted { response: Vec<u8>, step: usize, cut: usize, given: usize, sent: Vec<u8>, fail: bool }
@@ -72,12 +72,12 @@ fn urls() {
 fn the_request() {
     let data = body(10);
     let mut t = Scripted::new(&ok(&data));
-    get(&mut t, &Url::parse(URL).unwrap(), 0, &mut File::default()).unwrap();
+    get(&mut t, &Url::parse(URL).unwrap(), 0, &mut File::default(), &mut Local).unwrap();
     let sent = String::from_utf8(t.sent).unwrap();
     assert!(sent.starts_with("GET /releases/big.bin HTTP/1.1\r\nHost: 10.0.2.2:8080\r\n"), "{sent}");
     assert!(sent.contains("Connection: close\r\n") && sent.ends_with("\r\n\r\n") && !sent.contains("Range"), "{sent}");
     let mut t = Scripted::new(&partial(&data, 4));
-    get(&mut t, &Url::parse(URL).unwrap(), 4, &mut File { data: data[..4].to_vec(), ..Default::default() }).unwrap();
+    get(&mut t, &Url::parse(URL).unwrap(), 4, &mut File { data: data[..4].to_vec(), ..Default::default() }, &mut Local).unwrap();
     assert!(String::from_utf8(t.sent).unwrap().contains("\r\nRange: bytes=4-\r\n"));
 }
 
@@ -88,12 +88,12 @@ fn a_whole_body_in_small_pieces() {
         let mut t = Scripted::new(&ok(&data));
         t.step = step;
         let mut file = File::default();
-        assert_eq!(get(&mut t, &Url::parse(URL).unwrap(), 0, &mut file), Ok(Got { start: 0, end: 100_000, total: 100_000 }));
+        assert_eq!(get(&mut t, &Url::parse(URL).unwrap(), 0, &mut file, &mut Local), Ok(Got { start: 0, end: 100_000, total: 100_000 }));
         assert!(file.data == data, "step {step}");
     }
     // An empty file.
     let mut file = File::default();
-    let got = get(&mut Scripted::new(&ok(b"")), &Url::parse(URL).unwrap(), 0, &mut file).unwrap();
+    let got = get(&mut Scripted::new(&ok(b"")), &Url::parse(URL).unwrap(), 0, &mut file, &mut Local).unwrap();
     assert!(got.complete() && file.data.is_empty());
 }
 
@@ -108,11 +108,11 @@ fn a_cut_is_resumed_with_range() {
         let mut t = Scripted::new(&ok(&data));
         t.cut = 20_000;
         t.fail = fail;
-        let got = get(&mut t, &url, 0, &mut file).unwrap();
+        let got = get(&mut t, &url, 0, &mut file, &mut Local).unwrap();
         assert!(!got.complete() && got.end == file.data.len() as u64 && got.end > 0);
     }
     let from = file.data.len();
-    let got = get(&mut Scripted::new(&partial(&data, from)), &url, from as u64, &mut file).unwrap();
+    let got = get(&mut Scripted::new(&partial(&data, from)), &url, from as u64, &mut file, &mut Local).unwrap();
     assert_eq!(got, Got { start: from as u64, end: 50_000, total: 50_000 });
     assert!(file.data == data);
     assert_eq!(file.begun, [(0, 50_000), (from as u64, 50_000)]);
@@ -122,7 +122,7 @@ fn a_cut_is_resumed_with_range() {
 fn a_server_without_ranges_sends_it_all_again() {
     let data = body(3000);
     let mut file = File { data: data[..1000].to_vec(), ..Default::default() };
-    let got = get(&mut Scripted::new(&ok(&data)), &Url::parse(URL).unwrap(), 1000, &mut file).unwrap();
+    let got = get(&mut Scripted::new(&ok(&data)), &Url::parse(URL).unwrap(), 1000, &mut file, &mut Local).unwrap();
     assert_eq!(got, Got { start: 0, end: 3000, total: 3000 });
     assert_eq!(file.begun, [(0, 3000)]);
     assert!(file.data == data);
@@ -132,16 +132,16 @@ fn a_server_without_ranges_sends_it_all_again() {
 fn a_complete_file() {
     let response = b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */3000\r\nContent-Length: 0\r\n\r\n";
     let mut file = File::default();
-    assert_eq!(get(&mut Scripted::new(response), &Url::parse(URL).unwrap(), 3000, &mut file), Ok(Got { start: 3000, end: 3000, total: 3000 }));
+    assert_eq!(get(&mut Scripted::new(response), &Url::parse(URL).unwrap(), 3000, &mut file, &mut Local), Ok(Got { start: 3000, end: 3000, total: 3000 }));
     assert!(file.begun.is_empty());
     // Past the end of a shorter file: refused, not taken as complete.
-    assert_eq!(get(&mut Scripted::new(response), &Url::parse(URL).unwrap(), 4000, &mut file), Err(Error::Status(416)));
+    assert_eq!(get(&mut Scripted::new(response), &Url::parse(URL).unwrap(), 4000, &mut file, &mut Local), Err(Error::Status(416)));
 }
 
 #[test]
 fn refusals() {
     let url = Url::parse(URL).unwrap();
-    let refused = |response: &[u8], offset: u64| get(&mut Scripted::new(response), &url, offset, &mut File::default()).unwrap_err();
+    let refused = |response: &[u8], offset: u64| get(&mut Scripted::new(response), &url, offset, &mut File::default(), &mut Local).unwrap_err();
     assert_eq!(refused(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n", 0), Error::Status(404));
     assert_eq!(refused(b"HTTP/1.1 301 Moved\r\nLocation: http://elsewhere/\r\n\r\n", 0), Error::Status(301));
     assert_eq!(refused(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n", 0), Error::Chunked);
@@ -169,5 +169,43 @@ fn the_sink_can_refuse() {
         fn begin(&mut self, _: u64, _: u64) -> Result<(), Error> { Ok(()) }
         fn write(&mut self, _: u64, _: &[u8]) -> Result<(), Error> { Err(Error::Sink) }
     }
-    assert_eq!(get(&mut Scripted::new(&ok(&body(10))), &Url::parse(URL).unwrap(), 0, &mut Full), Err(Error::Sink));
+    assert_eq!(get(&mut Scripted::new(&ok(&body(10))), &Url::parse(URL).unwrap(), 0, &mut Full, &mut Local), Err(Error::Sink));
+}
+
+#[test]
+fn heads_parsed_on_their_own() {
+    let head = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 5-19/20\r\nContent-Length: 15\r\nServer: x";
+    assert_eq!(parse_head(head), Ok(Head { status: 206, length: Some(15), range: Some(Range::Bytes { start: 5, end: 19, total: 20 }), chunked: false }));
+    assert_eq!(parse_head(b"HTTP/1.0 416 No\r\nContent-Range: bytes */20"), Ok(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 20 }), chunked: false }));
+    assert_eq!(parse_head(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked").map(|h| h.chunked), Ok(true));
+    assert_eq!(parse_head(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: identity").map(|h| h.chunked), Ok(false));
+    for bad in [&b"HTTP/2 200 OK"[..], b"HTTP/1.1 20 OK", b"HTTP/1.1 200 OK\r\nno colon", b"HTTP/1.1 200 OK\r\nContent-Length: x", b"\xff\xfe", b""] {
+        assert_eq!(parse_head(bad), Err(Error::Head), "{bad:?}");
+    }
+}
+
+/// A parser that says what it is told to, whatever the bytes.
+struct Lying(Head);
+impl Parser for Lying { fn head(&mut self, _: &[u8]) -> Result<Head, Error> { Ok(self.0) } }
+
+#[test]
+fn get_checks_what_the_parser_says() {
+    // The parser runs elsewhere (the parser service); a parser that lies must not make `get` write where it did not ask.
+    let url = Url::parse(URL).unwrap();
+    let data = body(100);
+    let lie = |head: Head, offset: u64| get(&mut Scripted::new(&partial(&data, 10)), &url, offset, &mut File { data: data[..10].to_vec(), ..Default::default() }, &mut Lying(head));
+    let bytes = |start, end, total, length| Head { status: 206, length, range: Some(Range::Bytes { start, end, total }), chunked: false };
+    assert_eq!(lie(bytes(0, 99, 100, None), 10), Err(Error::Range)); // not where it asked
+    assert_eq!(lie(bytes(10, 9, 100, None), 10), Err(Error::Range)); // an end before the start
+    assert_eq!(lie(bytes(10, 100, 100, None), 10), Err(Error::Range)); // past the total
+    assert_eq!(lie(bytes(10, 99, 100, Some(5)), 10), Err(Error::Range)); // a length that disagrees
+    assert_eq!(lie(Head { status: 206, length: None, range: None, chunked: false }, 10), Err(Error::Range));
+    assert_eq!(lie(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 50 }), chunked: false }, 10), Err(Error::Status(416)));
+    assert_eq!(lie(Head { status: 200, length: Some(100), range: None, chunked: true }, 0), Err(Error::Chunked));
+    // What it says truthfully is taken.
+    assert_eq!(lie(bytes(10, 99, 100, Some(90)), 10), Ok(Got { start: 10, end: 100, total: 100 }));
+    // A parser that cannot be asked ends the GET with its error.
+    struct Gone;
+    impl Parser for Gone { fn head(&mut self, _: &[u8]) -> Result<Head, Error> { Err(Error::Parser) } }
+    assert_eq!(get(&mut Scripted::new(&ok(&data)), &url, 0, &mut File::default(), &mut Gone), Err(Error::Parser));
 }

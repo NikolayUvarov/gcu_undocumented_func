@@ -1,6 +1,8 @@
-# 351-APP-0016 — `update` in the shell and `msh`
+# 351-APP-0029 — `update` in the shell and `msh`
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0007](351-UPD-0007-updater-service.md) (the `updater` service and `idl/update.wit`) · **Main task:** [351](351-self-update.md) (phase 2) · **Roadmap:** track G · **Constitution:** MC-9.2, MC-12.4
+
+_Numbered 351-APP-0016 in the tools branch's commits until main's own 109-APP-0016 (2026-10-09); renumbered at the merge._
 
 Numbered from the kernel track's request in `requests-APP.md` (2026-10-08, for 351 at the maintainer's request). That file went once every request in it was numbered.
 

@@ -1,0 +1,38 @@
+# 109-NET-0008 — The parser service `parse` — done
+
+**Type:** network (service) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [109](109-session-parsers.done) · **Constitution:** MC-11.4, MC-11.5, MC-11.11, Appendix B.6
+
+## Problem
+
+B.6's session parser stage, "bounded bytes on input and typed messages on output; no arbitrary storage, spawn or device authorities", has no process.
+
+## Plan
+
+- **`parse`, a boot service** that `init` starts with its own endpoint and the system log, nothing else ([109-KRN-0042](109-KRN-0042-parser-service-at-boot.done)).
+- **`idl/parse.wit` 1.0:** `http-head` turns the head of an HTTP response (at most 8 KiB, the bytes before the blank line) into a typed record: the status, `Content-Length`, `Content-Range` and whether the body is chunked. A malformed head is refused (`malformed`), and logged.
+- **The parsing code** is `mind::http::parse_head`, split from `get`, with host tests. `get` takes a `Parser`: the service, or the same code in the process for the host tests. It keeps the domain's own checks on the typed head (MC-11.5): the range starts at the offset asked for, and the length agrees with it.
+- **Statelessness.** Nothing of one request is kept for the next. A crash ends one request, and `init` restarts the service.
+
+## Acceptance criteria
+
+`parse` holds only its endpoint and the log client (`stat caps`); a client gets typed heads from it; host tests cover the parser and `get`'s checks against a parser that lies.
+
+## Related
+
+[109](109-session-parsers.done), [109-NET-0009](109-NET-0009-download-through-the-parser.done), [docs/network/airlock.md](../docs/network/airlock.md).
+
+## Resolution
+
+- **`idl/parse.wit` 1.0** (`libmind/src/idl/parse.rs` generated): `http-head(head: bytes<8192>) -> result<http-head, error>`, a record of the status, `Content-Length`, `Content-Range` (bytes or unsatisfied) and chunked; error `malformed`.
+- **`parse/`, the service.** It answers each request on its own with `mind::http::parse_head` and keeps nothing between requests. A refusal is logged: `[PARSE] REFUSED AN HTTP HEAD FOR PID n: MALFORMED (k BYTES)`. `init` starts it with its endpoint and the log client only ([109-KRN-0042](109-KRN-0042-parser-service-at-boot.done)).
+- **`mind::http`.** `parse_head` is split from `get`. `get` takes a `Parser`: `Local` (the same code in the process, for the host tests) or `mind::parse::Service` (the service). It checks whatever comes back (MC-11.5): a 206 must start at the offset asked for, end inside the total, and agree with the length. A parser that cannot be asked is `Error::Parser`.
+- **`mind::parse`:** the record's conversions and `Service`.
+
+**Tests:**
+- `tests/http_host.rs`, 10 tests: the head parsed on its own; `get` against a parser that lies about the range and the length, and against one that cannot be asked.
+- The `net` suite, on x86 and aarch64:
+  - `stat caps` shows `parse` with two capabilities, its endpoint and a `logd` client;
+  - a malformed head is refused and logged there;
+  - killed, it is restarted and serves again.
+
+Docs: [docs/network/airlock.md](../docs/network/airlock.md) 0.2, [docs/network/downloads.md](../docs/network/downloads.md) 0.2, `docs/api/README.md`, `docs/profile/bootstrap.md` and the profile's MC-11.3/11.11 row, `README.md`.

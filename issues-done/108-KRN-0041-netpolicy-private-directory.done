@@ -1,0 +1,13 @@
+# 108-KRN-0041 — `init` gives `netpolicy` a VFS client with its own badge — done
+
+**Type:** kernel (init) · **Owner:** `KRN` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [108](108-editable-network-policy.done) · **Constitution:** MC-11.6, MC-3.3
+
+Done for the network track's main task 108 by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09).
+
+## Problem
+
+The policy broker keeps the changed policy in its private directory `system/netpolicy`, which `vfs_server` opens only for `mind::fs::BADGE_NETPOLICY` ([351-KRN-0040](351-KRN-0040-keystore-private-directory.done) made the badge). Its VFS client was unbadged.
+
+## Plan and resolution
+
+`init` gives `netpolicy` a `vfs_server` client badged `BADGE_NETPOLICY` in slot 3, in place of the unbadged one. It still reads the shipped `netpolicy.txt` through it. No one else gets that badge. The `net` suite's policy checks pass on x86 and aarch64 (108).
