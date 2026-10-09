@@ -41,4 +41,4 @@ Done on 2026-10-08.
 
 ## Related
 
-[251](../issues/251-model-cache-and-model-disk.md), [251-APP-0010](../issues/251-APP-0010-models-volume.md), [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
+[251](../issues/251-model-cache-and-model-disk.md), [251-APP-0010](251-APP-0010-models-volume.done), [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
