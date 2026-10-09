@@ -62,6 +62,6 @@ Any static web server over the directory serves a channel over HTTPS. The SSH ac
 
 ## Not provided yet
 
-- the updater on the device (351-UPD-0007) and its HTTPS and SSH clients (351-NET-0002, 351-NET-0004; plain HTTP downloads with resume are 351-NET-0001);
+- the updater on the device (351-UPD-0007) and its SSH client (351-NET-0004). Downloads with resume over HTTP (351-NET-0001) and HTTPS, the server trusted by its pinned key or the roots (351-NET-0002), are `download`'s ([docs/network/downloads.md](../network/downloads.md));
 - a check of the channel's minimum and expiry by a device (351-UPD-0009);
 - an SSH test server in CI (OpenSSH's server is not on the runners; the SSH path of `publish` is not tested).

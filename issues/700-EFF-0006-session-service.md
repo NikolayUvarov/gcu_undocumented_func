@@ -56,4 +56,4 @@ Something on the machine must keep the connection to the server, report the mach
 
 ## Related
 
-[700-EFF-0001](700-EFF-0001-protocol-contract.md), [700-EFF-0002](700-EFF-0002-test-server.md), [700-EFF-0007](700-EFF-0007-gateway-service.md), [351-NET-0002](351-NET-0002-https-for-programs.md), 173-KRN-0035 (`init` reads the service configuration; on the kernel track's branch until it merges).
+[700-EFF-0001](700-EFF-0001-protocol-contract.md), [700-EFF-0002](700-EFF-0002-test-server.md), [700-EFF-0007](700-EFF-0007-gateway-service.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), 173-KRN-0035 (`init` reads the service configuration; on the kernel track's branch until it merges).

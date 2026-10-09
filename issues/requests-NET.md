@@ -76,7 +76,7 @@ The agent of 700, which 501's tests also use, talks to Effector, a server that a
 
 **What `libmind::http` lacks.** It (351-NET-0001; its head parsed by `parse` since 109) makes one GET per connection with fixed headers and `Connection: close`. It has no POST and refuses a chunked body. A Go server sends a response without `Content-Length` as chunked once the response outgrows its buffer. A new TLS handshake every second would also be costly on the target.
 
-**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](351-NET-0002-https-for-programs.md) pins the server's public key (SPKI): a different value. On the network track's branch, `tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name. Effector is asked (its task 75) to publish SPKI pins too, so the agent can start with `connect-pinned` as it is; the second pin is still needed for a key change. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
+**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) pins the server's public key (SPKI): a different value. `tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name, root or validity period. Effector is asked (its task 75) to publish SPKI pins too, so the agent can start with `connect-pinned` as it is; the second pin is still needed for a key change. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
 
 ### Plan (a proposal; the network track decides)
 
@@ -96,7 +96,7 @@ The agent of 700, which 501's tests also use, talks to Effector, a server that a
   - **Two kinds of pin:**
     - the SHA-256 of the leaf certificate, as Effector's agents use;
     - 351-NET-0002's SPKI pin.
-  - **One minor version** of `idl/tls.wit` serves both 351-NET-0002 and this.
+  - **One minor version** of `idl/tls.wit` (1.2) adds both to 1.1's `connect-pinned`.
   - **Checks kept** with a pin: the SAN, the validity, the server-authentication purpose and `CA:false`.
   - **TLS 1.3 only, as now.** Effector accepts TLS 1.2 and later.
 - **Long-lived sessions:** a session that stays open between requests, and reads that wait without closing it.

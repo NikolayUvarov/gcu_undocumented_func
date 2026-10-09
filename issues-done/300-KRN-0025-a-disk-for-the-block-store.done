@@ -1,6 +1,6 @@
 # 300-KRN-0025 — A disk of the block store's own — done
 
-**Type:** kernel (init) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Constitution:** MC-6.8, Appendix B.6
+**Type:** kernel (init) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](300-checksummed-block-store.done) · **Constitution:** MC-6.8, Appendix B.6
 
 ## Problem
 

@@ -4,7 +4,7 @@
 
 Asked by the maintainer (2026-10-08): tests should run on real hardware without the maintainer typing them. Opened by the kernel session; the `ASR` track is open.
 
-**Revised at the maintainer's request (2026-10-09):** the test server is Effector, the maintainer's existing management system, so no server or protocol of our own is written.
+**Revised at the maintainer's request (2026-10-09):** the test server is Effector, the maintainer's existing management system, for updates and tests on bare metal once the network (550) and the agent are ready. No server or protocol of our own is written. Two sessions revised this task the same day; this text joins both.
 
 **Reconciled the same day with main task [700](700-effector-agent.md)** (track `EFF`), which the maintainer opened for the agent itself: MIND Core managed from Effector, with software, updates, diagnostics and services. The agent, its contract and its runs against Effector are 700's. This task keeps what tests need on top of it: scripts run in a test account, and each run recorded per configuration.
 
@@ -51,7 +51,7 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
   - only the grants its `requires:` line declares and the policy allows;
   - within a memory and time budget;
   - its output, exit status and time come back as the operation's result.
-- Never a shell with the agent's own capabilities. Without the policy line the action is answered `denied`.
+- Never a shell with the agent's own capabilities: arbitrary commands and the interactive console get the test account's authority at most (MC-3.11), or are not offered. Without the policy line the action is answered `denied`.
 - A test gets none of the agent's capabilities (TLS, the device key, the token, the update request) and cannot widen its grants (MC-11.9).
 
 **Evidence.**
@@ -67,9 +67,9 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 |---|---|
 | An HTTP client | `libmind::http` ([351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)): one GET with `Range`, its head parsed by the `parse` service ([109](../issues-done/109-session-parsers.done)). No POST, no keep-alive; chunked bodies and redirects are refused ([requests-NET.md](requests-NET.md)) |
 | TLS for a program or service | `REQUEST_TLS`, the kernel's part ([351-KRN-0034](../issues-done/351-KRN-0034-a-tls-client-for-programs.done)); the shell lending its client is the tools track's (requests-APP). A service gets its TLS client from `init`, as `updater` will ([351-KRN-0022](351-KRN-0022-updater-grants.md), open) |
-| HTTPS with a pinned server | [351-NET-0002](351-NET-0002-https-for-programs.md): on the network track's branch, not yet in `main`, `tls.wit` 1.1 `connect-pinned` checks one SHA-256 of the server's public key (SPKI). Effector's agents pin the leaf certificate, current and next: either Effector also publishes SPKI pins (its task 75) or `tls` takes the leaf kind and a second pin ([requests-NET.md](requests-NET.md)) |
+| HTTPS with a pinned server | [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), done: `tls.wit` 1.1 `connect-pinned` checks one SHA-256 of the server's public key (SPKI), no root store needed. Effector's agents pin the leaf certificate, current and next: either Effector also publishes SPKI pins (its task 75) or `tls` takes the leaf kind and a second pin ([requests-NET.md](requests-NET.md)) |
 | A client certificate | `tls` offers the device's Ed25519 certificate when the server asks (`tls/src/device.rs`) |
-| The device key across boots | [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), done: on the disk in `keystore`'s private directory; a TPM next (351-NET-0006) |
+| The device key across boots | [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), done: on the disk in `keystore`'s private directory; sealed by a TPM where there is one ([351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), waiting for the kernel's half) |
 | Host names in the network policy, changed while the system runs | [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done), [108](../issues-done/108-editable-network-policy.done), done |
 | Parsing external input | the `parse` service and the authority map ([109](../issues-done/109-session-parsers.done), [docs/network/airlock.md](../docs/network/airlock.md)) |
 | Scripts with declared grants | `msh` and its `requires:` line ([docs/msh.md](../docs/msh.md)) |

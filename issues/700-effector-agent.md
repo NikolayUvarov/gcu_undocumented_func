@@ -28,7 +28,7 @@ Its commands are typed actions:
 MIND Core has no such agent, and several of the parts it needs are missing (surveyed on 2026-10-09):
 
 - **HTTP.** `mind::http` does GET only. It has no request headers of the caller's (so no `Authorization`), no request bodies, no chunked responses and no kept-alive connections (351-NET-0001).
-- **Trust.** `tls` is TLS 1.3 with CA roots only. No program can pin a server certificate (351-NET-0002 plans an SPKI pin), and no program but `updater` can hold a TLS client yet.
+- **Trust.** `tls` is TLS 1.3. It pins a server by one SHA-256 of its public key (`connect-pinned`, [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), done), while Effector's agents pin the leaf certificate, current and next. A boot service gets its TLS client from `init`, as `updater` does.
 - **Formats.** There is no JSON and no ZIP reader in userland. Under the authority map ([docs/network/airlock.md](../docs/network/airlock.md), 109), external input is parsed in the `parse` service, which today parses HTTP heads only.
 - **Network grants.** A boot service's flow is granted once by `init` and ends with its term and volume: 3600 s and 16 MiB by default; a policy line can name more, and the owner changes the policy with `netpolicy add` (108). A service that heartbeats for days needs that line, or renewal.
 - **Local authorities.**
@@ -199,4 +199,4 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 ## Related
 
-[501](501-effector.md) (tests on real hardware, now through this agent), [351](351-self-update.md), 173 (the boot services' configuration; on the kernel track's branch until it merges), [550](550-network-on-real-hardware.md), [351-NET-0002](351-NET-0002-https-for-programs.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [109](../issues-done/109-session-parsers.done), [108](../issues-done/108-editable-network-policy.done), [351-UPD-0007](351-UPD-0007-updater-service.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [500](500-fuzzing-abi-and-idl.md), [docs/profile/threat-model.md](../docs/profile/threat-model.md).
+[501](501-effector.md) (tests on real hardware, now through this agent), [351](351-self-update.md), 173 (the boot services' configuration; on the kernel track's branch until it merges), [550](550-network-on-real-hardware.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [109](../issues-done/109-session-parsers.done), [108](../issues-done/108-editable-network-policy.done), [351-UPD-0007](351-UPD-0007-updater-service.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [500](500-fuzzing-abi-and-idl.md), [docs/profile/threat-model.md](../docs/profile/threat-model.md).
