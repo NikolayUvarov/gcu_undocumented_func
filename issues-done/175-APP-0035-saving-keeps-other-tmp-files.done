@@ -1,6 +1,6 @@
-# 175-APP-0035 — Saving does not destroy an existing `<name>.tmp`
+# 175-APP-0035 — Saving does not destroy an existing `<name>.tmp` — done
 
-**Type:** tools (`edit`, `fm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (P1 in the audit) · **Status:** open · **Blocked by:** — · **Main task:** [175](175-audit-2026-10-09.md) (audit A07) · **Roadmap:** track G · **Constitution:** MC-4.8
+**Type:** tools (`edit`, `fm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (P1 in the audit) · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) (audit A07) · **Roadmap:** track G · **Constitution:** MC-4.8
 
 Numbered from the kernel track's request in `requests-APP.md`, which routed the 2026-10-09 audit at the maintainer's decision. That file went once every request in it was numbered.
 
@@ -26,6 +26,15 @@ Audit finding A07 ([audit](../issues-audit/2026-10-09-repository-audit.md), [ass
 - `issues-audit/repro/fm_repro.py`'s A07 part becomes the regression test, with its assertion inverted.
 - **The `edit` suite:** a save next to an existing `.tmp` file leaves that file as it was.
 
+## Resolution
+
+- **`edit`** opens its staging file with `MODE_NEW`: `name.tmp`, else `name.tmp1` … `name.tmp99`. An existing file is never truncated, and only the file this save made is renamed or removed.
+- **`fm`'s built-in editor** does the same through `Disk::create(path, false)`. It flushes the staging file before the old file goes (175-APP-0036): a failed flush keeps the old text and removes only its own staging file.
+- **Tests:**
+  - `tests/fm_host.rs` `saving_keeps_other_staging_files`: an existing `todo.txt.tmp` keeps its bytes, the save's own file is gone, and a failed flush keeps the old text.
+  - The `edit` QEMU suite: a save next to `ram:keep.txt.tmp` leaves it as it was, with no `keep.txt.tmp1` left behind.
+- **Docs:** docs/tools §3 (EN, RU) and the editor's F1 keys.
+
 ## Related
 
-[175](175-audit-2026-10-09.md), [067](../issues-done/067-editor.done), [068](../issues-done/068-fm-write-df-fsck.done), [175-APP-0036](175-APP-0036-fm-move-keeps-source-until-flushed.md).
+[175](../issues/175-audit-2026-10-09.md), [067](../issues-done/067-editor.done), [068](../issues-done/068-fm-write-df-fsck.done), [175-APP-0036](175-APP-0036-fm-move-keeps-source-until-flushed.done).

@@ -165,7 +165,8 @@ Ten building blocks; the tools in §4 are thin on top of them.
   - one writer per file; readers see the last flushed size;
   - the boot set is protected by policy: `init` gives write handles only below a data directory (for example `/data`), never for `EFI/`, `kernel.elf` or service images.
   - Done in issue 066: `idl/vfs.wit` 2.0 (2.2 since the merge of `main`: listings in pages of 16 entries, reads and writes of up to 16 KiB); the zone of a root handle comes from the client's badge (applications read only, the shell's `VFS_BADGE_USER` writes on `ram:` and below `data/`); FSInfo's free count is marked unknown on the first change instead of being kept.
-- **Saving in the editor:** write `name.tmp`, flush, rename over `name` (in one directory this replaces one directory entry; best effort on FAT, stated as such).
+- **Saving in the editor:** write a staging file of its own, created exclusively (`name.tmp`, else `name.tmp1`, … up to `name.tmp99`: an existing one is never overwritten, 175-APP-0035), flush, then rename over `name` (in one directory this replaces one directory entry; best effort on FAT, stated as such). A failed flush keeps the old file and removes only the staging file.
+- **Moving between volumes in `fm`:** the copies are written and the target's volume flushed before any source is removed (175-APP-0036). A flush that fails stops the job with Retry / Skip / Abort, and Skip or Abort keep every source; a copy, a save or a new directory whose last flush fails says `NOT WRITTEN TO DISK`.
 - **Tests:** QEMU's virtual FAT drive (`fat:rw:`) is a poor target for write tests; writes are tested on the RAM disk and on a raw FAT image attached as a second disk, and after the run `fsck.fat -n` on the host checks the image.
 
 ### F9. `sysmon`

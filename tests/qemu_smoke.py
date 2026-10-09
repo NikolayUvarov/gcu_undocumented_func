@@ -3760,12 +3760,21 @@ def edit_check(vm):
     assert canon("Rust") in screen_text(vm)[0]
     vm.serial(enter=False)
     leave(f10, "[EDIT] DONE")
+    # 175-APP-0035: a save stages in a file of its own; an existing keep.txt.tmp stays as it was.
+    require(vm.command("write ram:keep.txt.tmp not the editor's"), "WROTE")
+    start("ram:keep.txt")
+    keys(b"kept", "BYTES=4 ")
+    keys(f2, "[EDIT] SAVED 4 BYTES TO ram:keep.txt")
+    leave(f10, "[EDIT] DONE")
+    require(vm.command("cat ram:keep.txt.tmp"), "not the editor's")
+    require(vm.command("cat ram:keep.txt"), "kept")
+    assert "keep.txt.tmp1" not in vm.command("ls ram:"), "the save's own staging file is gone"
     # vfs_server made a scope for each start and ended those whose editor had exited.
     scopes = vm.command("dmesg -s vfs_server")
     for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
         require(scopes, made)
     require(scopes, "ENDED")
-    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory; a Rust file in its colours", flush=True)
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory; a Rust file in its colours; a save leaves an existing name.tmp alone", flush=True)
 
 
 def edit_suite(args):

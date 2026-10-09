@@ -73,13 +73,14 @@ impl Sink for MemSink {
     }
 }
 
-struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String> }
+struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String>,
+             log: Vec<String>, fail_flushes: usize, pass_flushes: usize } // removals and flushes in order; flushes that fail after those that pass
 
 const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new() };
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0 };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
         for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
                                     ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
@@ -139,6 +140,7 @@ impl Disk for Mem {
         Ok(())
     }
     fn remove(&mut self, path: &str) -> Result<(), Failure> {
+        self.log.push(format!("remove {}", path));
         if !Self::allowed(path) { return Err(Failure::Denied); }
         if let Some(i) = self.files.iter().position(|f| f.0.eq_ignore_ascii_case(path)) {
             let (name, bytes, _, _) = self.files.remove(i);
@@ -168,7 +170,13 @@ impl Disk for Mem {
              else if path.starts_with("log:") { VolumeInfo { label: "MIND LOG".into(), fat_bits: 16, bytes: 16 << 20, free: 15 << 20 } }
              else { VolumeInfo { label: "MINDTEST".into(), fat_bits: 16, bytes: 60 << 20, free: 50 << 20 } })
     }
-    fn flush(&mut self, _path: &str) { self.flushes += 1; }
+    fn flush(&mut self, path: &str) -> Result<(), Failure> {
+        self.flushes += 1;
+        self.log.push(format!("flush {}", panel::volume(path).0));
+        if self.pass_flushes > 0 { self.pass_flushes -= 1; return Ok(()); }
+        if self.fail_flushes > 0 { self.fail_flushes -= 1; return Err(Failure::Other("I/O error".into())); }
+        Ok(())
+    }
 }
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
@@ -836,6 +844,7 @@ fn failures_space_and_stopping() {
     assert!(fm.status().contains(":FAILED"));
     fm.key(code(KEY_RIGHT), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk); // the copy's flush, then the end
     assert!(fm.job.is_none());
     assert!(disk.file("ram:half.bin").is_none(), "the partial copy is removed");
     assert_eq!(disk.space.get(), RAM);
@@ -873,7 +882,7 @@ fn failures_space_and_stopping() {
     fm.key(f(5), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk); // overwrite the partial copy left by Stop
-    assert_eq!(run(&mut fm, &mut disk), 4, "64 KiB a slice");
+    assert_eq!(run(&mut fm, &mut disk), 5, "64 KiB a slice, then the flush of the target");
     assert_eq!(disk.file("ram:big.bin").unwrap(), vec![7u8; 200 * 1024]);
 }
 
@@ -1169,4 +1178,142 @@ fn the_block_store_panel() {
     fm.load(1, "store:", None, &mut disk);
     assert_eq!(names(&fm.panels[1]), [".pins", "docs", "models", "other"]);
     assert!(!disk.writable("store:docs/readme.txt"), "objects are never changed in place");
+}
+
+// 175-APP-0036 (audit A08): a move removes no source before its target's volume is flushed; a flush that fails keeps
+// the sources and says so. The audit's probe (issues-audit/repro/fm_repro.py) with its assertion turned around.
+#[test]
+fn a_move_keeps_its_source_until_the_target_is_on_its_medium() {
+    let order = |disk: &Mem, a: &str, b: &str| -> bool {
+        let at = |what: &str| disk.log.iter().position(|l| l == what).unwrap_or_else(|| panic!("{} not in {:?}", what, disk.log));
+        at(a) < at(b)
+    };
+    let mut disk = Mem::sample();
+    disk.dirs.push("data".into());
+    disk.add_file("data/audit-source.txt", b"original");
+    disk.add_file("data/second.txt", b"second");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.load(0, "data", Some("audit-source.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:audit-source.txt").unwrap(), b"original");
+    assert!(disk.file("data/audit-source.txt").is_none());
+    assert!(order(&disk, "flush ram:", "remove data/audit-source.txt"), "{:?}", disk.log);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Moved 2 of 2"), "{:?}", fm.notice);
+    // Two files: both copied, the target flushed once, then both sources removed.
+    disk.add_file("data/first.txt", b"first");
+    disk.log.clear();
+    fm.load(0, "data", Some("first.txt"), &mut disk);
+    fm.key(code(KEY_INSERT), &mut disk);
+    fm.load(0, "data", Some("second.txt"), &mut disk);
+    fm.key(code(KEY_INSERT), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:first.txt").unwrap(), b"first");
+    assert_eq!(disk.file("ram:second.txt").unwrap(), b"second");
+    assert!(disk.file("data/first.txt").is_none() && disk.file("data/second.txt").is_none());
+    assert!(order(&disk, "flush ram:", "remove data/first.txt") && order(&disk, "flush ram:", "remove data/second.txt"), "{:?}", disk.log);
+    // The target's flush fails: the job stops at it; Retry flushes again and then the source goes.
+    disk.add_file("data/retry.txt", b"retry");
+    disk.fail_flushes = 1;
+    disk.log.clear();
+    fm.load(0, "data", Some("retry.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    assert!(disk.file("data/retry.txt").is_some(), "the source stays while the target's flush failed");
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Write ram:") && screen_has(&screen, "I/O error"), "{:#?}", screen);
+    fm.key(code(KEY_ENTER), &mut disk); // Retry
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert!(disk.file("data/retry.txt").is_none() && disk.file("ram:retry.txt").is_some());
+    // It fails again and the user skips it: the copy stays, and so does the source.
+    disk.add_file("data/skip.txt", b"skip");
+    disk.fail_flushes = 1;
+    fm.load(0, "data", Some("skip.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk); // Skip
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert_eq!(disk.file("data/skip.txt").unwrap(), b"skip");
+    assert_eq!(disk.file("ram:skip.txt").unwrap(), b"skip");
+    assert!(fm.notice.as_deref().unwrap().contains("1 failed"), "{:?}", fm.notice);
+    // Abort keeps the source too.
+    disk.add_file("data/abort.txt", b"abort");
+    disk.fail_flushes = 1;
+    fm.load(0, "data", Some("abort.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk); // Abort
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.job.is_none());
+    assert_eq!(disk.file("data/abort.txt").unwrap(), b"abort");
+    assert!(fm.notice.as_deref().unwrap().starts_with("Stopped:"), "{:?}", fm.notice);
+}
+
+// A copy's last flush that fails is said, not "Copied" alone (175-APP-0036).
+#[test]
+fn a_copy_says_when_it_is_not_on_its_medium() {
+    let mut disk = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.load(0, "", Some("readme.txt"), &mut disk);
+    disk.fail_flushes = 2; // the copy's own flush, then Retry's
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk); // Retry fails once more
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk); // Retry succeeds
+    run(&mut fm, &mut disk);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Copied 1 of 1"), "{:?}", fm.notice);
+    // The copy's own flush passes and the one at the end fails: the notice says so.
+    fm.load(0, "", Some("Zeta.TXT"), &mut disk);
+    disk.pass_flushes = 1;
+    disk.fail_flushes = 1;
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert!(fm.notice.as_deref().unwrap().contains("NOT WRITTEN TO DISK: I/O error"), "{:?}", fm.notice);
+}
+
+// 175-APP-0035 (audit A07): saving stages in a file of its own and leaves an existing `name.tmp` as it was; a failed
+// flush keeps the old text. The audit's probe with its assertion turned around.
+#[test]
+fn saving_keeps_other_staging_files() {
+    let mut disk = Mem::sample();
+    disk.dirs.push("ram:notes".into());
+    disk.add_file("ram:notes/todo.txt", b"original");
+    disk.add_file("ram:notes/todo.txt.tmp", b"unrelated valuable file");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    fm.load(0, "ram:notes", Some("todo.txt"), &mut disk);
+    fm.key(f(4), &mut disk);
+    typed(&mut fm, &mut disk, "new ");
+    fm.key(f(2), &mut disk);
+    assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), b"new original");
+    assert_eq!(disk.file("ram:notes/todo.txt.tmp").unwrap(), b"unrelated valuable file");
+    assert!(disk.file("ram:notes/todo.txt.tmp1").is_none(), "the save's own staging file is gone");
+    // The staging file does not reach its medium: the old text stays, and the staging file goes.
+    typed(&mut fm, &mut disk, "x");
+    disk.fail_flushes = 1;
+    fm.key(f(2), &mut disk);
+    assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), b"new original");
+    assert!(disk.file("ram:notes/todo.txt.tmp1").is_none());
+    assert_eq!(disk.file("ram:notes/todo.txt.tmp").unwrap(), b"unrelated valuable file");
 }

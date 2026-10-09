@@ -1,0 +1,49 @@
+# 175-APP-0036 — `fm` keeps a move's source until the destination is on its medium — done
+
+**Type:** tools (`fm`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) (audit A08) · **Roadmap:** track G · **Constitution:** MC-4.8, MC-4.9
+
+Numbered from the kernel track's request in `requests-APP.md`, which routed the 2026-10-09 audit at the maintainer's decision. That file went once every request in it was numbered.
+
+## Problem
+
+Audit finding A08 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)), confirmed.
+
+- **The order.** A move between volumes plans its removals after its copies, and `finish()` flushes the sources before the target (`fm/src/fm.rs`).
+- **The lost error.** `Disk::flush` returns `()`, and `fm/src/main.rs` drops the error of `root.flush()`.
+- **The result.** In a move between two durable volumes (`data/` to a USB stick), the source's removal can reach its medium before the destination's data. A later I/O error or power loss then loses the file, while `fm` reports it moved.
+
+## Plan
+
+- `Disk::flush` returns its error, and so does the editor's final flush.
+- A move flushes each destination, and removes the source only after that flush succeeded.
+- When writing or flushing fails, the source stays and `fm` shows the failure.
+
+## Acceptance criteria
+
+- **Host tests (`tests/fm_host.rs`):**
+  - errors from the destination's write-back and flush;
+  - moves of several files, retry and cancellation;
+  - copy and save completion pass flush errors on;
+  - no source is removed before its destination's successful flush.
+- `issues-audit/repro/fm_repro.py`'s A08 part becomes the regression test, with its assertion inverted.
+
+## Resolution
+
+- **`Disk::flush`** returns its error. `fm`'s disk passes on the volume's `flush` result, and the block store's panel has nothing to flush: an object is committed when it is published.
+- **A flush step.** A move or copy that writes (copies, new directories) gets a step `Flush(target)` after its copies and before a move's removals. A source is removed only after the target's volume flushed.
+  - A failed flush stops the job with the usual Retry / Skip / Abort.
+  - Retry flushes again.
+  - Skip and Abort keep every source of the move; the copies stay as written.
+- **The end of a job** flushes the target first, then the sources' volumes. A flush that fails there is said: `…; NOT WRITTEN TO DISK: <error>`.
+- **The built-in editor's save** flushes its staging file before the old file is removed, and reports a failed final flush; F7's new directory reports one too.
+- The step counts that `fm` shows (`JOB=COPY:i/n`, "Moved 2 of 2") count the user's entries, not the flush.
+- **Tests:**
+  - `tests/fm_host.rs` `a_move_keeps_its_source_until_the_target_is_on_its_medium`: the double records removals and flushes in order. It checks a move from `data/` to `ram:` (the audit's probe turned around), two files with one flush before both removals, a failed flush with Retry, Skip and Abort.
+  - `a_copy_says_when_it_is_not_on_its_medium`: a failing flush is retried, and one at the end is said.
+  - The existing tests count one more work slice for a copy (the flush).
+  - `issues-audit/repro/fm_repro.py` now fails at both of its defect assertions, as it should once fixed.
+- **Not done:** a real medium's power loss is not simulated; the double checks the order of calls.
+
+## Related
+
+[175](../issues/175-audit-2026-10-09.md), [068](../issues-done/068-fm-write-df-fsck.done), [175-APP-0035](175-APP-0035-saving-keeps-other-tmp-files.done).

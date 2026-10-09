@@ -163,7 +163,7 @@ impl Disk for Vfs {
         let name = panel::volume(path).0.trim_end_matches(':');
         fs::volume(name).ok().map(|v| VolumeInfo { label: String::from(v.label()), fat_bits: v.fat_bits, bytes: v.bytes, free: v.free })
     }
-    fn flush(&mut self, path: &str) { if let Ok(root) = fs::Dir::root(panel::volume(path).0.trim_end_matches(':')) { let _ = root.flush(); } }
+    fn flush(&mut self, path: &str) -> Result<(), Failure> { fs::Dir::root(panel::volume(path).0.trim_end_matches(':')).and_then(|root| root.flush()).map_err(failure) }
 }
 
 mind::entry!(main);

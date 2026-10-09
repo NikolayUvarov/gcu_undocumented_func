@@ -46,15 +46,25 @@ fn load(path: &str) -> Result<(Vec<u8>, bool), String> {
     Ok((text, read_only))
 }
 
-// Writes `name.tmp`, flushes it, then puts it in place of `path` (FAT has no atomic replace: if the rename fails after
-// the old file is gone, the text is in `name.tmp`).
+// Writes a staging file of its own, flushes it, then puts it in place of `path` (FAT has no atomic replace: if the rename
+// fails after the old file is gone, the text is in the staging file).
 fn save(path: &str, text: &[u8]) -> Result<usize, String> {
-    let temporary = format!("{}.tmp", path);
+    // A staging file of its own: name.tmp, else name.tmp1, …, never one that exists (175-APP-0035).
+    let mut staged = None;
+    for n in 0..100 {
+        let name = if n == 0 { format!("{}.tmp", path) } else { format!("{}.tmp{}", path, n) };
+        match File::open_mode(&name, fs::MODE_WRITE | fs::MODE_CREATE | fs::MODE_NEW) {
+            Ok(file) => { staged = Some((file, name)); break; }
+            Err(Error::Exists) => continue,
+            Err(error) => return Err(describe(error)),
+        }
+    }
+    let Some((mut file, temporary)) = staged else { return Err(format!("{}.tmp to {}.tmp99 all exist", path, path)) };
     let written = (|| -> Result<(), Error> {
-        let mut file = File::create(&temporary)?;
         file.write_at(0, text)?;
         file.flush()
     })();
+    drop(file);
     if let Err(error) = written { let _ = fs::remove(&temporary); return Err(describe(error)); }
     match fs::remove(path) {
         Ok(()) | Err(Error::NotFound) => {}
