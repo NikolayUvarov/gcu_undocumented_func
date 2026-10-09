@@ -33,7 +33,11 @@ impl Failure {
 }
 
 /// A file being written; dropping it ends the write.
-pub trait Sink { fn write(&mut self, data: &[u8]) -> Result<(), Failure>; }
+pub trait Sink {
+    fn write(&mut self, data: &[u8]) -> Result<(), Failure>;
+    /// The last write is done: the block store publishes the object here (300-APP-0019).
+    fn finish(&mut self) -> Result<(), Failure> { Ok(()) }
+}
 
 /// A mounted volume as the information panel and the volume menu show it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -120,7 +124,7 @@ const FIND_MAX: usize = 500;
 /// Bytes copied per step of a job (the screen and the keys are served between steps).
 pub const SLICE: usize = 64 * 1024;
 // The boot disk and ram: always; log: and models: where they are mounted (211-APP-0013).
-const VOLUMES: [(&str, &str); 4] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models")];
+const VOLUMES: [(&str, &str); 5] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models"), ("store:", "store: block store")];
 
 const MENU_TITLES: [&str; 5] = ["Left", "Files", "Commands", "Options", "Right"];
 const PANEL_ITEMS: [&str; 11] = ["Brief", "Full", "Info", "Quick view", "Name", "Extension", "Time", "Size", "Reverse order", "Reread  Ctrl+R", "Volume  Alt+F1/F2"];
@@ -261,14 +265,14 @@ impl Job {
                 }
                 if self.buffer.is_empty() { self.buffer = vec![0u8; SLICE]; }
                 let copying = self.copying.as_mut().unwrap();
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 let want = ((copying.size - copying.offset) as usize).min(SLICE);
                 let got = copying.source.read(copying.offset, &mut self.buffer[..want]);
                 if got == 0 { return Err(Failure::Other(String::from("cannot read the file"))); }
                 copying.sink.write(&self.buffer[..got])?;
                 copying.offset += got as u64;
                 self.done += got as u64;
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 Ok(false)
             }
         }
@@ -351,6 +355,7 @@ impl<'b> Fm<'b> {
         let (volume, _) = panel::volume(path);
         let name = VOLUMES.iter().find(|(v, _)| v.eq_ignore_ascii_case(volume)).map_or("?", |(_, name)| name);
         match disk.volume(path) {
+            Some(v) if v.fat_bits == 0 => format!("{} {}: {} KiB, {} KiB free", name, v.label, v.bytes / 1024, v.free / 1024),
             Some(v) => format!("{} {} FAT{}: {} KiB, {} KiB free", name, v.label, v.fat_bits, v.bytes / 1024, v.free / 1024),
             None => String::from(name),
         }
@@ -437,6 +442,7 @@ impl<'b> Fm<'b> {
         let written = (|| -> Result<(), Failure> {
             let mut sink = disk.create(&temporary, true)?;
             for chunk in text.chunks(SLICE) { sink.write(chunk)?; }
+            sink.finish()?;
             Ok(())
         })();
         if let Err(failure) = written { let _ = disk.remove(&temporary); return Err(failure.text()); }

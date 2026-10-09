@@ -84,7 +84,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550; a TLS client without the device certificate, for 351).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550; a TLS client without the device certificate, for 351); [requests-STO.md](requests-STO.md) (a list of the published names, for `fm`'s `store:` panel).
 
 
 ## Finished tasks (`issues-done/`)
@@ -222,6 +222,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [211-APP-0014](../issues-done/211-APP-0014-wm-full-screen-and-window-list.done) | `wm`: Alt+F gives the window in front the whole screen without its frame or the bars, and its frame back; Alt+L lists the windows with their PIDs and states | done (2026-10-09) |
 | [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, only with a flow grant and, in a script, `requires: tls` (requested by NET for 351-NET-0002) | done (2026-10-09) |
 | [000-APP-0018](../issues-done/000-APP-0018-cpu-budgets-in-top.done) | `top` shows the CPU budget `budget` sets: a BUDGET column (ms per period, `*` while spent) and a line in a task's details | done (2026-10-09) |
+| [300-APP-0019](../issues-done/300-APP-0019-block-store-panel-in-fm.done) | `fm` shows the block store as `store:`: names as files, `.pins`, objects read with every block checked, a copy there published, F6 a commit, F8 unpublishes (a list of names requested from STO) | done (2026-10-09) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

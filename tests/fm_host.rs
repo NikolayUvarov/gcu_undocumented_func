@@ -24,6 +24,14 @@ mod editor;
 mod panel;
 #[path = "../fm/src/fm.rs"]
 mod fm;
+#[path = "../libmind/src/sha256.rs"]
+mod sha256;
+#[path = "../libmind/src/cid.rs"]
+mod cid;
+#[path = "../libmind/src/dag.rs"]
+mod dag;
+#[path = "../fm/src/store.rs"]
+mod store;
 
 use abi::*;
 use fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo, DOUBLE_CLICK_MS};
@@ -672,11 +680,11 @@ fn the_mouse_in_panels_viewer_and_key_bar() {
 
 fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }
 fn alt_f2() -> Key { alt_f(2) }
-fn typed(fm: &mut Fm, disk: &mut Mem, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
-fn clear_line(fm: &mut Fm, disk: &mut Mem) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
+fn typed(fm: &mut Fm, disk: &mut dyn Disk, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
+fn clear_line(fm: &mut Fm, disk: &mut dyn Disk) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
 
 // Runs the job until it ends or waits for an answer; returns the number of slices.
-fn run(fm: &mut Fm, disk: &mut Mem) -> usize {
+fn run(fm: &mut Fm, disk: &mut dyn Disk) -> usize {
     let mut slices = 0;
     while fm.busy() { fm.work(disk); slices += 1; assert!(slices < 10_000, "the job does not end"); }
     slices
@@ -995,4 +1003,170 @@ fn the_mouse_in_menus_and_the_editor() {
     fm.key(code(KEY_ENTER), &mut disk);
     assert!(fm.editor.is_none());
     assert_eq!(disk.file("data/notes.txt").unwrap(), b"one\ntwo\n", "not saved");
+}
+
+fn names(panel: &Panel) -> Vec<String> { panel.items.iter().map(|e| e.name.clone()).collect() }
+
+// The block store in memory (300-APP-0019): blocks by CID, names with their versions, the owner's pins; `listing`:
+// whether it can list its names (blockstore.wit 1.3 cannot).
+#[derive(Default)]
+struct StoreInner { blocks: std::collections::HashMap<cid::Cid, Vec<u8>>, names: std::collections::BTreeMap<String, (u64, cid::Cid)>, pins: Vec<cid::Cid>, listing: bool, commits: usize }
+#[derive(Clone, Default)]
+struct FakeStore(Rc<RefCell<StoreInner>>);
+
+impl dag::Blocks for FakeStore {
+    fn put(&mut self, codec: cid::Codec, data: &[u8]) -> Result<cid::Cid, dag::Error> {
+        let cid = cid::Cid::of(codec, data);
+        self.0.borrow_mut().blocks.insert(cid, data.to_vec());
+        Ok(cid)
+    }
+    fn get(&mut self, cid: &cid::Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        let inner = self.0.borrow();
+        let data = inner.blocks.get(cid).ok_or(dag::Error::NotFound)?;
+        out[..data.len()].copy_from_slice(data);
+        Ok(data.len())
+    }
+    fn has(&mut self, cid: &cid::Cid) -> Result<bool, dag::Error> { Ok(self.0.borrow().blocks.contains_key(cid)) }
+}
+
+impl store::Store for FakeStore {
+    fn resolve(&mut self, name: &str) -> Result<Option<(u64, cid::Cid)>, String> { Ok(self.0.borrow().names.get(name).copied()) }
+    fn publish(&mut self, name: &str, expected: u64, root: &cid::Cid) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        let current = inner.names.get(name).map_or(0, |n| n.0);
+        if current != expected { return Err(Failure::Other("Conflict".into())); }
+        inner.names.insert(name.into(), (current + 1, *root));
+        Ok(())
+    }
+    fn unpublish(&mut self, name: &str, expected: u64) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        if inner.names.get(name).map(|n| n.0) != Some(expected) { return Err(Failure::Other("Conflict".into())); }
+        inner.names.remove(name);
+        Ok(())
+    }
+    fn commit(&mut self, updates: &[(&str, u64, Option<cid::Cid>)]) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        if updates.iter().any(|(name, expected, _)| inner.names.get(*name).map_or(0, |n| n.0) != *expected) { return Err(Failure::Other("Conflict".into())); }
+        for (name, expected, root) in updates {
+            match root { Some(root) => { inner.names.insert((*name).into(), (expected + 1, *root)); } None => { inner.names.remove(*name); } }
+        }
+        inner.commits += 1;
+        Ok(())
+    }
+    fn pins(&mut self) -> Result<Vec<(cid::Cid, u64)>, String> {
+        let inner = self.0.borrow();
+        Ok(inner.pins.iter().map(|cid| (*cid, inner.blocks.get(cid).map_or(0, |b| b.len() as u64))).collect())
+    }
+    fn stats(&mut self) -> Result<(u64, u64, u32), String> { let inner = self.0.borrow(); Ok((1 + inner.blocks.len() as u64 * 2, 16384, inner.names.len() as u32)) }
+    fn names(&mut self) -> Option<Vec<String>> { let inner = self.0.borrow(); inner.listing.then(|| inner.names.keys().cloned().collect()) }
+}
+
+impl FakeStore {
+    // An object's bytes, read back with every block checked.
+    fn read(&self, name: &str) -> Option<Vec<u8>> {
+        let root = self.0.borrow().names.get(name)?.1;
+        let mut blocks = self.clone();
+        let mut buffer = [0u8; dag::CHUNK];
+        let size = dag::size(&mut blocks, &root, &mut buffer).ok()?;
+        let mut out = vec![0u8; size as usize];
+        dag::read_at(&mut blocks, &root, 0, &mut out, &mut buffer).ok()?;
+        Some(out)
+    }
+    fn add(&self, name: &str, bytes: &[u8]) -> cid::Cid {
+        let mut blocks = self.clone();
+        let mut builder = Box::new(dag::Builder::new());
+        builder.write(&mut blocks, bytes).unwrap();
+        let (root, _) = builder.finish(&mut blocks).unwrap();
+        if !name.is_empty() { self.0.borrow_mut().names.insert(name.into(), (1, root)); }
+        root
+    }
+}
+
+#[test]
+fn the_block_store_panel() {
+    // 300-APP-0019: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
+    // checked, F6 renames in one commit, F8 unpublishes; names fm has not seen show once the store can list them.
+    let fake = FakeStore::default();
+    fake.add("models/vosk.txt", b"vosk model");
+    let pinned = fake.add("", b"pinned bytes");
+    fake.0.borrow_mut().pins.push(pinned);
+    let mut disk = store::WithStore { disk: Mem::sample(), store: Some(store::Volume::new(fake.clone())) };
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    // The volume menu offers it with its sectors and names.
+    fm.key(alt_f(2), &mut disk);
+    let screen = draw(&mut fm, 130, 30);
+    assert!(screen_has(&screen, "store: block store 1 names: 8192 KiB, 8189 KiB free"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
+    // Without a list of names, the root has the pins only; a name opened once is listed then.
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins"]);
+    assert!(disk.open("store:models/vosk.txt").is_some());
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins", "models"]);
+    fm.load(1, "store:.pins", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), ["..", &format!("{}", pinned)]);
+    // F5: readme.txt and a file of three chunks from A: to store:, published under their names.
+    let big: Vec<u8> = (0..40_000u32).map(|i| (i * 31 + 7) as u8).collect();
+    disk.disk.add_file("big.bin", &big);
+    fm.load(0, "", None, &mut disk);
+    fm.load(1, "store:", None, &mut disk);
+    for name in ["readme.txt", "big.bin"] {
+        fm.panels[0].arrange(Some(name));
+        fm.key(f(5), &mut disk);
+        let screen = draw(&mut fm, 100, 30);
+        assert!(screen_has(&screen, &format!("Copy {} to", name)) && screen_has(&screen, "store:/"), "{:#?}", screen);
+        fm.key(code(KEY_ENTER), &mut disk);
+        run(&mut fm, &mut disk);
+        assert!(fm.notice.as_deref().unwrap_or("").starts_with("Copied 1 of 1"), "{:?}", fm.notice);
+    }
+    assert_eq!(fake.read("readme.txt").unwrap(), "Hello\nПривет, мир\n".as_bytes());
+    assert_eq!(fake.read("big.bin").unwrap(), big);
+    assert_eq!(names(&fm.panels[1]), [".pins", "models", "big.bin", "readme.txt"]);
+    // F3 views an object; a copy back to ram: is the same bytes.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("readme.txt"));
+    fm.key(f(3), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Привет, мир"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.load(0, "ram:", None, &mut disk);
+    fm.panels[1].arrange(Some("big.bin"));
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.disk.file("ram:big.bin").unwrap(), big);
+    // F6 renames in the store: the new name and the old one's removal in one commit.
+    fm.panels[1].arrange(Some("readme.txt"));
+    fm.key(f(6), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "docs/readme.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(fake.0.borrow().commits, 1);
+    assert!(fake.read("readme.txt").is_none() && fake.read("docs/readme.txt").is_some());
+    // A name the store does not take is refused, and the object is not stored.
+    fm.load(0, "", None, &mut disk);
+    disk.disk.add_file("файл.txt", b"x");
+    fm.load(0, "", None, &mut disk);
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[0].arrange(Some("файл.txt"));
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "a name in the store is 1 to 64 of A-Z a-z 0-9 . _ / -"), "{:#?}", screen);
+    // F8 unpublishes; with a list of names the store shows all of them.
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("big.bin"));
+    fm.key(f(8), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fake.read("big.bin").is_none());
+    fake.0.borrow_mut().names.insert("other/seen-by-none".into(), (1, pinned));
+    fake.0.borrow_mut().listing = true;
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins", "docs", "models", "other"]);
+    assert!(!disk.writable("store:docs/readme.txt"), "objects are never changed in place");
 }

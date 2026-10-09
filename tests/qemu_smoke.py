@@ -2626,6 +2626,53 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
           "effect cut short comes back pending and is reconciled before another begins", flush=True)
+    fm_store_check(vm)
+
+
+def fm_store_check(vm):
+    """300-APP-0019: fm shows the block store as store:; a file copied there is stored as an object and published under
+    its name, F3 reads it back, F8 unpublishes it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    text = b"from fm to the store\n"
+    require(vm.command("write ram:fmnote.txt from fm to the store"), "WROTE 21 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: FULL")
+    keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: A:, ram:, store: (no log: or models: here)
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/store: BRIEF")
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    to("fmnote.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, store:/
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "JOB=NONE", whole=True), "RIGHT=/store: BRIEF")
+    keys(b"\t", "ACTIVE=R")
+    to("fmnote.txt")
+    keys(b"\x1bOR", "VIEW=1")  # F3
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("from fm to the store") in row for row in screen), screen
+    keys(b"\x1b", "VIEW=0")
+    keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
+    require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
+    require(log, "REMOVED fmnote.txt VERSION")
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
 
 
 def free_port():
