@@ -283,3 +283,20 @@ The trackpad now drags a window by its title: a press held while a finger moves,
 
 The `wm` suite starts a drag by a title, sees the mark while the button is held and its absence after the release.
 
+## A program that ends at once in a window leaves its message on view (158, 211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, after the maintainer's run on the MacBook Pro: "`camera` — nothing happens when it starts".
+
+### Problem
+
+Started from `wm`, `camera` found no camera and ended at once with `camera: no camera (the video gateway lists none)`. It printed to its text window (`WINDOW 1 OF PID 30: Text 256X112`), and the window closed when the program ended, so the user saw nothing. Every program that fails at its start behaves so in `wm`.
+
+### Plan (a proposal; the tools track decides)
+
+- When a program in a text window ends with a nonzero status, `wm` (or `libmind::windowed`) keeps the window, with its last lines and `ENDED (STATUS n): PRESS A KEY`, until a key or a click.
+- A program that ends with status 0 closes its window as now.
+
+### Acceptance criteria
+
+The `wm` suite starts `camera` without a camera (or another program that fails at once): its window stays with the message until a key.
+
