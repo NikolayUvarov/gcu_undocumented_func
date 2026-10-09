@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -71,6 +71,29 @@ Its quota is the default 16 MiB (`HEAP_MAX_BYTES`), so the index stays under abo
 ### Acceptance criteria
 
 On a store disk of 8 GiB, `[BLOCKSTORE] INDEX:` reports the slots `slots_for` asks for, not a halved number.
+
+## A kernel panic in `awaits_reply` after the task table shrank
+
+**Recorded by:** the storage session, 2026-10-09, from its local gate (`scripts/ci_local.sh --ref claude/relaxed-meitner-5bmhpz`, the branch at 10375c2 merged with `main` at a9ac93f; the branch changes no kernel file).
+
+### Problem
+
+The group "aarch64: GICv2 with GICv2m" failed in the `normal` suite's `applications_until_memory_ends`, right after `kill 165`:
+
+```
+KERNEL PANIC: index out of bounds: the len is 1 but the index is 2 at src/scheduler.rs:438:19 CPU=2 PID=3 NAME=rtc
+```
+
+Line 438 is `awaits_reply`: `self.tasks[client]`. `Table::index` (`&self.chunks[index / CHUNK][index % CHUNK]`) panics for a slot in a chunk that `shrink` dropped. So when `rtc` replied to a client whose task had ended, the table had shrunk under that client's slot: the second chunk emptied as the suite's applications were killed. The other groups that run the same suite passed, so it depends on timing. GICv2 changes how interrupts reach CPU 2.
+
+### Plan (a proposal; the kernel track decides)
+
+- `Table::get(index) -> Option<&Option<T>>`, `None` past the end, used wherever a slot is held across a point where the table may shrink: `awaits_reply`, `fail_reply`, the reply paths, timeouts. Or `Index` gives a static `None` past the end, as an empty slot reads.
+- A host or QEMU case: a client killed while it waits for a reply, in the table's second chunk, with the chunk dropped before the server replies.
+
+### Acceptance criteria
+
+A reply to a client whose slot's chunk was dropped fails with `ERR_PEER` to the server and does not panic.
 
 ## The `devicetree` suite misses the kernel's line when CI is slow
 
