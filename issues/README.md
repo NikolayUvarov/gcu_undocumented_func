@@ -330,6 +330,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, with a flow grant only; the script word `tls` (for NET) | done (2026-10-09) |
 | [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) | HTTPS for programs: `download` over a `tls` session on its own grant; a server trusted by its pinned key (`tls.wit` 1.1 `connect-pinned`) or the roots | done (2026-10-09) |
 | [351-KRN-0043](../issues-done/351-KRN-0043-tpm-service-at-boot.done) | `init` starts the TPM service; `PLATFORM_TPM`, `SLOT_TPM`; `keystore`'s seal client (for DRV and NET; the kernel's lookup is a request) | done (2026-10-09) |
+| [351-KRN-0044](../issues-done/351-KRN-0044-update-badge.done) | The update badge `BADGE_UPDATE` in `mind::fs` (for 351-UPD-0008; `init`'s grant is a request) | done (2026-10-09) |
 | [351-APP-0018](../issues-done/351-APP-0018-shell-tpm-command.done) | The shell's `tpm` command: the TPM, and a refused seal as a check (for DRV) | done (2026-10-09) |
 | [300-STO-0004](../issues-done/300-STO-0004-rights-by-badge.done) | Rights to the block store by badge; a client that may only read refused `put` and `publish` on the platform | done (2026-10-09) |
 | [300](../issues-done/300-checksummed-block-store.done) | A checksummed block store with content addresses (track B, first step) | done (2026-10-09) |
