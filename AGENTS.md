@@ -71,7 +71,7 @@ The registry of tracks — current owners, branches, statuses and starting tasks
    - generated IDL files are committed;
    - third-party code is recorded in [THIRD_PARTY.md](THIRD_PARTY.md).
    - **proprietary files** (firmware, microcode or data whose terms forbid redistribution) never enter the repository or a disk image (the maintainer's decision, 2026-10-09):
-     - a script fetches them on the maintainer's machine from a named source and checks them by SHA-256;
+     - a script fetches them on the maintainer's machine from a named source into `proprietary/` in the working tree, the separate store for all such components, and checks them by SHA-256. `.gitignore` excludes that directory, and nothing in it is ever committed;
      - after the image is written, the script copies them onto the disk, under `data/firmware/` on the boot volume;
      - a driver reads them from there and says so in the log when they are missing;
      - [THIRD_PARTY.md](THIRD_PARTY.md) names the script and the source, not the files.
