@@ -55,7 +55,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
 | [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` | P1 | 0008 (351-KRN-0014, 351-NET-0002 done) | track C |
-| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` | P1 | — (351-KRN-0014 done) | track C |
+| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only (built; the updater's badged client waits for `init`) | `UPD` | P1 | requests-KRN.md (the updater's VFS client badged) | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` | P2 | 351-UPD-0007 | track C |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD`, with `PRT` | P3 | 351-KRN-0022 (351-KRN-0027 done) | track C |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | A version floor in a TPM 2.0 counter, kept by the bootloader (rollback with the disk in hand) | `UPD`, with `PRT` | P2 | 351-UPD-0009, 0012 | track C |

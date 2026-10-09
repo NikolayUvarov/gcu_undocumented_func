@@ -506,6 +506,15 @@ impl<S: Sectors> Volume<S> {
         Ok(data.len())
     }
 
+    /// Writes bytes inside a file in place: its size, clusters and directory entry stay as they are (a boot record,
+    /// 351-UPD-0008). Bytes past its end are refused.
+    pub fn overwrite(&mut self, node: &Node, offset: u32, data: &[u8]) -> Result<()> {
+        if node.is_dir() { return Err(Error::IsDirectory); }
+        if !self.disk.writable() { return Err(Error::ReadOnly); }
+        if offset.checked_add(data.len() as u32).is_none_or(|end| end > node.size) { return Err(Error::Invalid); }
+        self.write_raw(&mut node.clone(), offset, data)
+    }
+
     /// Sets the size of a file: clusters past it are freed, a longer file reads zeros.
     pub fn truncate(&mut self, node: &mut Node, size: u32, stamp: u32) -> Result<()> {
         if node.is_dir() { return Err(Error::IsDirectory); }

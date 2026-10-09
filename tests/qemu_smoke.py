@@ -5697,6 +5697,8 @@ def boot_suite(args, disk):
             vfs = vm.command("dmesg -s vfs_server", raw=True)
             require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
             require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            # Booted from the volume's root, not a slot: nothing for an updater to fill (351-UPD-0008).
+            require(vfs, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")
             require(vm.command("ls"), "kernel.elf")
         finally:
             vm.close()
@@ -5728,7 +5730,12 @@ def boot_suite(args, disk):
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
         try:
-            return vm.expect(until, timeout=60)
+            if not until.startswith("[VFS]"):
+                return vm.expect(until, timeout=60)
+            # The shell holds the serial line, so vfs_server's lines are read with dmesg once it is up.
+            output = vm.expect("MIND> ", timeout=90)
+            time.sleep(1); vm.collect(); vm.output = ""
+            return output + vm.command("dmesg -s vfs_server", raw=True)
         finally:
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
