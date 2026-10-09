@@ -1,6 +1,6 @@
 # 158 — Video capture devices: cameras through a video gateway
 
-**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P1 (the maintainer's MacBook Pro camera, 2026-10-09) · **Status:** open · **Blocked by:** — (the USB stack, step 1 below, is done: [164](../issues-done/164-usb-hid-keyboard-and-mouse.done)) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
+**Type:** drivers + service · **Owner:** the kernel session (`claude/youthful-mendel-mf1soy`): `usb_host`'s isochronous transfers and the UVC class, taken from the drivers track at the maintainer's word (2026-10-09); the tools track for the programs · **Priority:** P1 (the maintainer's MacBook Pro camera, 2026-10-09) · **Status:** open · **Blocked by:** — (the USB stack, step 1 below, is done: [164](../issues-done/164-usb-hid-keyboard-and-mouse.done)) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
 
 ## Problem
 
@@ -80,6 +80,7 @@ The maintainer asked that the mind can use the test MacBook Pro's camera, starte
   - `camera` writes a still and a 3-second AVI that ffprobe accepts.
 - **USB:** `usb_storage` works unchanged on top of `usb_host` (the `ahci`/USB image suites).
 - **Manual** (documented): with a passed-through webcam, `camera` shows its picture.
+- **The MacBook Pro** (the maintainer's run): `camera` shows the FaceTime HD camera's picture in its window, the camera mark is on, and `camera -s still.bmp` writes a still of it. These were the drivers track's request until the camera came to the kernel session on 2026-10-09; the request is withdrawn from `requests-DRV.md`.
 - **Host tests:** UVC payload-header parsing and frame assembly (with packet loss); YUY2 conversion.
 
 ## Related
