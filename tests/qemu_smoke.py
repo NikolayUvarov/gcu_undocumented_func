@@ -5709,6 +5709,45 @@ def tablet_suite(vm, wav):
     else:
         raise AssertionError(screen)
     assert any(canon("[BEEP] DEVICE=true RATE=48000") in row[80:] for row in screen[25:]), screen
+    # A window held by its title is marked until the button is released (211-APP-0037): beep's window is pressed on its
+    # title through the tablet, which marks its frame in the accent colour; moved and released, it is unmarked.
+    beep_pid = re.findall(r"\[WM\] STARTED console PID (\d+)", logged(vm, 0, "[WM] STARTED console PID"))[-1]
+    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} "))[1])
+
+    def state(out):
+        # beep's frame (cells) and whether wm holds it, from the last state line in `out`.
+        line = re.findall(r"\[WM\] MODE=.*$", out, re.M)[-1]
+        return tuple(map(int, re.search(fr"\b{beep}@(\d+),(\d+),(\d+)x(\d+)", line).groups())), f" DRAG={beep}" in line
+
+    def accent_on_left_edge(frame):
+        # Pixels in wm's accent colour (DARK) on the left edge of `frame`, below its title.
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        width, height = map(int, size.split())
+        x0, y0 = width % 8 // 2, height % 16 // 2
+        x, y, _, h = frame
+        return sum(pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == b"\xa6\xe3\xa1"
+                   for py in range(y0 + (y + 1) * 16, y0 + (y + h - 1) * 16) for px in range(x0 + x * 8, x0 + x * 8 + 8))
+
+    (x, y, w, h), held = state(logged(vm, 0, "[WM] MODE="))
+    assert not held and accent_on_left_edge((x, y, w, h)) == 0, (x, y, w, h)
+    start = len(vm.log)
+    vm.tablet_at((x + w // 3) * 8 + 4, y * 16 + 8)
+    time.sleep(.05)
+    vm.qmp("input-send-event", events=[{"type": "btn", "data": {"down": True, "button": "left"}}])
+    pressed, held = state(logged(vm, start, f" DRAG={beep}"))
+    assert held and pressed == (x, y, w, h), (pressed, held)
+    time.sleep(.3)
+    assert accent_on_left_edge(pressed) >= 8 * (h - 2), "the held window's frame in the accent colour"
+    # Moves while the button is held are not logged; the release is, with where the window went.
+    to = (x + w // 3 - 20, y - 6)
+    vm.tablet_at(to[0] * 8 + 4, to[1] * 16 + 8)
+    time.sleep(.3)
+    start = len(vm.log)
+    vm.qmp("input-send-event", events=[{"type": "btn", "data": {"down": False, "button": "left"}}])
+    dropped, held = state(logged(vm, start, f"POINTER={to[0]},{to[1]}"))
+    assert not held and dropped[:2] != (x, y), (dropped, held)
+    time.sleep(.3)
+    assert accent_on_left_edge(dropped) == 0, "no mark after the release"
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
@@ -5725,7 +5764,7 @@ def tablet_suite(vm, wav):
     beep_demo_tones(left, rate, loud[0])
     print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge; "
           "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window; "
-          "beep from the menu: its lines in its console window, its tones in the WAV", flush=True)
+          "beep from the menu: its lines in its console window, its tones in the WAV; a window dragged by its title marked until the release", flush=True)
 
 
 def windows_suite(vm):

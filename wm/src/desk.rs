@@ -62,10 +62,12 @@ pub struct Desk {
     /// Bottom to top: the last one is in front and has the focus.
     pub windows: Vec<Win>,
     changed: Vec<u32>,
+    /// The window the pointer holds by its title or corner: drawn marked until the button is released (211-APP-0037).
+    pub held: Option<u32>,
 }
 
 impl Desk {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new() } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), held: None } }
 
     /// Where windows go: below the top bar, above the status line.
     pub fn area(&self) -> Rect { Rect::new(0, 1, self.cols, self.rows.saturating_sub(2)) }
@@ -308,8 +310,10 @@ impl Desk {
             let r = w.rect;
             if r.w < 2 || r.h < 2 { continue; }
             let focused = index == top;
-            let frame = if focused { Style::new(0xFFFFFF, theme.panel.bg) } else { theme.frame };
-            let title_style = if focused { theme.selected } else { theme.frame };
+            // A window being dragged or resized: its frame in the accent colour and its title inverted (211-APP-0037).
+            let held = self.held == Some(w.id);
+            let frame = if held { Style::new(theme.accent.fg, theme.panel.bg) } else if focused { Style::new(0xFFFFFF, theme.panel.bg) } else { theme.frame };
+            let title_style = if held { theme.selected.inverse() } else if focused { theme.selected } else { theme.frame };
             grid.frame_titled(r, if focused { Line::Double } else { Line::Single }, &w.title, frame, title_style);
             if r.w >= 8 { grid.text(r.right() - 5, r.y, "[×]", if focused { Style::new(0xFFFFFF, 0xA03030) } else { frame }); }
             if r.w >= 11 { grid.text(r.right() - 8, r.y, if w.restore.is_some() { "[⇕]" } else { "[▲]" }, frame); }
@@ -341,7 +345,8 @@ impl Desk {
     pub fn status(&self) -> String {
         let windows: Vec<String> = self.windows.iter().map(|w| format!("{}@{},{},{}x{}", w.id, w.rect.x, w.rect.y, w.rect.w, w.rect.h)).collect();
         let full = self.full_screen().map_or(String::new(), |id| format!(" FULL={}", id));
-        format!("FOCUS={} WINDOWS={}{}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "), full)
+        let held = self.held.map_or(String::new(), |id| format!(" DRAG={}", id));
+        format!("FOCUS={} WINDOWS={}{}{}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "), full, held)
     }
 }
 
@@ -515,6 +520,13 @@ impl Wm {
     /// a window's content brings it to the front and goes to its program, which then gets the mouse until every
     /// button is up; the wheel goes to the window under the mouse. Moves with no button held are not passed on.
     pub fn pointer(&mut self, x: usize, y: usize, buttons: u8, wheel: i32) -> Action {
+        let action = self.pointer_event(x, y, buttons, wheel);
+        // The window the drag holds is marked while it lasts (211-APP-0037).
+        self.desk.held = match self.drag { Some(Drag::Move { id, .. }) | Some(Drag::Resize { id }) => Some(id), None => None };
+        action
+    }
+
+    fn pointer_event(&mut self, x: usize, y: usize, buttons: u8, wheel: i32) -> Action {
         let (x, y) = (x.min(self.desk.cols.saturating_sub(1)), y.min(self.desk.rows.saturating_sub(1)));
         let pressed = buttons & 1 != 0 && self.buttons & 1 == 0;
         let released = buttons & 1 == 0 && self.buttons & 1 != 0;

@@ -664,3 +664,41 @@ fn the_desktop_menu() {
     let rects = open.rects(&wm.programs, 160, 50);
     assert!(rects.len() == 2 && rects[1].x < first.x && rects[1].bottom() <= 49, "{:?}", rects);
 }
+
+// 211-APP-0037: the window the pointer holds by its title or corner is marked (its frame in the accent colour, its
+// title inverted) until the button is released, for a mouse and a trackpad's drag lock alike.
+#[test]
+fn a_dragged_window_is_marked() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let frame_style = |wm: &mut Wm, x: usize, y: usize| -> tui::Style {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+        grid.get(x, y).style
+    };
+    let calm = frame_style(&mut wm, 80, 10); // window 2's left edge, at rest
+    wm.pointer(100, 1, 1, 0);
+    assert!(wm.status().contains(" DRAG=2"), "{}", wm.status());
+    let held = frame_style(&mut wm, 80, 10);
+    assert_ne!(held, calm);
+    assert_eq!(held.fg, DARK.accent.fg);
+    let inverted = (80..160).any(|x| frame_style(&mut wm, x, 1) == DARK.selected.inverse());
+    assert!(inverted, "the title inverted");
+    wm.pointer(110, 5, 1, 0); // moved while held
+    assert!(wm.status().contains(" DRAG=2"));
+    wm.pointer(110, 5, 0, 0);
+    assert!(!wm.status().contains("DRAG="), "{}", wm.status());
+    let (x, y, _, _) = rect(&wm.desk, 2);
+    assert_ne!(frame_style(&mut wm, x, y + 2).fg, DARK.accent.fg, "no mark after the release");
+    // The resize corner holds it too.
+    wm.desk.place(2, Rect::new(40, 10, 30, 10));
+    wm.pointer(69, 19, 1, 0);
+    assert!(wm.status().contains(" DRAG=2"));
+    wm.pointer(69, 19, 0, 0);
+    assert!(!wm.status().contains("DRAG="));
+    // A click in a window's content holds nothing.
+    wm.pointer(50, 15, 1, 0);
+    assert!(!wm.status().contains("DRAG="));
+    wm.pointer(50, 15, 0, 0);
+}
