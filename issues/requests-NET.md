@@ -76,7 +76,7 @@ The agent of 700, which 501's tests also use, talks to Effector, a server that a
 
 **What `libmind::http` lacks.** It (351-NET-0001; its head parsed by `parse` since 109) makes one GET per connection with fixed headers and `Connection: close`. It has no POST and refuses a chunked body. A Go server sends a response without `Content-Length` as chunked once the response outgrows its buffer. A new TLS handshake every second would also be costly on the target.
 
-**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](351-NET-0002-https-for-programs.md) plans a pin by the server's public key (SPKI): a different value. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
+**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](351-NET-0002-https-for-programs.md) pins the server's public key (SPKI): a different value. On the network track's branch, `tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name. Effector is asked (its task 75) to publish SPKI pins too, so the agent can start with `connect-pinned` as it is; the second pin is still needed for a key change. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
 
 ### Plan (a proposal; the network track decides)
 
