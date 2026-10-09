@@ -35,7 +35,7 @@ impl Failure {
 /// A file being written; dropping it ends the write.
 pub trait Sink {
     fn write(&mut self, data: &[u8]) -> Result<(), Failure>;
-    /// The last write is done: the block store publishes the object here (300-APP-0019).
+    /// The last write is done: the block store publishes the object here (300-APP-0038).
     fn finish(&mut self) -> Result<(), Failure> { Ok(()) }
 }
 

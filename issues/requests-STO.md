@@ -27,7 +27,7 @@ P2 while the store runs on a RAM disk. P1 before it gets a durable medium (stage
 
 ## A list of the published names (for `fm`'s `store:` panel)
 
-**Recorded by:** the tools track (APP), 2026-10-09, for [300-APP-0019](../issues-done/300-APP-0019-block-store-panel-in-fm.done).
+**Recorded by:** the tools track (APP), 2026-10-09, for [300-APP-0038](../issues-done/300-APP-0038-block-store-panel-in-fm.done).
 
 ### Problem
 

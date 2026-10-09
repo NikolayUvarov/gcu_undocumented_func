@@ -2777,7 +2777,7 @@ def store_suite(vm):
 
 
 def fm_store_check(vm):
-    """300-APP-0019: fm shows the block store as store:; a file copied there is stored as an object and published under
+    """300-APP-0038: fm shows the block store as store:; a file copied there is stored as an object and published under
     its name, F3 reads it back, F8 unpublishes it."""
     def keys(data, text):
         vm.send_bytes(data)
