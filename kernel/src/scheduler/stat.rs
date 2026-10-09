@@ -36,7 +36,7 @@ fn largest_free(free: usize) -> usize {
     low
 }
 
-fn wait_of(state: State, running: bool, tasks: &Table<Task>) -> (u8, u32) {
+fn wait_of(state: State, running: bool, tasks: &Table<TaskBox>) -> (u8, u32) {
     if running { return (WAIT_RUNNING, 0); }
     match state {
         State::BlockedSend(ep) => (WAIT_SEND, ep as u32),
@@ -107,8 +107,7 @@ impl Scheduler {
                         quota_endpoints: task.quota_endpoints as u16, used_endpoints: if alive { endpoints_used[index] as u16 } else { 0 },
                         band: task.band, throttled: (task.budget_ns != 0 && task.consumed >= task.budget_ns) as u8, focus: (index == self.foreground) as u8, reserved: 0,
                         budget_ns: task.budget_ns, period_ns: task.period_ns,
-                        kernel_bytes: (task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * 4096
-                            + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * 4 + task.nodes.capacity() * core::mem::size_of::<Node>()) as u64,
+                        kernel_bytes: kernel_bytes(task) as u64,
                         memory_quota: task.memory_quota as u64, memory_used: task.memory_tree as u64,
                     });
                 }

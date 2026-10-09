@@ -1,6 +1,6 @@
 use crate::abi::*;
 use crate::input::{Events, Queue};
-use crate::memory::Region;
+use crate::memory::{Frames, Region};
 use crate::task_state::{self, State};
 use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
@@ -66,14 +66,18 @@ impl Capability {
     }
 }
 
+// A task and its kernel structures live in the frame pool, charged to its payers (171-KRN-0032).
+type TaskBox = alloc::boxed::Box<Task, Frames>;
+
 struct Task {
     pid: u64, name: Name, service: bool, state: State, sp: usize, cpu: usize,
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64, dirty: bool,
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
-    cspace: Vec<Option<Capability>>, generations: Vec<u32>,
-    nodes: Vec<Node>,
+    cspace: Vec<Option<Capability>, Frames>, generations: Vec<u32, Frames>,
+    nodes: Vec<Node, Frames>,
+    kernel: usize, // bytes of its kernel structures charged to its payers (171-KRN-0032)
     pending_cap: Option<Pending>, pending_call: bool, pending_badge: u16, send_seq: u64, // send waiting for a receiver
     reply_to: Option<(usize, u64, u64)>, // slot, PID and call number of the client awaiting a reply
     call_seq: u64, // number of this task's current call; a reply must name it
@@ -86,6 +90,13 @@ struct Task {
     memory_quota: usize, memory_tree: usize, payer: Option<(usize, u64)>,
     exit_reason: usize, // why it ended (EXIT_*), for a watch that comes after the exit
     handed_by: Option<(usize, u64)>, // the task in front that started it with SPAWN_FOREGROUND: the focus returns there (issue 160)
+}
+// What a task's kernel structures take of the frame pool: the task itself, its context, exit and info pages, its page
+// tables and its capability table (171-KRN-0032).
+fn kernel_bytes(task: &Task) -> usize {
+    core::mem::size_of::<Task>() + task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * paging::PAGE
+        + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * core::mem::size_of::<u32>()
+        + task.nodes.capacity() * core::mem::size_of::<Node>()
 }
 // A copy of `list` with room for exactly its elements, if the kernel heap has it.
 fn exact_copy(list: &[usize]) -> Option<Vec<usize>> { let mut copy = Vec::new(); copy.try_reserve_exact(list.len()).ok()?; copy.extend_from_slice(list); Some(copy) }
@@ -129,7 +140,7 @@ impl<T> core::ops::Index<usize> for Table<T> { type Output = Option<T>; fn index
 impl<T> core::ops::IndexMut<usize> for Table<T> { fn index_mut(&mut self, index: usize) -> &mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] } }
 
 struct Scheduler {
-    boot: BootInfo, tasks: Table<Task>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
+    boot: BootInfo, tasks: Table<TaskBox>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
     foreground: usize, // focused task: its screen is shown and it receives input
     focus_owner: usize, // holder of process control that set the focus; focus returns to it
@@ -260,7 +271,7 @@ impl Scheduler {
         if every {
             // A task out of budget counts once its period ends: select refills it, and an idle CPU has no tick to.
             let now = crate::clock::now_ns();
-            let runnable = |t: &&Task| t.state == State::Ready && t.cpu < count && (t.budget_ns == 0 || t.consumed < t.budget_ns || now >= t.period_start + t.period_ns);
+            let runnable = |t: &&TaskBox| t.state == State::Ready && t.cpu < count && (t.budget_ns == 0 || t.consumed < t.budget_ns || now >= t.period_start + t.period_ns);
             for t in self.tasks.iter().flatten().filter(runnable) { ready.mark(t.cpu); }
         }
         if ready.is_empty() { return; }
@@ -312,6 +323,17 @@ impl Scheduler {
         true
     }
     fn uncharge(&mut self, slot: usize, bytes: usize) { self.walk_payers(slot, |task| task.memory_tree = task.memory_tree.saturating_sub(bytes)); }
+    // Kernel structures a task grew or gave back since it was last looked at (its capability table, its page tables) go
+    // to its payers' accounts, as its image and stack do; past a quota if need be, which then refuses the payer's next
+    // allocation. Growth is bounded by CAP_SLOTS_MAX and the page-table limit (171-KRN-0032).
+    fn settle_kernel(&mut self, slot: usize) {
+        let task = self.tasks[slot].as_mut().unwrap();
+        let (charged, now) = (task.kernel, kernel_bytes(task));
+        if now == charged { return; }
+        task.kernel = now;
+        let Some(up) = self.payer_of(slot) else { return };
+        if now > charged { self.walk_payers(up, |t| t.memory_tree += now - charged); } else { self.uncharge(up, charged - now); }
+    }
     fn walk_payers(&mut self, slot: usize, mut f: impl FnMut(&mut Task)) {
         let mut at = Some(slot); let mut depth = 0;
         while let Some(s) = at.filter(|_| depth < self.tasks.len()) { f(self.tasks[s].as_mut().unwrap()); at = self.payer_of(s); depth += 1; }
@@ -387,10 +409,10 @@ impl Scheduler {
         }
         if self.focus_owner == slot { self.focus_owner = 0; if self.foreground == slot { self.focus(0); } }
         for listener in self.listeners.iter_mut() { if listener.is_some_and(|l| l.slot == slot) { *listener = None; } }
-        // The task's own memory, image, stack and screen included, leaves its payers' accounts (what it keeps referenced is bounded by DETACHED_MAX_BYTES);
+        // The task's own memory, image, stack, screen and kernel structures included, leaves its payers' accounts (what it keeps referenced is bounded by DETACHED_MAX_BYTES);
         // its children's memory is paid from now on by its payer, which already counts it.
         let task = self.tasks[slot].as_ref().unwrap(); let payer = task.payer;
-        let own = task.heap.bytes() + task.heap.retained + task._image.len() + task._stack.len() + task.screen.as_ref().map_or(0, Region::len);
+        let own = task.heap.bytes() + task.heap.retained + task._image.len() + task._stack.len() + task.screen.as_ref().map_or(0, Region::len) + task.kernel;
         if let Some(up) = self.payer_of(slot) { self.uncharge(up, own); }
         for child in self.tasks.iter_mut().flatten() { if child.payer == Some((slot, pid)) { child.payer = payer; } }
         let task = self.tasks[slot].as_mut().unwrap(); task.payer = None; task.memory_tree = 0;
@@ -443,14 +465,19 @@ impl Scheduler {
     fn fresh(&mut self) -> u64 { self.next_node += 1; self.next_node }
     // Stores a new capability with its node in a free kernel-allocated slot and returns its handle.
     fn insert(task: &mut Task, cap: Capability, node: Node) -> Option<usize> {
+        let index = Self::room(task)?;
+        task.cspace[index] = Some(cap); task.nodes[index] = node; Some(Self::handle(task, index))
+    }
+    // A free kernel-allocated slot. The table doubles when full; a frame pool that cannot grow it refuses the capability.
+    // The growth is charged at the task's next system call (settle_kernel).
+    fn room(task: &mut Task) -> Option<usize> {
         let index = Self::free_slot(&task.cspace)?;
-        // The table doubles when full; a kernel heap that cannot grow it refuses the capability.
         if index == task.cspace.len() {
             let more = task.cspace.len().min(CAP_SLOTS_MAX - task.cspace.len());
             if task.cspace.try_reserve_exact(more).is_err() || task.generations.try_reserve_exact(more).is_err() || task.nodes.try_reserve_exact(more).is_err() { return None; }
             task.cspace.resize(task.cspace.len() + more, None); task.generations.resize(task.generations.len() + more, 1); task.nodes.resize(task.nodes.len() + more, Node::default());
         }
-        task.cspace[index] = Some(cap); task.nodes[index] = node; Some(Self::handle(task, index))
+        Some(index)
     }
     fn root(&mut self) -> Node { Node { id: self.fresh(), parent: 0 } }
     // Frees a slot; a kernel-allocated slot moves to the next generation (20 bits) so old handles stay invalid.
@@ -659,33 +686,36 @@ impl Scheduler {
         let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
         let elf = elf::Image::parse(file)?;
         let screen_bytes = if has_screen { frame_bytes(&self.boot) } else { 0 };
-        if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
+        if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes + core::mem::size_of::<Task>() + 3 * 4096 + context::SIZE) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
         let mut image = Region::task(elf.size.div_ceil(4096) * 4096, 4096)?; let entry = elf.load(image.bytes_mut(), paging::USER_IMAGE)?;
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
-        let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::new(8192, 4096)?;
+        let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::task(8192, 4096)?;
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
         let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
-        let exit = Region::new(4096, 4096)?; let stub = context::exit_stub(paging::USER_MAILBOX as u64); unsafe { core::ptr::copy_nonoverlapping(stub.as_ptr(), exit.ptr(), stub.len()); } cpu::code_written(); let user_sp = unsafe { context::prepare_stack(stack.ptr() as usize, STACK_SIZE) };
+        let exit = Region::task(4096, 4096)?; let stub = context::exit_stub(paging::USER_MAILBOX as u64); unsafe { core::ptr::copy_nonoverlapping(stub.as_ptr(), exit.ptr(), stub.len()); } cpu::code_written(); let user_sp = unsafe { context::prepare_stack(stack.ptr() as usize, STACK_SIZE) };
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
-        let context = Region::new(context::SIZE, 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
-        // Image, stack and screen are charged to the spawner and every payer above it, after the last fallible step (issue 168).
-        let fixed = image.len() + stack.len() + screen.as_ref().map_or(0, Region::len);
-        if let Some((spawner, _)) = parent { if !self.charge(spawner, fixed) { return Err("OVER MEMORY QUOTA"); } }
+        let context = Region::task(context::SIZE, 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
         if self.on_cpu[cpu].try_reserve_exact(1).is_err() { return Err("OUT OF MEMORY: TASK LIST"); }
-        let (mut cspace, mut generations, mut table) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut cspace, mut generations, mut table) = (Vec::new_in(Frames), Vec::new_in(Frames), Vec::new_in(Frames));
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        self.tasks[slot] = Some(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None });
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, kernel: 0 }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
+        // after the last fallible step (issue 168, 171-KRN-0032).
+        task.kernel = kernel_bytes(&task);
+        let fixed = task._image.len() + task._stack.len() + task.screen.as_ref().map_or(0, Region::len) + task.kernel;
+        if let Some((spawner, _)) = parent { if !self.charge(spawner, fixed) { return Err("OVER MEMORY QUOTA"); } }
+        self.tasks[slot] = Some(task);
         if let Err(at) = self.on_cpu[cpu].binary_search(&slot) { self.on_cpu[cpu].insert(at, slot); }
         self.readied.mark(cpu); self.next_pid = next_pid; Ok(pid)
     }
@@ -779,7 +809,7 @@ impl Scheduler {
         let reads = |t: &Task| t.state != State::Exited && t.cspace.iter().flatten().any(|c| matches!(c, Capability::Endpoint(id, rights, _) if *id == ep && rights & CAP_READ != 0));
         let creator = self.endpoint_owner.get(ep).copied().flatten().filter(|&(slot, _)| slot < self.tasks.len());
         if creator.is_some_and(|(slot, pid)| self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && reads(t))) { return true; }
-        self.tasks.iter().flatten().any(reads) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
+        self.tasks.iter().flatten().any(|t| reads(t)) || self.irq_bind.iter().flatten().flatten().any(|b| b.ep == ep)
     }
 
     // Delivers the message of a blocked or current sender to the receiver.
@@ -1055,7 +1085,8 @@ impl Scheduler {
 
     unsafe fn syscall(&mut self, slot: usize, sp: usize, cpu: usize) -> usize {
         let ptr = self.mailbox(slot); let request = core::ptr::read_volatile(ptr);
-        let tasks: *mut Table<Task> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
+        self.settle_kernel(slot);
+        let tasks: *mut Table<TaskBox> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
@@ -1104,12 +1135,12 @@ impl Scheduler {
                 task.dirty = true; return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
-            SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::free_slot(&task.cspace)) {
+            SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::room(task)) {
                 _ if self.used_endpoints(slot) >= task.quota_endpoints => Err(ERR_LIMIT),
                 (Some(ep), Some(_)) => { self.endpoints[ep] = true; self.endpoint_owner[ep] = Some((slot, task.pid)); let node = self.root(); Ok(Self::insert(task, Capability::Endpoint(ep, ENDPOINT_ALL, 0), node).unwrap()) }
                 _ => Err(ERR_NO_SLOT),
             },
-            SYSCALL_CAP_MINT => match (self.cap(slot, request.arg1), self.index(slot, request.arg1), Self::free_slot(&task.cspace)) {
+            SYSCALL_CAP_MINT => match (self.cap(slot, request.arg1), self.index(slot, request.arg1), Self::room(task)) {
                 (Some(cap), Some(index), Some(_)) => match Self::mint(cap, request.arg2, request.msg[0], request.msg[1], request.msg[2]) {
                     Some(child) => { let node = Node { id: self.fresh(), parent: task.nodes[index].id }; Ok(Self::insert(task, child, node).unwrap()) }
                     None => Err(ERR_INVALID),
@@ -1130,7 +1161,7 @@ impl Scheduler {
             SYSCALL_SPAWN => self.spawn(slot, &request),
             SYSCALL_PLATFORM_CAP => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
-                    match (Self::free_slot(&task.cspace), self.platform_cap(request.arg1, request.arg2, request.msg[0])) {
+                    match (Self::room(task), self.platform_cap(request.arg1, request.arg2, request.msg[0])) {
                         (Some(_), Ok(cap)) => { let node = self.root(); Ok(Self::insert((*(*tasks).ptr(slot)).as_mut().unwrap(), cap, node).unwrap()) }
                         (None, Ok(_)) => Err(ERR_NO_SLOT),
                         (_, Err(error)) => Err(error),
@@ -1205,7 +1236,7 @@ impl Scheduler {
             },
             SYSCALL_MEM_DETACH => match task.heap.shareable(request.arg1, 0) {
                 None => Err(ERR_INVALID),
-                Some(_) if Self::free_slot(&task.cspace).is_none() => Err(ERR_NO_SLOT),
+                Some(_) if Self::room(task).is_none() => Err(ERR_NO_SLOT),
                 Some((physical, size)) if self.referenced(physical, size) => Err(ERR_BUSY), // already shared: not a single owner
                 Some((_, size)) if self.orphans.iter().map(|o| o.region.len()).sum::<usize>() + size > DETACHED_MAX_BYTES => Err(ERR_NO_MEMORY),
                 Some((physical, size)) => {
@@ -1215,7 +1246,7 @@ impl Scheduler {
                     let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size, CAP_READ | CAP_WRITE), node).unwrap())
                 }
             },
-            SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::free_slot(&task.cspace)) {
+            SYSCALL_MEM_SHARE => match (task.heap.shareable(request.arg1, request.arg2), Self::room(task)) {
                 (Some((physical, size)), Some(_)) => { let node = self.root(); Ok(Self::insert(task, Capability::Memory(physical, size, MEMORY_ALL), node).unwrap()) }
                 (None, _) => Err(ERR_INVALID),
                 _ => Err(ERR_NO_SLOT),
@@ -1351,7 +1382,7 @@ impl Scheduler {
                 match outcome { Ok(Some(next)) => return next, Ok(None) => Ok(0), Err(error) => Err(error) }
             }
             SYSCALL_IPC_REPLY => self.ipc_reply(slot, &request),
-            SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::free_slot(&task.cspace)) {
+            SYSCALL_IPC_SAVE_REPLY => match (task.reply_to, Self::room(task)) {
                 // Deferred reply: the server accepts further requests and replies to this client later.
                 (Some((caller, pid, seq)), Some(_)) => { task.reply_to = None; let node = self.root(); Ok(Self::insert(task, Capability::Reply(caller, pid, seq), node).unwrap()) }
                 (None, _) => Err(ERR_INVALID),

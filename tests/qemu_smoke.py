@@ -485,6 +485,11 @@ def applications_until_memory_ends(vm):
         return False
     pids = clocks(1000)
     assert len(pids) > 32, len(pids)
+    # 171-KRN-0032: the frame pool, not the kernel arena, ran out: what is left is under the recovery reserve and one
+    # more clock, and each clock took little arena (its task, tables and capabilities are in the frame pool).
+    at_peak, arena = frames_free(vm), heap_used(vm) - baseline
+    assert at_peak < (48 << 20), f"{at_peak >> 20} MiB of the frame pool left at the refusal"
+    assert arena < len(pids) * 4096, f"{arena} bytes of arena for {len(pids)} clocks"
     assert len(task_rows(vm)) == len(pids), (len(task_rows(vm)), len(pids))
     assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system goes on after the refusal"
     peak = len(pids)
@@ -515,7 +520,7 @@ def applications_until_memory_ends(vm):
             vm.command(f"kill {pid}")
         assert settled(retained), f"arena {heap_used(vm)} (was {retained} after the first round, {baseline} before), frame pool {frames_free(vm)} (was {frames})"
         kept = f" ({retained - baseline} bytes of arena kept from the peak, not raised by a second round)"
-    print(f"PASS: {peak} clocks at once until memory ran out, a clean refusal; uptime and top see all {rows} tasks; frame pool and arena back{kept}", flush=True)
+    print(f"PASS: {peak} clocks at once until the frame pool ran out ({at_peak >> 20} MiB left, {arena // peak} bytes of arena a clock), a clean refusal; uptime and top see all {rows} tasks; frame pool and arena back{kept}", flush=True)
 
 
 def monitors_every_cpu(vm):
@@ -1994,16 +1999,17 @@ def recovery_reserve(vm):
 
 
 def task_memory(vm, pid, raw=False):
-    # (image + stack + screen, memory used by the task and its descendants) from `stat <pid>`.
+    # (image + stack + screen + kernel structures, memory used by the task and its descendants) from `stat <pid>`.
     details = vm.command(f"stat {pid}", raw=raw)
-    sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) ", details)
+    sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) .* KERNEL=(\d+) ", details)
     used = re.search(r"MEMORY=(\d+)/\d+", details)
     assert sizes and used, details
     return sum(map(int, sizes.groups())), int(used[1])
 
 
 def memory_charged_to_spawner(vm):
-    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit."""
+    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit;
+    its kernel structures too (171-KRN-0032)."""
     loader = vm.services()["loader"]
     def loader_used():
         previous = None
@@ -2035,7 +2041,7 @@ def memory_charged_to_spawner(vm):
         time.sleep(.2)
     else:
         raise AssertionError(f"loader's account {loader_used()} did not return to {before}")
-    print(f"PASS: a program's image, stack and screen ({fixed} bytes) charged to loader and returned at exit", flush=True)
+    print(f"PASS: a program's image, stack, screen and kernel structures ({fixed} bytes) charged to loader and returned at exit", flush=True)
 
 
 def memory_beyond_the_arena(vm):
@@ -2917,7 +2923,20 @@ def services_suite(vm):
     assert "SERVICES" not in output, output
     require(vm.command("list zz*"), "PROGRAMS ON DISK MATCHING zz* (0).")
     require(vm.command("list -x"), "USAGE: LIST [-L] [MASK]")
+    loader = vm.services()["loader"]
+    def used(pid):
+        return int(re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=(\d+)/", vm.command(f"stat {pid}", raw=True))[1])
+    before = used(loader)
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
+    # 171-KRN-0032: the loader pays for what it started, the program's kernel structures too (its task, pages, page
+    # tables and capability table, in the frame pool): its use grows by exactly that sum.
+    for _ in range(20):
+        parts = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) HEAP=(\d+) .* RETAINED=(\d+) KERNEL=(\d+)", vm.command("stat 4"))
+        grown = used(loader) - before
+        if grown == sum(map(int, parts.groups())):
+            break
+        time.sleep(.2)
+    assert grown == sum(map(int, parts.groups())) and int(parts[6]) > 0, (grown, parts.groups())
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")

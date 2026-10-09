@@ -1,5 +1,5 @@
 // Physical frames for task memory (issue 150): the free RAM of the firmware map outside the kernel arena. Heap blocks,
-// memory objects, screens, images and stacks come from here; kernel structures stay in the arena.
+// memory objects, screens, images and stacks come from here, and each task's kernel structures (`memory::Frames`).
 use crate::abi::StatPhys;
 use core::alloc::Layout;
 use core::ptr::NonNull;
@@ -67,6 +67,12 @@ pub unsafe fn free(pointer: NonNull<u8>, layout: Layout) {
         let heap = pool.heaps.iter_mut().find(|h| (h.bottom() as usize..h.top() as usize).contains(&at)).expect("frames freed outside the pool");
         heap.deallocate(pointer, layout);
     });
+}
+
+/// Whether `pointer` lies in the pool (and so goes back to it).
+pub fn owns(pointer: *const u8) -> bool {
+    let at = pointer as usize;
+    ready() && locked(|pool| pool.heaps.iter().any(|h| (h.bottom() as usize..h.top() as usize).contains(&at)))
 }
 
 /// (total, free) bytes of the pool.

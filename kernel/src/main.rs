@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![feature(allocator_ext)] // Box::try_new_in: a task in the frame pool, refused when the pool is full (171-KRN-0032)
 
 extern crate alloc;
 
