@@ -8,8 +8,10 @@ use crate::sys::{Error, Result};
 /// A client's badge names the one device class it may claim.
 pub const BADGE_HID: u16 = 1;
 pub const BADGE_STORAGE: u16 = 2;
-/// The interface class a badge allows (HID 3, mass storage 8).
-pub fn class_of(badge: u16) -> Option<u8> { match badge { BADGE_HID => Some(3), BADGE_STORAGE => Some(8), _ => None } }
+/// A camera's interfaces (158): the video gateway's.
+pub const BADGE_VIDEO: u16 = 3;
+/// The interface class a badge allows (HID 3, mass storage 8, video 0x0E).
+pub fn class_of(badge: u16) -> Option<u8> { match badge { BADGE_HID => Some(3), BADGE_STORAGE => Some(8), BADGE_VIDEO => Some(0x0E), _ => None } }
 
 /// The client's buffer: control data and descriptions at its start, bulk data anywhere in it.
 pub const BUFFER: usize = 68 * 1024;
@@ -20,16 +22,19 @@ pub const BULK_MAX: usize = 64 * 1024;
 pub const MAX_ENDPOINTS: usize = 4;
 
 /// `usb_host`'s EHCI controllers (211-DRV-0004): the slots of each one's register window and DMA region, and the
-/// region's size; init grants them, after the xHCI controller's own.
+/// region's size; init grants them, after the xHCI controller's own. 128 KiB of schedules and buffers, then an
+/// isochronous stream's 64 descriptors and 768 KiB of their buffers (158).
 pub const EHCI: [(usize, usize); 2] = [(3, 8), (7, 9)];
-pub const EHCI_DMA_BYTES: usize = 128 * 1024;
+pub const EHCI_DMA_BYTES: usize = 128 * 1024 + 8 * 1024 + 768 * 1024;
 
-/// One endpoint of an interface: address (bit 7: IN), attributes (bits 0-1: 2 bulk, 3 interrupt), packet size, interval.
+/// One endpoint of an interface: address (bit 7: IN), attributes (bits 0-1: 1 isochronous, 2 bulk, 3 interrupt), packet
+/// size, interval. An isochronous endpoint's packet is wMaxPacketSize as is: bits 11-12 count its extra transactions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EndpointInfo { pub address: u8, pub attributes: u8, pub packet: u16, pub interval: u8 }
 
 impl EndpointInfo {
     pub fn is_in(&self) -> bool { self.address & 0x80 != 0 }
+    pub fn is_isochronous(&self) -> bool { self.attributes & 3 == 1 }
     pub fn is_bulk(&self) -> bool { self.attributes & 3 == 2 }
     pub fn is_interrupt(&self) -> bool { self.attributes & 3 == 3 }
 }
@@ -68,8 +73,10 @@ impl Interface {
 pub struct Host { endpoint: Endpoint, buffer: Pages, lease: usize, attached: bool }
 
 impl Host {
-    pub fn new(endpoint: Endpoint) -> Result<Self> {
-        let buffer = Pages::new(BUFFER).ok_or(Error::NoMemory)?;
+    pub fn new(endpoint: Endpoint) -> Result<Self> { Self::with_buffer(endpoint, BUFFER) }
+    /// A client with a larger buffer (a camera's packets, 158).
+    pub fn with_buffer(endpoint: Endpoint, bytes: usize) -> Result<Self> {
+        let buffer = Pages::new(bytes.max(BUFFER)).ok_or(Error::NoMemory)?;
         let lease = buffer.share()?;
         Ok(Self { endpoint, buffer, lease, attached: false })
     }
@@ -133,6 +140,30 @@ impl Host {
             at += 2 + length;
         }
         Ok(count)
+    }
+}
+
+impl Host {
+    /// Selects alternate setting `alternate` of a claimed interface; its endpoints (usb.wit 1.2, 158).
+    pub fn select(&mut self, handle: u32, alternate: u8) -> Result<Interface> {
+        let r = usb::select(self.endpoint, handle, alternate);
+        self.check(r)?;
+        Interface::decode(self.buffer()).ok_or(Error::Invalid)
+    }
+    /// The isochronous packets received since the last call, each with whether the controller saw an error in it.
+    pub fn isochronous(&mut self, handle: u32, address: u8, mut each: impl FnMut(&[u8], bool)) -> Result<usize> {
+        let length = self.buffer.as_slice().len();
+        let r = usb::isochronous(self.endpoint, handle, address, 0, length as u32);
+        let written = (self.check(r)? as usize).min(length);
+        let buffer = &self.buffer.as_slice()[..written];
+        let mut at = 0;
+        while at + 2 <= written {
+            let head = u16::from_le_bytes([buffer[at], buffer[at + 1]]);
+            let Some(packet) = buffer.get(at + 2..at + 2 + (head & 0x7FFF) as usize) else { break };
+            each(packet, head & 0x8000 != 0);
+            at += 2 + packet.len();
+        }
+        Ok(written)
     }
 }
 

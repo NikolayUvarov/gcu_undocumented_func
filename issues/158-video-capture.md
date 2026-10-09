@@ -71,6 +71,40 @@ The maintainer asked that the mind can use the test MacBook Pro's camera, starte
   2. isochronous transfers in `usb_host`, on EHCI (iTD) and on xHCI. QEMU's `usb-audio`, an isochronous device, tests the transfer path without a camera;
   3. the UVC class itself (step 2): the probe and commit of a format, payload headers, frame assembly, and YUY2 and MJPEG into `video_gw`.
 
+## Progress (2026-10-09): the UVC driver, made and host-tested; the Mac's run left
+
+The camera came to the kernel session on 2026-10-09 (its owner line). Step 2 is written. QEMU 8.2 has no video class device and no other high-speed isochronous one, so the iTD path runs only on the MacBook Pro. What it does there is not known until the maintainer's run.
+
+- **`usb_host`, EHCI: one isochronous IN stream a controller.**
+  - **The ring.** A ring of up to 64 iTDs, one a frame. Frame list entry j names iTD j mod n, and that iTD then links to the interrupt chain.
+  - **The buffers.** Each microframe's transaction has up to 3 × 1024 bytes (Mult). The region grew by 776 KiB to hold the ring: `EHCI_DMA_BYTES`.
+  - **Collecting.** The iTDs the controller is done with are collected in the order it ran them, then armed again no nearer than two frames ahead of it. A controller may hold an iTD up to a frame (its isochronous scheduling threshold).
+  - **The queue.** Packets wait in a queue of 1 MiB. When it is full, new ones are dropped and counted.
+  - **Polling.** While a stream runs, `usb_host` collects every tick, and again at each request.
+  - **Not done.** Split isochronous (siTD) for a full-speed camera behind a hub, and isochronous on xHCI. `select` refuses both, with a log line.
+- **`idl/usb.wit` 1.2.**
+  - `select(handle, alternate)`: SET_INTERFACE, then the setting's endpoints written back, and its isochronous IN endpoint's stream started; setting 0 stops it. `control` now refuses SET_INTERFACE.
+  - `isochronous(handle, address, offset, length)`: whole packets, each after two length bytes (bit 15: an error the controller reported).
+  - `BADGE_VIDEO` (class 0x0E). `init` gives `video_gw` that client in `SLOT_DEV1`.
+- **`mind::uvc`** (host-tested, `tests/uvc_host.rs`):
+  - the control and streaming interfaces, the input header, YUY2 and MJPEG formats, frame sizes with listed or continuous intervals, and the isochronous alternate settings;
+  - the probe and commit controls by UVC version (26, 34 or 48 bytes);
+  - the choice of the smallest YUY2 frame size that holds the picture asked for, the slowest interval that is fast enough, and the setting carrying the committed payload size;
+  - frames from payloads: FID, EOF, ERR, a damaged packet, a header of the wrong length, too many bytes.
+- **`video_gw`.**
+  - It claims a camera's interfaces from `usb_host` at start and whenever one is asked for, and reads its descriptors and product name.
+  - It logs the formats, frame sizes and settings, then probes and commits, and logs what the camera committed.
+  - It selects the setting and takes the packets every tick while the stream is open.
+  - It gives frames on the rate's grid, scaled to the size asked for (`mind::video::yuy2_scaled`).
+  - Without a good frame for 5 s, a read fails and the log says what came: packets, bytes, broken frames, the first header.
+  - The USB camera is listed first, the test pattern after it.
+- **Open:**
+  - the maintainer's run;
+  - MJPEG (no decoder yet);
+  - bulk streaming;
+  - siTD and xHCI isochronous;
+  - a camera passed through to QEMU (manual).
+
 ## Acceptance criteria
 
 - **QEMU** (CI, synthetic source):

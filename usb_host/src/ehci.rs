@@ -2,7 +2,8 @@
 // rate-matching hub of an EHCI controller, whose ports the chipset cannot hand to xHCI. Polled like xhci.rs: control
 // and bulk transfers through queue heads on the asynchronous schedule, interrupt IN endpoints through rings of
 // transfer descriptors on the periodic schedule, split transactions for full- and low-speed devices behind a
-// high-speed hub. The bus (devices, hubs, interfaces) follows the xHCI one in main.rs.
+// high-speed hub, and one isochronous IN stream of a high-speed device through a ring of iTDs (a camera, 158). The bus
+// (devices, hubs, interfaces) follows the xHCI one in main.rs.
 use alloc::vec::Vec;
 use crate::xhci::{wait, wait_for};
 use crate::{speed_name, Iface, CLASS_HUB, MAX_INTERFACES, SERVED};
@@ -21,6 +22,12 @@ const LONG: usize = 512; const LONG_SLOTS: usize = 2; const LONG_AREA: usize = R
 pub const DATA: usize = 0x10000; // bulk data, a chunk at a time
 const DMA_BYTES: usize = mind::usb::EHCI_DMA_BYTES;
 const CHUNK: usize = 16 * 1024; // bulk bytes per descriptor (five pages hold it at any alignment)
+// The isochronous stream (158): up to MAX_FRAMES iTDs, then their buffers, each page aligned; a queue of what they got.
+const ITDS: usize = 0x20000; const ITD: usize = 128; const MAX_FRAMES: usize = 64;
+const ISO_DATA: usize = ITDS + MAX_FRAMES * ITD; const ISO_BYTES: usize = DMA_BYTES - ISO_DATA;
+const ISO_QUEUE: usize = 1 << 20;
+// iTD transaction words: active, the errors (data buffer, babble, transaction), the length from bit 16.
+const ITD_ACTIVE: u32 = 1 << 31; const ITD_ERRORS: u32 = 7 << 28;
 
 // Transfer descriptor token: status, PID, error count, interrupt on complete, length, data toggle.
 const ACTIVE: u32 = 0x80; const HALTED: u32 = 0x40; const BUFFER_ERROR: u32 = 0x20; const BABBLE: u32 = 0x10; const XACT: u32 = 0x08; const MISSED: u32 = 0x04;
@@ -39,10 +46,50 @@ pub enum Kind { Control, Bulk, Interrupt }
 // program's 64 KiB stack, where it is built (211-DRV-0018).
 struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, stride: usize, queue: Vec<u8>, lengths: [u16; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
 
+// The isochronous stream: frame list entry j names iTD j % frames, which every microframe `step` apart moves up to `slot`
+// bytes into its buffer. An iTD is armed again once collected, but never within two frames of the controller (it may
+// hold an iTD that long). The packets go to `queue`, a ring of two length bytes (bit 15: an error) and the data each.
+struct Iso {
+    address: u8, endpoint: u8, frames: usize, step: usize, slot: usize, area: usize, armed: u64, next: usize,
+    queue: Vec<u8>, head: usize, len: usize, pub stats: IsoStats,
+}
+
+/// What a stream moved: packets and their bytes, those with errors, those the full queue dropped, frames armed too late.
+#[derive(Clone, Copy, Default)]
+pub struct IsoStats { pub packets: u64, pub bytes: u64, pub errors: u64, pub dropped: u64, pub late: u64 }
+
+// A ring's bytes from `at` on, wrapping at its end.
+fn ring_write(ring: &mut [u8], at: usize, data: &[u8]) {
+    let first = data.len().min(ring.len() - at);
+    ring[at..at + first].copy_from_slice(&data[..first]);
+    ring[..data.len() - first].copy_from_slice(&data[first..]);
+}
+fn ring_read(ring: &[u8], at: usize, out: &mut [u8]) {
+    let first = out.len().min(ring.len() - at);
+    out[..first].copy_from_slice(&ring[at..at + first]);
+    let rest = out.len() - first;
+    out[first..].copy_from_slice(&ring[..rest]);
+}
+
+impl Iso {
+    // A packet into the queue, or counted as dropped when the queue has no room for it.
+    fn push(&mut self, data: &[u8], error: bool) {
+        let need = 2 + data.len();
+        if self.len + need > ISO_QUEUE { self.stats.dropped += 1; return; }
+        let head = (data.len() as u16 | if error { 0x8000 } else { 0 }).to_le_bytes();
+        let at = (self.head + self.len) % ISO_QUEUE;
+        ring_write(&mut self.queue, at, &head);
+        ring_write(&mut self.queue, (at + 2) % ISO_QUEUE, data);
+        self.len += need;
+        self.stats.packets += 1; self.stats.bytes += data.len() as u64;
+        if error { self.stats.errors += 1; }
+    }
+}
+
 pub struct Ehci {
     mmio: Mmio, dma: Dma, op: usize, pub ports: usize, high: u32,
     qhs: u64, tds: [u64; MAX_TDS / 64], head: usize, chain: usize,
-    interrupts: [Option<Interrupt>; MAX_INTERRUPTS], pub last: u32,
+    interrupts: [Option<Interrupt>; MAX_INTERRUPTS], pub last: u32, iso: Option<Iso>,
 }
 
 fn qh_at(i: usize) -> usize { QHS + i * QH }
@@ -63,7 +110,7 @@ impl Ehci {
         if !wait(|| mmio.read32(op) & 2 == 0) { return Err("DID NOT RESET"); }
         dma.zero(0, LONG_AREA + LONG_SLOTS * RING * LONG);
         let mut ehci = Self { mmio, dma, op, ports: (hcs & 0xF) as usize, high: (base >> 32) as u32, qhs: 0, tds: [0; MAX_TDS / 64], head: 0, chain: 0,
-            interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
+            interrupts: [const { None }; MAX_INTERRUPTS], last: 0, iso: None };
         // The asynchronous list's head (H, halted, linked to itself) and the periodic chain's head every frame names.
         ehci.head = ehci.qh_alloc().ok_or("NO QUEUE HEAD")?; ehci.chain = ehci.qh_alloc().ok_or("NO QUEUE HEAD")?;
         let (head, chain) = (qh_at(ehci.head), qh_at(ehci.chain));
@@ -288,8 +335,10 @@ impl Ehci {
     /// The report length an armed endpoint polls with.
     pub fn armed_length(&self, index: usize) -> u32 { self.interrupts[index].as_ref().map_or(0, |e| e.length) }
 
-    /// Collects the reports the controller has put in the interrupt rings, and gives their descriptors back to it.
+    /// Collects the reports the controller has put in the interrupt rings and the isochronous stream's packets, and
+    /// gives their descriptors back to it.
     pub fn pump(&mut self) {
+        self.pump_iso();
         for slot in 0..MAX_INTERRUPTS {
             loop {
                 let Some(e) = self.interrupts[slot].as_ref() else { break };
@@ -326,6 +375,105 @@ impl Ehci {
         Ok(count)
     }
     pub fn forget(&mut self, qh: usize) { if let Some(i) = self.armed(qh) { if let Some(e) = self.interrupts[i].as_mut() { e.count = 0; } } }
+
+    // The frame the controller is in (FRINDEX's frame bits: the frame list's index).
+    fn frame(&self) -> usize { ((self.mmio.read32(self.op + 0x0C) >> 3) & 0x3FF) as usize }
+
+    /// Starts the stream of isochronous IN endpoint `endpoint` of high-speed device `address`: `packet` is the
+    /// descriptor's wMaxPacketSize, `interval` its bInterval. The ring's frames, or why it cannot run.
+    pub fn start_iso(&mut self, address: u8, endpoint: u8, packet: u16, interval: u8) -> Result<usize, &'static str> {
+        if self.iso.is_some() { return Err("ANOTHER STREAM RUNS ON THIS CONTROLLER"); }
+        let (size, mult) = ((packet & 0x7FF) as usize, (packet >> 11 & 3) as usize + 1);
+        if size == 0 || mult > 3 { return Err("NO PACKET SIZE"); }
+        let (slot, step) = (size * mult, 1usize << (interval.clamp(1, 4) - 1)); // microframes apart: 1, 2, 4 or 8
+        let area = (8 / step * slot).next_multiple_of(4096);
+        let mut frames = MAX_FRAMES;
+        while frames > 4 && frames * area > ISO_BYTES { frames /= 2; }
+        if frames * area > ISO_BYTES { return Err("PACKETS TOO LARGE"); }
+        let mut queue = Vec::new();
+        if queue.try_reserve_exact(ISO_QUEUE).is_err() { return Err("NO MEMORY FOR ITS QUEUE"); }
+        queue.resize(ISO_QUEUE, 0);
+        // Each iTD's fixed words: the pages of its buffer with the device, endpoint, IN, packet size and transactions.
+        let chain = self.physical(qh_at(self.chain)) | TYPE_QH;
+        for k in 0..frames {
+            let (at, buffer) = (ITDS + k * ITD, ISO_DATA + k * area);
+            self.dma.write32(at, chain);
+            for word in 0..8 { self.dma.write32(at + 4 + word * 4, 0); }
+            for page in 0..7 {
+                let pointer = if page * 4096 < area { self.physical(buffer + page * 4096) } else { 0 };
+                let low = match page { 0 => (endpoint as u32 & 0xF) << 8 | address as u32, 1 => 1 << 11 | size as u32, 2 => mult as u32, _ => 0 };
+                self.dma.write32(at + 0x24 + page * 4, pointer | low);
+                self.dma.write32(at + 0x40 + page * 4, self.high);
+            }
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        for j in 0..1024 { let itd = self.physical(ITDS + j % frames * ITD); self.dma.write32(FRAMES + j * 4, itd); }
+        let next = (self.frame() + 2) % frames;
+        self.iso = Some(Iso { address, endpoint, frames, step, slot, area, armed: 0, next, queue, head: 0, len: 0, stats: IsoStats::default() });
+        self.pump_iso();
+        Ok(frames)
+    }
+
+    /// Stops the stream (the frame list names the interrupt chain again) and says what it moved.
+    pub fn stop_iso(&mut self) -> Option<(u8, u8, IsoStats)> {
+        let iso = self.iso.take()?;
+        let chain = self.physical(qh_at(self.chain)) | TYPE_QH;
+        for j in 0..1024 { self.dma.write32(FRAMES + j * 4, chain); }
+        mind::time::sleep(2); // two frames: the controller has left the iTDs
+        Some((iso.address, iso.endpoint, iso.stats))
+    }
+    /// The device and endpoint number of the stream.
+    pub fn iso_of(&self) -> Option<(u8, u8)> { self.iso.as_ref().map(|i| (i.address, i.endpoint)) }
+
+    // Collects the iTDs the controller is done with, in the order it ran them, and arms them again ahead of it.
+    fn pump_iso(&mut self) {
+        let frame = self.frame();
+        let Ehci { dma, iso, .. } = self;
+        let Some(iso) = iso.as_mut() else { return };
+        for _ in 0..iso.frames {
+            let k = iso.next;
+            let at = ITDS + k * ITD;
+            let collected = iso.armed & 1 << k != 0;
+            if collected {
+                if (0..8).any(|t| dma.read32(at + 4 + t * 4) & ITD_ACTIVE != 0) { break; }
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+                for n in 0..8 / iso.step {
+                    let word = dma.read32(at + 4 + n * iso.step * 4);
+                    let (length, error) = (((word >> 16) & 0xFFF) as usize, word & ITD_ERRORS != 0);
+                    if length == 0 && !error { continue; }
+                    let data = dma.bytes(ISO_DATA + k * iso.area + n * iso.slot, length.min(iso.slot));
+                    iso.push(data, error);
+                }
+                iso.armed &= !(1 << k);
+            }
+            if (k + iso.frames - frame % iso.frames) % iso.frames < 2 { if collected { iso.stats.late += 1; } break; }
+            for t in 0..8 {
+                let word = if t % iso.step != 0 { 0 } else {
+                    let offset = t / iso.step * iso.slot;
+                    ITD_ACTIVE | (iso.slot as u32) << 16 | ((offset / 4096) as u32) << 12 | (offset % 4096) as u32
+                };
+                dma.write32(at + 4 + t * 4, word);
+            }
+            iso.armed |= 1 << k;
+            iso.next = (k + 1) % iso.frames;
+        }
+    }
+
+    /// The queued packets into `out` (two length bytes and the packet each, whole packets only); the bytes written.
+    pub fn take_iso(&mut self, out: &mut [u8]) -> Option<usize> {
+        self.pump_iso();
+        let iso = self.iso.as_mut()?;
+        let mut written = 0;
+        while iso.len >= 2 {
+            let head = u16::from_le_bytes([iso.queue[iso.head], iso.queue[(iso.head + 1) % ISO_QUEUE]]);
+            let need = 2 + (head & 0x7FFF) as usize;
+            if written + need > out.len() { break; }
+            ring_read(&iso.queue, iso.head, &mut out[written..written + need]);
+            iso.head = (iso.head + need) % ISO_QUEUE;
+            iso.len -= need; written += need;
+        }
+        Some(written)
+    }
     pub fn small(&mut self, length: usize) -> &mut [u8] { self.dma.bytes(SMALL, length) }
     pub fn data(&mut self, length: usize) -> &mut [u8] { self.dma.bytes(DATA, length) }
 }
@@ -342,14 +490,35 @@ pub struct Device {
 
 pub struct Bus {
     pub hc: Ehci, pub devices: [Option<Device>; MAX_DEVICES], generation: u16, addresses: u128,
-    root_tries: [u8; 16], root_failed: u16, name: u8, swept: u64,
+    root_tries: [u8; 16], root_failed: u16, pub name: u8, swept: u64,
+    /// The device and interface whose isochronous stream runs (158), and whether its first packet was logged.
+    pub streaming: Option<(usize, usize)>, pub streamed: bool,
 }
 
 impl Bus {
     pub fn new(hc: Ehci, name: u8) -> Self {
         mind::println!("[USB] EHCI {}: {} PORTS", name, hc.ports);
         for port in 1..=hc.ports { mind::println!("[USB] EHCI {} PORT {} PORTSC {:08X}", name, port, hc.port_status(port)); }
-        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name, swept: 0 }
+        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name, swept: 0, streaming: None, streamed: false }
+    }
+
+    /// The configuration descriptor of device `index` (up to CONTROL_MAX bytes) and its length.
+    pub fn config(&mut self, index: usize) -> Option<([u8; CONTROL_MAX], usize)> {
+        self.control(index, 0x80, 6, 0x0200, 0, 9).ok()?;
+        let total = u16::from_le_bytes([self.hc.small(4)[2], self.hc.small(4)[3]]).clamp(9, CONTROL_MAX as u16) as usize;
+        let got = self.control(index, 0x80, 6, 0x0200, 0, total as u16).ok()?;
+        let mut config = [0u8; CONTROL_MAX];
+        config[..got].copy_from_slice(self.hc.small(got));
+        Some((config, got))
+    }
+
+    /// Stops the isochronous stream and logs what it moved.
+    pub fn stop_stream(&mut self) {
+        self.streaming = None;
+        if let Some((address, endpoint, s)) = self.hc.stop_iso() {
+            mind::println!("[USB] EHCI {} DEVICE {} ENDPOINT {:02X}: STREAM STOPPED: {} PACKETS, {} BYTES, {} WITH ERRORS, {} DROPPED (QUEUE FULL), {} TIMES BEHIND",
+                self.name, address, endpoint | 0x80, s.packets, s.bytes, s.errors, s.dropped, s.late);
+        }
     }
 
     pub fn control(&mut self, index: usize, request_type: u8, request: u8, value: u16, windex: u16, length: u16) -> Result<usize, u32> {
@@ -523,6 +692,7 @@ impl Bus {
     /// Removes a device that went away, and everything behind it if it is a hub.
     pub fn remove(&mut self, index: usize) {
         for child in 0..MAX_DEVICES { if self.devices[child].is_some_and(|d| d.parent.is_some_and(|p| p.0 == index)) { self.remove(child); } }
+        if self.streaming.is_some_and(|s| s.0 == index) { self.stop_stream(); }
         let Some(device) = self.devices[index].take() else { return };
         for &(_, qh) in &device.pipes[..device.pipe_count] { self.hc.drop_pipe(qh); }
         if let Some(qh) = device.status { self.hc.drop_pipe(qh); }

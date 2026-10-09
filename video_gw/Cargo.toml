@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
-libmind = { path = "../libmind" }
+libmind = { path = "../libmind", features = ["alloc"] }
 
 [profile.release]
 panic = "abort"
