@@ -1,6 +1,6 @@
 # 251-STO-0010 — Speech models in the block store
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** [requests-KRN.md](requests-KRN.md) ("A durable disk for the block store": the store runs on an 8 MiB RAM disk, so a model of 25 MB to 3 GB does not fit and nothing survives a restart of the machine) · **Main task:** [251](251-model-cache-and-model-disk.md) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.5
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** — (the store's own disk is done: [300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done)) · **Main task:** [251](251-model-cache-and-model-disk.md) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.5
 
 Numbered from the tools track's request in `requests-STO.md` (2026-10-08, at the maintainer's request) by the storage session.
 

@@ -1,10 +1,10 @@
 # 300-KRN-0024 — A block store client that may only read — done
 
-**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Constitution:** MC-3.4, MC-3.11
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](300-checksummed-block-store.done) · **Constitution:** MC-3.4, MC-3.11
 
 ## Problem
 
-From the storage track's request ("A block store client with fewer rights", for [300-STO-0004](../issues/300-STO-0004-rights-by-badge.md)).
+From the storage track's request ("A block store client with fewer rights", for [300-STO-0004](300-STO-0004-rights-by-badge.done)).
 
 The shell held the only `blockstore` client, badged get, put and publish, and lent it for `REQUEST_BLOCKSTORE`. A badge is set once, so no program could hold a client that may only read. The service's refusals by badge were tested on the host only.
 
@@ -28,4 +28,4 @@ A program that asked only to read holds a client with badge 1. The storage track
 
 ## Related
 
-[300-STO-0004](../issues/300-STO-0004-rights-by-badge.md), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done).
+[300-STO-0004](300-STO-0004-rights-by-badge.done), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done).

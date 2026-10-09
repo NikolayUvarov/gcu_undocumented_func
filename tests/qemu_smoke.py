@@ -2469,6 +2469,15 @@ def store_suite(vm):
     require(blocks("put ram:note.txt"), f"PUT {note} SIZE 12")
     require(blocks(f"get {note} ram:copy.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:copy.txt"), "hello store")
+    # 300-STO-0004: blocksro asks only to read and holds the client badged get alone (300-KRN-0024). It reads; a put
+    # and a publish are refused, and the store logs each with its badge.
+    require(vm.command(f"blocksro get {note} ram:ro.txt"), "GOT 12 BYTES")
+    out = vm.command("blocksro put ram:note.txt")
+    require(out, "blocks: put:"); require(out, "Rights")
+    require(vm.command(f"blocksro publish ro {note}"), "blocks: publish ro: Rights")
+    log = vm.service_logs("blockstore", "REFUSED Publish")
+    assert re.search(r"\[BLOCKSTORE\] REFUSED Put FOR PID \d+ \(BADGE 1\)", log) and re.search(r"\[BLOCKSTORE\] REFUSED Publish FOR PID \d+ \(BADGE 1\)", log), log
+    require(blocks("resolve ro"), "blocks: resolve ro: NotFound")
     # Names: compare-and-swap on the version; only roots whose blocks are all stored.
     require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
     require(blocks(f"publish obj {note}"), "blocks: publish obj: Conflict")
@@ -2496,8 +2505,9 @@ def store_suite(vm):
     assert re.search(r"COLLECTED 0 BLOCKS [0-2] NAMES [0-2] SECTORS", first), first
     require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
-    print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; names by "
-          "compare-and-swap, only complete roots; a full medium refused; a restarted store finds blocks and names again", flush=True)
+    print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; a client that may only "
+          "read is refused put and publish; names by compare-and-swap, only complete roots; a full medium refused; a restarted "
+          "store finds blocks and names again", flush=True)
     # What no name retains goes once its lease (60 s after the last put or the mount) has ended: a file put and never
     # published goes; the file kept as obj's second version stays, retained by the name's history (303-STO-0003).
     require(vm.command("write ram:loose.txt never named"), "WROTE 12 BYTES")
@@ -5798,6 +5808,12 @@ def main():
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
+            if suite == "store":
+                # blocksro: blocks asking only to read (REQUEST_BLOCKSTORE_READ 32768 for REQUEST_BLOCKSTORE 16384).
+                elf = bytearray((disk / "blocks.elf").read_bytes())
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
+                (disk / "blocksro.elf").write_bytes(elf)
             if suite == "tools":
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())

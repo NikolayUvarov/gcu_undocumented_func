@@ -4,7 +4,7 @@
 
 ## Problem
 
-Blocks and objects are immutable and named by their content ([300](../issues/300-checksummed-block-store.md), [301](301-objects-as-merkle-dags.done)). Nothing names what is current.
+Blocks and objects are immutable and named by their content ([300](300-checksummed-block-store.done), [301](301-objects-as-merkle-dags.done)). Nothing names what is current.
 
 - MC-4.3 asks that a stable entity, its immutable version and the reference to the current version are distinct. A change creates a new version and publishes a new root with authority. Concurrent updates follow a declared protocol, and confirmed changes are not silently lost.
 - MC-4.4 asks that a root is published only after all data needed for it is durable. References to data not yet received are marked, not presented as stored.

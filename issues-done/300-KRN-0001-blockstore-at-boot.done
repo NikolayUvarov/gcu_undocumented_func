@@ -1,6 +1,6 @@
 # 300-KRN-0001 — The block store starts at boot, over a RAM disk of its own — done
 
-**Type:** kernel (core services) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) (`STO`) · **Constitution:** MC-3.3, MC-3.7, MC-4.1, MC-1.7
+**Type:** kernel (core services) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Main task:** [300](300-checksummed-block-store.done) (`STO`) · **Constitution:** MC-3.3, MC-3.7, MC-4.1, MC-1.7
 
 Requested by the storage track (STO) in `issues/requests-KRN.md`, 2026-10-06.
 
