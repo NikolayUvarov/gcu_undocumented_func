@@ -35,6 +35,7 @@
 | Fault | Behaviour |
 |---|---|
 | Exception in a user task | The task is terminated, the fault is recorded (`faults`), clients waiting for its reply get `ERR_PEER`, its memory is reclaimed once no other task maps it. |
+| A kernel bug that reaches a program's page through the program's address | Where the CPU has them, SMAP (x86) or PAN (aarch64) make a read or write fault, and SMEP (x86) or PXN (aarch64) make a jump fault; the kernel stops with `KERNEL EXCEPTION` rather than act on the program's data or run its code in ring 0 (000-KRN-0039). Without them (CPUs before Broadwell or ARMv8.1, QEMU's `qemu64`; the boot line says `PROTECTION: NONE`) nothing stops it. |
 | Task exits or is killed while focused | Focus returns to the focus owner (shell), which gets a notice. |
 | Service dies | Its clients get `ERR_PEER`; new sends to its endpoint fail with `ERR_PEER`. It is restarted only by an explicit `RUN <service> &` (no automatic supervision). |
 | Driver hangs | Not detected (no watchdog, no supervision). |

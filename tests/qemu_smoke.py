@@ -1849,6 +1849,7 @@ def smp_suite(vm):
     cpus = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", cpus)) == vm.cpus, cpus
     avx_expected(vm)
+    protection_check(vm)
     # Two non-yielding SIMD loops per core force real preemption on every CPU.
     count = min(vm.cpus * 2, 8)
     for pid in range(1, count + 1):
@@ -1952,10 +1953,37 @@ def isolation_suite(vm):
     pid, faults = family("x", 1, "LEASE REVOKED")
     assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
+    # 000-KRN-0039: SGDT from a program faults (#GP) where UMIP is on.
+    names = protection_check(vm)
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("U\n")
+    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    if "UMIP" in names:
+        faults = vm.command("faults")
+        assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR=13 ", faults), faults
+    else:
+        require(output, "SGDT ALLOWED")
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+
+
+def protection_check(vm):
+    """000-KRN-0039: what the kernel turned on against reaching programs' pages, as the CPU model offers it. The
+    protection-test kernel reads and jumps into a program's page once: SMAP and SMEP must stop both."""
+    line = re.search(r"MIND CORE KERNEL: PROTECTION: ([A-Z ]+?)\r?\n", vm.log)
+    assert line, vm.log[-2000:]
+    names, model = line[1].split(), getattr(vm.args, "cpu_model", None)
+    if vm.arch == "aarch64":
+        assert names == ["PXN", "PAN"], line[0]  # -cpu max has PAN (ARMv8.1)
+    elif model in (None, "max"):
+        assert names == (["SMEP", "SMAP", "UMIP"] if model == "max" else ["NONE"]), line[0]
+    if "protection" in (getattr(vm.args, "kernel", None) or ""):
+        require(vm.log, "PROTECTION TEST: READ OF A PROGRAM'S PAGE FAULTED, FETCH FROM IT FAULTED")
+    return names
 
 
 def memory_suite(vm):

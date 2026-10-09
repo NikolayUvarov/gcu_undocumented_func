@@ -73,6 +73,7 @@ X86_GROUPS=(
     "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
     "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
     "x86: padded vector area|$X86 --cpu-model max --kernel /tmp/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
+    "x86: protection probes|$X86 --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
@@ -114,6 +115,7 @@ x86_fixtures() {
     (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
     (cd kernel && cargo build --release --features bar-move-test --target-dir /tmp/mind-bar-target)
     (cd kernel && cargo build --release --features xsave-pad-test --target-dir /tmp/mind-xsave-pad-target)
+    (cd kernel && cargo build --release --features protection-test --target-dir /tmp/mind-protection-target)
 }
 tap_bench() {
     ip link show mindtap0 >/dev/null 2>&1 || {

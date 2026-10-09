@@ -82,6 +82,7 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
     let saved = crate::context::saved_state();
     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: VECTOR STATE: {}, XCR0 {:#X}, {} BYTES A TASK\n",
         if saved == 0 { "FXSAVE" } else { "XSAVE" }, saved, crate::context::area()));
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PROTECTION: {}\n", crate::mmu::protection_names()));
     let (ids, count) = processors(info);
     COUNT.store(count, Ordering::Release);
     // Test-only: what many PCs' firmware does, x2APIC on before the kernel starts.

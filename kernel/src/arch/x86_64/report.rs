@@ -35,7 +35,55 @@ pub fn msr(number: u32) -> Option<u64> {
 
 /// Where a kernel fault at `pc` resumes, if it is the checked read's (the result reads as absent).
 pub fn resume_after_fault(pc: u64) -> Option<u64> {
+    #[cfg(feature = "protection-test")]
+    if let Some(resume) = probe::resume(pc) { return Some(resume); }
     (pc == core::ptr::addr_of!(msr_read_instruction) as u64).then(|| core::ptr::addr_of!(msr_read_resume) as u64)
+}
+
+// Test kernel only (000-KRN-0039): on the first LOG call the kernel reads the caller's mailbox page and jumps into its
+// exit stub through the program's addresses. SMAP and SMEP must stop both; a fault resumes with RAX zero.
+#[cfg(feature = "protection-test")]
+pub mod probe {
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    core::arch::global_asm!(r#"
+        .global probe_read, probe_read_instruction, probe_read_resume, probe_fetch, probe_fetch_resume
+    probe_read:
+        mov eax, 1
+    probe_read_instruction:
+        mov rdx, [rdi]
+    probe_read_resume:
+        ret
+    probe_fetch:
+        mov eax, 1
+        jmp rdi
+    probe_fetch_resume:
+        ret
+    "#);
+    unsafe extern "sysv64" {
+        fn probe_read(address: u64) -> u64;
+        fn probe_fetch(address: u64) -> u64;
+        static probe_read_instruction: u8;
+        static probe_read_resume: u8;
+        static probe_fetch_resume: u8;
+    }
+    static TARGET: AtomicU64 = AtomicU64::new(u64::MAX);
+    static DONE: AtomicBool = AtomicBool::new(false);
+    pub fn resume(pc: u64) -> Option<u64> {
+        if pc == core::ptr::addr_of!(probe_read_instruction) as u64 { return Some(core::ptr::addr_of!(probe_read_resume) as u64); }
+        (pc == TARGET.load(Ordering::Relaxed)).then(|| core::ptr::addr_of!(probe_fetch_resume) as u64)
+    }
+    /// Run once, with a program's address space active.
+    pub fn run() {
+        if DONE.swap(true, Ordering::AcqRel) { return; }
+        let read = unsafe { probe_read(crate::paging::USER_MAILBOX as u64) } == 1;
+        // Without SMEP the jump would run the program's code in ring 0: not tried.
+        let fetch = if crate::mmu::protection() & crate::mmu::SMEP == 0 { "NOT TRIED" } else {
+            TARGET.store(crate::paging::USER_EXIT as u64, Ordering::Relaxed);
+            if unsafe { probe_fetch(crate::paging::USER_EXIT as u64) } == 1 { "RAN" } else { "FAULTED" }
+        };
+        let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PROTECTION TEST: READ OF A PROGRAM'S PAGE {}, FETCH FROM IT {}\n",
+            if read { "DONE" } else { "FAULTED" }, fetch));
+    }
 }
 
 fn cpuid(leaf: u32, sub: u32) -> CpuidResult { __cpuid_count(leaf, sub) }
@@ -214,4 +262,5 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
 /// The platform section: what the kernel chose on this machine.
 pub fn kernel(out: &mut String) {
     let _ = writeln!(out, "  architecture      x86-64\n  interrupt mode    {}\n  vector state      XCR0 {:#X}, {} B a task and an interrupt entry", if crate::cpu::x2apic() { "x2APIC" } else { "xAPIC" }, crate::context::saved_state(), crate::context::area());
+    let _ = writeln!(out, "  protection        {} (CR4)", crate::mmu::protection_names());
 }

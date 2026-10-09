@@ -94,6 +94,9 @@ jobs:
           # The vector area padded to AMX's size, for the frames QEMU cannot emulate (174-KRN-0037).
           - name: padded vector area
             args: --cpu-model max --kernel /tmp/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation
+          # The kernel reads and jumps into a program's page once: SMAP and SMEP must stop it (000-KRN-0039).
+          - name: protection probes
+            args: --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})
@@ -120,6 +123,7 @@ jobs:
           (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
           (cd kernel && cargo build --release --features bar-move-test --target-dir /tmp/mind-bar-target)
           (cd kernel && cargo build --release --features xsave-pad-test --target-dir /tmp/mind-xsave-pad-target)
+          (cd kernel && cargo build --release --features protection-test --target-dir /tmp/mind-protection-target)
       - name: Tap interface for the benchmark (host 10.0.2.2/24; a card on it offers checksum offload)
         if: ${{ matrix.tap }}
         run: |

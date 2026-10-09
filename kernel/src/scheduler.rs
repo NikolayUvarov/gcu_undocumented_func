@@ -1162,6 +1162,7 @@ impl Scheduler {
         self.settle_kernel(slot);
         let tasks: *mut Table<TaskBox> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
+        #[cfg(all(feature = "protection-test", target_arch = "x86_64"))] if request.syscall_num == SYSCALL_LOG { crate::arch::report::probe::run(); }
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
             // The legacy byte of the next event that has one (events without a byte are skipped).

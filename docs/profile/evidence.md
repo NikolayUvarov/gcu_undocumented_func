@@ -5,6 +5,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Statement | Evidence |
 |---|---|
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
+| The kernel kept out of programs' pages (000-KRN-0039): with `-cpu max` x86 sets SMEP, SMAP and UMIP, a program's `sgdt` faults, and the probe kernel's read of a program's page and jump into it both fault; with `qemu64` none is offered and the boot line says so; aarch64 sets PAN (`-cpu max`), programs' pages being PXN already | `isolation` suite (case `U`, `protection_check`), CI group "x86: protection probes" (`protection-test` kernel), aarch64 `smp` suite; QEMU only, a real machine's line is in its hardware report |
 | A read-only memory mint maps read-only; a revoked lease is unmapped in its holder, also after the holder dropped the lease capability; a detached block leaves the address space | `isolation` suite, cases m, v, l, d |
 | Revocation reaches descendants whose parent was dropped; a mapping cannot be re-shared as a new root | `isolation` suite, case `k` |
 | Heap holes are reused; block and byte limits include retained memory; only own blocks are shareable; revoke unmaps by node; detach leaves the address space | Host tests `user_heap::tests` in `tests/runtime.rs` |

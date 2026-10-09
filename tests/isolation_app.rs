@@ -164,6 +164,13 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             b'u' => {
                 asm!("ud2");
             }
+            b'U' => {
+                // UMIP (000-KRN-0039): reading the GDT's address faults where the CPU has it.
+                let mut table = [0u8; 10];
+                asm!("sgdt [{}]", in(reg) table.as_mut_ptr());
+                print(mb, b"SGDT ALLOWED\r\n");
+                return;
+            }
             b'g' => {
                 let _ = core::ptr::read_volatile(0x80_0100_0000 as *const u8);
             }
