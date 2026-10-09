@@ -68,6 +68,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-NET-0005](351-NET-0005-persistent-device-key.md) | The device key kept across boots, sealed; a purpose for SSH login | `NET` | P3 | — | track D |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0007 (351-KRN-0014 done) | Assurance |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers | `ASR` (open) | P2 | 351-UPD-0005 | Assurance |
+| [351-APP-0016](351-APP-0016-update-in-the-shell.md) | `update check, fetch, apply, status, rollback` in the shell and `msh` (requested by KRN for 351) | `APP` | P2 | 351-UPD-0007 | track G |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
 | [501](501-effector.md) | The effector: a client on the target for a test server, so tests run on real hardware unattended; results recorded per configuration; new images only through self-update (351) | main task, `ASR` (open) | P2 | 550; `NET` (TLS for a service, a persistent device key) | Assurance |
@@ -75,6 +76,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [550-DRV-0005](550-DRV-0005-usb-ethernet.md) | A USB Ethernet class driver (CDC-ECM, CDC-NCM) over `usb_host`; the choice of configuration and alternate setting in `usb_host` | `DRV` (open) | P2 | — (the check with `netstack`: [requests-NET.md](requests-NET.md), `init`) | track A |
 | [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) | The MacBook Pro's Broadcom Wi-Fi (BCM4331 expected, SoftMAC): the PCI ID and the firmware licence first, then the driver (proposed) | `DRV` (open) | P3 | the PCI ID; the firmware licence; `NET`'s 802.11 station | track A |
 | [550-DRV-0007](550-DRV-0007-broadcom-ethernet.md) | Broadcom tg3-family Ethernet: Apple's Thunderbolt Gigabit Ethernet adapter and PCs; no QEMU model (proposed) | `DRV` (open) | P3 | hardware with such a chip | track A |
+| [550-APP-0017](550-APP-0017-wifi-setup-program.md) | `wifi`: the networks found, a passphrase typed without echo and kept by `keystore`, the state (requested by KRN for 550) | `APP` | P2 | `NET`'s 802.11 station and its configuration interface ([requests-NET.md](requests-NET.md)) | track G |
 | [600](600-apple-silicon-mac-vm-host.md) | An Apple Silicon Mac as a host: the aarch64 system in a virtual machine with HVF, built, run and tested on macOS ([guide](../docs/apple-silicon.md)) | main task, `APL` (open) | P2 | a person with an Apple Silicon Mac | track H |
 | [600-APL-0009](600-APL-0009-aarch64-build-on-macos.md) | The aarch64 build with the Bash 3.2 and BSD sed macOS ships (`mapfile`, a GNU sed form) | `APL` (open) | P2 | — (the check: a Mac) | track H |
 | [600-APL-0010](600-APL-0010-run-script-on-macos.md) | `03_run_qemu_aarch64.sh` on macOS: the screen in a window, Bash 3.2, `MIND_ACCEL`, memory above 3 GiB on an M1 | `APL` (open) | P2 | — (the check: a Mac) | track H |
@@ -82,7 +84,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (full screen and a list of windows in `wm`; clocks asking the RTC service 10 times a second; `update` in the shell for 351; a Wi-Fi setup program for 550; `log:` in the shell's help and in `fm`; `efivar` in the tools guide; the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
 
 
 ## Finished tasks (`issues-done/`)

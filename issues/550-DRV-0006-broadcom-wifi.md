@@ -33,4 +33,4 @@ Steps 3–6 are large. Nothing here is promised by a date.
 
 ## Related
 
-[550](550-network-on-real-hardware.md), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), [requests-NET.md](requests-NET.md) (the 802.11 station), [requests-APP.md](requests-APP.md) (the setup program), [THIRD_PARTY.md](../THIRD_PARTY.md).
+[550](550-network-on-real-hardware.md), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), [requests-NET.md](requests-NET.md) (the 802.11 station), [550-APP-0017](550-APP-0017-wifi-setup-program.md) (the setup program), [THIRD_PARTY.md](../THIRD_PARTY.md).
