@@ -38,14 +38,14 @@ The kernel builds the report, since it alone sees the CPU's model-specific regis
     - the 256 bytes of configuration space in hex.
   - **GPUs and NPUs** (classes 03, 12 and 0B40) marked as such, with what their registers say where it is safe to read them (NVIDIA: the chip's ID from `PMC_BOOT_0`).
   - **The kernel's decisions:** the tick source and TSC frequency, CPUs started, x2APIC, the saved vector state, and the kernel ring.
-- **Files.** When the services have started, init writes the report to `log:hwNNNN.txt` (`NNNN` of this boot's `bootNNNN.log`), and each ACPI table to `log:acpi/<SIG>.bin` (`SSDT1.bin`, `SSDT2.bin`, … for repeated signatures). Without a log volume the report goes to `ram:hardware.txt`.
+- **Files.** When the services have started, init writes the report to `log:hwNNNN.txt` (`NNNN` of this boot's `bootNNNN.log`), and each ACPI table to `log:acpi/<SIG>.bin` (`SSDT1.bin`, `SSDT2.bin`, … for repeated signatures). Without a log volume nothing is written (`ram:` and `data/` are the user's); init logs the report's size.
 - **Authority and privacy.** Only init gets the report, with the platform privilege at boot (MC-10.2: no new path to memory). The report holds identifiers (MAC addresses, serial numbers), stays on the machine's log volume, and leaves it only when the user copies it.
 - **aarch64:** the same sections from the ID registers (MIDR, MPIDR, ID_AA64*), the GIC and timer, and the ACPI tables or the device tree.
 - **Later steps of 174** add to the report what they learn: SMBIOS (needs the bootloader to pass its entry point), the drivers' devices (NVMe identify, USB descriptors, EDID), and NUMA nodes.
 
 ## Acceptance criteria
 
-- **QEMU, x86 and aarch64:** the report holds every section, the CPU's brand and every PCI function `devices` lists, and the ACPI tables as files that match the firmware's. A machine with and without a log volume is covered.
+- **QEMU, x86 and aarch64:** the report holds every section, the CPU's brand and every PCI function `devices` lists, and the ACPI tables as files that match the firmware's. A machine without a log volume gets no file, only init's line.
 - **The MacBook Pro:** the report and `log:acpi/` are on the USB drive after a boot. Its PCI section names both GPUs and both EHCI controllers with their BARs, and its kernel ring shows the lines the screen lost.
 
 ## Progress
@@ -72,10 +72,10 @@ The kernel builds the report, since it alone sees the CPU's model-specific regis
 - **init** (`init/src/hardware.rs`), before it drops the platform privilege:
   - writes `log:hwNNNN.txt`, numbered after this boot's `bootNNNN.log`, and keeps the last 50 as the boot logs are kept;
   - writes every table to `log:acpi/<SIG>.bin` (RSDP and the DSDT included; SSDTs numbered);
-  - without a log volume, writes `ram:hardware.txt`;
-  - logs `[INIT] HARDWARE REPORT: …`.
+  - without a log volume, writes nothing, since `ram:` and `data/` are the user's (a first version wrote `ram:hardware.txt` and broke the tests that expect an empty RAM disk);
+  - logs `[INIT] HARDWARE REPORT: …`, with the size.
 - **Tests.**
-  - The `normal` suite (x86 and aarch64) finds `ram:hardware.txt` with the report's header, the CPU section and the started CPUs.
+  - The `normal` suite (x86 and aarch64) finds init's line with the report's size, without a log volume.
   - `usb_image_smoke.py` reads `HWNNNN.TXT` and `ACPI/*.bin` from the log partition on the host. It checks every section and the kernel's own lines, and that FACP, DSDT and APIC each have their signature and length, and the RSDP its signature.
 - **Docs:** `docs/api` (the two kinds), the disk-writing guide (section 9, EN and RU), the log volume's README.
 

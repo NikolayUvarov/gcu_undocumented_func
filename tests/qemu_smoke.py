@@ -603,17 +603,16 @@ def ram_above_4g(vm):
 
 
 def hardware_report_check(vm):
-    """174-KRN-0038: init writes the kernel's hardware report at boot; without a log volume to ram:hardware.txt."""
+    """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
+    and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
+    log = ""
     for _ in range(60):
-        listing = vm.command("ls ram:")
-        if "hardware.txt" in listing:
+        log += vm.command("logs 1", raw=True)
+        if "[INIT] HARDWARE REPORT" in log:
             break
         time.sleep(.5)
-    size = re.search(r"hardware\.txt\s+(\d+)", listing)
-    assert size and int(size[1]) > 4000, listing
-    head = vm.command("cat ram:hardware.txt", raw=True)
-    for line in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "CPUs started      %d of %d listed" % (vm.cpus, vm.cpus), "Features\n"):
-        require(head, line)
+    size = re.search(r"\[INIT\] HARDWARE REPORT: NO LOG VOLUME, NOT WRITTEN \((\d+) BYTES\)", log)
+    assert size and int(size[1]) > 4000, log[-2000:]
 
 
 def normal_suite(vm):

@@ -1,6 +1,6 @@
 // The hardware report (174-KRN-0038): the kernel's text goes to log:hwNNNN.txt beside this boot's bootNNNN.log, the
-// ACPI tables to log:acpi/<SIG>.bin; without a log volume the report goes to ram:hardware.txt. Run once at boot, while
-// init holds the platform privilege that the report and the tables need.
+// ACPI tables to log:acpi/<SIG>.bin. Without a log volume nothing is written: ram: and data/ are the user's. Run once at
+// boot, while init holds the platform privilege that the report and the tables need.
 use mind::abi::*;
 use mind::fs::{MODE_CREATE, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::vfs;
@@ -63,16 +63,16 @@ pub fn report(keeper: usize) {
         let bytes = text.1.as_slice();
         let bytes = &bytes[..bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len())];
         let mut name = FixedBuf::<16>::new();
-        let place = match vfs::root(files, "log") {
-            Ok(Ok(root)) => { let _ = core::fmt::Write::write_fmt(&mut name, format_args!("hw{:04}.txt", this_boot(files, root))); Some((root, "log:")) }
-            _ => match vfs::root(files, "ram") { Ok(Ok(root)) => { let _ = core::fmt::Write::write_fmt(&mut name, format_args!("hardware.txt")); Some((root, "ram:")) } _ => None },
-        };
-        match place {
-            Some((root, volume)) if write(files, root, name.as_str(), bytes) => mind::println!("[INIT] HARDWARE REPORT: {}{}, {} BYTES", volume, name.as_str(), bytes.len()),
-            _ => mind::println!("[INIT] HARDWARE REPORT NOT WRITTEN ({} BYTES)", bytes.len()),
+        match vfs::root(files, "log") {
+            Ok(Ok(root)) => {
+                let _ = core::fmt::Write::write_fmt(&mut name, format_args!("hw{:04}.txt", this_boot(files, root)));
+                if write(files, root, name.as_str(), bytes) { mind::println!("[INIT] HARDWARE REPORT: log:{}, {} BYTES", name.as_str(), bytes.len()); }
+                else { mind::println!("[INIT] HARDWARE REPORT NOT WRITTEN ({} BYTES)", bytes.len()); }
+                tables(files, root);
+                let _ = vfs::close(files, root);
+            }
+            _ => mind::println!("[INIT] HARDWARE REPORT: NO LOG VOLUME, NOT WRITTEN ({} BYTES)", bytes.len()),
         }
-        if let Some((root, "log:")) = place { tables(files, root); }
-        if let Some((root, _)) = place { let _ = vfs::close(files, root); }
         done(text);
     }
     let _ = mind::ipc::drop_cap(client);
