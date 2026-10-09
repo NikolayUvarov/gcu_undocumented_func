@@ -1,0 +1,37 @@
+# 250-KRN-0056 — FP/SIMD for programs on aarch64: V0–V31, FPCR and FPSR saved per task
+
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** tracks A and H, for main tasks [250](250-voice-dictation.md) and [252](252-neural-speech-synthesis.md) · **Constitution:** MC-2.1 (a task's state is its own), MC-10.5 (no state passes between tasks through the vector registers)
+
+## Problem
+
+This is the tools track's request in `requests-KRN.md` (2026-10-09). The dictation and speech-synthesis engines compute in f32 with SIMD. On x86_64 the kernel saves SSE and AVX state per task (153, 174-KRN-0037).
+
+On aarch64 the kernel left FP/SIMD disabled at EL0 (`CPACR_EL1` = 0), and programs are built for `aarch64-unknown-none-softfloat`. A program that runs one NEON or FP instruction traps, so the engines cannot run there.
+
+## Plan
+
+- **The frame.** It grows from 304 to 832 bytes. After its 37 words come V0–V31 (512 bytes), FPCR and FPSR.
+  - The common exception entry saves them. The 128-byte vector slots have no room for it, but the slot's own instructions use only general registers.
+  - The exit loads them from the frame it resumes. A task's frame is copied into its context record whole, as before, so a switch brings the next task's registers with its frame.
+  - The kernel stays soft-float and never touches them.
+- **`CPACR_EL1.FPEN` = 0b11** on every CPU, set before the vector base, so no entry can trap on the save.
+- **The firmware call (351-KRN-0028).** It no longer toggles `CPACR_EL1`: the registers the firmware changes are the calling task's, loaded again from its frame.
+- **A new task's** vector registers and FPCR start at zero (`initial`).
+- **Reporting.**
+  - `STAT_CPUS` `xsave` = 1 on aarch64, and the shell's `cpus` shows `FPU=FP/SIMD`. The tools track asked for both in its request.
+  - The hardware report's vector state.
+  - The aarch64 profile: its FP/SIMD row, "not yet", the threat model and the TCB.
+- **The test.**
+  - The busy fixture on aarch64 keeps both halves of V8 and V31 and FPCR's rounding mode across preemption, besides its general registers. It traps (`udf`) when any differs.
+  - The `busy` and `smp` suites run it, several on a CPU.
+  - `avx_expected` checks `FPU=FP/SIMD` and the fixture's `FP/SIMD` line.
+
+## Acceptance criteria
+
+- On aarch64 in QEMU, the `busy` and `smp` suites pass with the fixture's FP/SIMD checks, on 4 CPUs and on 1. `cpus` reports `FPU=FP/SIMD` on every CPU.
+- The rest of the aarch64 gate passes, the firmware variable suite (`efivar`) among it.
+- **Not here:** building the voice engines hard-float is the tools track's step.
+
+## Related
+
+[153](../issues-done/153-xsave-avx-state.done) (x86's vector state), 174-KRN-0037, 351-KRN-0028 (firmware calls on aarch64), [250](250-voice-dictation.md), [252](252-neural-speech-synthesis.md).

@@ -1923,7 +1923,7 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
+    print(f"PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
           f"without one the loop takes {share:.2f} of the time other tasks leave its CPU ({wall:.2f} of the wall clock)", flush=True)
 
 
@@ -1931,8 +1931,9 @@ def avx_expected(vm, fixture=None):
     """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
     cpus = vm.command("cpus")
     model = getattr(vm.args, "cpu_model", None)
-    if vm.arch == "aarch64":  # soft-float: no FP state is saved
-        assert len(re.findall(r"FPU=NONE", cpus)) == vm.cpus, cpus
+    if vm.arch == "aarch64":  # every task's V0-V31, FPCR and FPSR are saved (250-KRN-0056)
+        assert len(re.findall(r"FPU=FP/SIMD", cpus)) == vm.cpus, cpus
+        assert fixture is None or "CALLS, FP/SIMD" in fixture, fixture
     elif model == "max":
         assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
         assert fixture is None or "CALLS, AVX" in fixture, fixture
