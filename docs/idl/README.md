@@ -88,7 +88,7 @@ A change that alters the meaning or layout of an existing function increments th
 
 | File | Service | Version |
 |---|---|---|
-| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times) | 1.1.0 |
+| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times; 1.2 `set`, for the client with the setting badge, 211-KRN-0051) | 1.2.0 |
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`; 1.1: the microphone has one owner at a time, others get `busy`) | 1.1.0 |
 | [`idl/voice.wit`](../../idl/voice.wit) | the shell, for the `voice` program it starts (voice control: `next` reports what was heard and is answered with the next order — at once, or at push-to-talk: `Call::defer`) | 1.0.0 |
