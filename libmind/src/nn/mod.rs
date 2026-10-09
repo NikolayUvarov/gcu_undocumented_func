@@ -2,6 +2,7 @@
 //! writes (MINDNN01: the graphs, one table of tensors, the weights' bytes), and an interpreter of the ONNX operators the
 //! speech models use (`ops`). Weights are read in place from the file's bytes; values made at run time are freed after
 //! their last use. No system calls: tests/nn_host.rs includes this module.
+mod extra;
 pub mod gemm;
 pub(crate) mod ops;
 
@@ -79,7 +80,7 @@ impl<'a> View<'a> {
 
 /// An attribute of a node.
 #[derive(Clone, Debug)]
-pub(crate) enum Attr { Ints(Vec<i64>), Floats(Vec<f64>), Graph(usize) }
+pub(crate) enum Attr { Ints(Vec<i64>), Floats(Vec<f64>), Graph(usize), Text(String) }
 
 pub(crate) struct Node { pub op: usize, pub inputs: Vec<u32>, pub outputs: Vec<u32>, pub freed: Vec<u32>, pub attrs: Vec<(String, Attr)> }
 
@@ -87,6 +88,7 @@ impl Node {
     pub fn int(&self, name: &str) -> Option<i64> { self.attrs.iter().find(|a| a.0 == name).and_then(|a| match &a.1 { Attr::Ints(v) => v.first().copied(), _ => None }) }
     pub fn ints(&self, name: &str) -> Option<&[i64]> { self.attrs.iter().find(|a| a.0 == name).and_then(|a| match &a.1 { Attr::Ints(v) => Some(&v[..]), _ => None }) }
     pub fn floats(&self, name: &str) -> Option<&[f64]> { self.attrs.iter().find(|a| a.0 == name).and_then(|a| match &a.1 { Attr::Floats(v) => Some(&v[..]), _ => None }) }
+    pub fn text(&self, name: &str) -> Option<&str> { self.attrs.iter().find(|a| a.0 == name).and_then(|a| match &a.1 { Attr::Text(t) => Some(t.as_str()), _ => None }) }
     pub fn graph(&self, name: &str) -> Option<usize> { self.attrs.iter().find(|a| a.0 == name).and_then(|a| match a.1 { Attr::Graph(g) => Some(g), _ => None }) }
 }
 
@@ -179,6 +181,7 @@ impl<'f> Model<'f> {
                         1 | 3 => Attr::Ints((0..count).map(|_| r.u64().map(|v| v as i64)).collect::<Result<_>>()?),
                         2 | 4 => Attr::Floats((0..count).map(|_| r.u64().map(f64::from_bits)).collect::<Result<_>>()?),
                         5 => { let g = (0..count).map(|_| r.u32()).collect::<Result<Vec<_>>>()?; Attr::Graph(*g.first().ok_or(bad("a branch"))? as usize) }
+                        6 => Attr::Text(r.text(count)?),
                         _ => return Err(bad("an attribute")),
                     };
                     attrs.push((name, attr));

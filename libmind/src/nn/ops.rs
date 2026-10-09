@@ -1,4 +1,5 @@
 //! The ONNX operators the speech models use (opset 13 semantics), on `View`s; every one makes new tensors.
+use super::extra;
 use super::gemm::{self, Layout, Shape};
 use super::{op_error, DType, Data, Elems, Node, Result, Tensor, View};
 use crate::voice::math;
@@ -12,10 +13,20 @@ pub(crate) fn run(op: &str, node: &Node, inputs: &[Option<View<'_>>]) -> Result<
     if inputs.iter().enumerate().any(|(i, v)| v.is_some_and(|v| v.panels) && !(op == "MatMulInteger" && i == 1)) { return Err(op_error("a weight in panels")); }
     match op {
         "Add" | "Sub" | "Mul" | "Div" | "Pow" | "Max" => one(arith(op, input(0)?, input(1)?)?),
-        "Equal" | "Greater" | "GreaterOrEqual" => one(compare(op, input(0)?, input(1)?)?),
+        "Equal" | "Greater" | "GreaterOrEqual" | "Less" | "LessOrEqual" => one(compare(op, input(0)?, input(1)?)?),
+        "And" | "Or" | "Xor" => one(extra::logical(op, input(0)?, input(1)?)?),
+        "Not" => one(extra::not(input(0)?)?),
+        "LeakyRelu" => { let alpha = node.floats("alpha").and_then(|v| v.first().copied()).unwrap_or(0.01) as f32; one(Tensor::f32(input(0)?.shape.to_vec(), f32s(&input(0)?)?.iter().map(|&a| if a < 0.0 { alpha * a } else { a }).collect())) }
+        "Pad" => one(extra::pad(input(0)?, &ints(input(1)?)?, inputs.get(2).copied().flatten(), inputs.get(3).copied().flatten().map(ints).transpose()?, node.text("mode").unwrap_or("constant"))?),
+        "Split" => extra::split(input(0)?, inputs.get(1).copied().flatten().map(ints).transpose()?, node.int("axis").unwrap_or(0), node.outputs.len()),
+        "RandomNormalLike" => one(extra::random_normal_like(input(0)?, node)?),
+        "NonZero" => one(extra::non_zero(input(0)?)?),
+        "GatherND" => one(extra::gather_nd(input(0)?, input(1)?, node.int("batch_dims").unwrap_or(0))?),
+        "CumSum" => one(extra::cum_sum(input(0)?, &ints(input(1)?)?, node.int("exclusive").unwrap_or(0) != 0, node.int("reverse").unwrap_or(0) != 0)?),
+        "ConvTranspose" => one(extra::conv_transpose(input(0)?, input(1)?, inputs.get(2).copied().flatten(), node)?),
         "Identity" => one(input(0)?.to_tensor()),
         "Where" => one(where_(input(0)?, input(1)?, input(2)?)?),
-        "Abs" | "Neg" | "Sign" | "Exp" | "Log" | "Sin" | "Cos" | "Atan" | "Tanh" | "Sigmoid" | "Relu" => one(unary(op, input(0)?)?),
+        "Abs" | "Neg" | "Sign" | "Exp" | "Log" | "Sin" | "Cos" | "Atan" | "Tanh" | "Sigmoid" | "Relu" | "Erf" | "Sqrt" | "Ceil" | "Floor" | "Softplus" => one(unary(op, input(0)?)?),
         "Clip" => one(clip(input(0)?, inputs.get(1).copied().flatten(), inputs.get(2).copied().flatten())?),
         "Cast" => one(cast(input(0)?, node.int("to").ok_or_else(|| op_error("to"))?)?),
         "Shape" => { let x = input(0)?; one(Tensor::i64(vec![x.shape.len()], x.shape.iter().map(|&d| d as i64).collect())) }
@@ -48,26 +59,26 @@ pub(crate) fn run(op: &str, node: &Node, inputs: &[Option<View<'_>>]) -> Result<
 
 // ---- Helpers ----
 
-fn ints(v: View<'_>) -> Result<Vec<i64>> {
+pub(super) fn ints(v: View<'_>) -> Result<Vec<i64>> {
     match v.data { Elems::I64(x) => Ok(x.to_vec()), Elems::I32(x) => Ok(x.iter().map(|&a| a as i64).collect()), _ => Err(op_error("expected integers")) }
 }
 
-fn f32s<'a>(v: &View<'a>) -> Result<&'a [f32]> { match v.data { Elems::F32(x) => Ok(x), _ => Err(op_error(format!("expected f32, got {:?}", v.data.dtype()))) } }
+pub(super) fn f32s<'a>(v: &View<'a>) -> Result<&'a [f32]> { match v.data { Elems::F32(x) => Ok(x), _ => Err(op_error(format!("expected f32, got {:?}", v.data.dtype()))) } }
 
-fn axis(a: i64, rank: usize) -> Result<usize> {
+pub(super) fn axis(a: i64, rank: usize) -> Result<usize> {
     let r = rank as i64;
     let a = if a < 0 { a + r } else { a };
     if a < 0 || a >= r.max(1) { return Err(op_error(format!("axis {} of rank {}", a, rank))); }
     Ok(a as usize)
 }
 
-fn strides(shape: &[usize]) -> Vec<usize> {
+pub(super) fn strides(shape: &[usize]) -> Vec<usize> {
     let mut s = vec![1; shape.len()];
     for i in (0..shape.len().saturating_sub(1)).rev() { s[i] = s[i + 1] * shape[i + 1]; }
     s
 }
 
-fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
+pub(super) fn broadcast(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
     let n = a.len().max(b.len());
     (0..n).map(|i| {
         let x = if i + a.len() >= n { a[i + a.len() - n] } else { 1 };
@@ -103,7 +114,7 @@ fn index_map(shape: &[usize], out: &[usize]) -> Vec<usize> {
 // Operands walked over `shape` together, each from its start by its steps per dimension (0 where it repeats). `f`
 // gets each innermost run: the operands' offsets, its length and their steps along it. Dimensions of 1 are dropped
 // and neighbours every operand steps through alike merged, so the runs are as long as they can be.
-fn walk<const N: usize>(shape: &[usize], starts: [isize; N], steps: [&[isize]; N], mut f: impl FnMut([isize; N], usize, [isize; N])) {
+pub(super) fn walk<const N: usize>(shape: &[usize], starts: [isize; N], steps: [&[isize]; N], mut f: impl FnMut([isize; N], usize, [isize; N])) {
     if shape.contains(&0) { return; }
     let (mut dims, mut st): (Vec<usize>, Vec<[isize; N]>) = (Vec::new(), Vec::new());
     for (d, &n) in shape.iter().enumerate() {
@@ -133,7 +144,7 @@ fn walk<const N: usize>(shape: &[usize], starts: [isize; N], steps: [&[isize]; N
 }
 
 // The steps of a tensor of shape `shape` broadcast to `out`.
-fn steps_into(shape: &[usize], out: &[usize]) -> Vec<isize> {
+pub(super) fn steps_into(shape: &[usize], out: &[usize]) -> Vec<isize> {
     let own = strides(shape);
     let mut s = vec![0isize; out.len()];
     for (i, &d) in shape.iter().enumerate() { if d != 1 { s[out.len() - shape.len() + i] = own[i] as isize; } }
@@ -141,7 +152,7 @@ fn steps_into(shape: &[usize], out: &[usize]) -> Vec<isize> {
 }
 
 // The elements of `src` a walk from `start` by `steps` over `shape` meets, in order.
-fn copy_walk<T: Copy>(src: &[T], start: isize, shape: &[usize], steps: &[isize]) -> Vec<T> {
+pub(super) fn copy_walk<T: Copy>(src: &[T], start: isize, shape: &[usize], steps: &[isize]) -> Vec<T> {
     let mut out = Vec::with_capacity(shape.iter().product());
     walk(shape, [start], [steps], |[at], n, [step]| {
         let at = at as usize;
@@ -154,7 +165,7 @@ fn copy_walk<T: Copy>(src: &[T], start: isize, shape: &[usize], steps: &[isize])
     out
 }
 
-fn view_walk(x: Elems<'_>, start: isize, shape: &[usize], steps: &[isize]) -> Data {
+pub(super) fn view_walk(x: Elems<'_>, start: isize, shape: &[usize], steps: &[isize]) -> Data {
     match x {
         Elems::F32(v) => Data::F32(copy_walk(v, start, shape, steps)),
         Elems::I64(v) => Data::I64(copy_walk(v, start, shape, steps)),
@@ -166,7 +177,7 @@ fn view_walk(x: Elems<'_>, start: isize, shape: &[usize], steps: &[isize]) -> Da
 }
 
 // Two inputs broadcast together, an element function over them.
-fn zip_with<A: Copy, B: Copy, C>(a: &[A], sa: &[usize], b: &[B], sb: &[usize], f: impl Fn(A, B) -> C) -> Result<(Vec<usize>, Vec<C>)> {
+pub(super) fn zip_with<A: Copy, B: Copy, C>(a: &[A], sa: &[usize], b: &[B], sb: &[usize], f: impl Fn(A, B) -> C) -> Result<(Vec<usize>, Vec<C>)> {
     let shape = broadcast(sa, sb)?;
     let total: usize = shape.iter().product();
     if a.len() == total && b.len() == total { return Ok((shape, a.iter().zip(b).map(|(&x, &y)| f(x, y)).collect())); }
@@ -237,10 +248,13 @@ fn arith(op: &str, a: View<'_>, b: View<'_>) -> Result<Tensor> {
 }
 
 fn compare(op: &str, a: View<'_>, b: View<'_>) -> Result<Tensor> {
-    let (eq, gt) = (op == "Equal", op == "Greater");
+    let eq = op == "Equal";
+    // The answer for less, equal and greater.
+    let (lt, e, gt) = match op { "Equal" => (false, true, false), "Greater" => (false, false, true), "GreaterOrEqual" => (false, true, true), "Less" => (true, false, false), _ => (true, true, false) };
+    fn order<T: PartialOrd>(p: T, q: T, (lt, e, gt): (bool, bool, bool)) -> bool { if p < q { lt } else if p > q { gt } else { e && p == q } }
     let (shape, v) = match (a.data, b.data) {
-        (Elems::F32(x), Elems::F32(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else if gt { p > q } else { p >= q })?,
-        (Elems::I64(x), Elems::I64(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else if gt { p > q } else { p >= q })?,
+        (Elems::F32(x), Elems::F32(y)) => zip_with(x, a.shape, y, b.shape, |p, q| order(p, q, (lt, e, gt)))?,
+        (Elems::I64(x), Elems::I64(y)) => zip_with(x, a.shape, y, b.shape, |p, q| order(p, q, (lt, e, gt)))?,
         (Elems::Bool(x), Elems::Bool(y)) if eq => zip_with(x, a.shape, y, b.shape, |p, q| p == q)?,
         (p, q) => return Err(op_error(format!("{:?} and {:?}", p.dtype(), q.dtype()))),
     };
@@ -297,7 +311,11 @@ fn unary(op: &str, x: View<'_>) -> Result<Tensor> {
     let out = match op {
         "Abs" => each(v, |a| a.abs()), "Neg" => each(v, |a| -a), "Sign" => each(v, |a| if a > 0.0 { 1.0 } else if a < 0.0 { -1.0 } else { 0.0 }),
         "Exp" => each(v, math::expf), "Log" => each(v, math::lnf), "Sin" => each(v, |a| math::sin(a as f64) as f32), "Cos" => each(v, |a| math::cos(a as f64) as f32),
-        "Atan" => each(v, atanf), "Tanh" => each(v, tanhf), "Sigmoid" => each(v, |a| 1.0 / (1.0 + math::expf(-a))), _ => each(v, |a| a.max(0.0)),
+        "Atan" => each(v, atanf), "Tanh" => each(v, tanhf), "Sigmoid" => each(v, |a| 1.0 / (1.0 + math::expf(-a))),
+        "Erf" => each(v, |a| math::erf(a as f64) as f32), "Sqrt" => each(v, sqrtf), "Ceil" => each(v, math_ceil), "Floor" => each(v, |a| -math_ceil(-a)),
+        // ln(1 + e^x) as onnxruntime computes it: x + ln(1 + e^-x) above 0.
+        "Softplus" => each(v, |a| if a > 0.0 { a + math::ln_1p(math::expf(-a) as f64) as f32 } else { math::ln_1p(math::expf(a) as f64) as f32 }),
+        _ => each(v, |a| a.max(0.0)),
     };
     Ok(Tensor::f32(x.shape.to_vec(), out))
 }
@@ -493,7 +511,7 @@ fn range(start: View<'_>, limit: View<'_>, delta: View<'_>) -> Result<Tensor> {
     }
 }
 
-fn math_ceil(x: f32) -> f32 { let t = x as i64 as f32; if t < x { t + 1.0 } else { t } }
+pub(super) fn math_ceil(x: f32) -> f32 { let t = x as i64 as f32; if t < x { t + 1.0 } else { t } }
 
 fn constant_of_shape(shape: &[i64], node: &Node) -> Result<Tensor> {
     let shape: Vec<usize> = shape.iter().map(|&d| d.max(0) as usize).collect();
@@ -685,8 +703,9 @@ fn dequantize(x: View<'_>, scale: View<'_>, zero: Option<View<'_>>) -> Result<Te
     Ok(Tensor::f32(x.shape.to_vec(), out))
 }
 
-// Elements of im2col's block of columns (64 KiB).
-const BLOCK: usize = 16 * 1024;
+// Elements of im2col's block of columns (4 MiB), and its fewest columns.
+const BLOCK: usize = 1 << 20;
+const COLUMNS: usize = 256;
 
 // Conv over 1 or 2 spatial dimensions, with groups, padding, strides and dilations.
 fn conv(x: View<'_>, w: View<'_>, b: Option<View<'_>>, node: &Node) -> Result<Tensor> {
@@ -746,7 +765,7 @@ fn conv(x: View<'_>, w: View<'_>, b: Option<View<'_>>, node: &Node) -> Result<Te
         return Ok(Tensor::f32(shape, out));
     }
     let pointwise = kh * kw == 1 && sh == 1 && sw == 1 && pt + pl + pb + pr == 0;
-    let block = if pointwise { cols } else { (BLOCK / taps.max(1)).clamp(16, cols.max(16)) };
+    let block = if pointwise { cols } else { (BLOCK / taps.max(1)).max(COLUMNS).min(cols.max(1)) };
     let mut col = if pointwise { Vec::new() } else { vec![0.0f32; taps * block] };
     for nb in 0..batch {
         for g in 0..group {
@@ -766,12 +785,27 @@ fn conv(x: View<'_>, w: View<'_>, b: Option<View<'_>>, node: &Node) -> Result<Te
                         for ky in 0..kh {
                             for kx in 0..kw {
                                 let row = &mut col[((ic * kh + ky) * kw + kx) * width..((ic * kh + ky) * kw + kx + 1) * width];
-                                let (mut oy, mut ox) = (p0 / ow, p0 % ow);
-                                for v in row.iter_mut() {
-                                    let (iy, ix) = ((oy * sh + ky * dh) as isize - pt as isize, (ox * sw + kx * dw) as isize - pl as isize);
-                                    *v = if iy >= 0 && iy < ih as isize && ix >= 0 && ix < iw as isize { plane[iy as usize * iw + ix as usize] } else { 0.0 };
-                                    ox += 1;
-                                    if ox == ow { ox = 0; oy += 1; }
+                                // A run of output positions in one output row at a time: its input is a slice of one
+                                // input row (every sw-th element), zero where it falls in the padding.
+                                let (mut q, mut oy, mut ox) = (0, p0 / ow, p0 % ow);
+                                while q < width {
+                                    let run = (ow - ox).min(width - q);
+                                    let out = &mut row[q..q + run];
+                                    let iy = (oy * sh + ky * dh) as isize - pt as isize;
+                                    if iy < 0 || iy >= ih as isize { out.fill(0.0); } else {
+                                        let line = &plane[iy as usize * iw..(iy as usize + 1) * iw];
+                                        let base = (ox * sw + kx * dw) as isize - pl as isize;
+                                        let lo = if base >= 0 { 0 } else { ((-base) as usize).div_ceil(sw).min(run) };
+                                        let hi = if base >= iw as isize { lo } else { ((iw as isize - base) as usize).div_ceil(sw).clamp(lo, run) };
+                                        out[..lo].fill(0.0);
+                                        out[hi..].fill(0.0);
+                                        if hi > lo {
+                                            let first = (base + (lo * sw) as isize) as usize;
+                                            if sw == 1 { out[lo..hi].copy_from_slice(&line[first..first + hi - lo]); }
+                                            else { for (t, v) in out[lo..hi].iter_mut().enumerate() { *v = line[first + t * sw]; } }
+                                        }
+                                    }
+                                    (q, ox, oy) = (q + run, 0, oy + 1);
                                 }
                             }
                         }

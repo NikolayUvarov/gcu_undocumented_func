@@ -104,3 +104,31 @@ pub fn expf(x: f32) -> f32 {
     let out = p * f32::from_bits(((half + 127) << 23) as u32) * f32::from_bits(((k - half + 127) << 23) as u32);
     if x.is_nan() { x } else { out }
 }
+
+/// The error function: its series below 2, else 1 - erfc from erfc's continued fraction; to about 1e-15.
+pub fn erf(x: f64) -> f64 {
+    let a = if x < 0.0 { -x } else { x };
+    let r = if a < 2.0 {
+        let (x2, mut term, mut sum) = (a * a, a, a);
+        for n in 1..60 {
+            term *= -x2 / n as f64;
+            let next = term / (2 * n + 1) as f64;
+            sum += next;
+            if next.abs() < 1e-17 { break; }
+        }
+        sum * 2.0 / sqrt(core::f64::consts::PI)
+    } else if a < 6.0 {
+        // erfc a = e^(-a^2) / sqrt(pi) / (a + (1/2) / (a + 1 / (a + (3/2) / (a + ...)))).
+        let mut t = a;
+        for k in (1..=80).rev() { t = a + (k as f64 / 2.0) / t; }
+        1.0 - exp(-a * a) / (sqrt(core::f64::consts::PI) * t)
+    } else {
+        1.0
+    };
+    if x < 0.0 { -r } else if x.is_nan() { x } else { r }
+}
+
+/// ln(1 + x) for x > -1, exact near 0.
+pub fn ln_1p(x: f64) -> f64 {
+    if x.abs() < 1e-4 { x - x * x / 2.0 + x * x * x / 3.0 } else { ln(1.0 + x) }
+}

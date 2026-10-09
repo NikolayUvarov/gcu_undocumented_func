@@ -133,13 +133,27 @@ mod x86 {
     #[target_feature(enable = "avx2")]
     unsafe fn mask(left: usize) -> __m256i { _mm256_cmpgt_epi32(_mm256_set1_epi32(left as i32), _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7)) }
 
+    // Depth of a block of k: its rows of a 16-column block of B (16 KiB) stay in the first-level cache for every row.
+    const KC: usize = 256;
+
     #[target_feature(enable = "avx2,fma")]
     pub(super) unsafe fn f32(m: usize, k: usize, n: usize, a: *const f32, lda: usize, b: *const f32, ldb: usize, c: *mut f32, ldc: usize) {
+        // The block of B, copied into one contiguous run so that it is read straight through.
+        let mut panel: alloc::vec::Vec<f32> = alloc::vec![0.0; KC * 16];
         let mut j = 0;
         while j + 16 <= n {
-            let mut i = 0;
-            while i + 6 <= m { f32_wide::<6>(i, j, k, a, lda, b, ldb, c, ldc); i += 6; }
-            while i < m { f32_wide::<1>(i, j, k, a, lda, b, ldb, c, ldc); i += 1; }
+            let mut p = 0;
+            while p < k {
+                let kc = (k - p).min(KC);
+                for r in 0..kc { core::ptr::copy_nonoverlapping(b.add((p + r) * ldb + j), panel.as_mut_ptr().add(r * 16), 16); }
+                let (ap, bp) = (a.add(p), panel.as_ptr());
+                let mut i = 0;
+                while i + 6 <= m { f32_wide::<6>(i, 0, kc, ap, lda, bp, 16, c.add(j), ldc); i += 6; }
+                if i + 4 <= m { f32_wide::<4>(i, 0, kc, ap, lda, bp, 16, c.add(j), ldc); i += 4; }
+                if i + 2 <= m { f32_wide::<2>(i, 0, kc, ap, lda, bp, 16, c.add(j), ldc); i += 2; }
+                if i < m { f32_wide::<1>(i, 0, kc, ap, lda, bp, 16, c.add(j), ldc); }
+                p += kc;
+            }
             j += 16;
         }
         while j < n {

@@ -64,4 +64,10 @@ fn elementary_functions() {
     assert!(math::lnf(0.0) == f32::NEG_INFINITY && math::lnf(f32::INFINITY) == f32::INFINITY && math::lnf(-1.0).is_nan() && math::lnf(f32::NAN).is_nan());
     for g in [88.72f32, 88.0, -87.0, -100.0, -103.0] { assert!((math::expf(g) - g.exp()).abs() <= 3e-7 * g.exp() + 1e-45, "expf {}: {} {}", g, math::expf(g), g.exp()); }
     assert!(math::expf(88.73).is_infinite() && math::expf(f32::NAN).is_nan() && math::expf(f32::NEG_INFINITY) == 0.0);
+    // erf (252's VITS voices) at values worked out elsewhere, and ln(1 + x) near 0.
+    for (x, want) in [(0.0, 0.0), (0.1, 0.1124629160182849), (0.5, 0.5204998778130465), (1.0, 0.8427007929497149), (1.9, 0.9927904292352575),
+                      (2.0, 0.9953222650189527), (3.0, 0.9999779095030014), (4.5, 0.9999999998033839), (-1.0, -0.8427007929497149), (7.0, 1.0)] {
+        assert!((math::erf(x) - want).abs() < 1e-14, "erf {}: {} {}", x, math::erf(x), want);
+    }
+    assert!((math::ln_1p(1e-9) - (1e-9 - 5e-19)).abs() < 1e-27 && (math::ln_1p(1.0) - core::f64::consts::LN_2).abs() < 1e-14);
 }

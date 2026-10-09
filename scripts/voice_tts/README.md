@@ -46,6 +46,7 @@ python3 scripts/voice_tts/page.py $W voices.html
 - `common.py <work>`: CER, WER and UTMOS on the eight sentences every voice read, into `results/common.json`.
 - `page.py <work> <out.html>`: a listening page with every voice reading the four listening sentences, and the measurements.
 - [`results-2026-10-08.jsonl`](results-2026-10-08.jsonl) holds every measurement of the comparison in 252.
+- `vits_reference.py <model.onnx | vosk-model-dir> "text" <out> [--vosk SPEAKER] [--dump]`: onnxruntime's audio of a VITS voice with the noise scales at 0, and its inputs, for `vits_against_onnxruntime` in `tests/nn_host.rs` (MIND_VITS_MODEL, a voice converted with `scripts/voice_dictate/convert.py` as the graph `vits`; MIND_VITS_REFERENCE; MIND_VITS_DUMP for every value). Piper's phonemes come from piper-phonemize (espeak-ng, GPL-3.0, on the host only); Vosk TTS's from vosk-tts.
 
 ## Sources and licences
 
@@ -53,5 +54,6 @@ python3 scripts/voice_tts/page.py $W voices.html
 - **Models:** each keeps its own licence, listed in 252. They are downloaded, not stored here.
 - **Python packages:**
   - sherpa-onnx, vosk-tts, jiwer, transformers, diffusers, huggingface_hub, qwen-tts, ruaccent: Apache-2.0;
+  - piper-phonemize: MIT, with espeak-ng inside (GPL-3.0); used on the host only, for references;
   - f5-tts, chatterbox-tts, pocket-tts, UTMOSv2: MIT;
   - PyTorch, soundfile, numpy: BSD-3-Clause.

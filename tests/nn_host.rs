@@ -27,6 +27,12 @@ fn model_files_are_checked() {
 fn node(attrs: Vec<(&str, nn::Attr)>) -> nn::Node { nn::Node { op: 0, inputs: vec![], outputs: vec![], freed: vec![], attrs: attrs.into_iter().map(|(n, a)| (n.to_string(), a)).collect() } }
 fn ints_attr(v: &[i64]) -> nn::Attr { nn::Attr::Ints(v.to_vec()) }
 fn run(op: &str, n: &nn::Node, inputs: &[&Tensor]) -> Vec<Tensor> { nn::ops::run(op, n, &inputs.iter().map(|t| Some(t.view())).collect::<Vec<_>>()).unwrap() }
+// The same for a node with `outputs` outputs (Split counts them).
+fn run_n(op: &str, n: &nn::Node, inputs: &[&Tensor], outputs: usize) -> Vec<Tensor> {
+    let mut n = nn::Node { op: n.op, inputs: n.inputs.clone(), outputs: vec![0; outputs], freed: vec![], attrs: n.attrs.clone() };
+    n.outputs.truncate(outputs);
+    run(op, &n, inputs)
+}
 fn floats_of(t: &Tensor) -> &[f32] { match &t.data { Data::F32(v) => v, other => panic!("{:?}", other) } }
 fn close(a: &[f32], b: &[f32]) -> bool { a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-5 * (1.0 + y.abs())) }
 
@@ -110,6 +116,69 @@ fn products_and_quantization() {
     assert_eq!(floats_of(&y[0]), [-2.0, -2.0, -2.0, 3.0, 12.0, 13.0, 13.0, 12.0]);
 }
 
+#[test]
+fn synthesis_operators() {
+    // The operators the VITS voices add (252), against values worked out by hand.
+    let none = node(vec![]);
+    let x = f(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let text = |s: &str| nn::Attr::Text(s.to_string());
+    let pad = |mode: &str, pads: &[i64]| run("Pad", &node(vec![("mode", text(mode))]), &[&x, &i(&[4], pads), &f(&[], &[9.0])]).remove(0);
+    let p = pad("constant", &[0, 1, 1, 0]);
+    assert_eq!((p.shape.clone(), floats_of(&p).to_vec()), (vec![3, 4], vec![9.0, 1.0, 2.0, 3.0, 9.0, 4.0, 5.0, 6.0, 9.0, 9.0, 9.0, 9.0]));
+    assert_eq!(floats_of(&pad("reflect", &[0, 2, 0, 1])), [3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 6.0, 5.0, 4.0, 5.0, 6.0, 5.0]);
+    assert_eq!(floats_of(&pad("edge", &[0, 1, 0, 0])), [1.0, 1.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]);
+    assert_eq!(floats_of(&pad("constant", &[0, -1, 0, 0])), [2.0, 3.0, 5.0, 6.0]);
+    let parts = run_n("Split", &node(vec![("axis", ints_attr(&[1]))]), &[&x, &i(&[2], &[1, 2])], 2);
+    assert_eq!((floats_of(&parts[0]).to_vec(), parts[1].shape.clone(), floats_of(&parts[1]).to_vec()), (vec![1.0, 4.0], vec![2, 2], vec![2.0, 3.0, 5.0, 6.0]));
+    let halves = run_n("Split", &node(vec![("axis", ints_attr(&[0]))]), &[&x], 2);
+    assert_eq!(floats_of(&halves[1]), [4.0, 5.0, 6.0]);
+    let (a, b) = (i(&[3], &[1, 5, 3]), i(&[], &[3]));
+    assert_eq!(run("Less", &none, &[&a, &b])[0].data, Data::Bool(vec![true, false, false]));
+    assert_eq!(run("LessOrEqual", &none, &[&a, &b])[0].data, Data::Bool(vec![true, false, true]));
+    let (t, u) = (Tensor { shape: vec![3], data: Data::Bool(vec![true, true, false]) }, Tensor { shape: vec![3], data: Data::Bool(vec![true, false, false]) });
+    assert_eq!(run("And", &none, &[&t, &u])[0].data, Data::Bool(vec![true, false, false]));
+    assert_eq!(run("Not", &none, &[&t])[0].data, Data::Bool(vec![false, false, true]));
+    let nz = run("NonZero", &none, &[&i(&[2, 2], &[0, 7, 3, 0])]).remove(0);
+    assert_eq!((nz.shape.clone(), nz.data), (vec![2, 2], Data::I64(vec![0, 1, 1, 0])));
+    let g = run("GatherND", &none, &[&x, &i(&[2, 2], &[1, 0, 0, 2])]).remove(0);
+    assert_eq!((g.shape.clone(), floats_of(&g).to_vec()), (vec![2], vec![4.0, 3.0]));
+    let rows = run("GatherND", &none, &[&x, &i(&[1, 1], &[1])]).remove(0);
+    assert_eq!((rows.shape.clone(), floats_of(&rows).to_vec()), (vec![1, 3], vec![4.0, 5.0, 6.0]));
+    assert_eq!(floats_of(&run("CumSum", &none, &[&x, &i(&[], &[1])])[0]), [1.0, 3.0, 6.0, 4.0, 9.0, 15.0]);
+    let ex = run("CumSum", &node(vec![("exclusive", ints_attr(&[1])), ("reverse", ints_attr(&[1]))]), &[&x, &i(&[], &[1])]).remove(0);
+    assert_eq!(floats_of(&ex), [5.0, 3.0, 0.0, 11.0, 6.0, 0.0]);
+    let v = f(&[5], &[-2.0, -0.5, 0.0, 0.5, 30.0]);
+    assert_eq!(floats_of(&run("LeakyRelu", &node(vec![("alpha", nn::Attr::Floats(vec![0.1]))]), &[&v])[0]), [-0.2, -0.05, 0.0, 0.5, 30.0]);
+    assert!(close(floats_of(&run("Erf", &none, &[&v])[0]), &[-0.9953222650, -0.5204998778, 0.0, 0.5204998778, 1.0]));
+    assert!(close(floats_of(&run("Softplus", &none, &[&v])[0]), &[0.126928011, 0.474076984, 0.693147181, 0.974076984, 30.0]));
+    assert_eq!(floats_of(&run("Ceil", &none, &[&v])[0]), [-2.0, 0.0, 0.0, 1.0, 30.0]);
+    assert_eq!(floats_of(&run("Sqrt", &none, &[&f(&[2], &[4.0, 2.25])])[0]), [2.0, 1.5]);
+    let noise = run("RandomNormalLike", &node(vec![("mean", nn::Attr::Floats(vec![1.0])), ("scale", nn::Attr::Floats(vec![2.0]))]), &[&f(&[100, 100], &[0.0; 10000])]).remove(0);
+    let n = floats_of(&noise);
+    let mean = n.iter().sum::<f32>() / n.len() as f32;
+    let sd = (n.iter().map(|a| (a - mean) * (a - mean)).sum::<f32>() / n.len() as f32).sqrt();
+    assert!((mean - 1.0).abs() < 0.06 && (sd - 2.0).abs() < 0.06, "{} {}", mean, sd);
+    // ConvTranspose against its definition: y[o][t * s + k * d - p] += x[c][t] w[c][o][k].
+    let mut rng = Lcg(5);
+    for (cin, cout, len, k, stride, pad, dil, group) in [(4usize, 3usize, 7usize, 4usize, 2usize, 1usize, 1usize, 1usize), (6, 2, 5, 16, 8, 4, 1, 2), (2, 2, 9, 3, 1, 1, 2, 1)] {
+        let xs: Vec<f32> = (0..cin * len).map(|_| rng.float()).collect();
+        let ws: Vec<f32> = (0..cin * (cout / group) * k).map(|_| rng.float()).collect();
+        let bias: Vec<f32> = (0..cout).map(|_| rng.float()).collect();
+        let attrs = node(vec![("strides", ints_attr(&[stride as i64])), ("pads", ints_attr(&[pad as i64, pad as i64])), ("dilations", ints_attr(&[dil as i64])), ("group", ints_attr(&[group as i64]))]);
+        let got = run("ConvTranspose", &attrs, &[&f(&[1, cin, len], &xs), &f(&[cin, cout / group, k], &ws), &f(&[cout], &bias)]).remove(0);
+        let out_len = stride * (len - 1) + dil * (k - 1) + 1 - 2 * pad;
+        let mut want: Vec<f32> = (0..cout * out_len).map(|j| bias[j / out_len]).collect();
+        let (cpg, opg) = (cin / group, cout / group);
+        for c in 0..cin { for o in 0..opg { for t in 0..len { for kk in 0..k {
+            let at = (t * stride + kk * dil) as isize - pad as isize;
+            if at < 0 || at as usize >= out_len { continue; }
+            want[((c / cpg) * opg + o) * out_len + at as usize] += xs[c * len + t] * ws[(c * opg + o) * k + kk];
+        }}}}
+        assert_eq!(got.shape, [1, cout, out_len]);
+        assert!(close(floats_of(&got), &want), "{:?}", (cin, cout, len, k, stride, pad, dil, group));
+    }
+}
+
 // A small generator of test values.
 struct Lcg(u64);
 impl Lcg {
@@ -173,12 +242,14 @@ fn convolutions_as_products() {
     // Conv (im2col and the products) against the definition, in 1 and 2 dimensions, with groups, padding, strides
     // and dilations, and a pointwise one.
     let mut rng = Lcg(11);
-    let cases: [(&[usize], &[usize], usize, &[i64], &[i64], &[i64]); 5] = [
+    let cases: [(&[usize], &[usize], usize, &[i64], &[i64], &[i64]); 6] = [
         (&[2, 4, 9, 13], &[6, 2, 3, 3], 2, &[1, 2, 1, 0], &[1, 2], &[1, 1]),
         (&[1, 3, 7, 40], &[5, 3, 1, 1], 1, &[0, 0, 0, 0], &[1, 1], &[1, 1]),
         (&[1, 4, 6, 11], &[4, 1, 3, 3], 4, &[1, 1, 1, 1], &[2, 1], &[1, 2]),
         (&[1, 6, 300], &[6, 1, 31], 6, &[15, 15], &[1], &[1]),
         (&[1, 2, 50], &[4, 2, 5], 1, &[2, 1], &[3], &[2]),
+        // Padding wider than the input, so that some taps meet no input at all for a whole row.
+        (&[1, 3, 4], &[2, 3, 9], 1, &[6, 6], &[1], &[1]),
     ];
     for (xs, ws, group, pads, strides, dil) in cases {
         let x = f(xs, &(0..xs.iter().product()).map(|_| rng.float()).collect::<Vec<_>>());
@@ -290,19 +361,26 @@ fn first_departure_from_onnxruntime() {
     let words = load(&model);
     let model = nn::Model::parse(bytes(&words), false).unwrap();
     let features: Vec<f32> = std::fs::read(format!("{}/features.f32", reference)).unwrap().chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).take(100 * 80).collect();
+    departures(&model, "encoder", vec![f(&[1, 100, 80], &features), i(&[1], &[100])], &dump);
+}
+
+// Runs `graph` and compares each value with onnxruntime's of the same name in `dump` (index.txt: name, dtype, shape,
+// file); prints the first departures beyond MIND_DICTATE_TOLERANCE (relative to the value's largest magnitude).
+fn departures(model: &nn::Model, graph: &str, inputs: Vec<Tensor>, dump: &str) {
     let mut index = std::collections::HashMap::new();
     for line in std::fs::read_to_string(format!("{}/index.txt", dump)).unwrap().lines() {
         let parts: Vec<&str> = line.split('\t').collect();
         index.insert(parts[0].to_string(), (parts[1].to_string(), parts[2].to_string(), parts[3].to_string()));
     }
+    let tolerance = std::env::var("MIND_DICTATE_TOLERANCE").ok().and_then(|t| t.parse().ok()).unwrap_or(1e-3);
     let mut reported = 0;
     let mut checked = 0;
-    model.run_watched("encoder", vec![f(&[1, 100, 80], &features), i(&[1], &[100])], &mut |_, name, t| {
+    model.run_watched(graph, inputs, &mut |op, name, t| {
         let Some((dtype, shape, file)) = index.get(name) else { return };
         checked += 1;
         let raw = std::fs::read(format!("{}/{}", dump, file)).unwrap();
         let want_shape: Vec<usize> = if shape.is_empty() { vec![] } else { shape.split(',').map(|d| d.parse().unwrap()).collect() };
-        let bad = |what: String| { if reported < 5 { println!("{} ({}): {}", name, dtype, what); } };
+        let bad = |what: String| { if reported < 5 { println!("{} {} ({}): {}", op, name, dtype, what); } };
         if want_shape != t.shape { bad(format!("shape {:?} against {:?}", t.shape, want_shape)); reported += 1; return; }
         let diff = match (&t.data, dtype.as_str()) {
             (Data::F32(v), "float32") => { let w: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect(); let scale = w.iter().map(|a| a.abs()).fold(1e-6f32, f32::max); v.iter().zip(&w).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max) / scale }
@@ -312,9 +390,40 @@ fn first_departure_from_onnxruntime() {
             (Data::Bool(v), "bool") => { if v.iter().zip(&raw).all(|(a, b)| *a as u8 == *b) { 0.0 } else { 1.0 } }
             (d, w) => { bad(format!("type {:?} against {}", std::mem::discriminant(d), w)); reported += 1; return; }
         };
-        if diff > std::env::var("MIND_DICTATE_TOLERANCE").ok().and_then(|t| t.parse().ok()).unwrap_or(1e-3) { bad(format!("relative difference {}", diff)); reported += 1; }
+        if diff > tolerance { bad(format!("relative difference {}", diff)); reported += 1; }
     }).unwrap();
     println!("checked {} values, {} departed", checked, reported);
+}
+
+// A VITS voice's inputs from scripts/voice_tts/vits_reference.py's directory.
+fn vits_inputs(reference: &str) -> Vec<Tensor> {
+    let ids: Vec<i64> = std::fs::read(format!("{}/ids.i64", reference)).unwrap().chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
+    let scales = floats(format!("{}/scales.f32", reference));
+    let mut inputs = vec![i(&[1, ids.len()], &ids), i(&[1], &[ids.len() as i64]), f(&[3], &scales)];
+    if let Ok(sid) = std::fs::read(format!("{}/sid.i64", reference)) { inputs.push(i(&[1], &[i64::from_le_bytes(sid[..8].try_into().unwrap())])); } // Vosk TTS
+    inputs
+}
+
+#[test]
+fn vits_against_onnxruntime() {
+    // By hand: MIND_VITS_MODEL (a Piper or Vosk TTS voice converted with convert.py, graph "vits") and MIND_VITS_REFERENCE
+    // (vits_reference.py's directory; the noise scales 0). The audio is onnxruntime's within 1e-3 of its peak.
+    let (Ok(path), Ok(reference)) = (std::env::var("MIND_VITS_MODEL"), std::env::var("MIND_VITS_REFERENCE")) else { return };
+    let words = load(&path);
+    let model = nn::Model::parse(bytes(&words), true).unwrap();
+    if let Ok(dump) = std::env::var("MIND_VITS_DUMP") { departures(&model, "vits", vits_inputs(&reference), &dump); }
+    let start = std::time::Instant::now();
+    let out = model.run("vits", vits_inputs(&reference)).unwrap();
+    let spent = start.elapsed().as_secs_f32();
+    let got = floats_of(&out[0]);
+    let want = floats(format!("{}/audio.f32", reference));
+    let peak = want.iter().fold(0.0f32, |m, a| m.max(a.abs()));
+    let worst = got.iter().zip(&want).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+    let noise: f32 = got.iter().zip(&want).map(|(a, b)| (a - b) * (a - b)).sum();
+    let signal: f32 = want.iter().map(|a| a * a).sum();
+    println!("{} samples ({:.2} s at 22050 Hz) in {:.2} s; largest difference {:.2e} of peak {:.3}; SNR {:.1} dB", got.len(), got.len() as f32 / 22050.0, spent, worst, peak, 10.0 * (signal / noise.max(1e-30)).log10());
+    assert_eq!(got.len(), want.len());
+    assert!(worst <= 1e-3 * peak, "{} against {}", worst, peak);
 }
 
 #[test]
@@ -324,13 +433,15 @@ fn profile_by_operator() {
     let (Ok(path), Ok(reference), Ok(_)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_REFERENCE"), std::env::var("MIND_DICTATE_PROFILE")) else { return };
     let words = load(&path);
     let model = nn::Model::parse(bytes(&words), false).unwrap();
-    let features = floats(format!("{}/features.f32", reference));
+    let vits = std::path::Path::new(&format!("{}/ids.i64", reference)).exists(); // a VITS voice's reference (252)
+    let features = if vits { Vec::new() } else { floats(format!("{}/features.f32", reference)) };
     let frames = features.len() / 80;
+    let (graph, inputs) = if vits { ("vits", vits_inputs(&reference)) } else { ("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])]) };
     let mut totals: std::collections::BTreeMap<String, (f64, usize)> = Default::default();
     let mut nodes: Vec<(f64, String, Vec<usize>)> = Vec::new();
     let mut last = std::time::Instant::now();
     let start = last;
-    model.run_watched("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])], &mut |op, name, value| {
+    model.run_watched(graph, inputs, &mut |op, name, value| {
         let now = std::time::Instant::now();
         let e = totals.entry(op.to_string()).or_default();
         e.0 += (now - last).as_secs_f64();

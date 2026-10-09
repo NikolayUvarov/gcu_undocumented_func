@@ -133,6 +133,10 @@ All eight are in `models/manifest.toml`, and every file was fetched and matched 
 
 Tasks are numbered `252-APP-MMMM` from the tools track's next counter.
 
+## Progress
+
+- **Step 4, VITS: done** in [252-APP-0026](../issues-done/252-APP-0026-vits-voices-in-mind-nn.done). `mind::nn` runs Piper and Vosk TTS 0.7 as converted network files. Given the same phonemes, their audio equals onnxruntime's to an SNR of about 90 dB on the host. Vosk TTS 0.7 took 1.0 s for 3.4 s of speech on one core (AVX2); Piper `lessac-high` about 1.2–1.5 times real time. Next: the Russian front end (vosk-tts's dictionary and rules) and a voice speaking in the system.
+
 ## Acceptance criteria
 
 - The maintainer has chosen the voices by ear, and each is in `models/manifest.toml` with its licence and terms; `scripts/models.py fetch --role tts` fetches them (done 2026-10-08).

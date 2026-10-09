@@ -17,7 +17,8 @@ The file, little endian, every section 64-byte aligned:
     graphs: per graph u16 name length, the name, u32 inputs, u32 outputs, u32 nodes, ids of inputs, ids of outputs,
         then per node: u16 op, u8 inputs, u8 outputs, u16 attributes, u16 0, input ids (0xFFFFFFFF: absent),
         output ids, u32 tensors freed after it and their ids, then the attributes: u8 name length, the name,
-        u8 kind (1 int, 2 float, 3 ints, 4 floats, 5 graph index), u8 0, u32 count, then count i64 / f64 / u32
+        u8 kind (1 int, 2 float, 3 ints, 4 floats, 5 graph index, 6 string), u8 0, u32 count, then count i64 / f64 /
+        u32 / UTF-8 bytes
     tokens: u32 count, then per token u16 length and its UTF-8 (count 0 without --tokens)
     data: the initializers' bytes
     u32 FNV-1a of everything before it
@@ -30,7 +31,7 @@ import struct
 import sys
 
 DTYPES = {1: (1, "f32", 4), 2: (2, "u8", 1), 3: (3, "i8", 1), 6: (4, "i32", 4), 7: (5, "i64", 8), 9: (6, "bool", 1)}
-KINDS = {"INT": 1, "FLOAT": 2, "INTS": 3, "FLOATS": 4, "GRAPH": 5}
+KINDS = {"INT": 1, "FLOAT": 2, "INTS": 3, "FLOATS": 4, "GRAPH": 5, "STRING": 6}
 
 
 def fnv1a(data):
@@ -100,6 +101,8 @@ class Model:
                     import onnx.numpy_helper as nh
                     array = nh.to_array(a.t).ravel()
                     attrs.append((a.name, 4 if array.dtype.kind == "f" else 3, [x.item() for x in array]))  # ConstantOfShape's value
+                elif kind == "STRING":
+                    attrs.append((a.name, 6, list(a.s)))  # its UTF-8 bytes
                 elif kind in KINDS:
                     value = helper.get_attribute_value(a)
                     attrs.append((a.name, KINDS[kind], list(value) if isinstance(value, (list, tuple)) else [value]))
@@ -201,7 +204,7 @@ class Model:
                     body += struct.pack("<I", len(freed)) + struct.pack(f"<{len(freed)}I", *freed)
                     for aname, kind, values in attrs:
                         body += struct.pack("<B", len(aname)) + aname.encode() + struct.pack("<BBI", kind, 0, len(values))
-                        fmt = {1: "q", 2: "d", 3: "q", 4: "d", 5: "I"}[kind]
+                        fmt = {1: "q", 2: "d", 3: "q", 4: "d", 5: "I", 6: "B"}[kind]
                         body += struct.pack(f"<{len(values)}{fmt}", *values)
             pad(body)
             body += struct.pack("<I", len(tokens))
