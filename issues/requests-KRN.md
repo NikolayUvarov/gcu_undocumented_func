@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (2 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -49,3 +49,45 @@ A sketch of all of it, about 70 lines, was run by the storage session on its mac
 ### Acceptance criteria
 
 CI runs the test on every push, and a finding fails the host-test step.
+
+## The updater's VFS client badged `BADGE_UPDATE`
+
+**Recorded by:** the storage session for the update track, 2026-10-09, for [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md).
+
+### Problem
+
+`vfs_server` now has the update zone (docs/update/slots.md): a client badged `mind::fs::BADGE_UPDATE` (4) may fill the slot that did not boot and write the boot records whole, in place, and nothing else. 351-KRN-0022 (on the kernel branch) lends `updater` an unbadged, read-only VFS client, so no client holds the badge.
+
+### Plan (a proposal)
+
+- In `init`'s `"updater"` arm, give slot `SLOT_VFS` a client of `vfs_server` badged `BADGE_UPDATE` in place of the lent one, as `keystore` and `netpolicy` get theirs: `grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT)`.
+- The `updater` suite's stand-in (`tests/updater_stub`), booted from a slot volume (`scripts/boot_slots.py layout … --both`):
+  - writes a file in the inactive slot and a whole record;
+  - is refused in the running slot, in `EFI/`, a record of another size and a new file in `MIND/`.
+
+  The update track can write those cases once the grant is in `main`.
+
+### Acceptance criteria
+
+Only `updater` holds a client with `BADGE_UPDATE`; it reads as before and may write only the update zone.
+
+## The `devicetree` suite misses the kernel's line when CI is slow
+
+**Recorded by:** the storage session, 2026-10-09: its branch's CI run for 29741e7 failed in "aarch64 (programs, shell and four CPUs)" on this suite alone; the next commit, with the same code, passed. The suite is [210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done)'s.
+
+### Problem
+
+`devicetree_suite` (`tests/qemu_smoke.py`) stops the machine once the bootloader prints `BOOT: DEVICE TREE AT …`. It then runs it on in steps of `cont`, 10 ms, `stop`, and reads the screen for the kernel's `MIND CORE KERNEL: DEVICE TREE AT …`. The failure was `AssertionError: (<re.Match … 'BOOT: DEVICE TREE AT 0x47ef6000, 1052672 BYTES'>, None)` after all 500 steps.
+
+Measured on the storage session's machine (aarch64, the branch's build):
+- `vm.hmp()` waits 10 ms per byte of the command before sending it, so each step lets the machine run about 110 ms, not 10 ms.
+- The stop after the bootloader's line comes as late: by the first look, the kernel's line is already on the screen.
+- The line stays visible for about four such steps (about 450 ms), then init's services scroll it off. A slow runner that lets the machine run longer before a stop misses it, and every later step looks in vain.
+
+### Proposed fix
+
+Stop and continue through QMP itself (`vm.qmp("stop")`, `vm.qmp("cont")`) in that suite, for the first stop and in the loop. Each step then lets the machine run 11–20 ms, and the line stayed at the top for more than 20 steps in the same measurement. The suite asserts the same thing.
+
+### Acceptance criteria
+
+The suite passes on aarch64 as before; its steps no longer go through the monitor's typing pace.

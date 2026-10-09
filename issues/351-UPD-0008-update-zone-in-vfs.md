@@ -1,6 +1,6 @@
 # 351-UPD-0008 — An update zone in `vfs_server`
 
-**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open · **Blocked by:** [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), its first part: the booted slot in `BootInfo` (0014's confirmation needs this task in turn), without which `vfs_server` cannot tell the inactive slot from the running one (the records name the slot chosen, not the one that verified and booted), and the grant that gives `updater` the zone; [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
+**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open (the zone is built, 2026-10-09; see Progress) · **Blocked by:** the grant that gives `updater` the zone: its VFS client badged `BADGE_UPDATE` by `init` ([requests-KRN.md](requests-KRN.md), on top of 351-KRN-0022); [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done) (the booted slot in `BootInfo`) is done; [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -21,6 +21,30 @@ Numbered by the kernel session at the maintainer's request (2026-10-08), before 
 ## Acceptance criteria
 
 A client with the update badge can fill the inactive slot and write a boot record, and nothing else. The shell's badge is unchanged.
+
+## Progress (2026-10-09, the storage session for the UPD track)
+
+Built in `vfs_server` (`vfs_server/src/zone.rs`, `main.rs`, `fat.rs`) and documented in [docs/update/slots.md](../docs/update/slots.md):
+- **The badge:** `mind::fs::BADGE_UPDATE` (4).
+- **The zone** is computed from `BootInfo`'s booted slot:
+  - booted from A, the zone is `MIND/B` and the two records; booted from B, it is `MIND/A` and the records;
+  - booted from the root, there is no zone;
+  - `vfs_server` logs which (`[VFS] UPDATE ZONE: …` / `[VFS] NO UPDATE ZONE: …`).
+- **Inside the inactive slot** the badge may create, write, truncate, rename and remove.
+- **A record** is opened for writing only as it is: never made, emptied or removed. It is written only whole (512 bytes at offset 0) by `Volume::overwrite`, which changes its sector in place and leaves its directory entry; the write is flushed before the reply.
+- **Everything else** is read-only to the badge. The shell's badge and the others are unchanged.
+- **No IDL change:** the existing `write` call serves records.
+
+Tests:
+- `tests/vfs_zone_host.rs`:
+  - the zone of every badge below the boot root;
+  - that a record write changes exactly one sector of the volume, with its entry and the FAT as they were;
+  - that the badge numbers are libmind's.
+- The `boot` suite (x86, `tests/boot_slots_check.py`) and `tests/aarch64_smoke.py`: `vfs_server` names slot A as its zone when B booted, slot B when A booted, and none on a root volume.
+
+Left for the acceptance criteria:
+- `init` gives the `updater` its VFS client with this badge. Today 351-KRN-0022, on the kernel branch, lends it an unbadged one ([requests-KRN.md](requests-KRN.md)).
+- A client with the badge fills the inactive slot and writes a record on the platform, and is refused elsewhere: the `updater` suite's stand-in can do it once it holds the badge.
 
 ## Related
 

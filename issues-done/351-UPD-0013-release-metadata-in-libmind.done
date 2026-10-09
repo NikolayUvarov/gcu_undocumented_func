@@ -1,0 +1,47 @@
+# 351-UPD-0013 — Release metadata in `libmind`: the channel and the boot manifest, read and encoded again — done
+
+**Type:** update (library) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md), part of [351-UPD-0007](../issues/351-UPD-0007-updater-service.md) · **Constitution:** MC-9.2, MC-11.5, MC-11.11
+
+## Problem
+
+The updater holds the update zone, so it must not parse metadata from the network itself (MC-11.11): the parser service reads the channel file and the boot manifests (351-UPD-0007's plan). The updater then has to know that what the parser says is what the release key and the boot key signed, without parsing it again (MC-11.5).
+
+## Plan and resolution
+
+`libmind/src/release.rs` (`mind::release`), without allocation:
+- **`parse_channel`** reads a channel file as `scripts/release.py publish` writes it, in its one encoding only:
+  - the JSON line with its keys in order and no spaces;
+  - architectures in order, at most 4, each with a SHA-256 in lower-case hex;
+  - decimal versions without leading zeros, and 1 ≤ minimum ≤ version;
+  - an expiry `YYYY-MM-DDTHH:MM:SSZ` that is a real date;
+  - then `ed25519 <128 hex digits>`, each line ending in a newline and nothing after.
+
+  It returns the fields, and where the signed bytes end along with the signature.
+- **`encode_channel`** writes a channel's line again. The updater accepts the parser's answer only if this equals the bytes the signature covers. So a lying parser is caught, and the updater never parses.
+- **`Manifest::parse`** checks a boot manifest of format 1 whole:
+  - the format line, then up to 7 more header lines (`key value`, kept as text, so a line the format gains later is carried, not refused);
+  - then file lines `file <path> <size> <sha256> <flags> <MiB>`, in `sign_manifest.py`'s order (by path components);
+  - relative paths without `.`, `..` or empty parts.
+
+  `header(i)` and `file(i)` give the lines; **`encode_file`** writes a file line again, for the same check.
+- **`expires_unix`** gives an expiry in seconds since 1970, to compare with the clock.
+
+## Acceptance criteria
+
+Channels and manifests made by the project's own scripts read field by field and encode again to exactly their bytes; other forms are refused.
+
+## Resolution
+
+Done. `tests/release_host.rs` (in the host test lists of CI and `scripts/ci_local.sh`):
+- channels written by `release.py`, with two architectures and with one, encode again to their signed line, and the signature is the file's;
+- 23 other forms are refused: spaces, order of keys and architectures, hex case and length, leading zeros, minimum 0 or above the version, a version past `u64`, dates that do not exist, escapes, extra or missing bytes, CRLF, five architectures;
+- every byte of a valid channel changed to each of 9 values: refused, or it reads as exactly what it encodes;
+- expiries agree with Python's `calendar.timegm`;
+- manifests from `sign_manifest.py`, and the build's own `usb_root` and `aarch64_root` manifests where they are built, encode again to their text;
+- 17 other forms are refused, among them the order by components (`voice/model.bin` before `voice.elf`).
+
+The parser service's requests are [351-NET-0011](../issues/351-NET-0011-parse-release-metadata.md); the updater's check is part of 351-UPD-0007.
+
+## Related
+
+[351-UPD-0005](351-UPD-0005-release-and-publish.done), [350-UPD-0002](350-UPD-0002-manifest-and-signing.done), [109](109-session-parsers.done).

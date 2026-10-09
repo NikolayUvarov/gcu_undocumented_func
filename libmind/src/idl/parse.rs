@@ -13,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -41,6 +41,45 @@ impl Wire for HttpHead {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { status: Wire::decode(r)?, has_length: Wire::decode(r)?, length: Wire::decode(r)?, has_range: Wire::decode(r)?, range_unsatisfied: Wire::decode(r)?, range_start: Wire::decode(r)?, range_end: Wire::decode(r)?, range_total: Wire::decode(r)?, chunked: Wire::decode(r)? }) }
 }
 
+/// An architecture's boot manifest in a channel: its name and the manifest's SHA-256 (1.1, 351-NET-0011).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ManifestRef { pub arch: Text<16>, pub digest: List<u8, 32> }
+impl Wire for ManifestRef {
+    const MAX: usize = <Text<16> as Wire>::MAX + <List<u8, 32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.arch.encode(w)?; self.digest.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { arch: Wire::decode(r)?, digest: Wire::decode(r)? }) }
+}
+
+/// A release channel file (docs/update/publishing.md), read in its one encoding (`mind::release`): its fields; the
+/// signature covers the file's first `signed` bytes. The updater accepts the fields only if they encode again to
+/// exactly those bytes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Channel { pub name: Text<32>, pub version: u64, pub minimum: u64, pub expires: Text<20>, pub manifests: List<ManifestRef, 4>, pub signed: u32, pub signature: List<u8, 64> }
+impl Wire for Channel {
+    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <List<ManifestRef, 4> as Wire>::MAX + <u32 as Wire>::MAX + <List<u8, 64> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.version.encode(w)?; self.minimum.encode(w)?; self.expires.encode(w)?; self.manifests.encode(w)?; self.signed.encode(w)?; self.signature.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, minimum: Wire::decode(r)?, expires: Wire::decode(r)?, manifests: Wire::decode(r)?, signed: Wire::decode(r)?, signature: Wire::decode(r)? }) }
+}
+
+/// A file line of a boot manifest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct File { pub path: Text<96>, pub size: u64, pub digest: List<u8, 32>, pub flags: u32, pub mib: u32 }
+impl Wire for File {
+    const MAX: usize = <Text<96> as Wire>::MAX + <u64 as Wire>::MAX + <List<u8, 32> as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.path.encode(w)?; self.size.encode(w)?; self.digest.encode(w)?; self.flags.encode(w)?; self.mib.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { path: Wire::decode(r)?, size: Wire::decode(r)?, digest: Wire::decode(r)?, flags: Wire::decode(r)?, mib: Wire::decode(r)? }) }
+}
+
+/// A boot manifest's header lines (its format line first, as text), its number of file lines, and up to 8 of them
+/// from the one asked for (a reply small enough for a program's 64 KiB stack).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Manifest { pub headers: List<Text<128>, 8>, pub files: u32, pub page: List<File, 8> }
+impl Wire for Manifest {
+    const MAX: usize = <List<Text<128>, 8> as Wire>::MAX + <u32 as Wire>::MAX + <List<File, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.headers.encode(w)?; self.files.encode(w)?; self.page.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { headers: Wire::decode(r)?, files: Wire::decode(r)?, page: Wire::decode(r)? }) }
+}
+
 /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
 pub fn http_head(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpHead, Error>> {
     let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
@@ -56,13 +95,46 @@ pub fn http_head(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <HttpHead as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// A channel file (1.1).
+pub fn channel(endpoint: Endpoint, file: &[u8]) -> Result<core::result::Result<Channel, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<1024>(file, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 352, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Channel as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
+pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result::Result<Manifest, Error>> {
+    let mut buffer = Pages::new(36864).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<32768>(text, &mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 2232, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Manifest as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
-pub const REQUEST_MAX: usize = 8194;
+pub const REQUEST_MAX: usize = 32774;
 
 /// A request to the `parse` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request<'a> {
     HttpHead { head: &'a [u8] },
+    Channel { file: &'a [u8] },
+    Manifest { text: &'a [u8], start: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -81,11 +153,36 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::HttpHead { head }, call))
         }
+        2 => {
+            let (call, length) = wire::take_buffer(request, cap, 352, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let file = codec::decode_bytes::<1024>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Channel { file }, call))
+        }
+        3 => {
+            let (call, length) = wire::take_buffer(request, cap, 2232, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let text = codec::decode_bytes::<32768>(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Manifest { text, start }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
 
 pub fn reply_http_head(call: Call, value: core::result::Result<&HttpHead, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_channel(call: Call, value: core::result::Result<&Channel, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_manifest(call: Call, value: core::result::Result<&Manifest, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

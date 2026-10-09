@@ -5,7 +5,8 @@ On a raw disk image with both slots and the bootloader of the build:
 - staged again and not confirmed, it gives way to slot A at the next boot;
 - a trial slot with a damaged service is not loaded: A boots and B has no tries left;
 - a newer record torn by a cut write is ignored for the older one;
-- the file system is consistent after the bootloader's writes.
+- the file system is consistent after the bootloader's writes;
+- vfs_server's update zone is the slot that did not boot (351-UPD-0008).
 
 `boot(image, until)` boots the image and returns the console output up to `until`. Init's confirmation is 351-KRN-0014:
 the host writes the confirmed record here, as the updater will.
@@ -39,8 +40,8 @@ def run(boot, temp, volume, label):
     image = boot_slots.Image.create(temp / "slots.img", boot_slots.layout(volume, temp / "slots", both=True))
     shutil.rmtree(temp / "slots")
 
-    def booted(slot, *lines, trial=False):
-        out = boot(image.path, STARTED).replace("\r", "")
+    def booted(slot, *lines, trial=False, until=STARTED):
+        out = boot(image.path, until).replace("\r", "")
         for line in (f"BOOT: SLOT {slot} LOADED" + (" ON TRIAL" if trial else "\n"), *lines):
             assert line in out, (line, out[-3000:])
         assert STARTED in out and "BOOT ERROR" not in out, out[-3000:]
@@ -54,14 +55,18 @@ def run(boot, temp, volume, label):
     booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
     assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
-    booted("B", "SLOT B, CONFIRMED")
-    print(f"PASS ({label}): slot B boots on trial, its try counted on the disk first, and as confirmed once confirmed", flush=True)
+    zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
+    booted("B", "SLOT B, CONFIRMED", zone, until=zone)
+    print(f"PASS ({label}): slot B boots on trial, its try counted on the disk first, and as confirmed once confirmed; "
+          "vfs_server's update zone is then slot A", flush=True)
 
     # Staged again and never confirmed: the next boot falls back to A.
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("B", trial=True)
-    booted("A", "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
-    print(f"PASS ({label}): an unconfirmed trial of slot B falls back to slot A at the next boot", flush=True)
+    zone = "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
+    booted("A", "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", zone, until=zone)
+    print(f"PASS ({label}): an unconfirmed trial of slot B falls back to slot A at the next boot, and the update zone is "
+          "slot B again", flush=True)
 
     # A trial slot with a damaged service: not loaded, A boots, and B is left with no tries.
     rtc = image.read("MIND/B/rtc.elf")
