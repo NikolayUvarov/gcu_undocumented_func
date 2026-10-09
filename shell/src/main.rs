@@ -98,6 +98,7 @@ fn error_text(error: Error, service: bool) -> &'static str {
     match error {
         Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
         Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (QUOTA)",
+        Error::Other(ERR_IO) => "CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)",
         Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
         Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
         Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
@@ -337,6 +338,7 @@ impl Shell {
         let failed = |error: loader::Error| match error {
             loader::Error::NotFound => Error::NotFound, loader::Error::Invalid => Error::Invalid, loader::Error::NoMemory => Error::NoMemory,
             loader::Error::Rights => Error::Rights, loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY),
+            loader::Error::Unreadable => Error::Other(ERR_IO),
         };
         let needs = loader::inspect(Endpoint::LOADER, name)?.map_err(failed)?;
         // Requests `needs` has no field for (loader.wit 1.2): the network (issue 102), the authority client (issue 081).

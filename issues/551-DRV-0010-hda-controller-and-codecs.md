@@ -1,6 +1,6 @@
 # 551-DRV-0010 — Intel HD Audio in `audio_gw`: controller, codecs, playback and capture
 
-**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 551) · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Constitution:** MC-1.5, MC-6.3, MC-11.4
+**Type:** driver · **Owner:** `DRV` (made by the kernel session for 551; it stays with that session until done, TRACKS 1.5) · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Constitution:** MC-1.5, MC-6.3, MC-11.4
 
 ## Problem
 
@@ -49,6 +49,12 @@
 - **Tests:** the `hda` suite (x86, CI group "services, storage, audio") runs QEMU's `intel-hda` with `hda-duplex`. beep's demo tones come out in the wav backend, and `listen` records 48000 frames. The `audio` and `listen` suites still pass on AC97.
 
 Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and the internal microphone are 551's step 2).
+
+**2026-10-09: silent on the MacBook Pro (fast-test 57242b9c78ff).**
+- **What ran.** The controller and the codec were found: `CODEC 0 1013:4206`, speaker pin 0xA fed by DAC 0x3. `say` ran its stream to the end (`[TTS] SPOKE 5 BYTES, 705 MS`), yet neither `beep` nor `say` was heard.
+- **The cause, by Linux's facts.** Apple's Cirrus codecs switch the speaker amplifier on through the function group's GPIO3, and the headphone amplifier through GPIO1 on the MacBook Pro 10,1 (subsystem 106B:2800) or GPIO2 on the others. Nothing set them.
+- **The change**, made here ahead of step 2 because the maintainer's run needs it: for a Cirrus codec with Apple's subsystem ID, `audio_gw` sets those GPIOs (mask, direction, data: speakers, or headphones when the output pin is a headphone jack). It logs `HDA: APPLE <SSID>, CIRRUS AMPLIFIERS: GPIO … OF <count> SET, READ …`.
+- **Left.** The MacBook Pro's run. If it is still silent, the next thing to try is Cirrus's errata coefficients for the vendor widget 0x11. Jack detection and the internal microphone stay with step 2, which `DRV`'s owner numbers.
 
 ## Related
 
