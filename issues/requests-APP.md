@@ -215,3 +215,25 @@ The kernel now saves AVX-512's and AMX's state components where the processor ha
 ### Acceptance criteria
 
 The `smp` suite with `--cpu-model max` still sees `FPU=XSAVE+AVX` on every CPU. A machine with AVX-512 shows `+AVX512` (the profile records it).
+
+## Horizontal scrolling from a trackpad (211-DRV-0018)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for [211-DRV-0018](211-DRV-0018-macbook-trackpad-gestures.md), at the maintainer's request.
+
+### Problem
+
+`usb_hid` now reads the MacBook Pro trackpad's fingers. A three-finger swipe up or down turns the wheel, which `wm` and the programs already use. A swipe left or right turns a horizontal wheel, which nothing reads yet:
+- relative pointer events carry it in bits 34–37 (`pointer_scroll`, `pointer_across` in `common/abi.rs`, zero in every other event);
+- `mind::input::Pointer` has no field for it;
+- `wm` passes only `wheel` to windows (`desk.rs`, `to_window`);
+- the window protocol has no field for it.
+
+### Plan (a proposal; the tools track decides)
+
+- `mind::input::Pointer` gains `across` (from `pointer_across`).
+- `wm` passes it to the window under the pointer, as the wheel. The window event carries it, in a new minor version of `idl/window.wit` if the event's layout changes.
+- `view`, `edit`, `fm` and the text windows scroll sideways by it where their content is wider than the window.
+
+### Acceptance criteria
+
+A host test of `wm`'s routing passes a horizontal step to the window under the pointer, and `view` scrolls a wide image sideways by it. On the MacBook Pro a three-finger swipe left or right moves a wide image in `view`.

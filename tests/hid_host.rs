@@ -7,7 +7,7 @@ mod abi;
 #[path = "../libmind/src/hid.rs"]
 mod hid;
 
-use abi::{pointer_absolute_fields, pointer_fields, POINTER_LEFT, POINTER_RIGHT, POINTER_SCALE};
+use abi::{pointer_absolute_fields, pointer_across, pointer_fields, POINTER_LEFT, POINTER_RIGHT, POINTER_SCALE};
 use hid::*;
 
 fn keys(keyboard: &mut Keyboard, report: [u8; 8], now: u64) -> Vec<u8> {
@@ -120,4 +120,100 @@ fn report_ids_select_the_report() {
     assert_eq!(mouse.id, 2);
     assert!(events(&mouse, &[1, 9, 9, 9]).is_empty());
     assert_eq!(pointer_fields(events(&mouse, &[2, 0, 1, 2, 0])[0]), (0, 1, 2, 0));
+}
+
+// 211-DRV-0018: Wellspring packets as the MacBook Pro's trackpad sends them in its multitouch mode: a 30-byte header with
+// the button at byte 15, then 28 bytes a finger (X at 2, Y at 4, upwards; the touch's major axis at 16).
+fn packet(button: bool, fingers: &[(i16, i16)]) -> Vec<u8> {
+    let mut p = vec![0u8; 30];
+    p[15] = button as u8;
+    for &(x, y) in fingers {
+        let mut f = [0u8; 28];
+        f[2..4].copy_from_slice(&x.to_le_bytes()); f[4..6].copy_from_slice(&y.to_le_bytes()); f[16..18].copy_from_slice(&300u16.to_le_bytes());
+        p.extend_from_slice(&f);
+    }
+    p
+}
+fn feed(pad: &mut Trackpad, button: bool, fingers: &[(i16, i16)], now: u64) -> Vec<(u8, i32, i32, i32, i32)> {
+    let mut out = Vec::new();
+    pad.feed(&packet(button, fingers), now, &mut |e| { let (b, dx, dy, w) = pointer_fields(e); out.push((b, dx, dy, w, pointer_across(e))); });
+    out
+}
+
+#[test]
+fn wellspring_trackpads_are_known() {
+    assert!(wellspring(0x05AC, 0x0263) && wellspring(0x05AC, 0x0262) && wellspring(0x05AC, 0x0259));
+    assert!(!wellspring(0x05AC, 0x0290) && !wellspring(0x046D, 0x0263));
+    assert_eq!(WELLSPRING_LONGEST, 478);
+}
+
+#[test]
+fn one_finger_moves_the_pointer_down_the_screen_as_y_falls() {
+    let mut pad = Trackpad::new();
+    assert!(feed(&mut pad, false, &[(0, 1000)], 0).is_empty()); // the first packet of a touch only places it
+    let moved = feed(&mut pad, false, &[(24, 976)], 8); // slow: 8 units a pixel
+    assert_eq!(moved, vec![(0, 3, 3, 0, 0)]);
+    let faster = feed(&mut pad, false, &[(24 + 200, 976)], 16); // 200 units in a packet: three times as far
+    assert_eq!(faster, vec![(0, 75, 0, 0, 0)]);
+    assert!(feed(&mut pad, false, &[], 24).is_empty());
+}
+
+#[test]
+fn pressing_with_one_finger_is_left_and_with_two_right() {
+    let mut pad = Trackpad::new();
+    feed(&mut pad, false, &[(0, 0)], 0);
+    assert_eq!(feed(&mut pad, true, &[(0, 0)], 8), vec![(POINTER_LEFT, 0, 0, 0, 0)]);
+    assert_eq!(feed(&mut pad, false, &[(0, 0)], 16), vec![(0, 0, 0, 0, 0)]);
+    feed(&mut pad, false, &[], 24);
+    feed(&mut pad, false, &[(0, 0), (900, 0)], 400);
+    assert_eq!(feed(&mut pad, true, &[(0, 0), (900, 0)], 408), vec![(POINTER_RIGHT, 0, 0, 0, 0)]);
+    // A finger lifted while the pad is held keeps the right button until it is up.
+    assert!(feed(&mut pad, true, &[(0, 0)], 416).iter().all(|e| e.0 == POINTER_RIGHT));
+    assert_eq!(feed(&mut pad, false, &[(0, 0)], 424), vec![(0, 0, 0, 0, 0)]);
+    assert!(feed(&mut pad, false, &[], 432).is_empty()); // pressed during the touch: no tap
+}
+
+#[test]
+fn a_quick_two_finger_tap_is_a_right_click() {
+    let mut pad = Trackpad::new();
+    feed(&mut pad, false, &[(0, 0), (900, 0)], 0);
+    feed(&mut pad, false, &[(10, 5), (910, 5)], 80);
+    assert_eq!(feed(&mut pad, false, &[], 160), vec![(POINTER_RIGHT, 0, 0, 0, 0), (0, 0, 0, 0, 0)]);
+    // Slow or moving two-finger touches are not taps; nor is a one-finger tap.
+    feed(&mut pad, false, &[(0, 0), (900, 0)], 1000);
+    assert!(feed(&mut pad, false, &[], 1400).is_empty());
+    feed(&mut pad, false, &[(0, 0), (900, 0)], 2000);
+    feed(&mut pad, false, &[(300, 0), (1200, 0)], 2050);
+    assert!(feed(&mut pad, false, &[], 2100).is_empty());
+    feed(&mut pad, false, &[(0, 0)], 3000);
+    assert!(feed(&mut pad, false, &[], 3050).is_empty());
+}
+
+#[test]
+fn three_fingers_scroll_one_way_at_a_time() {
+    let mut pad = Trackpad::new();
+    let three = |y: i16, x: i16| [(x, y), (x + 800, y), (x + 1600, y)];
+    feed(&mut pad, false, &three(1000, 0), 0);
+    // Upwards (Y grows): the content follows the fingers, as the wheel turned towards the user (positive).
+    let mut steps = 0;
+    for k in 1..=8 { for e in feed(&mut pad, false, &three(1000 + 40 * k, 0), 8 * k as u64) { assert_eq!((e.0, e.1, e.2, e.4), (0, 0, 0, 0)); steps += e.3; } }
+    assert_eq!(steps, 2); // 320 units, 160 a step
+    // Once vertical, sideways movement in the same gesture does not scroll across.
+    for e in feed(&mut pad, false, &three(1320, 400), 80) { assert_eq!(e.4, 0); }
+    feed(&mut pad, false, &[], 100);
+    // Leftwards: across, positive (the view goes right as the content follows the fingers).
+    feed(&mut pad, false, &three(0, 0), 200);
+    let mut across = 0;
+    for k in 1..=4 { for e in feed(&mut pad, false, &three(0, -80 * k), 200 + 8 * k as u64) { assert_eq!(e.3, 0); across += e.4; } }
+    assert_eq!(across, 2);
+    assert!(feed(&mut pad, false, &[], 300).is_empty());
+}
+
+#[test]
+fn short_or_empty_packets_do_nothing() {
+    let mut pad = Trackpad::new();
+    let mut out = Vec::new();
+    pad.feed(&[0u8; 12], 0, &mut |e| out.push(e));
+    pad.feed(&packet(false, &[]), 0, &mut |e| out.push(e));
+    assert!(out.is_empty());
 }

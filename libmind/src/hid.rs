@@ -2,7 +2,7 @@
 //! (mind::keys), as virtio_input does for VirtIO keyboards; a mouse's or tablet's reports, laid out by its report
 //! descriptor, become pointer events (relative, or absolute as a share of the screen). No system calls:
 //! tests/hid_host.rs.
-use crate::abi::{pointer_absolute, pointer_event, POINTER_SCALE};
+use crate::abi::{pointer_absolute, pointer_event, pointer_scroll, POINTER_LEFT, POINTER_RIGHT, POINTER_SCALE};
 
 /// PS/2 set 1 code of a keyboard-page usage (press; a release adds 0x80): (E0 prefix, code). None for keys without one.
 pub fn scancode(usage: u8) -> Option<(bool, u8)> {
@@ -177,6 +177,100 @@ impl Pointer {
             out(pointer_event(buttons, sx, sy, sw));
             (dx, dy, wheel) = (dx - sx, dy - sy, wheel - sw);
             if dx == 0 && dy == 0 && wheel == 0 { break; }
+        }
+    }
+}
+
+/// Apple's trackpads of 2011-2013 (Wellspring 5 to 7A: MacBook Pro 8 to 10, MacBook Air 4 to 5) in their multitouch
+/// mode (211-DRV-0018). After their mode switch (`WELLSPRING_MODE`, a feature report to interface 0) they send each
+/// touch's fingers on the vendor interface: a 30-byte header with the built-in button at byte 15, then 28 bytes a
+/// finger (X at 2, Y at 4, growing upwards, signed; the touch's major axis at 16, zero for a finger lifted). Only the
+/// facts of the protocol are taken from Linux's bcm5974 driver.
+pub fn wellspring(vendor: u16, product: u16) -> bool {
+    vendor == 0x05AC && matches!(product, 0x0245..=0x0247 | 0x0249..=0x024E | 0x0252..=0x0254 | 0x0259..=0x025B | 0x0262..=0x0264)
+}
+/// The mode switch: read feature report 0 of interface 0 (GET_REPORT, value 0x300, 8 bytes), set byte 0 to 1 (0x08: the
+/// mouse mode again) and write it back (SET_REPORT).
+pub const WELLSPRING_MODE: (u16, u16, u8) = (0x300, 8, 0x01);
+/// The longest packet: the header and 16 fingers.
+pub const WELLSPRING_LONGEST: u16 = (TRACKPAD_HEADER + 16 * TRACKPAD_FINGER) as u16;
+const TRACKPAD_HEADER: usize = 30;
+const TRACKPAD_FINGER: usize = 28;
+const TRACKPAD_BUTTON: usize = 15;
+// Raw units a screen pixel, a scroll step, and a tap's limits.
+const MOTION_DIVISOR: i32 = 8;
+const SCROLL_STEP: i32 = 160;
+const AXIS_LOCK: i32 = 60;
+const TAP_MS: u64 = 250;
+const TAP_TRAVEL: i32 = 200;
+
+/// What a trackpad's touches mean (211-DRV-0018): one finger moves the pointer; pressing the pad is the left button,
+/// with two fingers on it the right one; a quick tap of two fingers is a right click; three fingers scroll, vertically
+/// or horizontally by the way they first move, in the content's direction (macOS's natural scrolling).
+#[derive(Default)]
+pub struct Trackpad { fingers: usize, last: Option<(i32, i32)>, carry: (i32, i32), scroll: (i32, i32), axis: u8, held: u8, touch: Option<(u64, usize, i32, bool)> }
+
+impl Trackpad {
+    pub fn new() -> Self { Self::default() }
+
+    /// One packet at `now` (ms); `out` gets pointer events.
+    pub fn feed(&mut self, packet: &[u8], now: u64, out: &mut impl FnMut(usize)) {
+        if packet.len() < TRACKPAD_HEADER { return; }
+        let (mut count, mut sum) = (0usize, (0i32, 0i32));
+        for finger in packet[TRACKPAD_HEADER..].chunks_exact(TRACKPAD_FINGER) {
+            if u16::from_le_bytes([finger[16], finger[17]]) == 0 { continue; }
+            count += 1;
+            sum = (sum.0 + i16::from_le_bytes([finger[2], finger[3]]) as i32, sum.1 + i16::from_le_bytes([finger[4], finger[5]]) as i32);
+        }
+        let centre = if count > 0 { Some((sum.0 / count as i32, sum.1 / count as i32)) } else { None };
+        // Movement since the last packet, only while the same fingers touch: a finger put down or lifted moves the centre.
+        let delta = match (centre, self.last) { (Some(c), Some(l)) if count == self.fingers => (c.0 - l.0, c.1 - l.1), _ => (0, 0) };
+        if count != self.fingers { self.scroll = (0, 0); self.axis = 0; }
+        self.last = centre;
+        self.fingers = count;
+        // A touch, for taps: when it began, the most fingers, how far they went, whether the pad was pressed.
+        let pressed = packet[TRACKPAD_BUTTON] & 1 != 0;
+        match (&mut self.touch, count) {
+            (None, n) if n > 0 => self.touch = Some((now, n, 0, pressed)),
+            (Some(t), n) if n > 0 => { t.1 = t.1.max(n); t.2 += delta.0.abs() + delta.1.abs(); t.3 |= pressed; }
+            (Some(t), _) => {
+                let (start, most, travel, was_pressed) = *t;
+                self.touch = None;
+                if most == 2 && !was_pressed && now.saturating_sub(start) <= TAP_MS && travel <= TAP_TRAVEL && self.held == 0 {
+                    out(pointer_event(POINTER_RIGHT, 0, 0, 0));
+                    out(pointer_event(0, 0, 0, 0));
+                }
+            }
+            _ => {}
+        }
+        // The button: left, or right with two fingers or more on the pad when it went down; it stays so until it is up.
+        let held = if pressed { if self.held != 0 { self.held } else if count >= 2 { POINTER_RIGHT } else { POINTER_LEFT } } else { 0 };
+        let changed = held != self.held;
+        self.held = held;
+        if count >= 3 {
+            self.scroll = (self.scroll.0 + delta.0, self.scroll.1 + delta.1);
+            if self.axis == 0 && self.scroll.0.abs().max(self.scroll.1.abs()) >= AXIS_LOCK { self.axis = if self.scroll.1.abs() >= self.scroll.0.abs() { 1 } else { 2 }; }
+            let (mut wheel, mut across) = (0, 0);
+            if self.axis == 1 { wheel = self.scroll.1 / SCROLL_STEP; self.scroll.1 -= wheel * SCROLL_STEP; }
+            if self.axis == 2 { across = -(self.scroll.0 / SCROLL_STEP); self.scroll.0 += across * SCROLL_STEP; }
+            if wheel != 0 || across != 0 || changed { out(pointer_scroll(held, 0, 0, wheel.clamp(-8, 7), across.clamp(-8, 7))); }
+            return;
+        }
+        // One finger moves the pointer, and any number while the pad is held (a drag); faster strokes go further.
+        let (dx, dy) = if count == 1 || held != 0 {
+            let speed = delta.0.abs().max(delta.1.abs());
+            let gain = if speed > 80 { 3 } else if speed > 30 { 2 } else { 1 };
+            let x = delta.0 * gain + self.carry.0; let y = -delta.1 * gain + self.carry.1;
+            self.carry = (x % MOTION_DIVISOR, y % MOTION_DIVISOR);
+            (x / MOTION_DIVISOR, y / MOTION_DIVISOR)
+        } else { (0, 0) };
+        if dx == 0 && dy == 0 && !changed { return; }
+        let (mut dx, mut dy) = (dx, dy);
+        loop {
+            let (sx, sy) = (dx.clamp(-256, 255), dy.clamp(-256, 255));
+            out(pointer_event(held, sx, sy, 0));
+            (dx, dy) = (dx - sx, dy - sy);
+            if dx == 0 && dy == 0 { break; }
         }
     }
 }

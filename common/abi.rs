@@ -425,6 +425,14 @@ pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
     let signed = |value: u32, bits: u32| ((value << (32 - bits)) as i32) >> (32 - bits);
     (event_mods(event), signed(field & 0x1FF, 9), signed(field >> 9 & 0x1FF, 9), signed(field >> 18 & 0xF, 4))
 }
+// A relative pointer event's horizontal wheel (211-DRV-0018: a trackpad's three-finger swipe): bits 34-37 of the event,
+// signed, positive to the right, where an absolute event keeps its wheel. Zero in every event made before; consumers that
+// do not read it see an ordinary pointer event.
+pub fn pointer_scroll(buttons: u8, dx: i32, dy: i32, wheel: i32, across: i32) -> usize {
+    pointer_event(buttons, dx, dy, wheel) | (across.clamp(-8, 7) as usize & 0xF) << 34
+}
+/// The horizontal wheel steps of a relative pointer event (0 for an absolute one).
+pub fn pointer_across(event: usize) -> i32 { if event & POINTER_ABSOLUTE != 0 { 0 } else { (((event >> 34) & 0xF) as i32) << 28 >> 28 } }
 // An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
 // movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
 // kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
