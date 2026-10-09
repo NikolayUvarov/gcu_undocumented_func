@@ -87,7 +87,7 @@ In QEMU, with both enabled, each service holds exactly the listed grants (the `i
 
 It must not be able to write anywhere else on `data/`. A private directory in `system/` (351-KRN-0040, 108-KRN-0041) covers the journal, but not these: other programs, the shell and the loader must read them.
 
-### Plan (a proposal; the kernel track, or the track that owns `vfs_server`, decides)
+### Plan (a proposal; the kernel track, which owns `vfs_server` since 175, decides)
 
 - A write grant limited to named directories, made by `init` from the service's arm (or `vfs.wit`'s `scope` applied to writes).
 - Rename within the scope, and flush.
