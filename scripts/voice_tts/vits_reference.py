@@ -8,7 +8,7 @@ For Piper the phonemes come from espeak-ng through piper-phonemize (GPL-3.0, use
 ids with the voice's MODEL.onnx.json the way Piper does: "^", each phoneme followed by "_", "$". For Vosk TTS they come
 from vosk-tts's own dictionary and rules (vosk_tts.Synth.g2p_noembed), and the speaker's number is an input too. The
 noise scales are 0, so the audio does not depend on the random numbers. OUT_DIR gets ids.i64, scales.f32 (noise,
-length, noise_w), audio.f32, phonemes.txt and, for Vosk TTS, sid.i64; with --dump also every value onnxruntime makes
+length, noise_w), audio.f32, text.txt, phonemes.txt and, for Vosk TTS, sid.i64; with --dump also every value onnxruntime makes
 (index.txt: name, dtype, shape, file), for finding where `mind::nn` departs from it. Needs onnx, onnxruntime, numpy,
 and piper-phonemize or vosk-tts.
 """
@@ -69,6 +69,8 @@ def main():
     x.tofile(os.path.join(out, "ids.i64"))
     scales.tofile(os.path.join(out, "scales.f32"))
     np.asarray(results[0], dtype=np.float32).ravel().tofile(os.path.join(out, "audio.f32"))
+    with open(os.path.join(out, "text.txt"), "w", encoding="utf-8") as f:
+        f.write(text + "\n")
     with open(os.path.join(out, "phonemes.txt"), "w", encoding="utf-8") as f:
         f.write((" " if speaker is not None else "").join(phonemes) + "\n")
     if dump:

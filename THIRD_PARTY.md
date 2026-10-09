@@ -19,6 +19,7 @@ Code adapted from another project:
 | File | Source | Licence |
 |---|---|---|
 | `tls/src/provider.rs` | The rustls crypto provider of [rustls-rustcrypto](https://github.com/RustCrypto/rustls-rustcrypto) 0.0.2-alpha (RustCrypto Developers): cipher, hash, HMAC, key exchange and signature verification glue, rewritten for TLS 1.3 only, RDRAND randomness and no private keys | MIT OR Apache-2.0 |
+| `libmind/src/voice/russian.rs` (`rules`), `scripts/voice_tts/dictionary.py` (`convert`) | The Russian letter-to-sound rules of [vosk-tts](https://github.com/alphacep/vosk-tts) 0.3.61 (`vosk_tts/g2p.py`, alphacep), ported; the dictionary they serve stays with the model on the model disk (`models/manifest.toml`: `tts-ru-vosk-0.7`) | Apache-2.0 |
 
 Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.
 

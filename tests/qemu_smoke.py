@@ -1240,6 +1240,7 @@ def tools_suite(vm):
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
     fbank_check(vm)
     dictate_check(vm)
+    speak_check(vm)
     monitors_check(vm)
 
 
@@ -1285,6 +1286,39 @@ def dictate_check(vm):
     assert simd and f"TEXT: {TOY_TEXT}" in out and "331 MS OF SPEECH" in out, out[-2000:]
     require(run("dictate --model toy-damaged.bin fbank.wav"), "dictate: toy-damaged.bin: Format(\"checksum\")")
     print(f"PASS: dictate in the system: the toy transducer's text is the host's (SIMD {simd[1]}); a damaged file is refused", flush=True)
+
+
+def speak_dictionary():
+    """252: a small MINDDIC1 dictionary (scripts/voice_tts/dictionary.py) over a made-up phoneme table, the text speak
+    reads, and the ids vosk-tts's algorithm gives for it on the host."""
+    sys.path.insert(0, str(ROOT / "scripts/voice_tts"))
+    sys.dont_write_bytecode = True  # nothing written into scripts/
+    import dictionary as voice_dictionary
+    names = ["_", "^", "$", " ", "!", ",", ".", "-"] + [v + s for v in "aoueiy" for s in "01"] + \
+        [c + soft for c in "bvgdzklmnprstfh" for soft in ("", "j")] + ["zh", "c", "ch", "sh", "sch", "j"]
+    table = {n: [i] for i, n in enumerate(names)}
+    rules = voice_dictionary.convert
+    best = {"говорит": rules("говор+ит"), "разум": rules("р+азум"), "корабля": rules("корабл+я"), "ёлка": rules("+ёлка"),
+            "мкс": ["e0", "m", "k", "a0", "e1", "s"]}  # an abbreviation, kept with its phonemes
+    text = "Говорит разум корабля — ёлка, МКС! Неизвестное слово."
+    data = voice_dictionary.build(table, best)[0]
+    return data, text, voice_dictionary.ids(text, table, best)
+
+
+def speak_check(vm):
+    """252: speak's Russian front end in the system (dictionary, rules, punctuation) gives the host's ids, and a
+    damaged dictionary is refused."""
+    if vm.arch != "x86_64":
+        print("SKIP: speak is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
+        return
+    want = speak_dictionary()[2]
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("speak --dictionary speak.dic --ids --file speak.txt")
+    assert f"IDS: {' '.join(map(str, want))}" in out, (want, out[-2000:])
+    require(run("speak --dictionary speak-damaged.dic --ids --file speak.txt"), "speak: speak-damaged.dic: checksum")
+    print(f"PASS: speak in the system: the Russian front end gives the host's {len(want)} phoneme ids; a damaged dictionary is refused", flush=True)
 
 
 def table_row(screen, pattern):
@@ -5881,6 +5915,13 @@ def main():
                 (disk / "toy.bin").write_bytes(toy)
                 toy[len(toy) // 2] ^= 1
                 (disk / "toy-damaged.bin").write_bytes(toy)
+                # speak's front end (252): a small dictionary, its text, and a damaged copy.
+                words, text, _ = speak_dictionary()
+                (disk / "speak.dic").write_bytes(words)
+                (disk / "speak.txt").write_text(text, encoding="utf-8")
+                damaged = bytearray(words)
+                damaged[len(damaged) // 2] ^= 1
+                (disk / "speak-damaged.dic").write_bytes(damaged)
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
                 note = elf.index(b"MINDREQ1") + 8

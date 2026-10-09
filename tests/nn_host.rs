@@ -12,6 +12,10 @@ pub mod math;
 mod fbank;
 #[path = "../libmind/src/voice/dictation.rs"]
 mod dictation;
+#[path = "../libmind/src/voice/russian.rs"]
+mod russian;
+#[path = "../libmind/src/voice/synthesis.rs"]
+mod synthesis;
 mod voice { pub use super::math; }
 
 use nn::{Data, Tensor};
@@ -177,6 +181,33 @@ fn synthesis_operators() {
         assert_eq!(got.shape, [1, cout, out_len]);
         assert!(close(floats_of(&got), &want), "{:?}", (cin, cout, len, k, stride, pad, dil, group));
     }
+}
+
+#[test]
+fn sentences_of_a_text() {
+    assert_eq!(synthesis::sentences("Привет! Это проверка... Да? Число 3.14 и всё"), ["Привет!", "Это проверка...", "Да?", "Число 3.14 и всё"]);
+    assert!(synthesis::sentences("  ").is_empty());
+}
+
+#[test]
+fn voice_against_onnxruntime() {
+    // By hand: MIND_VITS_MODEL (Vosk TTS 0.7 converted), MIND_TTS_DICTIONARY (dictionary.py's file) and
+    // MIND_VITS_REFERENCE (vits_reference.py --vosk): our front end gives vosk-tts's ids for the reference's text, and
+    // the voice says it as onnxruntime does with the noise at 0.
+    let (Ok(path), Ok(dictionary), Ok(reference)) = (std::env::var("MIND_VITS_MODEL"), std::env::var("MIND_TTS_DICTIONARY"), std::env::var("MIND_VITS_REFERENCE")) else { return };
+    let (words, dict) = (load(&path), std::fs::read(dictionary).unwrap());
+    let voice = synthesis::Voice::new(nn::Model::parse(bytes(&words), true).unwrap(), russian::Dictionary::parse(&dict, true).unwrap()).unwrap();
+    let text = std::fs::read_to_string(format!("{}/text.txt", reference)).unwrap();
+    let want_ids: Vec<i64> = std::fs::read(format!("{}/ids.i64", reference)).unwrap().chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
+    assert_eq!(voice.dictionary().ids(text.trim()), want_ids);
+    let speaker = i64::from_le_bytes(std::fs::read(format!("{}/sid.i64", reference)).unwrap()[..8].try_into().unwrap());
+    let start = std::time::Instant::now();
+    let audio = voice.say(text.trim(), &synthesis::Settings { noise: 0.0, length: 1.0, length_noise: 0.0, speaker }).unwrap();
+    let want = floats(format!("{}/audio.f32", reference));
+    let worst = audio.iter().zip(&want).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+    println!("{:.2} s of speech in {:.2} s; largest difference {:.2e}", audio.len() as f32 / 22050.0, start.elapsed().as_secs_f32(), worst);
+    assert_eq!(audio.len(), want.len());
+    assert!(worst < 1e-3);
 }
 
 // A small generator of test values.

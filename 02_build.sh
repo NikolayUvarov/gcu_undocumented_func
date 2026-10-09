@@ -128,6 +128,7 @@ USER_CRATES=(
     "camera:camera:camera.elf"
     "efivar:efivar:efivar.elf"
     "dictate:dictate:dictate.elf"
+    "speak:speak:speak.elf"
 )
 
 # The kernel, every service and program, and the UEFI bootloader build in parallel, a log each (000-KRN-0020).

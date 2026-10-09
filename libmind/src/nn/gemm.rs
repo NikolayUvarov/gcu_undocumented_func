@@ -129,10 +129,6 @@ mod x86 {
     #[target_feature(enable = "xsave")]
     unsafe fn xcr0() -> u64 { _xgetbv(0) }
 
-    // Columns j.. of 8 lanes: all of them, or the first `left` (< 8).
-    #[target_feature(enable = "avx2")]
-    unsafe fn mask(left: usize) -> __m256i { _mm256_cmpgt_epi32(_mm256_set1_epi32(left as i32), _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7)) }
-
     // Depth of a block of k: its rows of a 16-column block of B (16 KiB) stay in the first-level cache for every row.
     const KC: usize = 256;
 
@@ -156,12 +152,18 @@ mod x86 {
             }
             j += 16;
         }
-        while j < n {
-            let m8 = mask(n - j);
-            let mut i = 0;
-            while i + 6 <= m { f32_narrow::<6>(i, j, k, a, lda, b, ldb, c, ldc, m8); i += 6; }
-            while i < m { f32_narrow::<1>(i, j, k, a, lda, b, ldb, c, ldc, m8); i += 1; }
-            j += 8;
+        // The last columns (fewer than 16), 8 at a time, B's copied 8 to a row: no load reads past a row's end (QEMU's
+        // emulation faults on masked loads at a page's edge, though the processor does not); the extra lanes are dropped.
+        if j < n {
+            let mut narrow: alloc::vec::Vec<f32> = alloc::vec![0.0; k * 8];
+            while j < n {
+                let w = (n - j).min(8);
+                for r in 0..k { core::ptr::copy_nonoverlapping(b.add(r * ldb + j), narrow.as_mut_ptr().add(r * 8), w); }
+                let mut i = 0;
+                while i + 6 <= m { f32_narrow::<6>(i, j, w, k, a, lda, narrow.as_ptr(), c, ldc); i += 6; }
+                while i < m { f32_narrow::<1>(i, j, w, k, a, lda, narrow.as_ptr(), c, ldc); i += 1; }
+                j += w;
+            }
         }
     }
 
@@ -190,17 +192,24 @@ mod x86 {
         }
     }
 
-    // Rows i..i+R, the columns of `m8` from j.
+    // Rows i..i+R, `w` (at most 8) columns from j; `panel` holds them for every k, 8 to a row.
     #[target_feature(enable = "avx2,fma")]
     #[inline]
-    unsafe fn f32_narrow<const R: usize>(i: usize, j: usize, k: usize, a: *const f32, lda: usize, b: *const f32, ldb: usize, c: *mut f32, ldc: usize, m8: __m256i) {
+    unsafe fn f32_narrow<const R: usize>(i: usize, j: usize, w: usize, k: usize, a: *const f32, lda: usize, panel: *const f32, c: *mut f32, ldc: usize) {
         let mut acc = [_mm256_setzero_ps(); R];
-        for (r, acc) in acc.iter_mut().enumerate() { *acc = _mm256_maskload_ps(c.add((i + r) * ldc + j), m8); }
+        let mut row = [0.0f32; 8];
+        for (r, acc) in acc.iter_mut().enumerate() {
+            core::ptr::copy_nonoverlapping(c.add((i + r) * ldc + j), row.as_mut_ptr(), w);
+            *acc = _mm256_loadu_ps(row.as_ptr());
+        }
         for kk in 0..k {
-            let b0 = _mm256_maskload_ps(b.add(kk * ldb + j), m8);
+            let b0 = _mm256_loadu_ps(panel.add(kk * 8));
             for (r, acc) in acc.iter_mut().enumerate() { *acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&*a.add((i + r) * lda + kk)), b0, *acc); }
         }
-        for (r, acc) in acc.iter().enumerate() { _mm256_maskstore_ps(c.add((i + r) * ldc + j), m8, *acc); }
+        for (r, acc) in acc.iter().enumerate() {
+            _mm256_storeu_ps(row.as_mut_ptr(), *acc);
+            core::ptr::copy_nonoverlapping(row.as_ptr(), c.add((i + r) * ldc + j), w);
+        }
     }
 
     // a: m x k2 in i16 (k2 even), b: k x n in i8 rows ldb apart, c: m x n.

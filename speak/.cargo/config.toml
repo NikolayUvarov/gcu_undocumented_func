@@ -1,0 +1,14 @@
+# The voice engines compute in f32 (250): built for x86_64 with SSE2 and the hard-float ABI, core and alloc built from
+# source for that target (rust-src). The kernel saves SSE and AVX state per task (issue 153).
+[build]
+target = "../targets/x86_64-mind-float.json"
+rustflags = [
+    "-C", "relocation-model=pic",
+    "-Z", "relax-elf-relocations=yes",
+    "-C", "link-arg=-Tlinker.ld"
+]
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true

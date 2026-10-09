@@ -47,6 +47,9 @@ python3 scripts/voice_tts/page.py $W voices.html
 - `page.py <work> <out.html>`: a listening page with every voice reading the four listening sentences, and the measurements.
 - [`results-2026-10-08.jsonl`](results-2026-10-08.jsonl) holds every measurement of the comparison in 252.
 - `vits_reference.py <model.onnx | vosk-model-dir> "text" <out> [--vosk SPEAKER] [--dump]`: onnxruntime's audio of a VITS voice with the noise scales at 0, and its inputs, for `vits_against_onnxruntime` in `tests/nn_host.rs` (MIND_VITS_MODEL, a voice converted with `scripts/voice_dictate/convert.py` as the graph `vits`; MIND_VITS_REFERENCE; MIND_VITS_DUMP for every value). Piper's phonemes come from piper-phonemize (espeak-ng, GPL-3.0, on the host only); Vosk TTS's from vosk-tts.
+- `dictionary.py <vosk-model-dir> <out.dic>`: Vosk TTS's Russian dictionary (2 million words, 101 MB) as a MINDDIC1 file of 13 MB for `mind::voice::russian`: per word the vowels stressed and the е that are ё, from which vosk-tts's rules give its phonemes (99 % of the words), else the phonemes; each entry checked against the dictionary.
+- `vosk_ids.py <vosk-model-dir> sentences.tsv <out.txt>`: vosk-tts's phoneme ids of the Russian sentences, for `sentences_as_vosk_tts` in `tests/russian_host.rs` (MIND_TTS_DICTIONARY, MIND_TTS_IDS).
+- The model disk with the voice: `models.py disk OUT.img tts-ru-vosk-0.7 --add tts-ru-vosk-0.7/voice.bin=<converted model> --add tts-ru-vosk-0.7/russian.dic=<dictionary>`; `speak` uses both.
 
 ## Sources and licences
 

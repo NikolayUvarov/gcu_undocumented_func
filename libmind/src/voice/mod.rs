@@ -9,6 +9,8 @@ pub mod math;
 pub mod grammar;
 pub mod model;
 pub mod recognizer;
+pub mod russian;
+pub mod synthesis;
 
 pub use front::*;
 
