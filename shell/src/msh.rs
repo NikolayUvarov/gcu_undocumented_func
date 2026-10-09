@@ -15,7 +15,7 @@ use mind::script::{parse, Host, Interpreter, Script, Value};
 
 /// The functions the shell gives scripts (beside mind::script's).
 pub const HOST_FUNCTIONS: [&str; 8] = ["capture", "ps", "services", "files", "glob", "log", "sleep", "now"];
-const WORDS: [&str; 13] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera"];
+const WORDS: [&str; 14] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "parse"];
 const MAX_SCRIPT: usize = 64 * 1024;
 
 // The shell's commands that need a declared word in a script.

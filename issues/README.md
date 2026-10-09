@@ -327,5 +327,6 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [108-APP-0015](../issues-done/108-APP-0015-netpolicy-command.done) | The shell's `netpolicy [add|remove <line>]`, which asks the user first | done (2026-10-09) |
 | [109-NET-0007](../issues-done/109-NET-0007-airlock-authority-map.done) | The authority map of every adapter of external input, against MC-11.11 and B.6 (`docs/network/airlock.md`) | done (2026-10-09) |
 | [109-KRN-0042](../issues-done/109-KRN-0042-parser-service-at-boot.done) | `init` starts `parse`; `SLOT_PARSE` 28, `REQUEST_PARSE`, the loader accepts the slot (for NET) | done (2026-10-09) |
+| [109-APP-0016](../issues-done/109-APP-0016-shell-lends-the-parser.done) | The shell lends its `parse` client for `REQUEST_PARSE`; the script word `parse` (for NET) | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
