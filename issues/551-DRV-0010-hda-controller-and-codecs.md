@@ -70,7 +70,7 @@ Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and th
 - **The clicks, to find out.**
   - The Mac's controller runs `POLLED`, without an interrupt line, at a 20 ms poll against 21 ms buffers. A late poll lets the ring run dry, and the controller plays stale buffers.
   - Next: count the underruns in the log (debug mode), take the interrupt (MSI) where the line is missing, or poll at 5 ms while a stream plays, and listen again on the Mac.
-  - **Measured in QEMU (2026-10-09).** The `tts` suite's recording has no silence of a buffer's length inside the speech, so the driver's ring did not run dry there. What it does have is the synthesizer's: onsets rising to 3000–5000 within two or three samples after its pauses, and the linear upsampler's images at 8–12 kHz, only 8 dB below the sibilants. Both are recorded for the tools track (requests-APP.md, "Russian speech is barely intelligible"). The maintainer also hears a periodic hiss in the sounds, which fits those images. The Mac's polled ring is still to be counted.
+  - **Measured in QEMU (2026-10-09).** The `tts` suite's recording has no silence of a buffer's length inside the speech, so the driver's ring did not run dry there. What it does have is the synthesizer's: onsets rising to 3000–5000 within two or three samples after its pauses, and the linear upsampler's images at 8–12 kHz, only 8 dB below the sibilants. Both are recorded for the tools track (requests-APP.md, the note for 252-APP-0041). The maintainer also hears a periodic hiss in the sounds, which fits those images. The Mac's polled ring is still to be counted.
 
 
 ## Related

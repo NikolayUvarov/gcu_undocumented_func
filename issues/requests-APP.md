@@ -329,7 +329,24 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 
 `tts` runs its 16 kHz formant synthesizer and upsamples to 48 kHz for `audio_gw`. On the Mac's speakers Russian is hard to follow. The clicks are looked for in the driver (551-DRV-0010: polled playback without an interrupt). How intelligible the voice is, is the synthesizer's.
 
-**Added on 2026-10-09:** the maintainer hears not only clicks but a periodic hiss in the synthesized sounds themselves.
+### Plan (a proposal; the tools track decides)
+
+- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
+- Then the cheapest gains: the upsampler's filter, and the Russian rules and voice parameters. 252's neural synthesis is the larger step.
+
+### Acceptance criteria
+
+A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
+
+## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
+
+The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
+
+## Note: the hiss and the clicks in Russian speech, measured (252-APP-0041)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for the tools track's 252-APP-0041.
+
+The maintainer hears not only clicks but a periodic hiss in the synthesized sounds themselves.
 
 **Measured by the kernel track** on the `tts` suite's recording (`/tmp/mind-core-tts.wav`, QEMU's wav backend at 44.1 kHz; the averaged spectrum of the loud frames):
 
@@ -348,18 +365,7 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
   - The driver's path showed no underrun in QEMU: no silences of a buffer's length inside the speech.
   - The polled playback on the Mac is still looked at in 551-DRV-0010.
 
-### Plan (a proposal; the tools track decides)
+What the kernel track would try (the tools track decides):
 
-- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
 - The upsampler: a polyphase low-pass FIR instead of linear interpolation. For example, 48 taps (16 a phase) of a windowed sinc with its cutoff near 7 kHz at 48 kHz, which puts the images 50 dB or more down. Measure the 8–12 kHz band again: it should fall well below −40 dB.
 - The onsets: a ramp of a few milliseconds where a segment starts or ends at silence, and bursts limited in their slope.
-- Then the Russian rules and voice parameters. 252's neural synthesis is the larger step.
-
-### Acceptance criteria
-
-A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
-
-## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
-
-The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
