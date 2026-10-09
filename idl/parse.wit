@@ -3,7 +3,7 @@
 /// endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 /// of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 /// says against what it asked for (MC-11.5).
-package mind:parse@1.1.0;
+package mind:parse@1.2.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -33,4 +33,14 @@ interface parse {
     channel: func(file: bytes<1024>) -> result<channel, error>;
     /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
     manifest: func(text: bytes<32768>, start: u32) -> result<manifest, error>;
+
+    /// A file of a model on a model disk: its path below the model's directory, its size and SHA-256 (1.2, 251-STO-0014).
+    record model-file { path: string<96>, size: u64, sha256: list<u8, 32> }
+    /// One model of a model disk's MANIFEST.json (`mind::models`): how many models the manifest lists, the model's id,
+    /// where its entry lies in the text (`entry-start`, `entry-length`), its number of files and up to 8 of them from
+    /// the one asked for.
+    record model { models: u32, id: string<64>, entry-start: u32, entry-length: u32, files: u32, page: list<model-file, 8> }
+
+    /// Model `index` of a model disk's MANIFEST.json, read whole, and its files from `start` (1.2).
+    model: func(text: bytes<60000>, index: u32, start: u32) -> result<model, error>;
 }

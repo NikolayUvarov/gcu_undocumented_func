@@ -13,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -80,6 +80,26 @@ impl Wire for Manifest {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { headers: Wire::decode(r)?, files: Wire::decode(r)?, page: Wire::decode(r)? }) }
 }
 
+/// A file of a model on a model disk: its path below the model's directory, its size and SHA-256 (1.2, 251-STO-0014).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModelFile { pub path: Text<96>, pub size: u64, pub sha256: List<u8, 32> }
+impl Wire for ModelFile {
+    const MAX: usize = <Text<96> as Wire>::MAX + <u64 as Wire>::MAX + <List<u8, 32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.path.encode(w)?; self.size.encode(w)?; self.sha256.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { path: Wire::decode(r)?, size: Wire::decode(r)?, sha256: Wire::decode(r)? }) }
+}
+
+/// One model of a model disk's MANIFEST.json (`mind::models`): how many models the manifest lists, the model's id,
+/// where its entry lies in the text (`entry-start`, `entry-length`), its number of files and up to 8 of them from
+/// the one asked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Model { pub models: u32, pub id: Text<64>, pub entry_start: u32, pub entry_length: u32, pub files: u32, pub page: List<ModelFile, 8> }
+impl Wire for Model {
+    const MAX: usize = <u32 as Wire>::MAX + <Text<64> as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <List<ModelFile, 8> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.models.encode(w)?; self.id.encode(w)?; self.entry_start.encode(w)?; self.entry_length.encode(w)?; self.files.encode(w)?; self.page.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { models: Wire::decode(r)?, id: Wire::decode(r)?, entry_start: Wire::decode(r)?, entry_length: Wire::decode(r)?, files: Wire::decode(r)?, page: Wire::decode(r)? }) }
+}
+
 /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
 pub fn http_head(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpHead, Error>> {
     let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
@@ -126,8 +146,25 @@ pub fn manifest(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::res
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Manifest as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Model `index` of a model disk's MANIFEST.json, read whole, and its files from `start` (1.2).
+pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<core::result::Result<Model, Error>> {
+    let mut buffer = Pages::new(61440).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<60000>(text, &mut w).ok_or(SysError::Invalid)?;
+        index.encode(&mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1204, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Model as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
-pub const REQUEST_MAX: usize = 32774;
+pub const REQUEST_MAX: usize = 60010;
 
 /// A request to the `parse` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +172,7 @@ pub enum Request<'a> {
     HttpHead { head: &'a [u8] },
     Channel { file: &'a [u8] },
     Manifest { text: &'a [u8], start: u32 },
+    Model { text: &'a [u8], index: u32, start: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -170,6 +208,16 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Manifest { text, start }, call))
         }
+        4 => {
+            let (call, length) = wire::take_buffer(request, cap, 1204, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let text = codec::decode_bytes::<60000>(&mut r).ok_or(Reject::Invalid)?;
+            let index = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Model { text, index, start }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -183,6 +231,10 @@ pub fn reply_channel(call: Call, value: core::result::Result<&Channel, Error>) -
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_manifest(call: Call, value: core::result::Result<&Manifest, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_model(call: Call, value: core::result::Result<&Model, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
