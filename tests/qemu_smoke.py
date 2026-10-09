@@ -4746,6 +4746,90 @@ def wm_suite(vm):
         # Alt+Tab until `window` is in front.
         return keys(*["alt-tab"] * (list(state()[2]).index(window) + 1))
 
+    def last_state():
+        return re.findall(r"\[WM\] (MODE=[^\n]*)", "".join(seen))[-1]
+
+    def full_screen_and_list(fm, clock, top):
+        # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
+        # Alt+Tab from it shows the desktop with the next window in front, and back it is full again; Alt+F again
+        # gives it its frame back.
+        frames = front(clock)[2]
+        mode, focus, rects = keys("alt-f", text=f"FULL={clock}")
+        assert focus == clock and rects == frames, (focus, rects)
+        until(f"[WM] PIXELS {clock} 1280X800")  # it draws at the screen's size
+        time.sleep(.5)
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        width = int(size.split()[0])
+        assert not screen[0].startswith(canon(" wm │")) and canon("keys go to") not in screen[-1], (screen[0], screen[-1])
+        green = [px for py in range(0, 800, 2) for px in range(0, 1280, 2) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
+        assert green and max(green) > 700, (len(green), max(green, default=0))  # its digits across the screen
+        mode, focus, rects = keys("alt-tab")
+        assert focus != clock and "FULL=" not in last_state(), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        assert screen[0].startswith(canon(" wm │")), screen[0]
+        keys(*["alt-tab"] * (len(frames) - 1), text=f"FULL={clock}")
+        mode, focus, rects = keys("alt-f")
+        assert focus == clock and rects == frames and "FULL=" not in last_state(), last_state()
+        until(f"[WM] PIXELS {clock} {(frames[clock][2] - 2) * 8}X{(frames[clock][3] - 2) * 16}")
+        # A text window: top on the whole cell grid, then back in its frame.
+        front(top)
+        keys("alt-f", text=f"FULL={top}")
+        for _ in range(20):  # top lays itself out again on the whole grid
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(canon("PID NAME") in row for row in screen):
+                break
+        assert not screen[0].startswith(canon(" wm │")) and any(canon("PID NAME") in row for row in screen), screen
+        assert canon("keys go to") not in screen[-1], screen[-1]
+        mode, focus, rects = keys("alt-f")
+        assert focus == top and rects == frames and "FULL=" not in last_state(), last_state()
+        # The window list (211-APP-0014): Alt+L lists the three windows with their programs' PIDs; the second is
+        # brought to the front by keys, then by a click; a window closed from the list leaves it.
+        ids = sorted(frames)
+        owners = {int(m[0]): int(m[1]) for m in windows_re.findall("".join(seen))}
+        mode, focus, rects = keys("alt-l", text="MODE=LIST")
+        assert last_state().endswith(f"LIST={top}"), last_state()
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        column = screen[title].index(canon(" Windows "))
+        for row, window in zip(screen[title + 1:title + 1 + len(ids)], ids):
+            assert canon(f"PID {owners[window] + BASE} ") in row, (window, row)
+        assert canon("in front") in screen[title + 1 + ids.index(top)], screen[title + 1:title + 4]
+        keys("home", "down", text=f"LIST={ids[1]}")
+        mode, focus, rects = keys("ret")
+        assert mode == "NORMAL" and focus == ids[1], (mode, focus)
+        front(next(w for w in ids if w != ids[1]))
+        keys("alt-l", text="MODE=LIST")
+        point(column + 3, title + 2)  # the second entry
+        mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "NORMAL" and focus == ids[1], last_state()
+        # A fourth window, closed from the list with Alt+W: the list follows it out.
+        keys("alt-r", "c", "l", "o", "c", "k", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        extra = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={extra}")
+        keys("alt-w", text=f"CLOSE {extra}")
+        until(f"GONE {extra}")
+        while extra in state()[2]:
+            wait()
+        assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        assert sum(canon("PID ") in row for row in screen[title + 1:title + 6]) == 3, screen[title:title + 6]
+        mode, focus, rects = keys("esc")
+        assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
+        print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
+              "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
+              "window to the front, Alt+W closes one and the list follows", flush=True)
+
     vm.send("wm fm, clock, top\n")
     out = wait()
     while len(windows_re.findall("".join(seen))) < 3:
@@ -4928,6 +5012,7 @@ def wm_suite(vm):
     until(f"GONE {caps}")
     while caps in state()[2]:
         wait()  # the state line after the window went
+    full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
     assert set(places) == {fm, clock, top}, places

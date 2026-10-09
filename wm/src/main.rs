@@ -229,6 +229,7 @@ impl Manager {
             }
         }
         let mut pixels = Vec::new();
+        let (full, screen) = (self.wm.desk.full_screen(), Rect::new(0, 0, self.wm.desk.cols, self.wm.desk.rows));
         for live in self.lives.iter_mut() {
             let changes = live.surface.changes();
             let Some(index) = self.wm.desk.index(live.id) else { continue };
@@ -245,8 +246,8 @@ impl Manager {
             }
             let name = title(&live.surface);
             if !name.is_empty() && name != win.title { win.title = name; dirty = true; }
-            // A window draws at the size of its frame's inside: its cells, or their pixels (issue u009).
-            let inner = win.rect.inner();
+            // A window draws at the size of its frame's inside (issue u009), or of the screen when full (211-APP-0014).
+            let inner = if full == Some(live.id) { screen } else { win.rect.inner() };
             let wanted = match win.content { Content::Text => (inner.w, inner.h), Content::Pixels => (inner.w * 8, inner.h * 16) };
             if wanted != live.surface.size() && live.asked != Some(wanted) && inner.w > 0 && inner.h > 0 {
                 live.surface.ask_size(wanted.0, wanted.1);
@@ -347,7 +348,7 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize) {
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+M move/resize, Alt+W close,\nAlt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all. The mouse drags titles and corners.");
+    mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+F full screen, Alt+L the windows,\nAlt+M move/resize, Alt+W close, Alt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all.\nThe mouse drags titles and corners.");
     if !holds(SLOT_WINDOW) { mind::println!("[WM] NO WINDOW BROKER CLIENT: START WM FROM THE SHELL"); return; }
     match api::attach(BROKER) {
         Ok(Ok(_)) => {}
@@ -465,7 +466,7 @@ fn main(info: &'static BootInfo) {
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
                 let (Some(index), Some(live)) = (manager.wm.desk.index(id), manager.live(id)) else { continue };
-                blit(&screen, (x0, y0), &owner, cols, index, manager.wm.desk.windows[index].rect.inner(), &live.surface);
+                blit(&screen, (x0, y0), &owner, cols, index, manager.wm.desk.content(id), &live.surface);
             }
             if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py); shown_pointer = Some((px, py)); }
         }
