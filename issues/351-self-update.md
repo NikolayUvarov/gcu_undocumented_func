@@ -65,7 +65,7 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [351-NET-0004](351-NET-0004-ssh-client.md) | `NET` | An SSH client: curve25519-sha256, ssh-ed25519, chacha20-poly1305; public-key login with the device key; SFTP reads. The updater fetches the same files over it |
-| [351-NET-0005](351-NET-0005-persistent-device-key.md) | `NET` | `keystore` keeps the device key across boots in sealed storage, and gains a purpose for SSH login |
+| [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done) | `NET` | `keystore` keeps the device key across boots in sealed storage, and gains a purpose for SSH login |
 
 **Phase 4 — rollback policy, keys, the bootloader itself, storage.**
 

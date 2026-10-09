@@ -6,6 +6,7 @@ from WSL. Run after 02_build.sh; pass --qemu and --firmware as needed. Temporary
 FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
+import base64
 import codecs
 import hashlib
 import json
@@ -4511,6 +4512,59 @@ def tls_suite(args, disk):
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
+    device_key_check(args, with_entropy)
+
+
+def device_key_check(args, cpu):
+    """351-NET-0005: the device key kept across boots in the key service's private directory of the boot disk, on a raw
+    image booted three times. The first boot makes and stores it, the second finds the same key, and a stored key damaged
+    from the host is replaced. The shell cannot read the directory, and its public key is logged in the OpenSSH form."""
+    if not raw_tools():
+        print("SKIP: the device key check needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-key-", dir=ROOT / IMAGE) as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp))
+        part = f"{image}@@{start * 512}"
+
+        def boot():
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu])
+            try:
+                log = vm.service_logs("keystore", "PUBLIC KEY")
+                name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
+                assert name, log
+                public = re.search(r"\[KEYSTORE\] PUBLIC KEY ssh-ed25519 ([A-Za-z0-9+/]{68}) MIND-([0-9A-F]{8})", log)
+                assert public and public[2] == name[1], log
+                # The blob of the OpenSSH key: the key type, then the key, whose first four bytes name the device.
+                blob = base64.b64decode(public[1])
+                assert blob[:15] == b"\x00\x00\x00\x0bssh-ed25519" and blob[15:19] == b"\x00\x00\x00\x20" and blob[19:23].hex().upper() == name[1], blob
+                return vm, log, name[1]
+            except BaseException:
+                vm.close()
+                raise
+        vm, log, first = boot()
+        try:
+            require(log, "[KEYSTORE] DEVICE KEY MADE AND STORED IN system/keystore/device.key (ON DISK, NOT SEALED)")
+            # The shell's client lists system/ but opens nothing below it, and writes nothing there.
+            require(vm.command("ls system"), "keystore")
+            require(vm.command("cat system/keystore/device.key"), "ERROR: CAT: DENIED")
+            require(vm.command("ls system/keystore"), "DENIED")
+            require(vm.command("write system/keystore/device.key x"), "ERROR: WRITE: DENIED")
+        finally:
+            vm.close()
+        vm, log, second = boot()
+        vm.close()
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
+        assert second == first, (first, second)
+        damaged = Path(temp) / "device.key"
+        damaged.write_bytes(b"MINDKEY1" + bytes(64))
+        subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        vm, log, third = boot()
+        vm.close()
+        require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
+        assert third != first, (first, third)
+        fsck_volume(image, start, fs_sectors)
+    print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
+          "the shell can neither read nor write it; the public key logged in the OpenSSH form", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

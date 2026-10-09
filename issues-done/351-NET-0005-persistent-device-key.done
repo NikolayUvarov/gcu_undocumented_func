@@ -1,6 +1,6 @@
-# 351-NET-0005 — A persistent device key
+# 351-NET-0005 — A persistent device key — done
 
-**Type:** network (key service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) (phase 3) · **Roadmap:** track D · **Constitution:** MC-11.9, Appendix B.6
+**Type:** network (key service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) (phase 3) · **Roadmap:** track D · **Constitution:** MC-11.9, Appendix B.6
 
 Numbered from the request of `requests-NET.md` (the kernel track, for 351, recorded 2026-10-08 at the maintainer's request) by the storage session working the network track at the maintainer's request (2026-10-08).
 
@@ -20,4 +20,30 @@ The device key is the same after a reboot, its public key is shown, and it signs
 
 ## Related
 
-[351](351-self-update.md), [351-NET-0004](351-NET-0004-ssh-client.md), issue 103.
+[351](../issues/351-self-update.md), [351-NET-0004](../issues/351-NET-0004-ssh-client.md), issue 103.
+
+## Resolution
+
+Done on 2026-10-09 by the storage session working the network track. This is the interim the maintainer chose: the key on the disk, a TPM next ([351-NET-0006](../issues/351-NET-0006-device-key-sealed-by-a-tpm.md)).
+
+- **`vfs_server`:** private directories in the boot disk's `system/`. Only the client with a directory's badge may open, read or write it; nobody else may open it, though its name shows in a listing of `system/`.
+  - `system/keystore` belongs to `BADGE_KEYSTORE` and `system/netpolicy` to `BADGE_NETPOLICY`.
+  - The first owner to make its directory makes `system/` too.
+  - A scope keeps what its directory hides, so a scoped client cannot reach them either.
+- **`keystore`:**
+  - It reads the seed from `system/keystore/device.key` (`MINDKEY1`, the seed, a SHA-256 of both). Without the file it makes a seed from the random source and stores it; a damaged file is replaced by a new key. Each case is logged.
+  - It logs the public key as an OpenSSH line (`[KEYSTORE] PUBLIC KEY ssh-ed25519 … MIND-XXXXXXXX`), so the shell shows it with `dmesg -s keystore`.
+  - Without the random source there is still no key: the service fails closed as before.
+- **`init`** gives `keystore` the badged client ([351-KRN-0040](351-KRN-0040-keystore-private-directory.done)).
+- **Tests:** the `tls` suite's device key check, on a raw disk image booted three times, passes on x86 and aarch64:
+  - the key is made and stored;
+  - the same key comes back after a reboot;
+  - a stored key damaged from the host is replaced by a new one;
+  - the shell cannot read, list or write `system/keystore`;
+  - the OpenSSH blob carries the key the certificate's name comes from;
+  - `fsck.fat` is clean.
+- **Docs:** the profile's MC-11.9 row, the TCB and bootstrap rows, the threat model, the README and `idl/keystore.wit` say the key is on the disk unencrypted, readable to whoever has the disk itself.
+
+**Changed from the plan:**
+- The signing purpose for the SSH login goes with the SSH client ([351-NET-0004](../issues/351-NET-0004-ssh-client.md)), where the form of the data it signs is known.
+- The public key is shown through the system log, not a new call.
