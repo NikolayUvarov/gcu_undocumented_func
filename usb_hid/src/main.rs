@@ -21,6 +21,7 @@ const MAX_DEVICES: usize = 4;
 const RETRY_MS: u64 = 5000; // an interface that could not be set up is tried again this often
 const RETRIES: u8 = 5;
 const SHOWN: u8 = 3; // a pointer's first reports are logged, for a mouse that does not move the cursor (211-DRV-0003)
+const DECLINED: usize = 8; // interfaces this driver does not serve, kept claimed so that usb_host does not offer them again
 
 enum Kind { Keyboard(Keyboard), Pointer(Pointer) }
 struct Device { handle: u32, info: Interface, endpoint: u8, kind: Kind, complained: bool, shown: u8, ids: [u64; 4], misses: u8 }
@@ -74,6 +75,9 @@ fn main(_info: &'static BootInfo) {
     let Ok(mut host) = Host::new(Endpoint(SLOT_DEV0)) else { mind::println!("[USB_HID] NO MEMORY"); return };
     let mut devices: [Option<Device>; MAX_DEVICES] = [const { None }; MAX_DEVICES];
     let mut failed: [Option<Failed>; MAX_DEVICES] = [const { None }; MAX_DEVICES];
+    // Released, an interface comes straight back from claim: one not ours is kept here instead (211-DRV-0016, the
+    // MacBook Pro's keyboard interface 1 was claimed and released without end).
+    let mut declined = [0u32; DECLINED]; let mut declined_count = 0;
     let mut decoder = Ps2::new();
     let mut claimed_at = 0u64;
     let deliver = |decoder: &mut Ps2, byte: u8| { if let Some(event) = decoder.feed(byte) { mind::keyboard::deliver("USB_HID", decoder, event); } };
@@ -88,7 +92,9 @@ fn main(_info: &'static BootInfo) {
                 Err(Some(error)) if retry.tries < RETRIES && !matches!(error, Error::NotFound | Error::Peer) => { retry.tries += 1; retry.at = now + RETRY_MS; }
                 Err(error) => {
                     mind::println!("[USB_HID] {:04X}:{:04X} INTERFACE {} GIVEN UP: {:?}", retry.info.vendor, retry.info.product, retry.info.number, error);
-                    let _ = host.release(retry.handle); *entry = None;
+                    // Kept claimed like one not ours, so that it is not set up again at the next look.
+                    if declined_count < DECLINED && !matches!(error, Some(Error::NotFound | Error::Peer)) { declined[declined_count] = retry.handle; declined_count += 1; } else { let _ = host.release(retry.handle); }
+                    *entry = None;
                 }
             }
         }
@@ -106,7 +112,8 @@ fn main(_info: &'static BootInfo) {
                             None => { let _ = host.release(handle); break } // given back, and not claimed again before the next look
                         }
                     }
-                    Err(_) => { let _ = host.release(handle); }
+                    Err(_) if declined_count < DECLINED => { declined[declined_count] = handle; declined_count += 1; }
+                    Err(_) => { let _ = host.release(handle); break } // not claimed again before the next look
                 }
             }
         }
@@ -144,6 +151,7 @@ fn main(_info: &'static BootInfo) {
                 mind::println!("[USB_HID] DEVICE GONE");
                 *entry = None;
                 claimed_at = 0;
+                if matches!(result, Err(Error::Peer)) { declined_count = 0; } // a new usb_host knows none of the old handles
             }
         }
         // Keyboard requests (the shell's keymap) between the polls; without a device, until the next look for one.

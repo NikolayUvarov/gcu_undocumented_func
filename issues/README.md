@@ -48,6 +48,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [173-KRN-0036](173-KRN-0036-safe-start.md) | A safe start: a key at the bootloader, a flag in `BootInfo`, the configuration ignored | `KRN`, with `PRT` | P2 | 173-KRN-0035 | track A |
 | [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
 | [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) | The image writer for an internal SATA or NVMe disk, behind an explicit option | `PRT` | P2 | — | track H |
+| [211-DRV-0016](211-DRV-0016-hid-interfaces-not-ours-claimed-once.md) | `usb_hid`: an interface it does not serve is claimed once, not without end (the MacBook Pro's keyboard interface 1 flooded the screen; fixed, the Mac's run left) | `DRV` (open) | P0 | — | track A |
 | [211-DRV-0004](211-DRV-0004-ehci.md) | An EHCI driver for an Intel Mac's internal keyboard and trackpad (proposed) | `DRV` (open) | P2 | — | track A |
 | [211-DRV-0008](211-DRV-0008-usb-mouse-on-real-hardware.md) | A USB mouse on real hardware: the report protocol after the firmware's boot protocol; an interface whose setup fails is retried without flooding the log (in progress) | `DRV` (open) | P2 | — | track A |
 | [211-PRT-0006](211-PRT-0006-log-partition-in-the-image.md) | A 64 MiB FAT16 log partition `MIND LOG` in the disk images, which Windows, macOS and Linux mount (in progress) | `PRT` | P1 | — | track H |

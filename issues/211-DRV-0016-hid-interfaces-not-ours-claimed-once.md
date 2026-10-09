@@ -1,0 +1,31 @@
+# 211-DRV-0016 — `usb_hid`: an interface it does not serve is claimed once, not without end
+
+**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 211) · **Priority:** P0 · **Status:** in progress (fixed; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.3, MC-11.4
+
+## Problem
+
+On the MacBook Pro the screen filled with two lines repeated without end, from a photo the maintainer sent on 2026-10-09:
+
+```text
+[USB_HID] 05AC:0263 INTERFACE 1: SUBCLASS 0 PROTOCOL 0, ENDPOINT 81
+[USB_HID] 05AC:0263 NEITHER KEYBOARD NOR POINTER, LEFT ALONE
+```
+
+05AC:0263 is the MacBook Pro's internal keyboard and trackpad (Wellspring 7, ISO), now found through EHCI (211-DRV-0004, 211-KRN-0021). Its interface 1 is a vendor HID interface, neither a keyboard nor a pointer. `usb_hid` gave it back to `usb_host` and asked for the next interface in the same pass. `usb_host` offered the one just given back, so the driver never left that pass. It read no reports from the keyboard it had already claimed, and never reached the trackpad.
+
+An interface given up after failed retries had the same flaw, every half second.
+
+## Plan
+
+- An interface the driver does not serve, or gives up on, stays claimed and is not polled: `usb_host` does not offer it again.
+- Up to 8 such interfaces are kept. Past that, the interface is released and the pass ends there, so the claim is not repeated before the next look.
+- A new `usb_host` (after a restart) knows none of the old handles, so the list is cleared.
+
+## Acceptance criteria
+
+- The QEMU `usb` suites (x86, aarch64) pass as before.
+- On the MacBook Pro the two lines appear once. The internal keyboard types in the shell. The trackpad's interface is claimed (`[USB_HID] 05AC:0263 INTERFACE 2 …`), and as a pointer it moves the cursor in `wm`.
+
+## Related
+
+[211-DRV-0004](211-DRV-0004-ehci.md), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.md), `usb_hid/src/main.rs`.
