@@ -213,7 +213,13 @@ fn three_fingers_scroll_one_way_at_a_time() {
 fn short_or_empty_packets_do_nothing() {
     let mut pad = Trackpad::new();
     let mut out = Vec::new();
-    pad.feed(&[0u8; 12], 0, &mut |e| out.push(e));
-    pad.feed(&packet(false, &[]), 0, &mut |e| out.push(e));
+    // The mode switch's 2-byte answer and the 8-byte reports the MacBook Pro sent when its mode had not changed are no fingers.
+    assert!(!pad.feed(&[0u8; 12], 0, &mut |e| out.push(e)));
+    assert!(!pad.feed(&[0x60, 0x02], 0, &mut |e| out.push(e)));
+    assert!(!pad.feed(&[0x02, 0x00, 0xFB, 0x00, 0x00, 0x00, 0xFD, 0x00], 0, &mut |e| out.push(e)));
+    let mut torn = packet(false, &[(0, 0)]); torn.pop();
+    assert!(!pad.feed(&torn, 0, &mut |e| out.push(e)));
+    assert!(pad.feed(&packet(false, &[]), 0, &mut |e| out.push(e)));
     assert!(out.is_empty());
+    assert!(fingers(&packet(false, &[(1, 2), (3, 4)])) && !fingers(&[0u8; 29]));
 }
