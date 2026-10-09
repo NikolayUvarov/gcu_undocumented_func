@@ -1,0 +1,69 @@
+# 252-APP-0027 — The Russian voice speaks in the system: vosk-tts's front end and `speak` — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [252](../issues/252-neural-speech-synthesis.md) (step 3 for Russian, step 5 as a program) · **Roadmap:** track G · **Constitution:** MC-4.2, MC-11.5, MC-12.1, MC-12.2
+
+## Problem
+
+[252-APP-0026](252-APP-0026-vits-voices-in-mind-nn.done) runs the VITS network of Vosk TTS 0.7 given phoneme ids. vosk-tts makes the ids from text in two ways:
+
+- from a dictionary of 2 million words with their stress and phonemes, 101 MB of text;
+- from letter-to-sound rules, for words the dictionary lacks.
+
+The system had neither. Nothing spoke with the voice.
+
+## Plan
+
+- **`scripts/voice_tts/dictionary.py`:** the dictionary as a MINDDIC1 file. The rules give the dictionary's phonemes for 99 % of the words once they know two things: which vowels are stressed, and which е is ё.
+  - So the file keeps, per word, only those marks. It keeps the phonemes in full for the other 21 563 words, mostly abbreviations.
+  - Words are in Windows-1251, front coded in blocks of 64, and there is an FNV-1a checksum.
+  - Every entry is checked against the dictionary while the file is written.
+- **`mind::voice::russian`:**
+  - the dictionary, read in place (binary search over the blocks);
+  - vosk-tts's rules (`vosk_tts/g2p.py`, Apache-2.0), ported;
+  - `ids()`, which makes the ids as `Synth.g2p_noembed` does. Characters the voice lacks are left out, where vosk-tts fails on them.
+- **`mind::voice::synthesis`:** a `Voice` (network and dictionary) says a sentence with the voice's settings, and `sentences()` splits a text.
+- **`mind::models::read`:** the shared way to read a model file. The file is read into 8-byte words and hashed, and on `models:` it is used only with the SHA-256 that `MANIFEST.json` lists (MC-4.2). `dictate` now uses it too.
+- **`mind::voice::Resampler::between`:** any rate to any rate, here 22.05 kHz to the gateway's 48 kHz.
+- **`speak [--speaker N] [--wav FILE] [--model FILE] [--dictionary FILE] [--ids] (text... | --file FILE)`:**
+  - It reads the voice and the dictionary from `models:tts-ru-vosk-0.7/` (put there with `models.py disk --add`) and says the text a sentence at a time, through the audio gateway or into a WAV.
+  - The text is only spoken (MC-11.5).
+- **A fix found on the way:** the f32 product read the last columns of B with masked AVX loads. QEMU faults on such a load at a page's edge, though the processor does not. The last columns are now copied into a buffer first.
+
+## Acceptance criteria
+
+- **CI:**
+  - `tests/russian_host.rs`: the rules on vosk-tts's own examples, and a small dictionary (marks, ё, phonemes in full, several blocks, a damaged copy refused) gives the ids of a text.
+  - `tests/nn_host.rs`: `sentences()`.
+  - The `tools` suite (x86): `speak --ids` over a small dictionary made by `dictionary.py` gives the host's ids, and a damaged dictionary is refused.
+- **By hand:**
+  - our ids equal vosk-tts's for the Russian sentences of 252;
+  - our voice says a sentence as onnxruntime does;
+  - `speak` in QEMU says a system phrase that a recognizer understands.
+
+## Resolution
+
+- **Dictionary:** 13.4 MB for 2 037 832 words (101 MB of text). It is read and checked in 0.02 s on the host.
+- **Ids:** equal to vosk-tts's for the 22 of the 24 sentences of 252 that vosk-tts can read. It fails on two, at "–" and at a non-breaking hyphen.
+- **Voice on the host:** `voice_against_onnxruntime`: text → our ids → network gives onnxruntime's audio to 5.5·10⁻⁵, 3.44 s of speech in 1.1 s.
+- **In QEMU** (x86, `-cpu max`, without KVM):
+  - The model disk was made with `models.py disk ... tts-ru-vosk-0.7 --add .../voice.bin --add .../russian.dic`.
+  - `speak --speaker 3 --file phrase.txt` read the voice (128 MB) and the dictionary, checked both against `MANIFEST.json` in 33 s, and said 4.35 s of speech in 425 s of emulated AVX2.
+  - The audio was captured from QEMU's AC97 and given to our dictation engine on the host. It heard «говорит разум корабля все системы работают нормально курс»; the last word was cut off by closing the virtual machine before it had played.
+  - These are emulation times, not hardware's (MC-12.1).
+- **Code:**
+  - [`libmind/src/voice/russian.rs`](../libmind/src/voice/russian.rs), [`synthesis.rs`](../libmind/src/voice/synthesis.rs), [`front.rs`](../libmind/src/voice/front.rs);
+  - [`libmind/src/models.rs`](../libmind/src/models.rs), [`libmind/src/nn/gemm.rs`](../libmind/src/nn/gemm.rs);
+  - [`speak/`](../speak/src/main.rs), [`dictate/src/main.rs`](../dictate/src/main.rs);
+  - [`scripts/voice_tts/dictionary.py`](../scripts/voice_tts/dictionary.py) and [`vosk_ids.py`](../scripts/voice_tts/vosk_ids.py);
+  - [`tests/russian_host.rs`](../tests/russian_host.rs);
+  - THIRD_PARTY.md records the ported rules.
+- **Not done here:**
+  - the `tts` service speaking with the voice, with the model as one shared memory object (step 5);
+  - numbers and abbreviations written out as words;
+  - English phonemes for Piper without espeak-ng;
+  - CER of our speech on the 24 sentences;
+  - aarch64.
+
+## Related
+
+[252](../issues/252-neural-speech-synthesis.md), [252-APP-0026](252-APP-0026-vits-voices-in-mind-nn.done), [251-APP-0023](251-APP-0023-faster-model-reading.done), [250-APP-0025](250-APP-0025-dictate-in-the-system.done).

@@ -4,6 +4,7 @@ use crate::abi::{KEY_DOWN, KEY_F1, KEY_UP, POINTER_LEFT};
 use crate::buffer::{decode, Buffer};
 use crate::keys::{self, Code, Key};
 use crate::tui::widgets::{fkey_at, fkey_bar, input_dialog, message, Edit, InputLine, KeyBars, MenuAction, MenuBar};
+use crate::tui::syntax::{self, Kind, Language, State};
 use crate::tui::{Grid, Rect, Style, Theme};
 use alloc::format;
 use alloc::string::String;
@@ -19,7 +20,7 @@ const TITLES: [&str; 4] = ["File", "Edit", "Search", "Options"];
 const FILE_ITEMS: [&str; 3] = ["Save  F2", "Save as  Shift+F2", "Quit  F10"];
 const EDIT_ITEMS: [&str; 6] = ["Undo  Ctrl+U", "Redo  Ctrl+Y", "Cut  Ctrl+X", "Copy  Ctrl+C", "Paste  Ctrl+V", "Select all  Ctrl+A"];
 const SEARCH_ITEMS: [&str; 4] = ["Find  F7", "Find next  Shift+F7", "Replace  Ctrl+F7", "Go to line  Alt+F8"];
-const OPTION_ITEMS: [&str; 2] = ["Tab width 4 / 8", "Insert / overwrite  Ins"];
+const OPTION_ITEMS: [&str; 3] = ["Tab width 4 / 8", "Insert / overwrite  Ins", "Syntax colours on / off"];
 const ITEMS: [&[&str]; 4] = [&FILE_ITEMS, &EDIT_ITEMS, &SEARCH_ITEMS, &OPTION_ITEMS];
 /// What a read-only editor says when it opens and when a key would change the text.
 pub const READ_ONLY: &str = "READ-ONLY: this file cannot be changed here (Shift+F2 saves a copy where you may write)";
@@ -31,7 +32,7 @@ const HELP: [&str; 9] = [
     "Ctrl+U or Alt+Backspace: undo; Ctrl+Y: redo; Ins: overwrite",
     "F2: save; Shift+F2: save as; F10 or Esc: quit",
     "F7: find; Shift+F7: next; Ctrl+F7: replace all; Alt+F8: go to line",
-    "F9: menu; F1: these keys",
+    "F9: menu (Options: tab width, overwrite, syntax colours); F1: these keys",
     "Line endings (LF or CRLF) and invalid UTF-8 are kept as they are.",
     "Saving writes name.tmp and renames it over the file.",
     "",
@@ -58,6 +59,10 @@ pub struct Editor {
     /// The modifiers held (MOD_*, `mind::input::modifiers`): the key bar shows what the keys do with them.
     pub modifiers: u8,
     buttons: u8, // the mouse buttons held at the last pointer event
+    /// The language the file's name gives, and whether its colours are shown.
+    pub syntax: Option<&'static Language>,
+    pub colours: bool,
+    states: Vec<State>, // the highlighter's state at the start of each line, as far as it is known
 }
 
 fn is_word(c: char) -> bool { c.is_alphanumeric() || c == '_' }
@@ -67,7 +72,8 @@ impl Editor {
     pub fn new(text: Vec<u8>, path: &str, read_only: bool) -> Self {
         let notice = read_only.then(|| String::from(READ_ONLY));
         Self { buffer: Buffer::new(text), cursor: 0, anchor: None, goal: None, top: 0, left: 0, path: String::from(path), read_only, overwrite: false, tab: 4,
-               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0 }
+               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0,
+               syntax: syntax::for_path(path), colours: true, states: alloc::vec![State::Normal] }
     }
 
     pub fn line(&self) -> usize { self.buffer.line_of(self.cursor) }
@@ -227,7 +233,12 @@ impl Editor {
     /// The file was saved (or not) as `path`.
     pub fn saved(&mut self, path: &str, result: Result<usize, String>) {
         match result {
-            Ok(bytes) => { self.buffer.mark_saved(); self.path = String::from(path); self.read_only = false; self.notice = Some(format!("Saved {} bytes", bytes)); }
+            Ok(bytes) => {
+                self.buffer.mark_saved(); self.path = String::from(path); self.read_only = false; self.notice = Some(format!("Saved {} bytes", bytes));
+                // Saved under another name: its extension may name another language.
+                let syntax = syntax::for_path(path);
+                if syntax.map(|l| l.name) != self.syntax.map(|l| l.name) { self.syntax = syntax; self.states.truncate(1); }
+            }
             Err(error) => self.notice = Some(format!("Not saved: {}", error)),
         }
     }
@@ -257,7 +268,8 @@ impl Editor {
             (2, 2) => { let mut find = InputLine::new(); find.set(&self.query.clone()); self.dialog = Some(Dialog::Replace { find, with: InputLine::new(), second: false }); }
             (2, _) => self.dialog = Some(Dialog::Goto(InputLine::new())),
             (3, 0) => self.tab = if self.tab == 4 { 8 } else { 4 },
-            _ => self.overwrite = !self.overwrite,
+            (3, 1) => self.overwrite = !self.overwrite,
+            _ => self.colours = !self.colours,
         }
         Outcome::Redraw
     }
@@ -441,17 +453,21 @@ impl Editor {
         if column < self.left { self.left = column; }
         if column >= self.left + self.width { self.left = column + 1 - self.width; }
         let selection = self.selection();
+        let language = self.syntax.filter(|_| self.colours);
+        if let Some(changed) = self.buffer.take_changed() { self.states.truncate(changed + 1); }
         for row in 0..self.height {
             let line = self.top + row;
             if line >= self.buffer.line_count() { break; }
             let start = self.buffer.line_start(line);
             let bytes = self.buffer.bytes(start, self.buffer.line_end(line));
+            let kinds = language.map(|l| { let mut kinds = alloc::vec![Kind::Text; bytes.len()]; l.line(&bytes, self.state_at(l, line), &mut kinds); kinds });
             let (mut at, mut col) = (0usize, 0usize);
             while at < bytes.len() && col < self.left + self.width {
                 let (c, n) = decode(&bytes, at);
                 let next = if c == '\t' { (col / self.tab + 1) * self.tab } else { col + 1 };
                 let selected = selection.is_some_and(|(s, e)| start + at >= s && start + at < e);
-                let style = if selected { theme.selected } else if c == '\u{FFFD}' { theme.error } else { theme.panel };
+                let style = if selected { theme.selected } else if c == '\u{FFFD}' { theme.error }
+                            else { kinds.as_ref().map_or(theme.panel, |k| syntax::style(theme, k.get(at).copied().unwrap_or(Kind::Text))) };
                 for x in col..next {
                     if x >= self.left && x < self.left + self.width {
                         let ch = if c == '\t' || x > col { ' ' } else if c.is_control() { '\u{FFFD}' } else { c };
@@ -467,8 +483,9 @@ impl Editor {
         }
         // Status: name, position, state.
         grid.fill(Rect::new(0, 0, w, 1), ' ', theme.status);
-        let state = format!("{}Ln {} Col {}{}{}{}  UTF-8 {}", if self.read_only { "READ-ONLY  " } else { "" }, line + 1, column + 1, if self.buffer.modified() { "  *" } else { "" },
-                            if self.overwrite { "  OVR" } else { "  INS" }, if self.tab == 8 { "  TAB 8" } else { "" }, if self.buffer.crlf() { "CRLF" } else { "LF" });
+        let state = format!("{}Ln {} Col {}{}{}{}{}  UTF-8 {}", if self.read_only { "READ-ONLY  " } else { "" }, line + 1, column + 1, if self.buffer.modified() { "  *" } else { "" },
+                            if self.overwrite { "  OVR" } else { "  INS" }, if self.tab == 8 { "  TAB 8" } else { "" }, language.map_or(String::new(), |l| format!("  {}", l.name)),
+                            if self.buffer.crlf() { "CRLF" } else { "LF" });
         let name = if self.path.is_empty() { "(new)" } else { self.path.as_str() };
         let state_width = state.chars().count() + 1;
         grid.text_right(w, 0, &format!("{} ", state), theme.status);
@@ -495,6 +512,19 @@ impl Editor {
                 None
             }
         }
+    }
+
+    // The highlighter's state at the start of `line`, from the lines before it (each line's state is kept until the
+    // text before it changes).
+    fn state_at(&mut self, language: &Language, line: usize) -> State {
+        while self.states.len() <= line {
+            let known = self.states.len() - 1;
+            let bytes = self.buffer.bytes(self.buffer.line_start(known), self.buffer.line_end(known));
+            let mut kinds = alloc::vec![Kind::Text; bytes.len()];
+            let next = language.line(&bytes, self.states[known], &mut kinds);
+            self.states.push(next);
+        }
+        self.states[line]
     }
 
     /// One line of state for the log after each key (tests follow it).

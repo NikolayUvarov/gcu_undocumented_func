@@ -5,7 +5,7 @@
   models.py fetch   [selection] [--from S]  download missing files (or copy them from a cache, pack or mounted disk S)
   models.py verify  [selection]             hash every cached file again
   models.py pack    OUT.tar [selection]     one file to copy elsewhere; `fetch --from OUT.tar` takes it back
-  models.py disk    OUT.img [selection]     a FAT32 disk of models for MIND Core (MANIFEST.json at its root)
+  models.py disk    OUT.img [selection] [--add PATH=FILE]  a FAT32 disk of models for MIND Core (MANIFEST.json at its root)
   models.py pin     REPO PATH... --id ID    print a manifest entry for files of a Hugging Face repository, hashed
                                            (a PATH ending in / takes every file below it)
 
@@ -259,10 +259,19 @@ def cmd_disk(args, models):
     out = Path(args.output)
     if out.exists() and not args.force:
         raise ValueError(f"{out} exists; --force overwrites it")
+    # Files made from the models (the dictation engine's network files, 250), each with its hash.
+    added = []
+    for item in args.add:
+        path, _, source = item.partition("=")
+        if not path or not source or not Path(source).is_file():
+            raise ValueError(f"--add {item}: PATH=FILE with an existing file")
+        added.append({"path": path, "size": Path(source).stat().st_size, "sha256": sha256_of(Path(source)), "source": source})
     with tempfile.TemporaryDirectory() as tmp:
         manifest = Path(tmp) / "MANIFEST.json"
-        manifest.write_text(json.dumps({"format": 1, "models": picked}, ensure_ascii=False, indent=1), encoding="utf-8")
+        listed = [{k: v for k, v in a.items() if k != "source"} for a in added]
+        manifest.write_text(json.dumps({"format": 1, "models": picked, **({"added": listed} if listed else {})}, ensure_ascii=False, indent=1), encoding="utf-8")
         files = {"MANIFEST.json": manifest}
+        files.update({a["path"]: Path(a["source"]) for a in added})
         for m in picked:
             for f in m["files"]:
                 files[f"{m['id']}/{f['path']}"] = cache / m["id"] / f["path"]
@@ -318,6 +327,7 @@ def main():
     p = sub.add_parser("pack"); p.add_argument("output"); selection(p)
     p = sub.add_parser("disk"); p.add_argument("output"); selection(p)
     p.add_argument("--extra", type=int, default=0, help="free space to leave on the disk, MB")
+    p.add_argument("--add", action="append", default=[], metavar="PATH=FILE", help="also put FILE at PATH, its SHA-256 under \"added\" in MANIFEST.json (e.g. asr-ru-vosk-0.54/dictate.bin=dictate-ru.bin)")
     p.add_argument("--force", action="store_true")
     p = sub.add_parser("pin"); p.add_argument("repo"); p.add_argument("paths", nargs="+"); p.add_argument("--id", required=True)
     args = parser.parse_args()

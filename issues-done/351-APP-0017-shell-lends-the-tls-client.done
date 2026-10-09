@@ -20,3 +20,11 @@ Numbered from the network track's request in `requests-APP.md` ("The shell lends
 **Tested** in the `net` suite on x86 and aarch64 (`https_download_runs`):
 - `download` fetches `https://` with the lent client over its own grant;
 - from a script that declares `console network file parse` but not `tls`, it gets no client and refuses (`HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT`).
+
+## The tools branch's copy
+
+The tools session did the same work, from the same request, on its branch (numbered 351-APP-0015, then 351-APP-0028; that number is retired). At the merge of 2026-10-09, this task's code was kept, and the copy added:
+
+- **A check in the `tls` suite** (`tls_lending_check`, x86 and aarch64), with copies of `clock` that ask for the network and TLS. With a rule in `netpolicy.txt`, the copy holds an endpoint of the TLS service in slot 20. Without one, it gets neither. A script with `requires: network` starts it without the client, and one with `requires: network tls` starts it with the client.
+- **`--help`** among the programs the shell asks nothing for (211-APP-0013, unchanged).
+- **A question for the network track.** A lent client may also offer the device certificate (`client-certificate`), signing in to a server within its own grant as the device. Whether it should is recorded in [requests-NET.md](../issues/requests-NET.md), "A TLS client without the device certificate".

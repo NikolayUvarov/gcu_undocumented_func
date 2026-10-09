@@ -1,0 +1,52 @@
+# 250-APP-0020 — The dictation models' features, and a floating-point build for the voice engines — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [250](../issues/250-voice-dictation.md) (step 2) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+The Zipformer2 models of 250 take 80-band log-mel features exactly as Kaldi computes them. `mind::voice::features` (V1) computes 40 bands in integers, which is not the same thing.
+
+The engines compute in f32, but every program builds for a soft-float target:
+
+- On x86, `x86_64-unknown-none` refuses SSE in a program's code. `#[target_feature(enable = "avx2")]` trips the `x86_softfloat_sse` lint, which is to become a hard error.
+- On aarch64, the kernel leaves FP/SIMD disabled at EL0.
+
+## Plan
+
+- **`mind::voice::fbank`**, as Kaldi computes it with sherpa-onnx's settings:
+  - 25 ms frames every 10 ms, centred, with the signal reflected at its ends (`snip_edges = false`);
+  - the DC offset removed, pre-emphasis 0.97, a Povey window, no dither;
+  - a 512-point FFT and the power spectrum;
+  - 80 triangular mel filters from 20 Hz to 7.6 kHz over the first 256 bins, and the log, floored at f32's epsilon.
+- **`mind::voice::math`:** ln, exp, cos, sin, sqrt and pow in f64 for the design, and ln and exp in f32. `core` has none of them.
+- **A floating-point target, `targets/x86_64-mind-float.json`:** `x86_64-unknown-none` with SSE2 and the hard-float ABI, core and alloc built from source.
+  - The kernel already saves SSE and AVX state per task ([153](153-xsave-avx-state.done)).
+  - `rust-toolchain.toml` gains the `rust-src` component.
+  - `02_build.sh` stages a program built for this target as it stages the others.
+- **`dictate`**, the program 250 ends with, for now only `--features file.wav`: the features of a WAV, one line per frame.
+- **aarch64:** a request to the kernel track for FP/SIMD at EL0 ([requests-KRN.md](../issues/requests-KRN.md)). Until then `dictate` is x86 only, and its check is skipped on aarch64.
+
+## Acceptance criteria
+
+- **Host** (`tests/fbank_host.rs`):
+  - the features of a test signal equal kaldi-native-fbank's (`tests/fbank_reference.txt`) to within 2·10⁻³;
+  - the elementary functions agree with std's.
+- **QEMU** (the x86 tools suite): `dictate --features` on the same signal gives the same features to within 2·10⁻³.
+
+## Resolution
+
+- **Code:**
+  - [`libmind/src/voice/fbank.rs`](../libmind/src/voice/fbank.rs) and [`libmind/src/voice/math.rs`](../libmind/src/voice/math.rs);
+  - [`dictate/`](../dictate/src/main.rs);
+  - [`targets/x86_64-mind-float.json`](../targets/x86_64-mind-float.json), [`02_build.sh`](../02_build.sh) and [`rust-toolchain.toml`](../rust-toolchain.toml).
+- **The reference:**
+  - [`scripts/voice_dictate/fbank_reference.py`](../scripts/voice_dictate/fbank_reference.py) makes [`tests/fbank_reference.txt`](../tests/fbank_reference.txt) with kaldi-native-fbank 1.22.3 (Apache-2.0, a host tool only, not shipped).
+  - The test signal is in integers, so Python and Rust make the same samples.
+- **Measured on this host:**
+  - the host test's largest difference is 1.9·10⁻⁴;
+  - in QEMU (x86, TCG, 4 CPUs), `fbank_check` gave the same largest difference, 1.9·10⁻⁴, and computed 33 frames in 20 ms.
+- **What this does not show:** that the network built on these features will recognize speech. That is steps 1 and 3 of 250.
+
+## Related
+
+[250](../issues/250-voice-dictation.md), [153](153-xsave-avx-state.done), [078](078-voice-command-recognizer.done) (the V1 features).

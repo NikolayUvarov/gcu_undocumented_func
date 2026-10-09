@@ -1,0 +1,26 @@
+# The voice engines compute in f32 (250): built for x86_64 with SSE2 and the hard-float ABI, core and alloc built from
+# source for that target (rust-src). The kernel saves SSE and AVX state per task (issue 153).
+[build]
+target = "../targets/x86_64-mind-float.json"
+rustflags = [
+    "-C", "relocation-model=pic",
+    "-Z", "relax-elf-relocations=yes",
+    "-C", "link-arg=-Tlinker.ld"
+]
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true
+
+# aarch64 (issue 201): the same static PIE with 4 KiB segment alignment. FP/SIMD stays off at EL0 there (requests-KRN.md),
+# so the engine computes in soft float until the kernel track enables it.
+[target.aarch64-unknown-none-softfloat]
+rustflags = [
+    "-C", "relocation-model=pic",
+    "-C", "link-arg=-Tlinker.ld",
+    "-C", "link-arg=-pie",
+    "-C", "link-arg=-zmax-page-size=4096",
+    "-C", "link-arg=--no-dynamic-linker",
+    "-C", "link-arg=-znotext"
+]

@@ -2,6 +2,10 @@
 #[allow(dead_code)]
 mod ipc { #[derive(Clone, Copy)] pub struct Endpoint(pub usize); impl Endpoint { pub const RTC: Endpoint = Endpoint(2); } }
 mod idl { pub mod rtc { pub fn now(_: crate::ipc::Endpoint) -> Result<Option<u32>, ()> { Ok(None) } pub fn date(_: crate::ipc::Endpoint) -> Result<Option<u32>, ()> { Ok(None) } } }
+mod time { pub fn monotonic_ns() -> u64 { 0 } }
+#[path = "../libmind/src/wallclock.rs"]
+#[allow(dead_code)]
+mod wallclock;
 #[path = "../libmind/src/rtc.rs"]
 #[allow(dead_code)]
 mod rtc;

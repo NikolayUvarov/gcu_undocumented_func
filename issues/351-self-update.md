@@ -58,7 +58,7 @@ Nothing of it exists (survey of 2026-10-08):
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | `UPD` (`vfs_server` has no owner) | An update zone: a badge that may write only the inactive slot and the boot records |
 | [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done) | `NET` | A streaming GET with resume into a file (`mind::http`, `download`); HTTPS for programs and the update server's trust (root store or pinned key); names in `netpolicy` |
 | [351-UPD-0007](351-UPD-0007-updater-service.md) | `UPD` | The `updater` service: check the channel, verify, fetch into the inactive slot, verify every file, write the trial record, ask to restart, report |
-| `requests-APP.md`: `update` | `APP` | `update check / fetch / apply / status / rollback` in the shell and `msh`, with a confirmation |
+| [351-APP-0029](351-APP-0029-update-in-the-shell.md): `update` | `APP` | `update check / fetch / apply / status / rollback` in the shell and `msh`, with a confirmation |
 
 **Phase 3 — SSH.**
 

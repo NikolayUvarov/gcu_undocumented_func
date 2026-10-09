@@ -8,6 +8,8 @@ target/
 *.bin
 # The voice recognizer's model is a source file (trained by scripts/voice_train.rs, issue 078).
 !voice/model.bin
+# The toy transducer of dictate's checks (scripts/voice_dictate/toy.py, 250).
+!tests/dictate_toy.bin
 # Built bootloader and modules laid out into usb_root
 *.efi
 *.EFI
@@ -22,6 +24,7 @@ aarch64_root/
 aarch64_root-kernel/
 dist/
 scripts/__pycache__/
+scripts/voice_dictate/__pycache__/
 NvVars
 
 # --- Generated dumps and exports ---

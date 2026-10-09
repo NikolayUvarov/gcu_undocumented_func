@@ -59,3 +59,64 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## A TLS client without the device certificate (351)
+
+**Recorded by:** the tools track (APP), 2026-10-09, while doing the same work as [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done).
+
+### Problem
+
+The shell now lends its client of `tls` to a program that asks for `REQUEST_TLS` and gets a flow grant. With that client, the program may call `connect` with `client-certificate`, and so present the device certificate to a server its grant reaches. Signing in as the device is more than a program needs to fetch a file over HTTPS.
+
+### Plan (a proposal; the network track decides)
+
+- A badge on the TLS client, for example `BADGE_DEVICE_CERTIFICATE`, without which `connect` refuses `client-certificate` (`denied`).
+- The shell keeps the badged client for its own `https -c` and lends one without the badge.
+- `init`'s grant to `updater` (351-KRN-0022) carries the badge only if the update server asks for the device's certificate.
+
+### Acceptance criteria
+
+The `tls` suite: a program with the lent client gets `denied` for `client-certificate`, while the shell's `https -c` still sends it.
+
+## A list of the stack's sockets, for `netstat` (000-APP-0031)
+
+**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0031](000-APP-0031-netstat.md) (the tools plan's phase T4: `netstat`, after track D).
+
+### Problem
+
+`socket.wit` can name the interfaces (`interfaces`) and a grant's totals (`policy-usage`), and `netpolicy.wit` the live grants (`list`). Nothing names the stack's sockets. A `netstat` cannot show which connections are open, in what state, to where, or for which program.
+
+### Plan (a proposal; the network track decides)
+
+- `sockets: func(start: u32) -> list<socket-info, 32>` in `socket.wit` (a new minor version), page by page.
+- `record socket-info { id: u32, protocol: protocol, local-port: u16, remote-address: u32, remote-port: u16, state: u8, badge: u16, sent: u64, received: u64 }`, where `state` is the TCP state (listen, syn-sent, established, fin-wait, close-wait, time-wait, closed) and `badge` the grant the socket belongs to.
+- Who may call it is the network track's choice. One way: only an unbadged client, such as the shell's, may call it. A program would then never see other programs' flows. `netstat` then runs in the shell, which maps each badge to its program through `netpolicy.list`.
+
+### Acceptance criteria
+
+In QEMU, while `download` fetches from the test server, the list shows its TCP connection as established, with the server's address and port and the badge of `download`'s grant; after it ends, the socket is gone or closed.
+
+## The aarch64 boot-slot check finds a dirty volume since the device key is stored at boot (351-NET-0005)
+
+**Recorded by:** the tools track (APP), 2026-10-09, while gating its branch locally.
+
+### Problem
+
+`tests/aarch64_smoke.py` fails at `boot_slots_check.fsck` (351-UPD-0006) on `origin/main` (ae80444) run on this session's machine (QEMU 8.2, 4 CPUs). It passed on GitHub's runners for the tools branch merged with the same main (run 37909196366), so it depends on timing. Its four boot checks pass, then:
+
+```
+Reclaimed 2 unused clusters (4096 bytes).
+Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.
+```
+
+On aarch64 the processor has RNDR, so at every boot of a fresh image `keystore` makes the device key and stores it in `system/keystore/`. The check closes the machine soon after `MIND CORE KERNEL: INIT STARTED`, in the middle of that write. vfs_server has marked the volume dirty and allocated clusters it has not linked yet. On x86 the default processor has no RDRAND, nothing is written, and the same check passes.
+
+On a vvfat boot disk, the same write once made QEMU itself stop: `block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed` (the aarch64 general boot, same run).
+
+### Plan (a proposal; the owning tracks decide)
+
+The check could wait for `[INIT] READY` and for keystore's line before closing the machine, or boot without RNDR. Alternatively, keystore's first write could happen where a test that kills the machine early does not meet it.
+
+### Acceptance criteria
+
+`python3 tests/aarch64_smoke.py` passes on main.

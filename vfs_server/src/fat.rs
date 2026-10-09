@@ -28,6 +28,10 @@ pub trait Sectors {
     fn writable(&self) -> bool;
     /// Forgets cached sectors without writing them (before the medium is overwritten as a whole).
     fn discard(&mut self) {}
+    /// Reads whole sectors from `lba` into `out` (a multiple of SECTOR bytes); a cache may read them in one request.
+    fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool {
+        out.chunks_exact_mut(SECTOR).enumerate().all(|(i, sector)| self.read(lba + i as u32, sector.try_into().unwrap()))
+    }
 }
 
 /// A volume can be mounted through a borrowed disk (`Volume::reformat` re-reads its geometry that way).
@@ -38,6 +42,7 @@ impl<S: Sectors> Sectors for &mut S {
     fn sectors(&self) -> u64 { (**self).sectors() }
     fn writable(&self) -> bool { (**self).writable() }
     fn discard(&mut self) { (**self).discard() }
+    fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool { (**self).read_run(lba, out) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +156,8 @@ pub struct Volume<S: Sectors> {
     start: u32, bits: u8, spc: u32, fats: u32, fat_size: u32, fat_start: u32, root_start: u32, root_sectors: u32, data_start: u32,
     root_cluster: u32, clusters: u32, fsinfo: u32, label: [u8; 11],
     changed: bool, dirtied: bool, next_free: u32, free: Option<u32>,
+    /// Where the last read ended in a chain: its first cluster, a cluster's index in it and that cluster.
+    cursor: Option<(u32, usize, u32)>,
 }
 
 impl<S: Sectors> Volume<S> {
@@ -177,7 +184,7 @@ impl<S: Sectors> Volume<S> {
         if boot[if bits == 32 { 66 } else { 38 }] == 0x29 { label.copy_from_slice(&boot[label_at..label_at + 11]); }
         let mut volume = Self { disk, start, bits, spc, fats, fat_size, fat_start: start + reserved, root_start: start + reserved + fats * fat_size, root_sectors,
                                 data_start: start + data, root_cluster: if bits == 32 { u32_at(&boot, 44) } else { 0 }, clusters,
-                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, dirtied: false, next_free: 2, free: None };
+                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, dirtied: false, next_free: 2, free: None, cursor: None };
         // The label entry in the root directory wins over the boot sector's copy.
         let root = volume.root();
         if let Ok(sectors) = volume.dir_sectors(&root) {
@@ -201,7 +208,8 @@ impl<S: Sectors> Volume<S> {
         format(&mut self.disk, label, stamp)?;
         if !self.disk.flush() { return Err(Error::Io); }
         let Ok(fresh) = Volume::mount(&mut self.disk) else { return Err(Error::Io) };
-        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free } = fresh;
+        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free, cursor: _ } = fresh;
+        self.cursor = None;
         (self.start, self.bits, self.spc, self.fats, self.fat_size, self.fat_start, self.root_start, self.root_sectors) = (start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors);
         (self.data_start, self.root_cluster, self.clusters, self.fsinfo, self.label, self.changed, self.dirtied, self.next_free, self.free) = (data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free);
         Ok(())
@@ -230,11 +238,16 @@ impl<S: Sectors> Volume<S> {
         if self.disk.write(lba, data) { Ok(()) } else { Err(Error::Io) }
     }
 
-    // Bytes of the first FAT at `offset`.
+    // Bytes of the first FAT at `offset`, each sector read once.
     fn fat_bytes(&mut self, offset: u32, out: &mut [u8]) -> Result<()> {
-        for (i, byte) in out.iter_mut().enumerate() {
+        let mut i = 0;
+        while i < out.len() {
             let at = offset + i as u32;
-            *byte = self.read_sector(self.fat_start + at / 512)?[(at % 512) as usize];
+            let data = self.read_sector(self.fat_start + at / 512)?;
+            let from = (at % 512) as usize;
+            let take = (SECTOR - from).min(out.len() - i);
+            out[i..i + take].copy_from_slice(&data[from..from + take]);
+            i += take;
         }
         Ok(())
     }
@@ -266,6 +279,7 @@ impl<S: Sectors> Volume<S> {
     }
 
     fn set_fat(&mut self, cluster: u32, value: u32) -> Result<()> {
+        self.cursor = None; // a chain may change
         match self.bits {
             12 => {
                 let at = cluster + cluster / 2; let mut b = [0u8; 2]; self.fat_bytes(at, &mut b)?;
@@ -499,17 +513,38 @@ impl<S: Sectors> Volume<S> {
         if offset >= node.size || node.cluster < 2 { return Ok(0); }
         let want = out.len().min((node.size - offset) as usize);
         let per = self.cluster_bytes() as usize;
-        let chain = self.chain(node.cluster)?;
+        // From where the last read in this chain ended, if that is not past here: sequential reads walk the FAT once.
+        let (mut index, mut cluster) = match self.cursor { Some((first, i, c)) if first == node.cluster && i <= offset as usize / per => (i, c), _ => (0, node.cluster) };
         let mut done = 0;
-        while done < want {
+        'read: while done < want {
             let position = offset as usize + done;
-            let Some(&cluster) = chain.get(position / per) else { break };
+            while index < position / per {
+                let next = self.fat(cluster)?;
+                if !self.is_cluster(next) || index as u32 > self.clusters { break 'read; } // the chain ends early, or loops
+                (index, cluster) = (index + 1, next);
+            }
+            // As many clusters on from here as lie next to each other on the disk and are wanted.
             let within = position % per;
-            let data = self.read_sector(self.sector_of(cluster) + (within / SECTOR) as u32)?;
-            let at = within % SECTOR; let take = (SECTOR - at).min(want - done);
-            out[done..done + take].copy_from_slice(&data[at..at + take]);
-            done += take;
+            let mut span = per - within;
+            let mut last = cluster;
+            while span < want - done && self.is_cluster(last + 1) && self.fat(last)? == last + 1 { last += 1; span += per; }
+            let span = span.min(want - done);
+            let lba = self.sector_of(cluster) + (within / SECTOR) as u32;
+            let (head, whole) = (within % SECTOR, span / SECTOR * SECTOR);
+            if head == 0 && whole > 0 {
+                if !self.disk.read_run(lba, &mut out[done..done + whole]) { return Err(Error::Io); }
+                done += whole;
+            } else {
+                let data = self.read_sector(lba)?;
+                let take = (SECTOR - head).min(want - done);
+                out[done..done + take].copy_from_slice(&data[head..head + take]);
+                done += take;
+            }
+            // Still within the run: its clusters follow each other.
+            let now = ((offset as usize + done) / per).min(index + (last - cluster) as usize);
+            (cluster, index) = (cluster + (now - index) as u32, now);
         }
+        self.cursor = Some((node.cluster, index, cluster));
         Ok(done)
     }
 

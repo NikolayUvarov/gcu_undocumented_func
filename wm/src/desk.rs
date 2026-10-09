@@ -30,11 +30,14 @@ pub struct Win {
     pub before_max: Option<Rect>,
     /// A program wm lent a lease of it to is recording it (issue u014): "● REC" on its frame.
     pub recording: bool,
+    /// Alt+F (211-APP-0014): in front, its content covers the whole screen, without the frame or the bars; its frame
+    /// stays as it was, for when it ends.
+    pub full: bool,
 }
 
 impl Win {
     pub fn new(id: u32, owner: u64, content: Content, size: (usize, usize), title: &str) -> Self {
-        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None, recording: false }
+        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None, recording: false, full: false }
     }
     /// The frame that shows all of the content.
     pub fn natural(&self) -> (usize, usize) {
@@ -71,6 +74,47 @@ impl Desk {
     /// The window in front, which gets the keys.
     pub fn focused(&self) -> Option<&Win> { self.windows.last() }
     pub fn focus(&self) -> Option<u32> { self.focused().map(|w| w.id) }
+    /// The window on the whole screen: the one in front, if it is full screen.
+    pub fn full_screen(&self) -> Option<u32> { self.focused().filter(|w| w.full).map(|w| w.id) }
+    /// Where a window's content is drawn: inside its frame, or the whole screen.
+    pub fn content(&self, id: u32) -> Rect {
+        if self.full_screen() == Some(id) { return Rect::new(0, 0, self.cols, self.rows); }
+        self.get(id).map_or(Rect::default(), |w| w.rect.inner())
+    }
+
+    /// Alt+F: full screen for a window, or its frame back.
+    pub fn toggle_full(&mut self, id: u32) {
+        let Some(index) = self.index(id) else { return };
+        self.windows[index].full = !self.windows[index].full;
+        if !self.changed.contains(&id) { self.changed.push(id); }
+    }
+    // A window moved, resized or snapped leaves full screen first.
+    fn leave_full(&mut self, id: u32) { if self.get(id).is_some_and(|w| w.full) { self.toggle_full(id); } }
+
+    /// Whether every cell of window `index`'s frame is under the frames of windows in front of it.
+    pub fn covered(&self, index: usize) -> bool {
+        let Some(w) = self.windows.get(index) else { return false };
+        let above = &self.windows[index + 1..];
+        if above.iter().any(|a| a.full && a.id == self.focus().unwrap_or(u32::MAX)) { return true; }
+        let r = w.rect;
+        (r.y..r.bottom()).all(|y| (r.x..r.right()).all(|x| above.iter().any(|a| x >= a.rect.x && x < a.rect.right() && y >= a.rect.y && y < a.rect.bottom())))
+    }
+
+    /// The windows as the list shows them (211-APP-0014): in the order they opened, each with its state.
+    pub fn listing(&self) -> Vec<(u32, String)> {
+        let area = self.area();
+        let mut ids: Vec<u32> = self.windows.iter().map(|w| w.id).collect();
+        ids.sort_unstable();
+        ids.iter().map(|&id| {
+            let index = self.index(id).unwrap_or(0);
+            let w = &self.windows[index];
+            let mut state = Vec::new();
+            state.push(if Some(id) == self.focus() { "in front" } else if self.covered(index) { "hidden" } else { "behind" });
+            if w.full { state.push("full screen"); }
+            if w.rect == area { state.push("maximized"); }
+            (id, state.join(", "))
+        }).collect()
+    }
 
     /// Windows whose frame changed since the last call: their place is saved, text programs get the new size.
     pub fn take_changed(&mut self) -> Vec<u32> { core::mem::take(&mut self.changed) }
@@ -137,12 +181,14 @@ impl Desk {
     }
 
     pub fn move_by(&mut self, id: u32, dx: isize, dy: isize) {
+        self.leave_full(id);
         self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
         self.set(id, Rect::new(r.x.saturating_add_signed(dx), r.y.saturating_add_signed(dy).max(self.area().y), r.w, r.h));
     }
     pub fn resize_by(&mut self, id: u32, dw: isize, dh: isize) {
+        self.leave_full(id);
         self.forget_restore(id);
         let Some(w) = self.get(id) else { return };
         let r = w.rect;
@@ -151,7 +197,7 @@ impl Desk {
         self.set(id, Rect::new(r.x, r.y, width, height));
     }
     /// Moves a window's frame to `rect` (kept inside the area), as a hand does: it is no longer snapped.
-    pub fn place(&mut self, id: u32, rect: Rect) { self.forget_restore(id); self.set(id, rect); }
+    pub fn place(&mut self, id: u32, rect: Rect) { self.leave_full(id); self.forget_restore(id); self.set(id, rect); }
 
     /// Half the area: 0 left, 1 right, 2 top, 3 bottom.
     pub fn half_rect(&self, side: usize) -> Rect {
@@ -165,11 +211,12 @@ impl Desk {
         let (right, bottom) = (n == 2 || n == 4, n >= 3);
         Rect::new(if right { a.x + w } else { a.x }, if bottom { a.y + h } else { a.y }, if right { a.w - w } else { w }, if bottom { a.h - h } else { h })
     }
-    pub fn half(&mut self, id: u32, side: usize) { let r = self.half_rect(side); self.keep_restore(id); self.set(id, r); }
-    pub fn quarter(&mut self, id: u32, n: usize) { let r = self.quarter_rect(n); self.keep_restore(id); self.set(id, r); }
+    pub fn half(&mut self, id: u32, side: usize) { let r = self.half_rect(side); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
+    pub fn quarter(&mut self, id: u32, n: usize) { let r = self.quarter_rect(n); self.leave_full(id); self.keep_restore(id); self.set(id, r); }
 
     /// Alt+Enter: the whole area, or back to where it was maximized from.
     pub fn maximize(&mut self, id: u32) {
+        self.leave_full(id);
         let area = self.area();
         let Some(index) = self.index(id) else { return };
         let w = &mut self.windows[index];
@@ -222,6 +269,7 @@ impl Desk {
 
     /// What is at cell (x, y): the front-most window there decides.
     pub fn hit(&self, x: usize, y: usize) -> Hit {
+        if let Some(id) = self.full_screen() { return Hit::Content(id); }
         for w in self.windows.iter().rev() {
             let r = w.rect;
             if x < r.x || x >= r.right() || y < r.y || y >= r.bottom() { continue; }
@@ -242,6 +290,18 @@ impl Desk {
     pub fn draw(&self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>) -> Vec<u16> {
         let (cols, rows) = (self.cols.min(grid.cols), self.rows.min(grid.rows));
         let mut owner = alloc::vec![0u16; cols * rows];
+        if let Some(id) = self.full_screen() {
+            let (index, w) = (self.index(id).unwrap_or(0), self.focused().unwrap());
+            for y in 0..rows {
+                for x in 0..cols {
+                    match w.content {
+                        Content::Text => { let (ch, fg, bg) = if x < w.size.0 && y < w.size.1 { cell(id, x, y).unwrap_or((' ', 0, 0)) } else { (' ', theme.panel.fg, 0) }; grid.put(x, y, ch, Style::new(fg, bg)); }
+                        Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
+                    }
+                }
+            }
+            return owner;
+        }
         grid.fill(self.area(), '░', Style::new(0x30485C, 0x182430));
         let top = self.windows.len().saturating_sub(1);
         for (index, w) in self.windows.iter().enumerate() {
@@ -280,7 +340,8 @@ impl Desk {
     /// One line of state for the log (tests follow it): the windows bottom to top as `id@x,y,wxh`.
     pub fn status(&self) -> String {
         let windows: Vec<String> = self.windows.iter().map(|w| format!("{}@{},{},{}x{}", w.id, w.rect.x, w.rect.y, w.rect.w, w.rect.h)).collect();
-        format!("FOCUS={} WINDOWS={}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "))
+        let full = self.full_screen().map_or(String::new(), |id| format!(" FULL={}", id));
+        format!("FOCUS={} WINDOWS={}{}", self.focus().map_or(String::from("-"), |id| format!("{}", id)), windows.join(" "), full)
     }
 }
 
@@ -312,11 +373,14 @@ enum Drag {
     Resize { id: u32 },
 }
 
-pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu) }
+/// `List`: the window list (211-APP-0014), the selected window and its place in the list (kept when it closes).
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize } }
 
-pub const HELP: [&str; 16] = [
+pub const HELP: [&str; 18] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
+    "Alt+F — full screen for the window in front, without the frame or the bars; Alt+F again: its frame back",
+    "Alt+L — the list of windows: arrows and Enter or a click bring one to the front, Alt+W closes it",
     "Alt+M — move and resize: arrows move, Shift+arrows resize, Enter ends (at an edge it snaps), Esc goes back",
     "Alt+W or Alt+F4 — close the window (its program ends)",
     "Alt+R — run a program in a new window: fm, top, clock, dzen-clock, edit <file>, …",
@@ -336,10 +400,11 @@ pub const HELP: [&str; 16] = [
 /// What a click on an item of the top bar does (issue u008): the same as its key — for a host that keeps Alt+Tab and
 /// the like for itself. "wm" at the left opens the programs, as Alt+P does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave }
+pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full }
 
-pub const BAR: [(&str, Bar); 7] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
-                                    ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave)];
+pub const BAR: [(&str, Bar); 9] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
+                                    ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave), ("Alt+L windows", Bar::List),
+                                    ("Alt+F full", Bar::Full)];
 
 /// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
 /// then `│ label ` for each item that fits.
@@ -409,6 +474,7 @@ impl Wm {
                 }
                 return Action::Redraw;
             }
+            Mode::List { .. } => return self.list_key(key),
             Mode::Normal => {}
         }
         let focus = self.desk.focus();
@@ -430,6 +496,8 @@ impl Wm {
                 Action::Redraw
             }
             (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
+            (_, Some('f')) => { if let Some(id) = focus { self.desk.toggle_full(id); } Action::Redraw }
+            (_, Some('l')) => { self.open_list(); Action::Redraw }
             (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
@@ -457,11 +525,20 @@ impl Wm {
             if buttons == 0 { self.grab = None; }
             return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
         }
-        if pressed && y == 0 {
+        if pressed && y == 0 && self.desk.full_screen().is_none() {
             if let Some(&(at, _, item)) = bar_items(self.desk.cols).iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
         }
         // The keys' help closes on a click too.
         if pressed && matches!(self.mode, Mode::Help) { self.mode = Mode::Normal; return Action::Redraw; }
+        // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
+        if let Mode::List { .. } = self.mode {
+            if pressed || other_pressed {
+                let (inner, list) = (self.list_area(), self.desk.listing());
+                if let Some((id, _)) = (y >= inner.y && x >= inner.x && x < inner.right()).then(|| list.get(y - inner.y)).flatten() { self.desk.raise(*id); }
+                self.mode = Mode::Normal;
+            }
+            return Action::Redraw;
+        }
         if let Mode::Menu(open) = &mut self.mode {
             let (cols, rows) = (self.desk.cols, self.desk.rows);
             return match open.pointer(&self.programs, cols, rows, x, y, pressed || other_pressed) {
@@ -529,24 +606,89 @@ impl Wm {
             Bar::Close => self.desk.focus().map_or(Action::Redraw, Action::Close),
             Bar::Help => { if !matches!(before, Mode::Help) { self.mode = Mode::Help; } Action::Redraw }
             Bar::Leave => Action::Detach,
+            Bar::List => { if !matches!(before, Mode::List { .. }) { self.open_list(); } Action::Redraw }
+            Bar::Full => { if let Some(id) = self.desk.focus() { self.desk.toggle_full(id); } Action::Redraw }
         }
+    }
+
+    // Alt+L: the list, with the window in front selected.
+    fn open_list(&mut self) {
+        let id = self.desk.focus();
+        let at = id.and_then(|id| self.desk.listing().iter().position(|(w, _)| *w == id)).unwrap_or(0);
+        self.mode = Mode::List { id, at };
+    }
+
+    /// The selected entry of the window list: the window chosen, or the one now at its place when it closed.
+    pub fn list_selected(&self) -> Option<(usize, u32)> {
+        let Mode::List { id, at } = self.mode else { return None };
+        let list = self.desk.listing();
+        let at = id.and_then(|id| list.iter().position(|(w, _)| *w == id)).unwrap_or(at.min(list.len().saturating_sub(1)));
+        list.get(at).map(|(w, _)| (at, *w))
+    }
+
+    // Keys in the window list: arrows choose, Enter brings to the front, Alt+W closes, Esc or Alt+L leaves.
+    fn list_key(&mut self, key: Key) -> Action {
+        let count = self.desk.listing().len();
+        let Some((at, id)) = self.list_selected() else {
+            if matches!(key.code(), Code::Esc | Code::Enter) || key.letter() == Some('l') { self.mode = Mode::Normal; }
+            return Action::Redraw;
+        };
+        let select = |wm: &mut Wm, at: usize| { let id = wm.desk.listing().get(at).map(|(w, _)| *w); wm.mode = Mode::List { id, at }; };
+        match (key.code(), key.letter()) {
+            (Code::Up, _) => select(self, at.saturating_sub(1)),
+            (Code::Down, _) => select(self, (at + 1).min(count - 1)),
+            (Code::Home, _) => select(self, 0),
+            (Code::End, _) => select(self, count - 1),
+            (Code::Enter, _) => { self.desk.raise(id); self.mode = Mode::Normal; }
+            (Code::Esc, _) => self.mode = Mode::Normal,
+            (Code::F(4), _) | (_, Some('w')) if key.alt() => { self.mode = Mode::List { id: None, at }; return Action::Close(id); }
+            (_, Some('l')) if key.alt() => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Action::Redraw
+    }
+
+    // The window list's lines, and the dialog's width.
+    fn list_lines(&self) -> (Vec<String>, usize) {
+        let lines: Vec<String> = self.desk.listing().iter().map(|(id, state)| {
+            let w = self.desk.get(*id).unwrap();
+            let title: String = w.title.chars().take(32).collect();
+            format!(" {:<32} PID {:<6} {} ", title, w.owner, state)
+        }).collect();
+        let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0).max(48).min(self.desk.cols.saturating_sub(2));
+        (lines, width)
+    }
+
+    /// Where the window list's entries are: the first row, x and width (one entry a row).
+    pub fn list_area(&self) -> Rect {
+        let (lines, width) = self.list_lines();
+        let area = Rect::new(0, 0, self.desk.cols, self.desk.rows).centered(width + 2, lines.len().max(1) + 4);
+        Rect::new(area.x + 1, area.y + 1, width, lines.len())
     }
 
     // The event for window `id` at screen cell (x, y), as a cell of its content (the nearest one when outside it).
     fn to_window(&self, id: u32, x: usize, y: usize, buttons: u8, wheel: i32) -> Option<Action> {
-        let inner = self.desk.get(id)?.rect.inner();
+        self.desk.get(id)?;
+        let inner = self.desk.content(id);
         if inner.w == 0 || inner.h == 0 { return None; }
         let (x, y) = (x.clamp(inner.x, inner.right() - 1) - inner.x, y.clamp(inner.y, inner.bottom() - 1) - inner.y);
         Some(Action::Pointer { id, x, y, buttons, wheel })
     }
 
-    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU" } }
+    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST" } }
 
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>, cursor: Option<(usize, usize)>) -> (Vec<u16>, Option<(usize, usize)>) {
         let mut owner = self.desk.draw(grid, theme, cell);
         let cols = grid.cols;
+        if let Some(id) = self.desk.full_screen() {
+            let inner = self.desk.content(id);
+            let mut shown = match self.desk.focused() { Some(w) if w.content == Content::Text => cursor.filter(|&(x, y)| x < inner.w && y < inner.h), _ => None };
+            self.dialogs(grid, theme, &mut shown);
+            for (index, tag) in owner.iter_mut().enumerate() { if *tag != 0 && grid.get(index % cols, index / cols) != PIXELS { *tag = 0; } }
+            return (owner, shown);
+        }
         let bar = Style::new(0x101820, 0x80A0C0);
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
         // The items can be clicked (issue u008); the one under the mouse is lit.
@@ -566,18 +708,14 @@ impl Wm {
         let status = match (&self.mode, &self.notice) {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
             (Mode::Menu(_), _) => String::from("PROGRAMS: a click or Enter starts one in a window; arrows move; Esc or a click elsewhere: close"),
+            (Mode::List { .. }, _) => String::from("WINDOWS: arrows and Enter or a click bring one to the front; Alt+W closes it; Esc: back"),
             (_, Some(notice)) => notice.clone(),
             _ if self.desk.windows.is_empty() => String::from("No windows. Enter or Alt+R: run a program in a window; F1 or Alt+H: keys; Alt+Q: leave"),
             _ => format!("{} windows; keys go to \"{}\"", self.desk.windows.len(), self.desk.focused().map_or("", |w| w.title.as_str())),
         };
         grid.text_padded(0, status_y, &status, cols, Style::new(0xE0E0E0, 0x000000));
         let mut shown = match self.desk.focused() { Some(w) if w.content == Content::Text => cursor.map(|(x, y)| (w.rect.x + 1 + x, w.rect.y + 1 + y)).filter(|&(x, y)| x + 1 < w.rect.right() && y + 1 < w.rect.bottom()), _ => None };
-        match &mut self.mode {
-            Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); shown = None; }
-            Mode::Run(line) => { shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
-            Mode::Menu(open) => { open.draw(&self.programs, grid, theme); shown = None; }
-            _ => {}
-        }
+        self.dialogs(grid, theme, &mut shown);
         // A dialog over a pixel window: its cells are no longer the window's.
         for (index, tag) in owner.iter_mut().enumerate() {
             if *tag != 0 && grid.get(index % cols, index / cols) != PIXELS { *tag = 0; }
@@ -585,10 +723,36 @@ impl Wm {
         (owner, shown)
     }
 
+    // The keys' help, the run line, the programs or the window list over the windows.
+    fn dialogs(&mut self, grid: &mut Grid, theme: &Theme, shown: &mut Option<(usize, usize)>) {
+        if let Mode::List { .. } = self.mode {
+            let (selected, (lines, width), area) = (self.list_selected(), self.list_lines(), self.list_area());
+            let inner = crate::tui::widgets::dialog(grid, "Windows", width + 2, lines.len().max(1) + 4, theme);
+            if lines.is_empty() { grid.text(inner.x + 1, inner.y, "No windows", theme.dialog); }
+            for (row, line) in lines.iter().enumerate() {
+                let style = if selected.is_some_and(|(at, _)| at == row) { theme.selected } else { theme.dialog };
+                grid.text_padded(area.x, area.y + row, line, area.w, style);
+            }
+            grid.text(inner.x + 1, inner.bottom() - 1, "Enter: to the front · Alt+W: close · Esc: back", theme.dialog);
+            *shown = None;
+            return;
+        }
+        match &mut self.mode {
+            Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); *shown = None; }
+            Mode::Run(line) => { *shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
+            Mode::Menu(open) => { open.draw(&self.programs, grid, theme); *shown = None; }
+            _ => {}
+        }
+    }
+
     /// The state line after each event.
     pub fn status(&self) -> String {
         let pointer = self.pointer.map_or(String::new(), |(x, y)| format!(" POINTER={},{}", x, y));
-        let menu = match &self.mode { Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)), _ => String::new() };
+        let menu = match &self.mode {
+            Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
+            Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
+            _ => String::new(),
+        };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)
     }
 }

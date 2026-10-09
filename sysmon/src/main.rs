@@ -7,7 +7,8 @@
 // Who holds what (`holders`, `authority`, the derivation links in `caps`) goes only to clients whose capability carries
 // the authority badge (sysinfo.wit 2.2). The kernel has no fixed count of tasks, endpoints, capabilities or CPUs (issue
 // 171): STAT is read page by page, the lists go to clients from a position on, and a sample keeps CPUs 0..15 one by one
-// and every CPU in its mean and maximum (sysinfo.wit 4.0).
+// and every CPU in its mean and maximum (sysinfo.wit 4.0). Messages are counted from STAT_ENDPOINTS once a second, not
+// at every sample (000-APP-0012).
 extern crate alloc;
 use alloc::vec::Vec;
 use mind::abi::*;
@@ -49,6 +50,9 @@ struct Monitor {
     pending_busy: Vec<u32>, // every CPU's busy share summed over the pending samples, for the slow sample's maximum
     load: [u64; 3], // runnable tasks, fixed point x 2048
     limiter: Limiter,
+    // Messages are counted from STAT_ENDPOINTS once a second, not every 100 ms (000-APP-0012): the last second's count,
+    // spread over the fast samples of the next.
+    messages_second: u32,
 }
 
 // e^(-1/60), e^(-1/300), e^(-1/900) x 2048: one-second samples into 1, 5 and 15 minute averages.
@@ -83,14 +87,19 @@ impl Monitor {
             if stat::runnable(task.wait) { runnable += 1; }
             true
         });
-        let mut messages = 0u64;
-        let _ = stat::each::<StatEndpoint>(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice(), |e| { messages += e.messages; true });
+        if self.pending_count == 0 {
+            let mut messages = 0u64;
+            let _ = stat::each::<StatEndpoint>(STAT_ENDPOINTS, 0, self.scratch.as_mut_slice(), |e| { messages += e.messages; true });
+            let total = &mut self.totals.messages;
+            self.messages_second = messages.saturating_sub(*total).min(u32::MAX as u64) as u32;
+            *total = messages;
+        }
         if let Ok(memory) = stat::one::<StatMemory>(STAT_MEMORY) { sample.used_kib = (memory.used / 1024) as u32; }
         let delta = |now: u64, before: &mut u64| { let d = now.saturating_sub(*before); *before = now; d.min(u32::MAX as u64) as u32 };
         sample.interrupts = delta(interrupts, &mut self.totals.interrupts);
         sample.switches = delta(switches, &mut self.totals.switches);
         sample.syscalls = delta(syscalls, &mut self.totals.syscalls);
-        sample.messages = delta(messages, &mut self.totals.messages);
+        sample.messages = self.messages_second / self.pending.len() as u32;
         sample.tasks = tasks; sample.runnable = runnable.saturating_sub(1); // not counting sysmon itself
         self.fast.push(sample);
         // Every tenth sample makes a one-second sample: average load, summed counts, the latest levels.
@@ -104,7 +113,7 @@ impl Monitor {
             slow.busy_max = (self.pending_busy.iter().copied().max().unwrap_or(0) / pending.len() as u32) as u16;
             self.pending_busy.iter_mut().for_each(|b| *b = 0);
             slow.interrupts = pending.iter().map(|s| s.interrupts).sum(); slow.syscalls = pending.iter().map(|s| s.syscalls).sum();
-            slow.messages = pending.iter().map(|s| s.messages).sum(); slow.switches = pending.iter().map(|s| s.switches).sum();
+            slow.messages = self.messages_second; slow.switches = pending.iter().map(|s| s.switches).sum();
             let runnable = pending.iter().map(|s| s.runnable as u64).sum::<u64>() * 2048 / pending.len() as u64;
             for (load, decay) in self.load.iter_mut().zip(DECAY) { *load = (*load * decay + runnable * (2048 - decay)) / 2048; }
             self.slow.push(slow);
@@ -260,7 +269,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let Some(scratch) = Pages::new(16 * 1024) else { mind::println!("[SYSMON] NO MEMORY"); return };
     let mut monitor = Monitor { scratch, fast: Ring::new(), slow: Ring::new(), totals: Totals::default(), pending: [Sample::default(); 10], pending_count: 0,
-                                pending_busy: Vec::new(), load: [0; 3], limiter: Limiter::new() };
+                                pending_busy: Vec::new(), load: [0; 3], limiter: Limiter::new(), messages_second: 0 };
     if stat::read(STAT_CPUS, 0, monitor.buffer()).is_err() { mind::println!("[SYSMON] NO OBSERVE PRIVILEGE"); return; }
     monitor.sample();
     mind::println!("[SYSMON] READY: SAMPLES EVERY {} MS", FAST_MS);

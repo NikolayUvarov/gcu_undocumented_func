@@ -1,0 +1,573 @@
+//! Host tests of the network interpreter (libmind/src/nn, 250): the operators on small tensors against values worked
+//! out by hand; and, when MIND_DICTATE_MODEL names a converted model and MIND_DICTATE_REFERENCE the directory
+//! scripts/voice_dictate/reference.py wrote, the encoder against onnxruntime on the same features; with
+//! MIND_DICTATE_SET (a directory of 16 kHz WAVs and refs.tsv, as scripts/voice_v3/prep.py writes it), the word error
+//! rate of the whole chain: our features, our network, greedy search.
+extern crate alloc;
+#[path = "../libmind/src/nn/mod.rs"]
+mod nn;
+#[path = "../libmind/src/voice/math.rs"]
+pub mod math;
+#[path = "../libmind/src/voice/fbank.rs"]
+mod fbank;
+#[path = "../libmind/src/voice/dictation.rs"]
+mod dictation;
+#[path = "../libmind/src/voice/russian.rs"]
+mod russian;
+#[path = "../libmind/src/voice/synthesis.rs"]
+mod synthesis;
+mod voice { pub use super::math; }
+
+use nn::{Data, Tensor};
+
+fn f(shape: &[usize], v: &[f32]) -> Tensor { Tensor::f32(shape.to_vec(), v.to_vec()) }
+fn i(shape: &[usize], v: &[i64]) -> Tensor { Tensor::i64(shape.to_vec(), v.to_vec()) }
+
+#[test]
+fn model_files_are_checked() {
+    assert!(nn::Model::parse(b"not a model at all, not at all", true).is_err());
+}
+
+fn node(attrs: Vec<(&str, nn::Attr)>) -> nn::Node { nn::Node { op: 0, inputs: vec![], outputs: vec![], freed: vec![], attrs: attrs.into_iter().map(|(n, a)| (n.to_string(), a)).collect() } }
+fn ints_attr(v: &[i64]) -> nn::Attr { nn::Attr::Ints(v.to_vec()) }
+fn run(op: &str, n: &nn::Node, inputs: &[&Tensor]) -> Vec<Tensor> { nn::ops::run(op, n, &inputs.iter().map(|t| Some(t.view())).collect::<Vec<_>>()).unwrap() }
+// The same for a node with `outputs` outputs (Split counts them).
+fn run_n(op: &str, n: &nn::Node, inputs: &[&Tensor], outputs: usize) -> Vec<Tensor> {
+    let mut n = nn::Node { op: n.op, inputs: n.inputs.clone(), outputs: vec![0; outputs], freed: vec![], attrs: n.attrs.clone() };
+    n.outputs.truncate(outputs);
+    run(op, &n, inputs)
+}
+fn floats_of(t: &Tensor) -> &[f32] { match &t.data { Data::F32(v) => v, other => panic!("{:?}", other) } }
+fn close(a: &[f32], b: &[f32]) -> bool { a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1e-5 * (1.0 + y.abs())) }
+
+#[test]
+fn element_wise_with_broadcasting() {
+    let none = node(vec![]);
+    let a = f(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let row = f(&[3], &[10.0, 20.0, 30.0]);
+    let col = f(&[2, 1], &[100.0, 200.0]);
+    assert_eq!(floats_of(&run("Add", &none, &[&a, &row])[0]), [11.0, 22.0, 33.0, 14.0, 25.0, 36.0]);
+    let out = run("Mul", &none, &[&col, &row]);
+    assert_eq!(out[0].shape, [2, 3]);
+    assert_eq!(floats_of(&out[0]), [1000.0, 2000.0, 3000.0, 2000.0, 4000.0, 6000.0]);
+    assert!(close(floats_of(&run("Pow", &none, &[&a, &f(&[], &[0.5])])[0]), &[1.0, 1.4142135, 1.7320508, 2.0, 2.236068, 2.4494898]));
+    let cond = Tensor { shape: vec![3], data: Data::Bool(vec![true, false, true]) };
+    assert_eq!(floats_of(&run("Where", &none, &[&cond, &a, &f(&[], &[0.0])])[0]), [1.0, 0.0, 3.0, 4.0, 0.0, 6.0]);
+    assert!(close(floats_of(&run("Sigmoid", &none, &[&f(&[2], &[0.0, 2.0])])[0]), &[0.5, 0.880797]));
+    assert!(close(floats_of(&run("Tanh", &none, &[&f(&[2], &[0.5, -3.0])])[0]), &[0.46211716, -0.9950548]));
+    assert!(close(floats_of(&run("Atan", &none, &[&f(&[3], &[0.5, -3.0, 20.0])])[0]), &[0.4636476, -1.2490458, 1.5208379]));
+    let soft = run("Softmax", &node(vec![("axis", ints_attr(&[-1]))]), &[&f(&[1, 3], &[1.0, 2.0, 3.0])]);
+    assert!(close(floats_of(&soft[0]), &[0.09003057, 0.24472847, 0.66524096]));
+}
+
+#[test]
+fn shapes() {
+    let none = node(vec![]);
+    let x = f(&[2, 3, 4], &(0..24).map(|v| v as f32).collect::<Vec<_>>());
+    assert_eq!(run("Reshape", &none, &[&x, &i(&[2], &[0, -1])])[0].shape, [2, 12]);
+    let t = run("Transpose", &node(vec![("perm", ints_attr(&[2, 0, 1]))]), &[&x]);
+    assert_eq!(t[0].shape, [4, 2, 3]);
+    assert_eq!(floats_of(&t[0])[..6], [0.0, 4.0, 8.0, 12.0, 16.0, 20.0]);
+    // Slice with a negative step and Gather with a negative index.
+    let s = run("Slice", &none, &[&x, &i(&[1], &[-1]), &i(&[1], &[i64::MIN]), &i(&[1], &[2]), &i(&[1], &[-2])]);
+    assert_eq!(s[0].shape, [2, 3, 2]);
+    assert_eq!(floats_of(&s[0])[..2], [3.0, 1.0]);
+    let g = run("Gather", &node(vec![("axis", ints_attr(&[1]))]), &[&x, &i(&[], &[-1])]);
+    assert_eq!(g[0].shape, [2, 4]);
+    assert_eq!(floats_of(&g[0]), [8.0, 9.0, 10.0, 11.0, 20.0, 21.0, 22.0, 23.0]);
+    let c = run("Concat", &node(vec![("axis", ints_attr(&[-1]))]), &[&f(&[2, 1], &[1.0, 2.0]), &f(&[2, 2], &[3.0, 4.0, 5.0, 6.0])]);
+    assert_eq!(floats_of(&c[0]), [1.0, 3.0, 4.0, 2.0, 5.0, 6.0]);
+    assert_eq!(floats_of(&run("Tile", &none, &[&f(&[2], &[1.0, 2.0]), &i(&[1], &[3])])[0]), [1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+    assert_eq!(run("Expand", &none, &[&f(&[3, 1], &[1.0, 2.0, 3.0]), &i(&[2], &[1, 2])])[0].shape, [3, 2]);
+    assert_eq!(run("Range", &none, &[&i(&[], &[10]), &i(&[], &[3]), &i(&[], &[-3])])[0].data, Data::I64(vec![10, 7, 4]));
+    let m = run("ReduceMean", &node(vec![("axes", ints_attr(&[2])), ("keepdims", ints_attr(&[1]))]), &[&x]);
+    assert_eq!((m[0].shape.clone(), floats_of(&m[0])[..2].to_vec()), (vec![2, 3, 1], vec![1.5, 5.5]));
+    // The English model's: ReduceMax, Greater, Identity.
+    let most = run("ReduceMax", &node(vec![("axes", ints_attr(&[1])), ("keepdims", ints_attr(&[0]))]), &[&x]);
+    assert_eq!((most[0].shape.clone(), floats_of(&most[0])[..4].to_vec()), (vec![2, 4], vec![8.0, 9.0, 10.0, 11.0]));
+    assert_eq!(run("Greater", &none, &[&i(&[3], &[1, 5, 3]), &i(&[], &[3])])[0].data, Data::Bool(vec![false, true, false]));
+    assert_eq!(run("Identity", &none, &[&x])[0], x);
+    let scattered = run("ScatterND", &none, &[&f(&[4], &[0.0; 4]), &i(&[2, 1], &[3, 1]), &f(&[2], &[9.0, 8.0])]);
+    assert_eq!(floats_of(&scattered[0]), [0.0, 8.0, 0.0, 9.0]);
+}
+
+#[test]
+fn products_and_quantization() {
+    let none = node(vec![]);
+    // A batch of two [2, 3] x one [3, 2].
+    let a = f(&[2, 2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    let b = f(&[3, 2], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let p = run("MatMul", &none, &[&a, &b]);
+    assert_eq!(p[0].shape, [2, 2, 2]);
+    assert_eq!(floats_of(&p[0]), [22.0, 28.0, 49.0, 64.0, 1.0, 2.0, 3.0, 4.0]);
+    // ONNX's own example for DynamicQuantizeLinear.
+    let q = run("DynamicQuantizeLinear", &none, &[&f(&[6], &[0.0, 2.0, -3.0, -2.5, 1.34, 0.5])]);
+    assert_eq!(q[0].data, Data::U8(vec![153, 255, 0, 26, 221, 179]));
+    assert!(close(floats_of(&q[1]), &[0.019607844]));
+    assert_eq!(q[2].data, Data::U8(vec![153]));
+    // u8 x i8 with zero points: (a - 2) . (b - (-1)).
+    let ua = Tensor { shape: vec![1, 2], data: Data::U8(vec![3, 255]) };
+    let ib = Tensor { shape: vec![2, 1], data: Data::I8(vec![-128, 127]) };
+    let (za, zb) = (Tensor { shape: vec![], data: Data::U8(vec![2]) }, Tensor { shape: vec![], data: Data::I8(vec![-1]) });
+    let r = run("MatMulInteger", &none, &[&ua, &ib, &za, &zb]);
+    assert_eq!(r[0].data, Data::I32(vec![(3 - 2) * (-128 + 1) + (255 - 2) * (127 + 1)]));
+    // A depthwise 1-D convolution with padding, as the conformer modules use it.
+    let conv = node(vec![("group", ints_attr(&[2])), ("kernel_shape", ints_attr(&[3])), ("pads", ints_attr(&[1, 1]))]);
+    let x = f(&[1, 2, 4], &[1.0, 2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 1.0]);
+    let w = f(&[2, 1, 3], &[1.0, 0.0, -1.0, 1.0, 1.0, 1.0]);
+    let y = run("Conv", &conv, &[&x, &w, &f(&[2], &[0.0, 10.0])]);
+    assert_eq!(y[0].shape, [1, 2, 4]);
+    assert_eq!(floats_of(&y[0]), [-2.0, -2.0, -2.0, 3.0, 12.0, 13.0, 13.0, 12.0]);
+}
+
+#[test]
+fn synthesis_operators() {
+    // The operators the VITS voices add (252), against values worked out by hand.
+    let none = node(vec![]);
+    let x = f(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let text = |s: &str| nn::Attr::Text(s.to_string());
+    let pad = |mode: &str, pads: &[i64]| run("Pad", &node(vec![("mode", text(mode))]), &[&x, &i(&[4], pads), &f(&[], &[9.0])]).remove(0);
+    let p = pad("constant", &[0, 1, 1, 0]);
+    assert_eq!((p.shape.clone(), floats_of(&p).to_vec()), (vec![3, 4], vec![9.0, 1.0, 2.0, 3.0, 9.0, 4.0, 5.0, 6.0, 9.0, 9.0, 9.0, 9.0]));
+    assert_eq!(floats_of(&pad("reflect", &[0, 2, 0, 1])), [3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 6.0, 5.0, 4.0, 5.0, 6.0, 5.0]);
+    assert_eq!(floats_of(&pad("edge", &[0, 1, 0, 0])), [1.0, 1.0, 2.0, 3.0, 4.0, 4.0, 5.0, 6.0]);
+    assert_eq!(floats_of(&pad("constant", &[0, -1, 0, 0])), [2.0, 3.0, 5.0, 6.0]);
+    let parts = run_n("Split", &node(vec![("axis", ints_attr(&[1]))]), &[&x, &i(&[2], &[1, 2])], 2);
+    assert_eq!((floats_of(&parts[0]).to_vec(), parts[1].shape.clone(), floats_of(&parts[1]).to_vec()), (vec![1.0, 4.0], vec![2, 2], vec![2.0, 3.0, 5.0, 6.0]));
+    let halves = run_n("Split", &node(vec![("axis", ints_attr(&[0]))]), &[&x], 2);
+    assert_eq!(floats_of(&halves[1]), [4.0, 5.0, 6.0]);
+    let (a, b) = (i(&[3], &[1, 5, 3]), i(&[], &[3]));
+    assert_eq!(run("Less", &none, &[&a, &b])[0].data, Data::Bool(vec![true, false, false]));
+    assert_eq!(run("LessOrEqual", &none, &[&a, &b])[0].data, Data::Bool(vec![true, false, true]));
+    let (t, u) = (Tensor { shape: vec![3], data: Data::Bool(vec![true, true, false]) }, Tensor { shape: vec![3], data: Data::Bool(vec![true, false, false]) });
+    assert_eq!(run("And", &none, &[&t, &u])[0].data, Data::Bool(vec![true, false, false]));
+    assert_eq!(run("Not", &none, &[&t])[0].data, Data::Bool(vec![false, false, true]));
+    let nz = run("NonZero", &none, &[&i(&[2, 2], &[0, 7, 3, 0])]).remove(0);
+    assert_eq!((nz.shape.clone(), nz.data), (vec![2, 2], Data::I64(vec![0, 1, 1, 0])));
+    let g = run("GatherND", &none, &[&x, &i(&[2, 2], &[1, 0, 0, 2])]).remove(0);
+    assert_eq!((g.shape.clone(), floats_of(&g).to_vec()), (vec![2], vec![4.0, 3.0]));
+    let rows = run("GatherND", &none, &[&x, &i(&[1, 1], &[1])]).remove(0);
+    assert_eq!((rows.shape.clone(), floats_of(&rows).to_vec()), (vec![1, 3], vec![4.0, 5.0, 6.0]));
+    assert_eq!(floats_of(&run("CumSum", &none, &[&x, &i(&[], &[1])])[0]), [1.0, 3.0, 6.0, 4.0, 9.0, 15.0]);
+    let ex = run("CumSum", &node(vec![("exclusive", ints_attr(&[1])), ("reverse", ints_attr(&[1]))]), &[&x, &i(&[], &[1])]).remove(0);
+    assert_eq!(floats_of(&ex), [5.0, 3.0, 0.0, 11.0, 6.0, 0.0]);
+    let v = f(&[5], &[-2.0, -0.5, 0.0, 0.5, 30.0]);
+    assert_eq!(floats_of(&run("LeakyRelu", &node(vec![("alpha", nn::Attr::Floats(vec![0.1]))]), &[&v])[0]), [-0.2, -0.05, 0.0, 0.5, 30.0]);
+    assert!(close(floats_of(&run("Erf", &none, &[&v])[0]), &[-0.9953222650, -0.5204998778, 0.0, 0.5204998778, 1.0]));
+    assert!(close(floats_of(&run("Softplus", &none, &[&v])[0]), &[0.126928011, 0.474076984, 0.693147181, 0.974076984, 30.0]));
+    assert_eq!(floats_of(&run("Ceil", &none, &[&v])[0]), [-2.0, 0.0, 0.0, 1.0, 30.0]);
+    assert_eq!(floats_of(&run("Sqrt", &none, &[&f(&[2], &[4.0, 2.25])])[0]), [2.0, 1.5]);
+    let noise = run("RandomNormalLike", &node(vec![("mean", nn::Attr::Floats(vec![1.0])), ("scale", nn::Attr::Floats(vec![2.0]))]), &[&f(&[100, 100], &[0.0; 10000])]).remove(0);
+    let n = floats_of(&noise);
+    let mean = n.iter().sum::<f32>() / n.len() as f32;
+    let sd = (n.iter().map(|a| (a - mean) * (a - mean)).sum::<f32>() / n.len() as f32).sqrt();
+    assert!((mean - 1.0).abs() < 0.06 && (sd - 2.0).abs() < 0.06, "{} {}", mean, sd);
+    // ConvTranspose against its definition: y[o][t * s + k * d - p] += x[c][t] w[c][o][k].
+    let mut rng = Lcg(5);
+    for (cin, cout, len, k, stride, pad, dil, group) in [(4usize, 3usize, 7usize, 4usize, 2usize, 1usize, 1usize, 1usize), (6, 2, 5, 16, 8, 4, 1, 2), (2, 2, 9, 3, 1, 1, 2, 1)] {
+        let xs: Vec<f32> = (0..cin * len).map(|_| rng.float()).collect();
+        let ws: Vec<f32> = (0..cin * (cout / group) * k).map(|_| rng.float()).collect();
+        let bias: Vec<f32> = (0..cout).map(|_| rng.float()).collect();
+        let attrs = node(vec![("strides", ints_attr(&[stride as i64])), ("pads", ints_attr(&[pad as i64, pad as i64])), ("dilations", ints_attr(&[dil as i64])), ("group", ints_attr(&[group as i64]))]);
+        let got = run("ConvTranspose", &attrs, &[&f(&[1, cin, len], &xs), &f(&[cin, cout / group, k], &ws), &f(&[cout], &bias)]).remove(0);
+        let out_len = stride * (len - 1) + dil * (k - 1) + 1 - 2 * pad;
+        let mut want: Vec<f32> = (0..cout * out_len).map(|j| bias[j / out_len]).collect();
+        let (cpg, opg) = (cin / group, cout / group);
+        for c in 0..cin { for o in 0..opg { for t in 0..len { for kk in 0..k {
+            let at = (t * stride + kk * dil) as isize - pad as isize;
+            if at < 0 || at as usize >= out_len { continue; }
+            want[((c / cpg) * opg + o) * out_len + at as usize] += xs[c * len + t] * ws[(c * opg + o) * k + kk];
+        }}}}
+        assert_eq!(got.shape, [1, cout, out_len]);
+        assert!(close(floats_of(&got), &want), "{:?}", (cin, cout, len, k, stride, pad, dil, group));
+    }
+}
+
+#[test]
+fn sentences_of_a_text() {
+    assert_eq!(synthesis::sentences("Привет! Это проверка... Да? Число 3.14 и всё"), ["Привет!", "Это проверка...", "Да?", "Число 3.14 и всё"]);
+    assert!(synthesis::sentences("  ").is_empty());
+}
+
+#[test]
+fn voice_against_onnxruntime() {
+    // By hand: MIND_VITS_MODEL (Vosk TTS 0.7 converted), MIND_TTS_DICTIONARY (dictionary.py's file) and
+    // MIND_VITS_REFERENCE (vits_reference.py --vosk): our front end gives vosk-tts's ids for the reference's text, and
+    // the voice says it as onnxruntime does with the noise at 0.
+    let (Ok(path), Ok(dictionary), Ok(reference)) = (std::env::var("MIND_VITS_MODEL"), std::env::var("MIND_TTS_DICTIONARY"), std::env::var("MIND_VITS_REFERENCE")) else { return };
+    let (words, dict) = (load(&path), std::fs::read(dictionary).unwrap());
+    let voice = synthesis::Voice::new(nn::Model::parse(bytes(&words), true).unwrap(), russian::Dictionary::parse(&dict, true).unwrap()).unwrap();
+    let text = std::fs::read_to_string(format!("{}/text.txt", reference)).unwrap();
+    let want_ids: Vec<i64> = std::fs::read(format!("{}/ids.i64", reference)).unwrap().chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
+    assert_eq!(voice.dictionary().ids(text.trim()), want_ids);
+    let speaker = i64::from_le_bytes(std::fs::read(format!("{}/sid.i64", reference)).unwrap()[..8].try_into().unwrap());
+    let start = std::time::Instant::now();
+    let audio = voice.say(text.trim(), &synthesis::Settings { noise: 0.0, length: 1.0, length_noise: 0.0, speaker }).unwrap();
+    let want = floats(format!("{}/audio.f32", reference));
+    let worst = audio.iter().zip(&want).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+    println!("{:.2} s of speech in {:.2} s; largest difference {:.2e}", audio.len() as f32 / 22050.0, start.elapsed().as_secs_f32(), worst);
+    assert_eq!(audio.len(), want.len());
+    assert!(worst < 1e-3);
+}
+
+// A small generator of test values.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u32 { self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (self.0 >> 33) as u32 }
+    fn below(&mut self, n: u32) -> usize { (self.next() % n) as usize }
+    fn float(&mut self) -> f32 { self.next() as f32 / (1u64 << 31) as f32 - 0.5 }
+}
+
+#[test]
+fn simd_products_equal_plain_loops() {
+    // Where the host has AVX2 and FMA: the same products with and without them, at sizes with every kind of edge.
+    let mut rng = Lcg(7);
+    let none = node(vec![]);
+    for round in 0..60 {
+        let (m, k, n) = (1 + rng.below(14), 1 + rng.below(70), 1 + rng.below(70));
+        let a: Vec<u8> = (0..m * k).map(|_| rng.next() as u8).collect();
+        let b: Vec<i8> = (0..k * n).map(|_| rng.next() as i8).collect();
+        let (za, zb) = (rng.next() as u8, if round % 2 == 0 { 0 } else { rng.next() as i8 });
+        let ins = [Tensor { shape: vec![m, k], data: Data::U8(a) }, Tensor { shape: vec![k, n], data: Data::I8(b) },
+            Tensor { shape: vec![], data: Data::U8(vec![za]) }, Tensor { shape: vec![], data: Data::I8(vec![zb]) }];
+        let fa = f(&[2, m, k], &(0..2 * m * k).map(|_| rng.float()).collect::<Vec<_>>());
+        let fb = f(&[k, n], &(0..k * n).map(|_| rng.float()).collect::<Vec<_>>());
+        let with = (run("MatMulInteger", &none, &ins.iter().collect::<Vec<_>>()), run("MatMul", &none, &[&fa, &fb]));
+        nn::gemm::simd(Some(false));
+        let without = (run("MatMulInteger", &none, &ins.iter().collect::<Vec<_>>()), run("MatMul", &none, &[&fa, &fb]));
+        nn::gemm::simd(Some(true));
+        assert_eq!(with.0, without.0, "{} x {} x {}", m, k, n);
+        assert!(close(floats_of(&with.1[0]), floats_of(&without.1[0])), "{} x {} x {}", m, k, n);
+    }
+    // B laid out in panels as the converter writes MatMulInteger's weights: the same products, with and without SIMD.
+    for &(m, k, n, zb) in &[(1usize, 2usize, 16usize, 0i8), (7, 64, 48, 0), (13, 30, 32, -5), (6, 192, 64, 3)] {
+        let a: Vec<u8> = (0..m * k).map(|_| rng.next() as u8).collect();
+        let b: Vec<i8> = (0..k * n).map(|_| rng.next() as i8).collect();
+        let mut packed = Vec::with_capacity(k * n);
+        for p in 0..n / 16 { for r in 0..k / 2 { for c in 0..16 { packed.push(b[2 * r * n + 16 * p + c]); packed.push(b[(2 * r + 1) * n + 16 * p + c]); } } }
+        let (sa, sb) = (nn::gemm::Shape::dense(m, k), nn::gemm::Shape::dense(k, n));
+        let mut want = vec![0i32; m * n];
+        nn::gemm::i8(&a, sa, 9, &b, sb, nn::gemm::Layout::Rows, zb, &mut want);
+        for simd in [true, false] {
+            nn::gemm::simd(Some(simd));
+            let mut got = vec![0i32; m * n];
+            nn::gemm::i8(&a, sa, 9, &packed, sb, nn::gemm::Layout::Panels, zb, &mut got);
+            assert_eq!(got, want, "panels {} x {} x {}, SIMD {}", m, k, n, simd);
+        }
+        nn::gemm::simd(Some(true));
+        // The operator takes them as its B only.
+        let shape = [k, n];
+        let weight = nn::View { shape: &shape, data: nn::Elems::I8(&packed), panels: true };
+        let ua = Tensor { shape: vec![m, k], data: Data::U8(a.clone()) };
+        let za = Tensor { shape: vec![], data: Data::U8(vec![9]) };
+        let zbt = Tensor { shape: vec![], data: Data::I8(vec![zb]) };
+        let out = nn::ops::run("MatMulInteger", &none, &[Some(ua.view()), Some(weight), Some(za.view()), Some(zbt.view())]).unwrap();
+        assert_eq!(out[0].data, Data::I32(want.clone()));
+        assert!(nn::ops::run("Transpose", &none, &[Some(weight)]).is_err());
+    }
+    println!("SIMD: {}", nn::gemm::simd(None));
+}
+
+#[test]
+fn convolutions_as_products() {
+    // Conv (im2col and the products) against the definition, in 1 and 2 dimensions, with groups, padding, strides
+    // and dilations, and a pointwise one.
+    let mut rng = Lcg(11);
+    let cases: [(&[usize], &[usize], usize, &[i64], &[i64], &[i64]); 6] = [
+        (&[2, 4, 9, 13], &[6, 2, 3, 3], 2, &[1, 2, 1, 0], &[1, 2], &[1, 1]),
+        (&[1, 3, 7, 40], &[5, 3, 1, 1], 1, &[0, 0, 0, 0], &[1, 1], &[1, 1]),
+        (&[1, 4, 6, 11], &[4, 1, 3, 3], 4, &[1, 1, 1, 1], &[2, 1], &[1, 2]),
+        (&[1, 6, 300], &[6, 1, 31], 6, &[15, 15], &[1], &[1]),
+        (&[1, 2, 50], &[4, 2, 5], 1, &[2, 1], &[3], &[2]),
+        // Padding wider than the input, so that some taps meet no input at all for a whole row.
+        (&[1, 3, 4], &[2, 3, 9], 1, &[6, 6], &[1], &[1]),
+    ];
+    for (xs, ws, group, pads, strides, dil) in cases {
+        let x = f(xs, &(0..xs.iter().product()).map(|_| rng.float()).collect::<Vec<_>>());
+        let w = f(ws, &(0..ws.iter().product()).map(|_| rng.float()).collect::<Vec<_>>());
+        let bias = f(&[ws[0]], &(0..ws[0]).map(|_| rng.float()).collect::<Vec<_>>());
+        let attrs = node(vec![("group", ints_attr(&[group as i64])), ("pads", ints_attr(pads)), ("strides", ints_attr(strides)), ("dilations", ints_attr(dil))]);
+        let got = run("Conv", &attrs, &[&x, &w, &bias]).remove(0);
+        // The definition, on [batch, channels, height, width] (height 1 in 1-D).
+        let two = xs.len() == 4;
+        let (ih, iw, kh, kw) = if two { (xs[2], xs[3], ws[2], ws[3]) } else { (1, xs[2], 1, ws[2]) };
+        let (pt, pl, pb, pr) = if two { (pads[0], pads[1], pads[2], pads[3]) } else { (0, pads[0], 0, pads[1]) };
+        let ((sh, sw), (dh, dw)) = if two { ((strides[0], strides[1]), (dil[0], dil[1])) } else { ((1, strides[0]), (1, dil[0])) };
+        let oh = ((ih as i64 + pt + pb - dh * (kh as i64 - 1) - 1) / sh + 1) as usize;
+        let ow = ((iw as i64 + pl + pr - dw * (kw as i64 - 1) - 1) / sw + 1) as usize;
+        let (cin, cout, cpg) = (xs[1], ws[0], ws[1]);
+        let (xv, wv, bv) = (floats_of(&x), floats_of(&w), floats_of(&bias));
+        let mut want = vec![0.0f32; xs[0] * cout * oh * ow];
+        for nb in 0..xs[0] { for oc in 0..cout { for oy in 0..oh { for ox in 0..ow {
+            let g = oc / (cout / group);
+            let mut s = bv[oc];
+            for ic in 0..cpg { for ky in 0..kh { for kx in 0..kw {
+                let (iy, ix) = (oy as i64 * sh + ky as i64 * dh - pt, ox as i64 * sw + kx as i64 * dw - pl);
+                if iy < 0 || ix < 0 || iy >= ih as i64 || ix >= iw as i64 { continue; }
+                s += wv[((oc * cpg + ic) * kh + ky) * kw + kx] * xv[((nb * cin + g * cpg + ic) * ih + iy as usize) * iw + ix as usize];
+            }}}
+            want[((nb * cout + oc) * oh + oy) * ow + ox] = s;
+        }}}}
+        let mut shape = vec![xs[0], cout];
+        if two { shape.push(oh); }
+        shape.push(ow);
+        assert_eq!(got.shape, shape);
+        assert!(close(floats_of(&got), &want), "{:?} * {:?}", xs, ws);
+    }
+}
+
+// The model file read into 8-byte aligned memory (its weights are read in place).
+fn load(path: &str) -> Vec<u64> {
+    let bytes = std::fs::read(path).unwrap();
+    let mut words = vec![0u64; bytes.len().div_ceil(8) + 1];
+    unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, bytes.len()) }.copy_from_slice(&bytes);
+    words.truncate(bytes.len().div_ceil(8));
+    words.push(bytes.len() as u64);
+    words
+}
+fn bytes(words: &[u64]) -> &[u8] { unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, *words.last().unwrap() as usize) } }
+
+fn floats(path: String) -> Vec<f32> { std::fs::read(path).unwrap().chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect() }
+
+#[test]
+fn clips_against_onnxruntime() {
+    // MIND_DICTATE_REFERENCE: a directory of clips, each a directory reference.py wrote. The encoder's output differs
+    // from onnxruntime's by the noise of dynamic int8 quantization: its exp differs from ours by about 1e-5, and a value
+    // near a rounding step lands on the other side. So a rare word may come out otherwise: at most 2 % of the words.
+    let (Ok(path), Ok(reference)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_REFERENCE")) else {
+        println!("skipped: MIND_DICTATE_MODEL and MIND_DICTATE_REFERENCE are not set");
+        return;
+    };
+    let words = load(&path);
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let model = dictation.model();
+    let mut clips: Vec<_> = std::fs::read_dir(&reference).unwrap().map(|e| e.unwrap().path()).filter(|p| p.join("text.txt").exists()).collect();
+    clips.sort();
+    let (mut audio, mut spent, mut words, mut differ) = (0usize, std::time::Duration::ZERO, 0usize, 0usize);
+    for clip in &clips {
+        let dir = clip.display().to_string();
+        let features = floats(format!("{}/features.f32", dir));
+        let frames = features.len() / 80;
+        let start = std::time::Instant::now();
+        let out = model.run("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])]).unwrap();
+        let Data::F32(got) = &out[0].data else { panic!() };
+        let text = dictation.search(got, out[0].shape[1], out[0].shape[2]).unwrap();
+        let took = start.elapsed();
+        spent += took;
+        audio += frames;
+        let want = floats(format!("{}/encoder_out.f32", dir));
+        let mean = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).sum::<f32>() / got.len() as f32;
+        let scale = want.iter().map(|a| a.abs()).sum::<f32>() / want.len() as f32;
+        println!("{}: {} frames in {:.2} s, encoder mean difference {:.3} of {:.3}; {}", clip.file_name().unwrap().to_string_lossy(), frames, took.as_secs_f32(), mean, scale, text);
+        assert!(mean < 0.1 * scale, "{} against {}", mean, scale);
+        let want_text = std::fs::read_to_string(format!("{}/text.txt", dir)).unwrap();
+        let (a, b): (Vec<&str>, Vec<&str>) = (text.split_whitespace().collect(), want_text.split_whitespace().collect());
+        let errors = edit_distance(&a, &b);
+        if errors > 0 { println!("  onnxruntime: {}", want_text.trim()); }
+        (words, differ) = (words + b.len(), differ + errors);
+    }
+    println!("{} clips, {:.1} s of speech in {:.1} s; {} of {} words differ from onnxruntime's", clips.len(), audio as f32 / 100.0, spent.as_secs_f32(), differ, words);
+    assert!(differ * 50 <= words, "more than 2 % of the words differ");
+}
+
+// Word-level edit distance.
+fn edit_distance(a: &[&str], b: &[&str]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1).min(row[j] + 1).min(prev + (x != y) as usize);
+            prev = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+#[test]
+fn first_departure_from_onnxruntime() {
+    // Debugging aid: MIND_DICTATE_DUMP names the directory scripts/voice_dictate/dump.py wrote for the first 100 frames.
+    let (Ok(model), Ok(reference), Ok(dump)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_REFERENCE"), std::env::var("MIND_DICTATE_DUMP")) else { return };
+    let words = load(&model);
+    let model = nn::Model::parse(bytes(&words), false).unwrap();
+    let features: Vec<f32> = std::fs::read(format!("{}/features.f32", reference)).unwrap().chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).take(100 * 80).collect();
+    departures(&model, "encoder", vec![f(&[1, 100, 80], &features), i(&[1], &[100])], &dump);
+}
+
+// Runs `graph` and compares each value with onnxruntime's of the same name in `dump` (index.txt: name, dtype, shape,
+// file); prints the first departures beyond MIND_DICTATE_TOLERANCE (relative to the value's largest magnitude).
+fn departures(model: &nn::Model, graph: &str, inputs: Vec<Tensor>, dump: &str) {
+    let mut index = std::collections::HashMap::new();
+    for line in std::fs::read_to_string(format!("{}/index.txt", dump)).unwrap().lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        index.insert(parts[0].to_string(), (parts[1].to_string(), parts[2].to_string(), parts[3].to_string()));
+    }
+    let tolerance = std::env::var("MIND_DICTATE_TOLERANCE").ok().and_then(|t| t.parse().ok()).unwrap_or(1e-3);
+    let mut reported = 0;
+    let mut checked = 0;
+    model.run_watched(graph, inputs, &mut |op, name, t| {
+        let Some((dtype, shape, file)) = index.get(name) else { return };
+        checked += 1;
+        let raw = std::fs::read(format!("{}/{}", dump, file)).unwrap();
+        let want_shape: Vec<usize> = if shape.is_empty() { vec![] } else { shape.split(',').map(|d| d.parse().unwrap()).collect() };
+        let bad = |what: String| { if reported < 5 { println!("{} {} ({}): {}", op, name, dtype, what); } };
+        if want_shape != t.shape { bad(format!("shape {:?} against {:?}", t.shape, want_shape)); reported += 1; return; }
+        let diff = match (&t.data, dtype.as_str()) {
+            (Data::F32(v), "float32") => { let w: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect(); let scale = w.iter().map(|a| a.abs()).fold(1e-6f32, f32::max); v.iter().zip(&w).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max) / scale }
+            (Data::I64(v), "int64") => { let w: Vec<i64> = raw.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(); if *v == w { 0.0 } else { 1.0 } }
+            (Data::I32(v), "int32") => { let w: Vec<i32> = raw.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect(); let scale = w.iter().map(|a| a.abs()).max().unwrap_or(1).max(1) as f32; v.iter().zip(&w).map(|(a, b)| (a - b).abs()).max().unwrap_or(0) as f32 / scale }
+            (Data::U8(v), "uint8") => { let n = v.iter().zip(&raw).filter(|(a, b)| a != b).count(); if n > 0 { bad(format!("{} of {} bytes differ", n, v.len())); } 0.0 }
+            (Data::Bool(v), "bool") => { if v.iter().zip(&raw).all(|(a, b)| *a as u8 == *b) { 0.0 } else { 1.0 } }
+            (d, w) => { bad(format!("type {:?} against {}", std::mem::discriminant(d), w)); reported += 1; return; }
+        };
+        if diff > tolerance { bad(format!("relative difference {}", diff)); reported += 1; }
+    }).unwrap();
+    println!("checked {} values, {} departed", checked, reported);
+}
+
+// A VITS voice's inputs from scripts/voice_tts/vits_reference.py's directory.
+fn vits_inputs(reference: &str) -> Vec<Tensor> {
+    let ids: Vec<i64> = std::fs::read(format!("{}/ids.i64", reference)).unwrap().chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect();
+    let scales = floats(format!("{}/scales.f32", reference));
+    let mut inputs = vec![i(&[1, ids.len()], &ids), i(&[1], &[ids.len() as i64]), f(&[3], &scales)];
+    if let Ok(sid) = std::fs::read(format!("{}/sid.i64", reference)) { inputs.push(i(&[1], &[i64::from_le_bytes(sid[..8].try_into().unwrap())])); } // Vosk TTS
+    inputs
+}
+
+#[test]
+fn vits_against_onnxruntime() {
+    // By hand: MIND_VITS_MODEL (a Piper or Vosk TTS voice converted with convert.py, graph "vits") and MIND_VITS_REFERENCE
+    // (vits_reference.py's directory; the noise scales 0). The audio is onnxruntime's within 1e-3 of its peak.
+    let (Ok(path), Ok(reference)) = (std::env::var("MIND_VITS_MODEL"), std::env::var("MIND_VITS_REFERENCE")) else { return };
+    let words = load(&path);
+    let model = nn::Model::parse(bytes(&words), true).unwrap();
+    if let Ok(dump) = std::env::var("MIND_VITS_DUMP") { departures(&model, "vits", vits_inputs(&reference), &dump); }
+    let start = std::time::Instant::now();
+    let out = model.run("vits", vits_inputs(&reference)).unwrap();
+    let spent = start.elapsed().as_secs_f32();
+    let got = floats_of(&out[0]);
+    let want = floats(format!("{}/audio.f32", reference));
+    let peak = want.iter().fold(0.0f32, |m, a| m.max(a.abs()));
+    let worst = got.iter().zip(&want).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+    let noise: f32 = got.iter().zip(&want).map(|(a, b)| (a - b) * (a - b)).sum();
+    let signal: f32 = want.iter().map(|a| a * a).sum();
+    println!("{} samples ({:.2} s at 22050 Hz) in {:.2} s; largest difference {:.2e} of peak {:.3}; SNR {:.1} dB", got.len(), got.len() as f32 / 22050.0, spent, worst, peak, 10.0 * (signal / noise.max(1e-30)).log10());
+    assert_eq!(got.len(), want.len());
+    assert!(worst <= 1e-3 * peak, "{} against {}", worst, peak);
+}
+
+#[test]
+fn profile_by_operator() {
+    // Debugging aid (MIND_DICTATE_PROFILE=1 with the model and a reference clip): where the encoder spends its time,
+    // by operator, and its slowest nodes.
+    let (Ok(path), Ok(reference), Ok(_)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_REFERENCE"), std::env::var("MIND_DICTATE_PROFILE")) else { return };
+    let words = load(&path);
+    let model = nn::Model::parse(bytes(&words), false).unwrap();
+    let vits = std::path::Path::new(&format!("{}/ids.i64", reference)).exists(); // a VITS voice's reference (252)
+    let features = if vits { Vec::new() } else { floats(format!("{}/features.f32", reference)) };
+    let frames = features.len() / 80;
+    let (graph, inputs) = if vits { ("vits", vits_inputs(&reference)) } else { ("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])]) };
+    let mut totals: std::collections::BTreeMap<String, (f64, usize)> = Default::default();
+    let mut nodes: Vec<(f64, String, Vec<usize>)> = Vec::new();
+    let mut last = std::time::Instant::now();
+    let start = last;
+    model.run_watched(graph, inputs, &mut |op, name, value| {
+        let now = std::time::Instant::now();
+        let e = totals.entry(op.to_string()).or_default();
+        e.0 += (now - last).as_secs_f64();
+        e.1 += 1;
+        nodes.push(((now - last).as_secs_f64(), format!("{} {}", op, name), value.shape.clone()));
+        last = now;
+    }).unwrap();
+    let mut v: Vec<_> = totals.into_iter().collect();
+    v.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap());
+    println!("{} frames in {:.2} s", frames, start.elapsed().as_secs_f64());
+    for (op, (s, n)) in v.iter().take(30) { println!("{:>24} {:>8.3} s {:>6}", op, s, n); }
+    nodes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    for (s, name, shape) in nodes.iter().take(15) { println!("{:>8.3} s {} {:?}", s, name, shape); }
+}
+
+// Text as scripts/voice_v3/evaluate.py compares it: lower case, ё as е, letters, digits and apostrophes inside words.
+fn normalize(text: &str) -> String {
+    let lower: String = text.to_lowercase().replace('ё', "е");
+    let spaced: String = lower.chars().map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' }).collect();
+    spaced.split_whitespace().map(|w| w.trim_matches('\'')).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+// Edit distance between two sequences.
+fn distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1).min(row[j] + 1).min(diagonal + (x != y) as usize);
+            diagonal = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+#[test]
+fn word_error_rate_of_a_test_set() {
+    // By hand: MIND_DICTATE_MODEL and MIND_DICTATE_SET (MIND_DICTATE_LIMIT: the first N sentences). 16-bit mono WAVs
+    // at 16 kHz with a 44-byte header; refs.tsv holds per line the file, its length and the reference text.
+    let (Ok(path), Ok(set)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_SET")) else { return };
+    let limit = std::env::var("MIND_DICTATE_LIMIT").ok().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
+    let words = load(&path);
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let refs = std::fs::read_to_string(format!("{}/refs.tsv", set)).unwrap();
+    let (mut audio, mut spent, mut word_errors, mut ref_words, mut char_errors, mut ref_chars) = (0.0f64, 0.0f64, 0, 0, 0, 0);
+    for line in refs.lines().take(limit) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let wav = std::fs::read(format!("{}/{}", set, fields[0])).unwrap();
+        assert!(&wav[..4] == b"RIFF" && u16::from_le_bytes([wav[22], wav[23]]) == 1 && u32::from_le_bytes(wav[24..28].try_into().unwrap()) == 16000);
+        let samples: Vec<i16> = wav[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        let start = std::time::Instant::now();
+        let text = dictation.text(&samples).unwrap();
+        spent += start.elapsed().as_secs_f64();
+        audio += samples.len() as f64 / 16000.0;
+        let (hyp, reference) = (normalize(&text), normalize(fields[2]));
+        let (h, r): (Vec<&str>, Vec<&str>) = (hyp.split(' ').filter(|w| !w.is_empty()).collect(), reference.split(' ').collect());
+        let errors = distance(&h, &r);
+        let (hc, rc): (Vec<char>, Vec<char>) = (hyp.chars().collect(), reference.chars().collect());
+        (word_errors, ref_words, char_errors, ref_chars) = (word_errors + errors, ref_words + r.len(), char_errors + distance(&hc, &rc), ref_chars + rc.len());
+        if errors > 0 { println!("{}: {} errors\n  ours: {}\n  ref:  {}", fields[0], errors, hyp, reference); }
+    }
+    println!("WER {:.2} % ({} of {} words), CER {:.2} %; {:.1} s of speech in {:.1} s ({:.3} of real time)",
+        100.0 * word_errors as f64 / ref_words as f64, word_errors, ref_words, 100.0 * char_errors as f64 / ref_chars as f64, audio, spent, spent / audio);
+}
+
+// tests/fbank_host.rs's test signal (5300 samples), which the tools suite also gives `dictate` as fbank.wav.
+fn fbank_signal() -> Vec<i16> {
+    let mut state: u64 = 12345;
+    (0..5300i64).map(|i| {
+        state = (state * 1103515245 + 12345) % (1 << 31);
+        let noise = ((state >> 16) % 2001) as i64 - 1000;
+        let phase = i % 37;
+        let triangle = if phase < 37 / 2 { (phase * 2 * 6000).div_euclid(37) - 6000 } else { 6000 - ((phase - 37 / 2) * 2 * 6000).div_euclid(37) };
+        let square = if (i / 1000) % 2 == 0 { if i % 113 < 56 { 3000 } else { -3000 } } else { 0 };
+        (triangle + square + noise).clamp(-32768, 32767) as i16
+    }).collect()
+}
+
+/// The toy transducer's text of the test signal; the tools suite expects it from `dictate` in the system.
+const TOY_TEXT: &str = "нет нет дом нет нет дом нет нет дом нет нет дом нет нет";
+
+#[test]
+fn the_toy_transducer() {
+    // tests/dictate_toy.bin (scripts/voice_dictate/toy.py): the whole chain on a few KB of random weights, with and
+    // without SIMD, gives one text.
+    let words = load("tests/dictate_toy.bin");
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let samples = fbank_signal();
+    let with = dictation.text(&samples).unwrap();
+    nn::gemm::simd(Some(false));
+    let without = dictation.text(&samples).unwrap();
+    nn::gemm::simd(Some(true));
+    println!("toy text: {:?}", with);
+    assert_eq!(with, without);
+    assert_eq!(with, TOY_TEXT);
+}

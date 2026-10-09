@@ -29,9 +29,10 @@ fn main(info: &'static BootInfo) {
 // Started as a console program (`dzen-clock --line`, issue u016): the face on one line, written again with \r each
 // second; Esc in the shell or `console` stops it.
 fn line_face() {
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     let mut previous = None;
     loop {
-        if let Some(seconds) = mind::rtc::seconds_since_midnight().filter(|&s| previous != Some(s)) {
+        if let Some(seconds) = rtc.seconds_since_midnight().filter(|&s| previous != Some(s)) {
             if let Some(face) = Face::at(seconds) {
                 let (line, n) = text::line(face, seconds);
                 print(b"\r");
@@ -71,6 +72,7 @@ fn pixel_face(info: &'static BootInfo) -> Next {
     let mut cycle = Cycle::new();
     let mut previous_dot = None;
     let mut waiting = false;
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     loop {
         let key = mind::input::read_key();
         if key.is_some_and(mind::input::is_escape) {
@@ -129,8 +131,8 @@ fn pixel_face(info: &'static BootInfo) -> Next {
                 },
             );
         }
-        // Time now comes from the rtc driver over IPC rather than a kernel syscall.
-        let seconds = mind::rtc::seconds_since_midnight().unwrap_or(abi::RTC_UNAVAILABLE);
+        // The time of day: the rtc driver read once a minute, the seconds between counted from CLOCK.
+        let seconds = rtc.seconds_since_midnight().unwrap_or(abi::RTC_UNAVAILABLE);
         let now = mind::time::uptime_ms();
         cycle.observe(seconds, now);
         if let Some(current) = Face::at(seconds) {
@@ -171,6 +173,7 @@ fn pixel_face(info: &'static BootInfo) -> Next {
 // The text face (issue 089): the same keys and log lines as the pixel face; drawn again every 100 ms.
 fn text_face(info: &'static BootInfo) -> Next {
     let Some(mut term) = mind::tui::Terminal::open(info, "dzen-clock") else { return Next::Exit };
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     print(b"\r\n[DZEN-CLOCK] STARTED (TEXT). D: DIGITS, C: ORBIT, P: 10S TICKS, H: TEXT, CTRL+Z: SHELL, ESC: EXIT.\r\n");
     let mut show = text::Show { digits: true, hints: true, mode: OrbitMode::Off, switch: !mind::windowed::active() };
     let mut cycle = Cycle::new();
@@ -188,7 +191,7 @@ fn text_face(info: &'static BootInfo) -> Next {
             }
             _ => {}
         }
-        let seconds = mind::rtc::seconds_since_midnight().filter(|&s| s < 86400);
+        let seconds = rtc.seconds_since_midnight().filter(|&s| s < 86400);
         let now = mind::time::uptime_ms();
         if let Some(s) = seconds { cycle.observe(s, now); }
         let current = seconds.and_then(Face::at);

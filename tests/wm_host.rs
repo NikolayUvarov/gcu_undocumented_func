@@ -337,7 +337,7 @@ fn the_top_bar_can_be_clicked() {
     wm.programs = catalogue(&programs(false));
     let items = desk::bar_items(160);
     assert_eq!(items[0], (0, 3, desk::Bar::Programs), "\"wm\" at the left");
-    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13)]);
+    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12)]);
     let mut cells = vec![Cell::BLANK; 160 * 50];
     let mut grid = Grid::new(&mut cells, 160, 50);
     let mut text = |_: u32, _: usize, _: usize| None;
@@ -397,6 +397,104 @@ fn a_recorded_window_is_marked() {
     desk.windows[index].recording = false;
     desk.draw(&mut grid, &DARK, &mut text);
     assert!(!(70..112).map(|x| grid.get(x, 5).ch).collect::<String>().contains("REC"));
+}
+
+#[test]
+fn full_screen_and_back() {
+    // Alt+F (211-APP-0014): the window in front covers the whole screen, without the frame or the bars; its frame is
+    // kept, and Alt+F gives it back.
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let before = rect(&wm.desk, 4);
+    wm.desk.take_changed();
+    assert_eq!(wm.key(alt_char('f')), Action::Redraw);
+    assert!(wm.status().contains(" FULL=4"), "{}", wm.status());
+    assert_eq!(wm.desk.content(4), Rect::new(0, 0, 160, 50), "a pixel window gets the screen's size");
+    assert_eq!(rect(&wm.desk, 4), before, "its frame is kept");
+    assert_eq!(wm.desk.take_changed(), [4], "the program is asked for the new size");
+    assert_eq!(wm.desk.hit(80, 0), Hit::Content(4), "no top bar to click");
+    assert_eq!(wm.pointer(5, 0, 1, 0), Action::Pointer { id: 4, x: 5, y: 0, buttons: 1, wheel: 0 }, "a click goes to the program");
+    wm.pointer(5, 0, 0, 0);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, x: usize, y: usize| Some((if (x, y) == (0, 0) { 'A' } else { '.' }, 0xFFFFFF, 0x0000AA));
+    let (owner, _) = wm.draw(&mut grid, &DARK, &mut text, None);
+    let tag = wm.desk.index(4).unwrap() as u16 + 1;
+    assert!(owner.iter().all(|&o| o == tag), "every cell shows its pixels: no frame, no top bar, no status line");
+    // Alt+Tab from it: the next window in front on the desktop as it was; back again, full screen again.
+    wm.key(alt(KEY_TAB, '\t'));
+    assert_eq!(wm.desk.focus(), Some(1));
+    assert!(!wm.status().contains("FULL="), "{}", wm.status());
+    let (owner, _) = wm.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[0], 0, "the top bar is back");
+    assert!((0..160).map(|x| grid.get(x, 0).ch).collect::<String>().starts_with(" wm │"));
+    wm.key(Key(event(KEY_TAB, '\t' as u32, MOD_ALT | MOD_SHIFT)));
+    assert!(wm.status().contains(" FULL=4"), "{}", wm.status());
+    assert_eq!(wm.key(alt_char('f')), Action::Redraw);
+    assert!(!wm.status().contains("FULL="));
+    assert_eq!(wm.desk.content(4), Rect::new(81, 26, 50, 20), "inside its frame again");
+    // A text window: the whole cell grid; its cursor where the program has it.
+    wm.desk.raise(2);
+    wm.key(alt_char('а')); // the Russian layout's letter on the F key
+    assert_eq!(wm.desk.content(2), Rect::new(0, 0, 160, 50));
+    let (_, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((3, 1)));
+    assert_eq!((grid.get(0, 0).ch, grid.get(159, 49).ch, cursor), ('A', ' ', Some((3, 1))), "its content from the top left, past its size blank");
+    // Snapping or maximizing a full-screen window ends full screen first.
+    wm.key(alt(KEY_LEFT, '\0'));
+    assert!(!wm.status().contains("FULL="));
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
+}
+
+#[test]
+fn the_window_list() {
+    // Alt+L (211-APP-0014): every window with its program's PID and state; arrows and Enter or a click bring one to
+    // the front, Alt+W closes the selected one, and the list follows windows that close.
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    wm.key(alt(KEY_ENTER, '\n')); // window 4 maximized: the others are under it
+    assert_eq!(wm.key(alt_char('l')), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=LIST") && wm.status().ends_with("LIST=4"), "{}", wm.status());
+    let listing = wm.desk.listing();
+    assert_eq!(listing.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1, 2, 3, 4], "in the order they opened");
+    assert_eq!(listing[3].1, "in front, maximized");
+    assert_eq!(listing[0].1, "hidden");
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    let area = wm.list_area();
+    let row = |grid: &Grid, y: usize| -> String { (area.x..area.right()).map(|x| grid.get(x, y).ch).collect() };
+    assert!(row(&grid, area.y).starts_with(" fm ") && row(&grid, area.y).contains("PID 101") && row(&grid, area.y).contains("hidden"), "{}", row(&grid, area.y));
+    assert!(row(&grid, area.y + 3).contains("dzen-clock") && row(&grid, area.y + 3).contains("PID 104") && row(&grid, area.y + 3).contains("in front, maximized"));
+    assert_eq!(grid.get(area.x, area.y + 3).style, DARK.selected, "the window in front is selected");
+    assert_eq!(wm.key(chr('x')), Action::Redraw, "nothing reaches the program while the list is shown");
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_UP));
+    assert!(wm.status().ends_with("LIST=2"));
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=2"), "{}", wm.status());
+    // A click on an entry; a click elsewhere only closes the list.
+    wm.key(alt_char('l'));
+    let area = wm.list_area();
+    wm.pointer(area.x + 5, area.y + 2, 1, 0);
+    wm.pointer(area.x + 5, area.y + 2, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
+    wm.key(alt_char('l'));
+    wm.pointer(2, 30, 1, 0);
+    wm.pointer(2, 30, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
+    // The top bar's item opens it too; Alt+W closes the selected window, and the list follows it out.
+    let windows = desk::bar_items(160).iter().find(|i| i.2 == desk::Bar::List).unwrap().0;
+    wm.pointer(windows + 2, 0, 1, 0);
+    wm.pointer(windows + 2, 0, 0, 0);
+    assert!(wm.status().starts_with("MODE=LIST"), "{}", wm.status());
+    wm.key(key(KEY_HOME));
+    assert_eq!(wm.key(alt_char('w')), Action::Close(1));
+    wm.desk.remove(1);
+    assert!(wm.status().starts_with("MODE=LIST") && wm.status().ends_with("LIST=2"), "{}", wm.status());
+    assert_eq!(wm.desk.listing().len(), 3);
+    wm.key(key(KEY_ESC));
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
 }
 
 #[test]

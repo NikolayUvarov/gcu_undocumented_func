@@ -9,6 +9,11 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use fm::fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo};
+use fm::store::{Store, Volume, WithStore};
+use mind::cid::{Cid, Codec};
+use mind::dag::{self, Blocks};
+use mind::idl::blockstore;
+use mind::idl::codec::{List, Text};
 use fm::panel::{self, Entry};
 use mind::abi::*;
 use mind::fs::{self, Error, File};
@@ -18,8 +23,9 @@ use mind::ipc::Endpoint;
 use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
 
-// The user's files to work on; system information only to lend to the monitors it starts.
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO);
+// The user's files to work on; system information only to lend to the monitors it starts; the block store as the
+// volume `store:` (300-APP-0019).
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_BLOCKSTORE);
 
 struct DiskFile(File);
 impl Source for DiskFile {
@@ -40,6 +46,72 @@ fn failure(error: Error) -> Failure {
 }
 
 struct Vfs;
+
+// The block store's client in SLOT_BLOCKSTORE, as fm::store needs it.
+#[derive(Clone, Copy)]
+struct Remote;
+
+const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
+
+fn fault(error: blockstore::Error) -> Failure {
+    match error {
+        blockstore::Error::NotFound => Failure::NotFound, blockstore::Error::Full | blockstore::Error::Quota => Failure::NoSpace,
+        blockstore::Error::Rights | blockstore::Error::ReadOnly => Failure::Denied, other => Failure::Other(alloc::format!("{:?}", other)),
+    }
+}
+fn lost(_: mind::Error) -> Failure { Failure::Other(String::from("the block store does not answer")) }
+
+impl Blocks for Remote {
+    fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, dag::Error> {
+        let codec = match codec { Codec::Raw => blockstore::Codec::Raw, Codec::DagCbor => blockstore::Codec::DagCbor };
+        let mut out = [0u8; 36];
+        match blockstore::put(STORE, codec, data, &mut out) {
+            Ok(Ok(n)) => Cid::from_bytes(&out[..n]).map_err(|_| dag::Error::Store),
+            Ok(Err(blockstore::Error::Full)) => Err(dag::Error::Full),
+            _ => Err(dag::Error::Store),
+        }
+    }
+    fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        match blockstore::get(STORE, &cid.to_bytes(), out) {
+            Ok(Ok(n)) => Ok(n), Ok(Err(blockstore::Error::NotFound)) => Err(dag::Error::NotFound), Ok(Err(blockstore::Error::Corrupt)) => Err(dag::Error::Corrupt), _ => Err(dag::Error::Store),
+        }
+    }
+    fn has(&mut self, cid: &Cid) -> Result<bool, dag::Error> { blockstore::has(STORE, &cid.to_bytes()).ok().and_then(Result::ok).ok_or(dag::Error::Store) }
+}
+
+impl Store for Remote {
+    fn resolve(&mut self, name: &str) -> Result<Option<(u64, Cid)>, String> {
+        match blockstore::resolve(STORE, name) {
+            Ok(Ok(head)) => Cid::from_bytes(head.root.as_slice()).map(|root| Some((head.version, root))).map_err(|_| String::from("a bad root")),
+            Ok(Err(blockstore::Error::NotFound)) => Ok(None),
+            Ok(Err(error)) => Err(alloc::format!("{:?}", error)),
+            Err(_) => Err(String::from("the block store does not answer")),
+        }
+    }
+    fn publish(&mut self, name: &str, expected: u64, root: &Cid) -> Result<(), Failure> {
+        blockstore::publish(STORE, name, expected, &root.to_bytes()).map_err(lost)?.map(drop).map_err(fault)
+    }
+    fn unpublish(&mut self, name: &str, expected: u64) -> Result<(), Failure> { blockstore::unpublish(STORE, name, expected).map_err(lost)?.map(drop).map_err(fault) }
+    fn commit(&mut self, updates: &[(&str, u64, Option<Cid>)]) -> Result<(), Failure> {
+        let mut list: Vec<blockstore::Update> = Vec::new();
+        for (name, expected, root) in updates {
+            let root = root.map_or(List::default(), |r| List::from_slice(&r.to_bytes()).unwrap_or_default());
+            list.push(blockstore::Update { name: Text::new(name).ok_or(Failure::Other(String::from("a long name")))?, expected: *expected, root });
+        }
+        blockstore::commit(STORE, &list).map_err(lost)?.map(drop).map_err(fault)
+    }
+    fn pins(&mut self) -> Result<Vec<(Cid, u64)>, String> {
+        match blockstore::pins(STORE) {
+            Ok(Ok(pins)) => Ok(pins.as_slice().iter().filter_map(|p| Cid::from_bytes(p.root.as_slice()).ok().map(|cid| (cid, p.size))).collect()),
+            Ok(Err(error)) => Err(alloc::format!("{:?}", error)),
+            Err(_) => Err(String::from("the block store does not answer")),
+        }
+    }
+    fn stats(&mut self) -> Result<(u64, u64, u32), String> {
+        match blockstore::stat(STORE) { Ok(Ok(s)) => Ok((s.used, s.sectors, s.names)), Ok(Err(error)) => Err(alloc::format!("{:?}", error)), Err(_) => Err(String::from("the block store does not answer")) }
+    }
+    fn names(&mut self) -> Option<Vec<String>> { None } // blockstore.wit 1.3 has no list of names
+}
 
 impl Disk for Vfs {
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String> {
@@ -96,10 +168,11 @@ impl Disk for Vfs {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:) and the RAM disk (ram:).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one. The mouse: a click puts the cursor on an entry, a double click\nopens it, a right click marks it, the wheel scrolls, a click on the key bar presses that key.\nIt may change ram: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
+    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:), the RAM disk (ram:) and, where mounted, log:, models:\nand the block store (store:: names as files, a copy there publishes one, a delete unpublishes it).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one. The mouse: a click puts the cursor on an entry, a double click\nopens it, a right click marks it, the wheel scrolls, a click on the key bar presses that key.\nIt may change ram:, log: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Terminal::open(info, "fm") else { return };
-    let mut disk = Vfs;
+    let store = (mind::dev::cap_info(SLOT_BLOCKSTORE).0 == CAP_KIND_ENDPOINT).then(|| Volume::new(Remote));
+    let mut disk = WithStore { disk: Vfs, store };
     // The viewer's window lives as long as the program; the viewer gives it back when it closes.
     let window: &'static mut [u8] = Box::leak(alloc::vec![0u8; 64 * 1024].into_boxed_slice());
     let mut fm = Fm::new(window, &mut disk);

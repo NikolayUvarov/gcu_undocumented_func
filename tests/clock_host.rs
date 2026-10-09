@@ -121,3 +121,46 @@ fn the_dzen_clock_on_one_line() {
     let (bytes, n) = dzen::line(face::Face::at(0).unwrap(), 0);
     assert_eq!(core::str::from_utf8(&bytes[..n]).unwrap(), "00:00:00  ·· R WR", "hour 0: red at the bottom right, step 0: white at the bottom left");
 }
+
+#[path = "../libmind/src/wallclock.rs"]
+mod wallclock;
+
+#[test]
+fn the_rtc_is_read_once_a_minute_and_seconds_are_counted_between() {
+    // 000-APP-0012: a clock asks 10 times a second; the slow clock (RTC) changes its second 0.35 s after the start.
+    let rtc = |t: u64| Some((43_200 + (t + 650_000_000) / 1_000_000_000) as usize % 86_400);
+    let mut clock = wallclock::WallClock::new();
+    let (mut reads, mut shown) = (0, Vec::new());
+    for tick in 0..6_000u64 { // ten minutes at 100 ms
+        let t = tick * 100_000_000;
+        let s = clock.seconds(t, || { reads += 1; rtc(t) }).unwrap();
+        assert!(s.abs_diff(rtc(t).unwrap()) <= 1, "{} s off at {} ms", s.abs_diff(rtc(t).unwrap()), t / 1_000_000);
+        if shown.last() != Some(&s) { shown.push(s); }
+    }
+    assert!(reads <= 10 * 6 + 10, "{} reads in ten minutes", reads); // about six per resynchronization, not 6000
+    assert_eq!(shown.len(), 601, "every second shown once, from 12:00:00 to 12:10:00");
+    assert!(shown.windows(2).all(|w| w[1] == w[0] + 1));
+}
+
+#[test]
+fn midnight_wraps_and_marks_the_date_due() {
+    let mut clock = wallclock::WallClock::new();
+    assert_eq!(clock.seconds(0, || Some(86_398)), Some(86_398));
+    assert!(clock.date_due());
+    assert_eq!(clock.seconds(100_000_000, || Some(86_399)), Some(86_399)); // the second changed: counted from here
+    assert!(!clock.date_due());
+    assert_eq!(clock.seconds(1_200_000_000, || panic!("not read between resynchronizations")), Some(0));
+    assert!(clock.date_due(), "past midnight the date is read again");
+    assert!(!clock.date_due());
+}
+
+#[test]
+fn a_stuck_or_missing_rtc() {
+    // A clock whose second never changes is taken as it is after 1.5 s; one that does not answer gives None.
+    let mut clock = wallclock::WallClock::new();
+    let mut reads = 0;
+    for tick in 0..40u64 { clock.seconds(tick * 100_000_000, || { reads += 1; Some(100) }); }
+    assert!(reads <= 17, "{} reads", reads);
+    assert_eq!(clock.seconds(5_000_000_000, || Some(100)), Some(103));
+    assert_eq!(wallclock::WallClock::new().seconds(0, || None), None);
+}

@@ -5,7 +5,8 @@
 extern crate alloc;
 
 pub use edit::{buffer, editor};
-pub use mind::{abi, keys, pattern, tui};
+pub use mind::{abi, cid, dag, keys, pattern, tui};
 
 pub mod panel;
 pub mod fm;
+pub mod store;

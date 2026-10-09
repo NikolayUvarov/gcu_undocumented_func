@@ -1,0 +1,54 @@
+# 300-APP-0019 — The block store as a panel of `fm`: the volume `store:` — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.3, MC-4.7
+
+## Problem
+
+The block store runs at boot ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done)), and the shell holds its client with the get, put and publish rights. Only the console tools `blocks` and `tally` reach it. The file manager could not show what is published, read an object, or store a file.
+
+## Plan
+
+- **`fm::store`:** the store as a volume of `fm`, over a `Store` trait (the service in the system, memory in the host tests).
+  - Published names are files, and a `/` in a name makes directories.
+  - `.pins` holds the objects the caller's owner pinned, by CID.
+  - An object is read through `mind::dag`, every block checked against its CID (MC-4.2).
+  - A file written to `store:` is stored as an object. When its last write ends (`Sink::finish`, new), it is published under its path, by compare-and-swap on the version: 0 for a new name, the current one when overwriting.
+  - A rename publishes the new name and removes the old one in one `commit`. A delete unpublishes.
+  - Objects are never changed in place, so `writable` is false there.
+  - A name must be 1 to 64 of `A-Z a-z 0-9 . _ / -`, or the copy is refused with that message.
+- **`WithStore`** puts the volume beside any `Disk`: paths on `store:` go to the store, the rest to the disk.
+- **`fm` asks for `REQUEST_BLOCKSTORE`.** Without a client, `store:` is not offered.
+- **The volume menu** shows the store with its names, size and free space, and no FAT type.
+- **Not possible yet:** `blockstore.wit` 1.3 cannot list names. So `fm` shows the names it published or opened in that run, and a list of names is requested from the storage track (`requests-STO.md`).
+
+## Acceptance criteria
+
+- **The `fm` host test** `the_block_store_panel`:
+  - the volume menu line;
+  - the pins;
+  - a name listed once it is opened;
+  - copies to `store:` of a small file and of a file of three blocks, read back equal;
+  - F3, and a copy back to `ram:`;
+  - a rename in one commit;
+  - a name the store does not take, refused;
+  - F8 unpublishing;
+  - every name once the store can list them.
+- **The QEMU store suite:** `fm` copies a file from `ram:` to `store:`, views it with F3 and deletes it with F8. The store's log shows the name published with the file's raw CID, then removed.
+
+## Resolution
+
+- **[`fm/src/store.rs`](../fm/src/store.rs):** `Store`, `Volume`, `WithStore`, and the object reader and writer.
+- **[`fm/src/fm.rs`](../fm/src/fm.rs):**
+  - `Sink::finish`, called after the last write of a copy and of a save;
+  - `store:` in `VOLUMES`;
+  - a volume line without a FAT type.
+- **[`fm/src/main.rs`](../fm/src/main.rs):** `Remote`, the store's client over `idl/blockstore.wit`, and the request flag.
+- **Docs:** [`docs/tools/README.md`](../docs/tools/README.md) and [`README_RU.md`](../docs/tools/README_RU.md) §4.1, and [`README.md`](../README.md).
+- **Tests:**
+  - `tests/fm_host.rs` (16 pass);
+  - `fm_store_check` at the end of the store suite in `tests/qemu_smoke.py`, which passed on x86 with 4 CPUs.
+- **The request:** [requests-STO.md](../issues/requests-STO.md), "A list of the published names".
+
+## Related
+
+[300](../issues/300-checksummed-block-store.md), [300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done) (`blocks`), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done), [063](063-file-manager-read-only.done), [068](068-fm-write-df-fsck.done).

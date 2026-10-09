@@ -163,6 +163,7 @@ impl Top {
         let endpoints: Vec<String> = details.caps.iter().filter(|c| c.kind as usize == CAP_KIND_ENDPOINT && c.endpoint != 0).map(|c| format!("{}→{}", c.slot, c.endpoint)).collect();
         if !endpoints.is_empty() { lines.push(format!("Endpoints (slot→index): {}", endpoints.join(" "))); }
         lines.push(format!("Quotas: tasks {}/{}, endpoints {}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints));
+        lines.push(text::budget_line(t.budget_ns, t.period_ns, t.band, t.throttled));
         lines
     }
 
@@ -217,8 +218,9 @@ impl Top {
     /// Columns that fit in `width` cells: name, width, right-aligned. Lower-priority columns are dropped first.
     pub fn columns(width: usize) -> Vec<(&'static str, usize, bool)> {
         // (title, width, right-aligned, priority: higher stays longer)
-        const ALL: [(&str, usize, bool, u8); 13] = [("PID", 5, true, 9), ("PPID", 5, true, 3), ("NAME", 16, false, 9), ("STATE", 5, false, 8), ("CPU", 3, true, 5),
-            ("%CPU", 5, true, 9), ("TIME", 9, true, 7), ("SYSC/s", 7, true, 6), ("MEM", 7, true, 7), ("HEAP", 7, true, 4), ("SHARED", 7, true, 2), ("CAPS", 4, true, 3), ("EP", 5, true, 1)];
+        const ALL: [(&str, usize, bool, u8); 14] = [("PID", 5, true, 9), ("PPID", 5, true, 3), ("NAME", 16, false, 9), ("STATE", 5, false, 8), ("CPU", 3, true, 5),
+            ("%CPU", 5, true, 9), ("TIME", 9, true, 7), ("SYSC/s", 7, true, 6), ("MEM", 7, true, 7), ("HEAP", 7, true, 4), ("SHARED", 7, true, 2), ("CAPS", 4, true, 3), ("EP", 5, true, 1),
+            ("BUDGET", 9, true, 5)];
         let mut keep = 0u8;
         loop {
             let used: usize = ALL.iter().filter(|c| c.3 > keep).map(|c| c.1 + 1).sum();
@@ -234,7 +236,7 @@ impl Top {
             "NAME" => { let mut name = String::new(); for _ in 1..depth { name.push_str("  "); } if depth > 0 { name.push_str("└ "); } name.push_str(&task.name); name }
             "STATE" => String::from(text::state(task.state)), "CPU" => format!("{}", task.cpu), "%CPU" => text::permille(usage.cpu),
             "TIME" => text::cpu_time(task.run_ns), "SYSC/s" => text::count(usage.syscalls), "MEM" => text::size(task.memory()), "HEAP" => text::size(task.heap),
-            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => if task.quota_endpoints >= 10_000 { format!("{}", task.used_endpoints) } else { format!("{}/{}", task.used_endpoints, task.quota_endpoints) }, // init's and loader's quotas of 65 535 and 65 279 (issue 171) do not fit the column
+            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "BUDGET" => text::budget(task.budget_ns, task.period_ns, task.throttled), "EP" => if task.quota_endpoints >= 10_000 { format!("{}", task.used_endpoints) } else { format!("{}/{}", task.used_endpoints, task.quota_endpoints) }, // init's and loader's quotas of 65 535 and 65 279 (issue 171) do not fit the column
             _ => String::new(),
         }
     }

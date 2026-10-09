@@ -142,18 +142,22 @@ pub struct Resampler {
 }
 
 impl Resampler {
-    pub fn new(rate: u32, channels: usize) -> Self {
-        let rate = rate.max(1);
-        let common = gcd(RATE, rate);
-        let (up, down) = ((RATE / common) as usize, (rate / common) as usize);
+    pub fn new(rate: u32, channels: usize) -> Self { Self::between(rate, RATE, channels) }
+
+    /// From `rate` to `to` (mono out), cut just below the lower of the two Nyquist frequencies (252: a voice's
+    /// 22.05 kHz to the gateway's 48 kHz).
+    pub fn between(rate: u32, to: u32, channels: usize) -> Self {
+        let (rate, to) = (rate.max(1), to.max(1));
+        let common = gcd(to, rate);
+        let (up, down) = ((to / common) as usize, (rate / common) as usize);
         let channels = channels.max(1);
         if up == 1 && down == 1 {
             return Self { channels, up, down, taps: 1, coefficients: vec![ONE as i32], history: vec![0; 2], write: 0, position: 0 };
         }
         // Taps per phase: the transition band is about 2.2 kHz wide at every input rate.
-        let taps = if rate > RATE { (96 * rate as usize).div_ceil(48_000).max(32) } else { 32 };
+        let taps = if rate > to { (96 * rate as usize).div_ceil(48_000).max(32) } else { 32 };
         let length = up * taps;
-        let cutoff = 0.5 * 0.9375 * rate.min(RATE) as f64 / (rate as f64 * up as f64); // cycles per upsampled sample
+        let cutoff = 0.5 * 0.9375 * rate.min(to) as f64 / (rate as f64 * up as f64); // cycles per upsampled sample
         let center = (length - 1) as f64 / 2.0;
         let norm = bessel_i0(BETA);
         let mut prototype = vec![0f64; length];

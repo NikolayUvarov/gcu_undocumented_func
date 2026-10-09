@@ -31,6 +31,7 @@ pub struct Buffer {
     redo: Vec<Group>,
     saved: usize, // undo depth at the last save (usize::MAX: never matches)
     open_group: bool,
+    changed: usize, // the first line changed since `take_changed` (usize::MAX: none)
 }
 
 impl Buffer {
@@ -39,7 +40,7 @@ impl Buffer {
         let pieces = if len > 0 { vec![Piece { source: Source::Original, start: 0, len }] } else { Vec::new() };
         let mut lines = vec![0];
         lines.extend(original.iter().enumerate().filter(|(_, &b)| b == b'\n').map(|(i, _)| i + 1));
-        Self { original, added: Vec::new(), pieces, len, lines, undo: Vec::new(), redo: Vec::new(), saved: 0, open_group: false }
+        Self { original, added: Vec::new(), pieces, len, lines, undo: Vec::new(), redo: Vec::new(), saved: 0, open_group: false, changed: usize::MAX }
     }
 
     pub fn len(&self) -> usize { self.len }
@@ -52,6 +53,12 @@ impl Buffer {
         let next = if line + 1 < self.lines.len() { self.lines[line + 1] - 1 } else { return self.len };
         if next > self.line_start(line) && self.byte(next - 1) == Some(b'\r') { next - 1 } else { next }
     }
+    /// The first line changed since the last call, if any (the highlighter's states after it are stale).
+    pub fn take_changed(&mut self) -> Option<usize> {
+        let line = core::mem::replace(&mut self.changed, usize::MAX);
+        (line != usize::MAX).then_some(line)
+    }
+
     /// The line that holds byte offset `at`.
     pub fn line_of(&self, at: usize) -> usize { self.lines.partition_point(|&start| start <= at) - 1 }
 
@@ -127,6 +134,7 @@ impl Buffer {
         }
         self.len += data.len();
         let line = self.line_of(at);
+        self.changed = self.changed.min(line);
         for start in &mut self.lines[line + 1..] { *start += data.len(); }
         let new: Vec<usize> = data.iter().enumerate().filter(|(_, &b)| b == b'\n').map(|(i, _)| at + i + 1).collect();
         let tail = self.lines.split_off(line + 1);
@@ -138,6 +146,7 @@ impl Buffer {
         let end = end.min(self.len);
         if start >= end { return Vec::new(); }
         let removed = self.bytes(start, end);
+        self.changed = self.changed.min(self.line_of(start));
         let first = self.split(start);
         let last = self.split(end);
         self.pieces.drain(first..last);

@@ -1,0 +1,47 @@
+# 000-APP-0012 — Clocks read the RTC once a minute; `sysmon` counts endpoint messages once a second — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-5.1, MC-5.2
+
+## Problem
+
+The kernel track's request ([requests-APP.md](../issues/requests-APP.md), 2026-10-07):
+
+- `clock` and `dzen-clock` called `mind::rtc::seconds_since_midnight()` after every `wait_or_exit(100)`, so each clock made 10 IPC calls a second to the `rtc` service.
+  - On x86 each answer is about 14 CMOS port accesses, each a system call; 60 clocks came to 8 700 port system calls a second.
+  - On aarch64 with 120 clocks the RTC service's queue stayed full, and a `date` from the shell waited 8.5 s for a place.
+- `sysmon` read `STAT_TASKS` and `STAT_ENDPOINTS` every 100 ms, each about a millisecond under the kernel's lock with 170 tasks.
+
+## Plan
+
+- `mind::wallclock::WallClock`: the time of day from a clock that is expensive to read.
+  - It reads the slow clock about once a minute. Between reads it counts seconds from `CLOCK`, the monotonic nanoseconds.
+  - A resynchronization reads until the slow clock's second changes, so the count starts at the beginning of a second. A clock whose second does not change within 1.5 s is taken as it is.
+  - It marks the date due once after midnight and after each resynchronization.
+  - The reads go to a function the caller gives, so the counting is tested on the host.
+- `mind::rtc::Clock` wraps it for the `rtc` service, and keeps the date until it is due again.
+- `clock` and `dzen-clock` use one `Clock` in each face's loop.
+- `sysmon` keeps sampling tasks every 100 ms. It reads endpoints once a second, and the 100 ms samples show a tenth of that second's messages.
+
+## Acceptance criteria
+
+- Host tests:
+  - in 10 minutes of 100 ms steps the RTC is read at most 70 times, and the shown seconds follow one another without a gap or a repeat;
+  - midnight wraps and marks the date due;
+  - an RTC that does not answer, or whose second does not change, still gives a time.
+- QEMU (x86, shell suite): four clocks in the background add fewer than 20 messages in 5 s to the `rtc` service's endpoints. Before, they added 200.
+
+## Resolution
+
+- **[`libmind/src/wallclock.rs`](../libmind/src/wallclock.rs):** `WallClock`, as planned.
+- **[`libmind/src/rtc.rs`](../libmind/src/rtc.rs):** `Clock`, with `seconds_since_midnight()` and `date()`.
+- **[`clock/src/main.rs`](../clock/src/main.rs) and [`dzen-clock/src/main.rs`](../dzen-clock/src/main.rs):** the pixel, line and text faces read the time through `Clock`.
+- **[`sysmon/src/main.rs`](../sysmon/src/main.rs):** `STAT_ENDPOINTS` once a second, as planned.
+- **Tests:**
+  - [`tests/clock_host.rs`](../tests/clock_host.rs) has three new tests, and all 14 pass.
+  - In `tests/qemu_smoke.py`, `rtc_load_check` runs in the shell suite. It also requires the clocks' reads at their start to show in the count, so the check sees their calls at all.
+  - On x86 with 4 CPUs, four clocks sent 24 messages to the RTC service as they started and none in the next 5 s.
+- **Not measured:** the aarch64 run with 120 clocks that the request describes. The aarch64 groups run the same shell suite in CI.
+
+## Related
+
+[000-KRN-0010](000-KRN-0010-ipc-back-pressure-without-starvation.done) (the kernel's side: back-pressure without starvation), [089](089-text-clock-faces.done), [u016](u016-clock-console-faces.done).

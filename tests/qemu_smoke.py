@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
@@ -36,6 +37,9 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
+from fbank_reference import signal as fbank_signal  # noqa: E402
+FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
@@ -274,7 +278,8 @@ class VM:
     def screenshot(self):
         path = ROOT / (self.disk + ".ppm")
         try:
-            self.hmp(f"screendump {path.relative_to(ROOT).as_posix()}")
+            # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
+            self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
             data = path.read_bytes()
             # Retain a viewable artifact outside the build tree.
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
@@ -1075,6 +1080,27 @@ def line_faces_check(vm):
         vm.expect("MIND> ")
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: clock --line and dzen-clock --line run as console programs: one line on the screen, written again every second; Esc stops them", flush=True)
+    rtc_load_check(vm)
+
+
+def rtc_load_check(vm):
+    """000-APP-0012: a clock reads the RTC service about once a minute and counts the seconds between, so four clocks
+    in the background add a few messages to its endpoint, not 10 a second each."""
+    rtc = vm.services()["rtc"]
+    def rtc_messages():
+        return sum(int(m) for m, server in re.findall(r"^EP=\d+ .*MESSAGES=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M) if int(server) == rtc)
+    start = rtc_messages()
+    pids = [int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) for _ in range(4)]
+    time.sleep(3)  # each clock waits out one change of the RTC's second when it starts
+    before = rtc_messages()
+    time.sleep(5)
+    added = rtc_messages() - before
+    for pid in pids:
+        vm.command(f"kill {pid}")
+    # Starting, each clock read the RTC until its second changed: the count sees the clocks' calls.
+    assert before - start >= 4, f"{before - start} messages to the RTC service while four clocks started"
+    assert added < 20, f"{added} messages to the RTC service in 5 s with 4 clocks (10 a second each was 200)"
+    print(f"PASS: four clocks: {before - start} messages to the RTC service as they started, {added} in the next 5 s (they read it once a minute)", flush=True)
 
 
 # msh scripts on the shell suite's disk (issue 094).
@@ -1233,7 +1259,77 @@ def tools_suite(vm):
     require(vm.command("view nothing.txt"), "PID=")
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+    fbank_check(vm)
+    dictate_check(vm)
+    speak_check(vm)
     monitors_check(vm)
+
+
+def fbank_check(vm):
+    """250: dictate computes the dictation models' features in the system (built with SSE2 on x86, in soft float on
+    aarch64, where programs may not use FP/SIMD yet) as kaldi-native-fbank does on the host (tests/fbank_reference.txt)."""
+    reference = [list(map(float, line.split())) for line in (ROOT / "tests/fbank_reference.txt").read_text().splitlines() if not line.startswith("#")]
+    vm.send("dictate --features fbank.wav\n")
+    out = vm.expect("MIND> ", timeout=60, after="dictate --features fbank.wav\n")
+    head = re.search(r"FBANK SAMPLES=(\d+) FRAMES=(\d+) IN (\d+) US", out)
+    assert head and int(head[1]) == len(FBANK_SIGNAL) and int(head[2]) == len(reference), out[-2000:]
+    rows = dict(re.findall(r"^F(\d+) ([-\d. ]+)$", out.replace("\r", ""), re.M))
+    worst = 0.0
+    for frame, want in enumerate(reference):
+        got = list(map(float, rows[str(frame)].split()))
+        assert len(got) == 80, (frame, len(got))
+        worst = max(worst, max(abs(a - b) for a, b in zip(got, want)))
+    assert worst < 2e-3, worst
+    print(f"PASS: dictate's features in the system equal kaldi-native-fbank's ({head[2]} frames, largest difference {worst:.1e}, "
+          f"{int(head[3]) / 1000:.1f} ms)", flush=True)
+
+
+# The toy transducer's text of the test signal (tests/nn_host.rs, TOY_TEXT).
+TOY_TEXT = "нет нет дом нет нет дом нет нет дом нет нет дом нет нет"
+
+
+def dictate_check(vm):
+    """250: dictate runs the whole chain in the system (a network file read and checked, features, encoder, greedy
+    search) and gives the host's text, with tests/dictate_toy.bin (scripts/voice_dictate/toy.py) in place of the 71 MB
+    model; and refuses a damaged file."""
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("dictate --model toy.bin fbank.wav")
+    simd = re.search(r"DICTATE: MODEL 9604 BYTES, READ IN \d+ MS, CHECKED IN \d+ MS; SIMD (AVX2|NONE)", out)
+    assert simd and f"TEXT: {TOY_TEXT}" in out and "331 MS OF SPEECH" in out, out[-2000:]
+    require(run("dictate --model toy-damaged.bin fbank.wav"), "dictate: toy-damaged.bin: Format(\"checksum\")")
+    print(f"PASS: dictate in the system: the toy transducer's text is the host's (SIMD {simd[1]}); a damaged file is refused", flush=True)
+
+
+def speak_dictionary():
+    """252: a small MINDDIC1 dictionary (scripts/voice_tts/dictionary.py) over a made-up phoneme table, the text speak
+    reads, and the ids vosk-tts's algorithm gives for it on the host."""
+    sys.path.insert(0, str(ROOT / "scripts/voice_tts"))
+    sys.dont_write_bytecode = True  # nothing written into scripts/
+    import dictionary as voice_dictionary
+    names = ["_", "^", "$", " ", "!", ",", ".", "-"] + [v + s for v in "aoueiy" for s in "01"] + \
+        [c + soft for c in "bvgdzklmnprstfh" for soft in ("", "j")] + ["zh", "c", "ch", "sh", "sch", "j"]
+    table = {n: [i] for i, n in enumerate(names)}
+    rules = voice_dictionary.convert
+    best = {"говорит": rules("говор+ит"), "разум": rules("р+азум"), "корабля": rules("корабл+я"), "ёлка": rules("+ёлка"),
+            "мкс": ["e0", "m", "k", "a0", "e1", "s"]}  # an abbreviation, kept with its phonemes
+    text = "Говорит разум корабля — ёлка, МКС! Неизвестное слово."
+    data = voice_dictionary.build(table, best)[0]
+    return data, text, voice_dictionary.ids(text, table, best)
+
+
+def speak_check(vm):
+    """252: speak's Russian front end in the system (dictionary, rules, punctuation) gives the host's ids, and a
+    damaged dictionary is refused."""
+    want = speak_dictionary()[2]
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("speak --dictionary speak.dic --ids --file speak.txt")
+    assert f"IDS: {' '.join(map(str, want))}" in out, (want, out[-2000:])
+    require(run("speak --dictionary speak-damaged.dic --ids --file speak.txt"), "speak: speak-damaged.dic: checksum")
+    print(f"PASS: speak in the system: the Russian front end gives the host's {len(want)} phoneme ids; a damaged dictionary is refused", flush=True)
 
 
 def table_row(screen, pattern):
@@ -1291,6 +1387,7 @@ def monitors_check(vm):
     baseline = heap_used(vm)
     clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
     tasks = BASE + 2  # the services, clock and the monitor
+    require(vm.command(f"budget {clock} 20 100"), f"BUDGET PID={clock} 20 MS PER 100 MS")  # top shows it (000-APP-0034)
     # top: the task table agrees with ps; details, sorting, filter and tree.
     vm.send("top\n")
     vm.expect("[TOP] READY")
@@ -1300,6 +1397,7 @@ def monitors_check(vm):
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
     assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
@@ -2674,6 +2772,53 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
           "effect cut short comes back pending and is reconciled before another begins", flush=True)
+    fm_store_check(vm)
+
+
+def fm_store_check(vm):
+    """300-APP-0019: fm shows the block store as store:; a file copied there is stored as an object and published under
+    its name, F3 reads it back, F8 unpublishes it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    text = b"from fm to the store\n"
+    require(vm.command("write ram:fmnote.txt from fm to the store"), "WROTE 21 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: FULL")
+    keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: A:, ram:, store: (no log: or models: here)
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/store: BRIEF")
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    to("fmnote.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, store:/
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "JOB=NONE", whole=True), "RIGHT=/store: BRIEF")
+    keys(b"\t", "ACTIVE=R")
+    to("fmnote.txt")
+    keys(b"\x1bOR", "VIEW=1")  # F3
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("from fm to the store") in row for row in screen), screen
+    keys(b"\x1b", "VIEW=0")
+    keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
+    require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
+    require(log, "REMOVED fmnote.txt VERSION")
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
 
 
 def free_port():
@@ -3107,6 +3252,13 @@ def services_suite(vm):
     require(output, "fm — file manager")
     assert "STARTED" not in output, output
     require(vm.command("help cat"), "- ls [path], cat <file>: files")
+    # log: named in help, efivar described (211-APP-0013); the USB image test checks log: on a disk that has it.
+    require(vm.command("help ls"), "log: the boot disk's log partition")
+    require(vm.command("help write"), "on ram:, on log: and in data/")
+    output = vm.command("efivar --help")
+    require(output, "efivar — the firmware's boot variables")
+    assert "ALLOW?" not in output, "--help asks the user for nothing"
+    require(vm.command("help efivar"), "bootnext <hex>")
     output = vm.command("help voice")
     require(output, "- voice on [--wav file] [seconds], voice off, voice listen: voice control")
     require(output, "PROGRAM voice:")
@@ -3648,12 +3800,26 @@ def edit_check(vm):
     leave(f10, "[EDIT] DONE")
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
     require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
+    require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
+    start("ram:colour.rs")
+    keys(b"\x1b[F", "LINE=1 COL=18 ")  # End: the cursor's underline off the cells checked
+    time.sleep(.3)
+    _, size, _, _ = vm.screenshot().split(b"\n", 3)
+    width, height = map(int, size.split())
+    x0, y0 = width % 8 // 2, height % 16 // 2 + 16
+    check_text16(vm, x0, y0, "fn", 0xFFFFFF, 0x0000AA)
+    check_text16(vm, x0 + 3 * 8, y0, "main", 0x55FFFF, 0x0000AA)
+    check_text16(vm, x0 + 10 * 8, y0, "// note", 0xAAAAAA, 0x0000AA)
+    assert canon("Rust") in screen_text(vm)[0]
+    vm.serial(enter=False)
+    leave(f10, "[EDIT] DONE")
     # vfs_server made a scope for each start and ended those whose editor had exited.
     scopes = vm.command("dmesg -s vfs_server")
     for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
         require(scopes, made)
     require(scopes, "ENDED")
-    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory", flush=True)
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory; a Rust file in its colours", flush=True)
 
 
 def edit_suite(args):
@@ -4816,6 +4982,17 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+    # Copies of clock that also ask for the network and the TLS client (351-APP-0017): tlsclock has a rule in the
+    # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
+    elf = bytearray((disk / "clock.elf").read_bytes())
+    note = elf.index(b"MINDREQ1") + 8
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072).to_bytes(4, "little")
+    for name in ("tlsclock", "tlsnone"):
+        (disk / f"{name}.elf").write_bytes(elf)
+    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
+    (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
     # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
     entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
@@ -4871,6 +5048,7 @@ def tls_suite(args, disk):
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
         assert holders == ["tls"], holders
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+        tls_lending_check(vm, servers, real["tls"])
     finally:
         vm.close()
         for server in (good, rogue, asking):
@@ -4950,6 +5128,33 @@ def device_key_check(args, cpu):
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
+
+
+def tls_lending_check(vm, servers, tls):
+    """351-APP-0017: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
+    flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
+    service = {ep for ep, server in servers.items() if server == tls}
+
+    def lent(command):
+        out = vm.command(command)
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
+        caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        require(vm.command(f"kill {pid}"), "KILLED")
+        slot = re.search(r"^SLOT=20 [^\n]* EP=(\d+)", caps, re.M)
+        return out, bool(slot and int(slot[1]) in service)
+
+    out, tls_lent = lent("run tlsclock &")
+    assert tls_lent, out
+    require(vm.command("netgrants"), "GRANT ")
+    out, tls_lent = lent("run tlsnone &")
+    require(out, "NETWORK FOR tlsnone: NoPolicy")
+    assert not tls_lent, "no flow grant, no TLS client"
+    out, tls_lent = lent("msh data/notls.msh")
+    assert not tls_lent, "a script without `tls`"
+    out, tls_lent = lent("msh data/tls.msh")
+    assert tls_lent, out
+    print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
+          "grant, and to a script's program only if the script declares tls", flush=True)
 
 
 def tpm_check(args, cpu):
@@ -5157,6 +5362,90 @@ def wm_suite(vm):
         # Alt+Tab until `window` is in front.
         return keys(*["alt-tab"] * (list(state()[2]).index(window) + 1))
 
+    def last_state():
+        return re.findall(r"\[WM\] (MODE=[^\n]*)", "".join(seen))[-1]
+
+    def full_screen_and_list(fm, clock, top):
+        # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
+        # Alt+Tab from it shows the desktop with the next window in front, and back it is full again; Alt+F again
+        # gives it its frame back.
+        frames = front(clock)[2]
+        mode, focus, rects = keys("alt-f", text=f"FULL={clock}")
+        assert focus == clock and rects == frames, (focus, rects)
+        until(f"[WM] PIXELS {clock} 1280X800")  # it draws at the screen's size
+        time.sleep(.5)
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        width = int(size.split()[0])
+        assert not screen[0].startswith(canon(" wm │")) and canon("keys go to") not in screen[-1], (screen[0], screen[-1])
+        green = [px for py in range(0, 800, 2) for px in range(0, 1280, 2) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
+        assert green and max(green) > 700, (len(green), max(green, default=0))  # its digits across the screen
+        mode, focus, rects = keys("alt-tab")
+        assert focus != clock and "FULL=" not in last_state(), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        assert screen[0].startswith(canon(" wm │")), screen[0]
+        keys(*["alt-tab"] * (len(frames) - 1), text=f"FULL={clock}")
+        mode, focus, rects = keys("alt-f")
+        assert focus == clock and rects == frames and "FULL=" not in last_state(), last_state()
+        until(f"[WM] PIXELS {clock} {(frames[clock][2] - 2) * 8}X{(frames[clock][3] - 2) * 16}")
+        # A text window: top on the whole cell grid, then back in its frame.
+        front(top)
+        keys("alt-f", text=f"FULL={top}")
+        for _ in range(20):  # top lays itself out again on the whole grid
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(canon("PID NAME") in row for row in screen):
+                break
+        assert not screen[0].startswith(canon(" wm │")) and any(canon("PID NAME") in row for row in screen), screen
+        assert canon("keys go to") not in screen[-1], screen[-1]
+        mode, focus, rects = keys("alt-f")
+        assert focus == top and rects == frames and "FULL=" not in last_state(), last_state()
+        # The window list (211-APP-0014): Alt+L lists the three windows with their programs' PIDs; the second is
+        # brought to the front by keys, then by a click; a window closed from the list leaves it.
+        ids = sorted(frames)
+        owners = {int(m[0]): int(m[1]) for m in windows_re.findall("".join(seen))}
+        mode, focus, rects = keys("alt-l", text="MODE=LIST")
+        assert last_state().endswith(f"LIST={top}"), last_state()
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        column = screen[title].index(canon(" Windows "))
+        for row, window in zip(screen[title + 1:title + 1 + len(ids)], ids):
+            assert canon(f"PID {owners[window] + BASE} ") in row, (window, row)
+        assert canon("in front") in screen[title + 1 + ids.index(top)], screen[title + 1:title + 4]
+        keys("home", "down", text=f"LIST={ids[1]}")
+        mode, focus, rects = keys("ret")
+        assert mode == "NORMAL" and focus == ids[1], (mode, focus)
+        front(next(w for w in ids if w != ids[1]))
+        keys("alt-l", text="MODE=LIST")
+        point(column + 3, title + 2)  # the second entry
+        mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "NORMAL" and focus == ids[1], last_state()
+        # A fourth window, closed from the list with Alt+W: the list follows it out.
+        keys("alt-r", "c", "l", "o", "c", "k", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        extra = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={extra}")
+        keys("alt-w", text=f"CLOSE {extra}")
+        until(f"GONE {extra}")
+        while extra in state()[2]:
+            wait()
+        assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        assert sum(canon("PID ") in row for row in screen[title + 1:title + 6]) == 3, screen[title:title + 6]
+        mode, focus, rects = keys("esc")
+        assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
+        print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
+              "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
+              "window to the front, Alt+W closes one and the list follows", flush=True)
+
     vm.send("wm fm, clock, top\n")
     out = wait()
     while len(windows_re.findall("".join(seen))) < 3:
@@ -5339,6 +5628,7 @@ def wm_suite(vm):
     until(f"GONE {caps}")
     while caps in state()[2]:
         wait()  # the state line after the window went
+    full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
@@ -6108,6 +6398,22 @@ def main():
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
             if suite == "tools":
+                # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
+                # and runs the toy transducer on it; one byte changed in a copy fails its checksum.
+                with wave.open(str(disk / "fbank.wav"), "wb") as out:
+                    out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
+                    out.writeframes(struct.pack(f"<{len(FBANK_SIGNAL)}h", *FBANK_SIGNAL))
+                toy = bytearray((ROOT / "tests/dictate_toy.bin").read_bytes())
+                (disk / "toy.bin").write_bytes(toy)
+                toy[len(toy) // 2] ^= 1
+                (disk / "toy-damaged.bin").write_bytes(toy)
+                # speak's front end (252): a small dictionary, its text, and a damaged copy.
+                words, text, _ = speak_dictionary()
+                (disk / "speak.dic").write_bytes(words)
+                (disk / "speak.txt").write_text(text, encoding="utf-8")
+                damaged = bytearray(words)
+                damaged[len(damaged) // 2] ^= 1
+                (disk / "speak-damaged.dic").write_bytes(damaged)
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
                 note = elf.index(b"MINDREQ1") + 8

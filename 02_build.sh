@@ -134,6 +134,8 @@ USER_CRATES=(
     "pins:pinmap:pinmap.elf"
     "camera:camera:camera.elf"
     "efivar:efivar:efivar.elf"
+    "dictate:dictate:dictate.elf"
+    "speak:speak:speak.elf"
 )
 
 # The kernel, every service and program, and the UEFI bootloader build in parallel, a log each (000-KRN-0020).
@@ -162,7 +164,10 @@ for entry in "${USER_CRATES[@]}"; do
     rest=${entry#*:}
     bin_name=${rest%%:*}
     out_name=${rest#*:}
-    cp "$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
+    # The voice engines are built for targets/x86_64-mind-float.json (SSE2, 250); every other program for x86_64-unknown-none.
+    built="$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-unknown-none/release/$bin_name"
+    [ -f "$built" ] || built="$BUILD_SCRIPT_DIR/$crate_dir/target/x86_64-mind-float/release/$bin_name"
+    cp "$built" "$BUILD_SCRIPT_DIR/usb_root/$out_name"
 done
 cp "$BUILD_SCRIPT_DIR/bootloader/target/x86_64-unknown-uefi/release/bootloader.efi" "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT/BOOTX64.EFI"
 # Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono

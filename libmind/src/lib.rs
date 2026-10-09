@@ -49,6 +49,7 @@ pub mod sha256;
 pub mod stat;
 pub mod sys;
 pub mod time;
+pub mod wallclock;
 pub mod tts;
 pub mod tui;
 pub mod usb;
@@ -66,6 +67,10 @@ pub mod script;
 pub mod pattern;
 #[cfg(feature = "alloc")]
 pub mod voice;
+#[cfg(feature = "alloc")]
+pub mod nn;
+#[cfg(feature = "alloc")]
+pub mod models;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;

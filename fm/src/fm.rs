@@ -24,7 +24,7 @@ impl Failure {
         match self {
             Failure::Exists => String::from("it already exists"),
             Failure::NotEmpty => String::from("the directory is not empty"),
-            Failure::Denied => String::from("denied (only ram: and data/ are writable)"),
+            Failure::Denied => String::from("denied (only ram:, log: and data/ are writable)"),
             Failure::NoSpace => String::from("the disk is full"),
             Failure::NotFound => String::from("not found"),
             Failure::Other(text) => text.clone(),
@@ -33,7 +33,11 @@ impl Failure {
 }
 
 /// A file being written; dropping it ends the write.
-pub trait Sink { fn write(&mut self, data: &[u8]) -> Result<(), Failure>; }
+pub trait Sink {
+    fn write(&mut self, data: &[u8]) -> Result<(), Failure>;
+    /// The last write is done: the block store publishes the object here (300-APP-0019).
+    fn finish(&mut self) -> Result<(), Failure> { Ok(()) }
+}
 
 /// A mounted volume as the information panel and the volume menu show it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -41,7 +45,7 @@ pub struct VolumeInfo { pub label: String, pub fat_bits: u8, pub bytes: u64, pub
 
 /// The file system as the file manager sees it. Paths name a volume first (`ram:docs`) or are on the boot disk.
 pub trait Disk {
-    /// Entries of a directory (`""` and `"ram:"` are the roots).
+    /// Entries of a directory (`""`, `"ram:"`, `"log:"` and `"models:"` are the roots).
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
@@ -119,7 +123,8 @@ const OUTPUT_MAX: usize = 200; // lines of the command line's output kept
 const FIND_MAX: usize = 500;
 /// Bytes copied per step of a job (the screen and the keys are served between steps).
 pub const SLICE: usize = 64 * 1024;
-const VOLUMES: [(&str, &str); 2] = [("", "A: boot disk"), ("ram:", "ram: RAM disk")];
+// The boot disk and ram: always; log: and models: where they are mounted (211-APP-0013).
+const VOLUMES: [(&str, &str); 5] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models"), ("store:", "store: block store")];
 
 const MENU_TITLES: [&str; 5] = ["Left", "Files", "Commands", "Options", "Right"];
 const PANEL_ITEMS: [&str; 11] = ["Brief", "Full", "Info", "Quick view", "Name", "Extension", "Time", "Size", "Reverse order", "Reread  Ctrl+R", "Volume  Alt+F1/F2"];
@@ -150,7 +155,7 @@ const HELP: [&str; 19] = [
     "Mouse: click — cursor; double click — open; right click — mark;",
     "  wheel — move the cursor; a click on the key bar presses that key",
     "Programs started here open a window of their own under wm; on a screen they run in the",
-    "background (FG <pid> in the shell). Only ram: and data/ on the boot disk are writable.",
+    "background (FG <pid> in the shell). Only ram:, log: and data/ on the boot disk are writable.",
     "",
 ];
 
@@ -260,14 +265,14 @@ impl Job {
                 }
                 if self.buffer.is_empty() { self.buffer = vec![0u8; SLICE]; }
                 let copying = self.copying.as_mut().unwrap();
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 let want = ((copying.size - copying.offset) as usize).min(SLICE);
                 let got = copying.source.read(copying.offset, &mut self.buffer[..want]);
                 if got == 0 { return Err(Failure::Other(String::from("cannot read the file"))); }
                 copying.sink.write(&self.buffer[..got])?;
                 copying.offset += got as u64;
                 self.done += got as u64;
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 Ok(false)
             }
         }
@@ -285,7 +290,7 @@ pub enum Dialog {
     Mask { select: bool, line: InputLine },
     Find { line: InputLine },
     Results { mask: String, found: Vec<String>, list: ListState },
-    Volume { side: usize, list: ListState, lines: Vec<String> },
+    Volume { side: usize, list: ListState, lines: Vec<String>, paths: Vec<&'static str> },
     /// F5 / F6: where to.
     Target { op: Op, line: InputLine, sources: Vec<(String, Entry)> },
     Mkdir { line: InputLine },
@@ -350,6 +355,7 @@ impl<'b> Fm<'b> {
         let (volume, _) = panel::volume(path);
         let name = VOLUMES.iter().find(|(v, _)| v.eq_ignore_ascii_case(volume)).map_or("?", |(_, name)| name);
         match disk.volume(path) {
+            Some(v) if v.fat_bits == 0 => format!("{} {}: {} KiB, {} KiB free", name, v.label, v.bytes / 1024, v.free / 1024),
             Some(v) => format!("{} {} FAT{}: {} KiB, {} KiB free", name, v.label, v.fat_bits, v.bytes / 1024, v.free / 1024),
             None => String::from(name),
         }
@@ -425,8 +431,8 @@ impl<'b> Fm<'b> {
         };
         let read_only = !new && !disk.writable(path);
         let mut editor = Editor::new(text, path, read_only);
-        // Where the user may write: ram: and data/ on the boot disk.
-        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: (Shift+F2 saves a copy there)")); }
+        // Where the user may write: ram:, log: and data/ on the boot disk.
+        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: and log: (Shift+F2 saves a copy)")); }
         self.editor = Some(editor);
     }
 
@@ -436,6 +442,7 @@ impl<'b> Fm<'b> {
         let written = (|| -> Result<(), Failure> {
             let mut sink = disk.create(&temporary, true)?;
             for chunk in text.chunks(SLICE) { sink.write(chunk)?; }
+            sink.finish()?;
             Ok(())
         })();
         if let Err(failure) = written { let _ = disk.remove(&temporary); return Err(failure.text()); }
@@ -518,9 +525,10 @@ impl<'b> Fm<'b> {
     }
 
     fn volume_dialog(&mut self, side: usize, disk: &mut dyn Disk) {
-        let lines = VOLUMES.iter().map(|(path, _)| Self::volume_line(path, disk)).collect();
-        let selected = VOLUMES.iter().position(|(v, _)| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
-        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines });
+        let paths: Vec<&'static str> = VOLUMES.iter().enumerate().filter(|(i, (path, _))| *i < 2 || disk.volume(path).is_some()).map(|(_, (path, _))| *path).collect();
+        let lines = paths.iter().map(|path| Self::volume_line(path, disk)).collect();
+        let selected = paths.iter().position(|v| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
+        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines, paths });
     }
 
     // F5 / F6: asks where to, with the other panel's directory filled in.
@@ -806,10 +814,10 @@ impl<'b> Fm<'b> {
                     }
                 }
             }
-            Dialog::Volume { side, list, .. } => {
-                if list.key(key, VOLUMES.len(), VOLUMES.len()) { true } else {
+            Dialog::Volume { side, list, paths, .. } => {
+                if list.key(key, paths.len(), paths.len()) { true } else {
                     match key.code() {
-                        Code::Enter => { let (side, path) = (*side, VOLUMES[list.selected.min(VOLUMES.len() - 1)].0); self.load(side, path, None, disk); false }
+                        Code::Enter => { let (side, path) = (*side, paths[list.selected.min(paths.len() - 1)]); self.load(side, path, None, disk); false }
                         Code::Esc | Code::F(10) => false,
                         _ => true,
                     }
@@ -1164,7 +1172,7 @@ impl<'b> Fm<'b> {
                 grid.text(inner.x + 1, inner.bottom() - 1, "Enter: go to   F3: view   Esc: close", theme.dialog);
                 None
             }
-            Some(Dialog::Volume { side, list, lines }) => {
+            Some(Dialog::Volume { side, list, lines, .. }) => {
                 let inner = dialog(grid, if *side == 0 { "Left panel volume" } else { "Right panel volume" }, 64, lines.len() + 4, theme);
                 for (i, volume) in lines.iter().enumerate() {
                     grid.text_padded(inner.x + 1, inner.y + 1 + i, volume, inner.w.saturating_sub(2), if i == list.selected { theme.selected } else { theme.dialog });
