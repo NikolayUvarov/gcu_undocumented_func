@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (1 request waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (2 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -32,3 +32,20 @@ A sketch of all of it, about 70 lines, was run by the storage session on its mac
 - With `-device tpm-crb` (x86) or `-device tpm-tis-device` (aarch64) and `swtpm`, `init` hands `tpm` the registers and `tpm` logs `READY`.
 - Without a TPM, `PLATFORM_TPM` answers `NOT_FOUND` as now.
 
+
+## The IDL fuzzer in CI's host tests (500-ASR-0001)
+
+**Recorded by:** the assurance track (`ASR`), 2026-10-09, for [500-ASR-0001](500-ASR-0001-idl-decoder-fuzzing.md).
+
+### Problem
+
+`tests/idl_fuzz_host.rs` fuzzes every generated IDL decoder with a fixed seed: 24 receivers and 82 types, 50 000 inputs per target, about 4 s. It is not in CI's host tests yet, and the CI files are the kernel track's.
+
+### Plan (a proposal; the kernel track decides)
+
+- Add `idl_fuzz` to the list of host tests in `.github/workflows/ci.yml` (the step "Host tests") and in `scripts/ci_local.sh` (`host_tests`), built like the others: `rustc --edition=2021 --test tests/idl_fuzz_host.rs`.
+- If 175-KRN-0046 changes how the host tests fail, the line follows that.
+
+### Acceptance criteria
+
+CI runs the test on every push, and a finding fails the host-test step.

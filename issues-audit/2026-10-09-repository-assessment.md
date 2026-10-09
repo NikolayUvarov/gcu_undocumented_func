@@ -119,7 +119,7 @@ All eight findings are real defects of the production code. None was refuted.
 
 ## Routing
 
-**The maintainer decided (2026-10-09): the kernel track assigns the owners.** The request is "Owners for the findings of the 2026-10-09 audit" in [issues/requests-KRN.md](../issues/requests-KRN.md). It proposes:
+**The maintainer decided (2026-10-09): the kernel track assigns the owners.** This assessment proposed:
 
 - **A02–A04:** an owner for `vfs_server`, which has none; `STO` (state and recovery) is the nearest track. The profile row of A04 can be narrowed at once by whoever takes it.
 - **A01:** `PRT`. **A06:** `KRN`, which keeps CI, with `ASR` for the gate's tests.
