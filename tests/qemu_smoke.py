@@ -4969,10 +4969,12 @@ def tpm_check(args, cpu):
 
         def boot(tpm=None):
             # A swtpm for each boot, on the state directory of TPM `tpm`.
-            swtpm, extra = None, []
+            swtpm, extra, sockets = None, [], None
             if tpm:
                 (temp / tpm).mkdir(exist_ok=True)
-                socket_path = temp / f"{tpm}.sock"
+                # A UNIX socket's path is under 108 bytes: in a short directory of its own, not beside a deep checkout.
+                sockets = Path(tempfile.mkdtemp(prefix="tpm-", dir="/tmp"))
+                socket_path = sockets / f"{tpm}.sock"
                 swtpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={temp / tpm}", "--ctrl", f"type=unixio,path={socket_path}", "--flags", "startup-clear"],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 for _ in range(50):
@@ -4981,7 +4983,7 @@ def tpm_check(args, cpu):
                     time.sleep(.1)
                 extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
-            vm.swtpm = swtpm
+            vm.swtpm, vm.sockets = swtpm, sockets
             log = vm.service_logs("keystore", "PUBLIC KEY")
             name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
             assert name, log
@@ -4991,6 +4993,8 @@ def tpm_check(args, cpu):
             vm.close()
             if vm.swtpm:
                 vm.swtpm.kill(); vm.swtpm.wait()
+            if vm.sockets:
+                shutil.rmtree(vm.sockets, ignore_errors=True)
 
         def stored(name):
             return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
