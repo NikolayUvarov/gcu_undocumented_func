@@ -287,8 +287,9 @@ fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Direct
                     *image = keep_program(services, data);
                     checked += 1;
                 }
-                // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
-                Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
+                // A service the signed manifest does not list may be absent (one of the other architecture, one not
+                // built yet such as the updater, 351-KRN-0022); init leaves it out. One it lists must be there.
+                Err("file not found") if name != "init.elf" && !manifest.names(name) => {}
                 Err(e) => return Err((name, e)),
             }
         }

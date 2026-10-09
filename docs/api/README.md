@@ -128,7 +128,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
 | 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID \| `NOTICE_FRONT` (started in front by the task in front, issue 160) / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs [process control] |
-| 55 | `REBOOT` | resets the machine: the ACPI FADT reset register, else port 0xCF9, else the 8042 controller, else a triple fault; on aarch64 PSCI `SYSTEM_RESET`; does not return. `arg1` = `REBOOT_POWER_OFF` turns the machine off instead (aarch64: PSCI `SYSTEM_OFF`; x86: `ERR_INVALID`, no ACPI sleep states yet) [process control] |
+| 55 | `REBOOT` | resets the machine: the ACPI FADT reset register, else port 0xCF9, else the 8042 controller, else a triple fault; on aarch64 PSCI `SYSTEM_RESET`; does not return. `arg1` = `REBOOT_POWER_OFF` turns the machine off instead (aarch64: PSCI `SYSTEM_OFF`; x86: `ERR_INVALID`, no ACPI sleep states yet) [process control, or the restart privilege: `init`, which resets the machine for a client of its lifecycle interface badged `BADGE_REBOOT`, the updater's, 351-KRN-0022] |
 
 **The focus** (MC-10.2): one task is in front. Its screen is shown and it gets the input events, except keys taken with `INPUT_LISTEN`.
 

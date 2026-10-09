@@ -989,7 +989,9 @@ impl Scheduler {
         let observation = matches!(request.syscall_num, SYSCALL_TASK_LIST | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_FAULTS | SYSCALL_STAT);
         // A lifecycle owner ends its own descendants without process control (issue 170: init supervises without it).
         let descendant = request.syscall_num == SYSCALL_TASK_KILL && self.find(request.arg1 as u64).is_some_and(|target| self.descends_from(target, slot));
-        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) && !descendant { return Err(ERR_RIGHTS); }
+        // The restart privilege (init's) may reset the machine too, when a service with the right asks it (351-KRN-0022).
+        let reset = request.syscall_num == SYSCALL_REBOOT && self.holds(slot, Capability::Restart);
+        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) && !descendant && !reset { return Err(ERR_RIGHTS); }
         let task_slot = |s: &Self, pid: usize| if pid == 0 { Some(slot) } else { s.find(pid as u64) };
         match request.syscall_num {
             SYSCALL_STAT => self.stat(slot, request),

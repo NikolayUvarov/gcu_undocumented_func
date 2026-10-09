@@ -9,7 +9,7 @@ mod legacy;
 
 use mind::abi::*;
 use mind::dev::cap_info;
-use mind::idl::{init as idl_init, wire};
+use mind::idl::{init as idl_init, netpolicy, vfs, wire};
 use mind::ipc::{self, Endpoint};
 use mind::platform;
 use mind::process::{grant, grant_moved, Image, Quota};
@@ -23,7 +23,8 @@ const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe priv
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
+    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
+    "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -114,6 +115,21 @@ impl Init {
     // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
     // slot of its own for it (only badged clients are minted and kept).
     fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    // A flow grant the policy broker makes for `program` (idl/netpolicy.wit), kept for restarts; None when the broker does
+    // not run or its policy names nothing for the program.
+    fn flow(&mut self, minted: &mut Minted, program: &str) -> Option<usize> {
+        if !self.running(service_index("netpolicy")) { return None; }
+        let client = ipc::mint_badged(self.keeper("netpolicy").ok()?, CLIENT, 0).ok()?;
+        let broker = Endpoint(client);
+        let taken = netpolicy::prepare(broker, program).ok().and_then(|r| r.ok()).is_some_and(|badge| matches!(netpolicy::take(broker, badge, RECEIVED), Ok(Ok(()))));
+        let _ = ipc::drop_cap(client);
+        if !taken { return None; }
+        let slot = ipc::mint(RECEIVED, u8::MAX, 0, 0).ok();
+        let _ = ipc::drop_cap(RECEIVED);
+        let slot = slot?;
+        minted.slots[minted.count] = slot; minted.count += 1;
+        Some(slot)
+    }
     // The block store's own disk (300-KRN-0025): a VirtIO disk that is blank or starts with the store's superblock;
     // looked at once, through a client of init's own, before vfs_server or the store gets any disk.
     fn store_disk(&mut self) -> Option<&'static str> {
@@ -337,6 +353,21 @@ impl Init {
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
             // The key service makes the device key itself (RDRAND) and needs only the date for its certificate.
             "keystore" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "keystore")?, ALL); self.lend(&mut grants, 2, "rtc")?; }
+            // The updater (351-KRN-0022): the clock and a read-only view of the boot disk; TLS over the flow the policy
+            // gives "updater" (made here and kept for restarts: the policy's term bounds it); a lifecycle client of init
+            // that may ask for a restart of the machine; the firmware's boot variables. The update zone comes with
+            // 351-UPD-0008.
+            "updater" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "updater")?, ALL);
+                self.lend(&mut grants, SLOT_RTC, "rtc")?; self.lend(&mut grants, SLOT_VFS, "vfs_server")?;
+                if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
+                match self.flow(&mut minted, "updater") {
+                    Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
+                    None => mind::println!("[INIT] updater: NO NETWORK GRANT (THE POLICY NAMES NOTHING FOR IT)"),
+                }
+                grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
+                grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
+            }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
@@ -374,7 +405,8 @@ impl Init {
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the serial line.
                 flags |= SPAWN_SCREEN;
-                grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
+                // Badged: an unbadged copy could be badged for reboot by whoever holds it (351-KRN-0022).
+                grants.add(SLOT_INIT, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_LIFECYCLE)?, CLIENT);
                 for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
@@ -517,7 +549,7 @@ impl Init {
         })
     }
 
-    fn serve(&mut self, request: idl_init::Request, call: wire::Call) -> Result<()> {
+    fn serve(&mut self, request: idl_init::Request, call: wire::Call, badge: u16) -> Result<()> {
         use idl_init::{Error as E, Request};
         match request {
             Request::Run { name } => {
@@ -539,7 +571,35 @@ impl Init {
                 let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
+            // Only the updater's badged client may restart the machine (351-KRN-0022).
+            Request::Reboot if badge != mind::process::BADGE_REBOOT => idl_init::reply_reboot(call, Err(E::Denied)),
+            Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
         }
+    }
+
+    // A restart of the machine the updater asked for: what the volumes cache is written, the services stop in reverse
+    // start order (their devices quiesced), then the reset through the restart privilege.
+    fn reboot(&mut self) -> ! {
+        mind::println!("[INIT] RESTARTING THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED");
+        if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
+            for volume in ["", "ram", "log"] {
+                if let Ok(Ok(handle)) = vfs::root(Endpoint(client), volume) { let _ = vfs::flush(Endpoint(client), handle); let _ = vfs::close(Endpoint(client), handle); }
+            }
+            let _ = ipc::drop_cap(client);
+        }
+        let (mut order, mut count) = ([0usize; UNITS], 0);
+        for index in boot_order() { order[count] = index; count += 1; }
+        for &index in order[..count].iter().rev() {
+            if !self.running(index) { continue; }
+            let pid = self.pids[index];
+            self.stopped[index] = true;
+            let _ = mind::control::kill(pid);
+            for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
+            self.quiesce(index);
+            mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid);
+        }
+        let _ = mind::control::reboot();
+        loop { mind::time::sleep(1000); }
     }
 }
 
@@ -550,6 +610,12 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
+
+// Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
+// instances of an image follow its first one.
+fn boot_order() -> impl Iterator<Item = usize> {
+    (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
+}
 
 // The pause for a photo of the boot screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
 const PHOTO_PAUSE_MS: usize = 5000;
@@ -567,9 +633,7 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
-    // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
-    // instances of an image follow its first one.
-    let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    let order = boot_order();
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);
@@ -627,6 +691,7 @@ fn main(info: &'static BootInfo) {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
-        let _ = match idl_init::decode(&request, RECEIVED) { Ok((request, call)) => init.serve(request, call), Err(reason) => wire::reject(reason) };
+        let badge = request.badge;
+        let _ = match idl_init::decode(&request, RECEIVED) { Ok((decoded, call)) => init.serve(decoded, call, badge), Err(reason) => wire::reject(reason) };
     }
 }

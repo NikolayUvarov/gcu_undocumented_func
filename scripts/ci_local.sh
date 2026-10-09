@@ -45,7 +45,7 @@ want() { [[ ",$ONLY," == *",$1,"* ]]; }
 OVMF=/usr/share/ovmf/OVMF.fd
 X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
- --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
+ --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
  --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
  --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
@@ -63,7 +63,7 @@ X86_GROUPS=(
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
-    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
+    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs"
@@ -81,7 +81,7 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb,devicetree,efivar"
-    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls"
+    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,updater"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
@@ -105,6 +105,7 @@ x86_fixtures() {
             -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
             "tests/$f.rs" -o "/tmp/mind-core-$f.elf" || return 1
     done
+    (cd tests/updater_stub && cargo build --release --target-dir /tmp/mind-updater-target) || return 1
     (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
     (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
     (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)

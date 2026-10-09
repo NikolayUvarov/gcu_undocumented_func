@@ -69,7 +69,7 @@ jobs:
           - name: keys, shell, tools
             args: --suites keys,shell,tools,windows,wm,tablet,usb
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults
+            args: --suites vfs,edit,disk,block,store,storefaults,updater
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -109,6 +109,7 @@ jobs:
               -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
               "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
           done
+          (cd tests/updater_stub && cargo build --release --target-dir /tmp/mind-updater-target)
           (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
           (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
           (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
@@ -125,7 +126,7 @@ jobs:
         run: |
           python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd \
             --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
-            --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
+            --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
             --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
             --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
       - name: Benchmark over the tap interface (checksum offload off and on)
@@ -167,7 +168,7 @@ jobs:
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,smp,busy,usb,devicetree,efivar
           - group: files, network and TLS
-            suites: vfs,store,storefaults,net,tls
+            suites: vfs,store,storefaults,net,tls,updater
           - group: RAM, ACPI and PCI above 4 GiB
             suites: normal,net
             machine: virt,gic-version=3,highmem=on

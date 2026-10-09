@@ -37,7 +37,7 @@ import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -3838,6 +3838,39 @@ def block_suite(args, block_elf):
     print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
+def updater_suite(args, updater_elf):
+    """The updater's authorities (351-KRN-0022): a raw FAT image boots with the test stand-in for the updater, which
+    reports the slots init filled (and no others) and what each authority does; when the shell makes data/reboot, it asks
+    init to restart the machine, and init flushes the volumes, stops the services and resets (QEMU exits: -no-reboot).
+    vfs_server writes directories through today, so the image shows the restart left the volume whole, not the flush."""
+    if not raw_tools():
+        print("SKIP: updater suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-updater-", dir=ROOT / IMAGE) as temp:
+        policy = b"# the updater may reach the release server\nupdater 10.0.2.2 tcp 8443 3600 1048576\n"
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"updater.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        part = f"{image}@@{start * 512}"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            # Its own endpoint, the clock, the file system, init (badged for reboot), the log every service has, the
+            # flow grant, TLS, the firmware privilege; nothing else.
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16", report
+            require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
+            for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
+                require(vm.command(command), answer)
+            vm.process.wait(timeout=60)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+        assert "kept" in listing and "reboot" in listing, listing
+    print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+
+
 def tone_power(samples, rate, start, hz):
     """How much of `hz` the 40 ms of `samples` from `start` hold."""
     window = samples[start:start + int(rate * 0.04)]
@@ -5376,8 +5409,10 @@ def boot_suite(args, disk):
             target.unlink()
         else:
             target.write_bytes(data)
-        # Signed again, so the bootloader gets past the manifest to the ELF it checks.
-        sign_manifest.sign_volume(disk)
+        # Signed again, so the bootloader gets past the manifest to the ELF it checks; a missing service is not, so the
+        # manifest still lists it (one it does not list may be absent, 351-KRN-0022).
+        if data is not None:
+            sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
@@ -5385,7 +5420,7 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(original)
     sign_manifest.sign_volume(disk)
-    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file the manifest lists", flush=True)
     # 350-UPD-0003: nothing is loaded that the signed manifest does not describe. A changed image, a changed manifest,
     # a manifest signed by another key or no signature: the bootloader names the file and stops.
     manifest, rtc = (disk / "MANIFEST").read_bytes(), (disk / "rtc.elf").read_bytes()
@@ -5545,7 +5580,7 @@ def main():
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5565,6 +5600,7 @@ def main():
     if args.kernel:
         # A test-only kernel (211-PRT-0002: x2APIC as firmware leaves it) in a copy of the image directory.
         copy = f"{IMAGE}-kernel"
+    parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
         shutil.rmtree(ROOT / copy, ignore_errors=True)
         shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
         shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
@@ -5577,7 +5613,7 @@ def main():
     if args.block_elf:
         suites.append("block")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -5585,6 +5621,8 @@ def main():
             block_suite(args, args.block_elf)
             continue
         if suite == "vfs":
+        fixture = ROOT / IMAGE / "fixture-updater.elf"
+        args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
             vfs_suite(args)
             continue
         if suite == "edit":
@@ -5602,6 +5640,8 @@ def main():
             if suite == "services":
                 # 12 KiB for cat: three times the console's queue (000-KRN-0030).
                 (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
+    if args.updater_elf:
+        suites.append("updater")
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
@@ -5610,6 +5650,9 @@ def main():
                 speech, starts = speech_wav()
                 (disk / "speech.wav").write_bytes(speech)
                 (disk / "commands.wav").write_bytes(speech_wav(COMMANDS)[0])
+        if suite == "updater":
+            updater_suite(args, args.updater_elf)
+            continue
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
