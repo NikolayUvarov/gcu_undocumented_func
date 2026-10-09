@@ -96,3 +96,20 @@ The shell lends its client only to a program that asks for it, and `msh` gets a 
 ### Acceptance criteria
 
 A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
+
+## A fixed slot for the shell's command endpoint (211-APP-0040)
+
+**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md) (the shell's commands in `wm`'s `console`, the kernel track's request for 211).
+
+### Problem
+
+The shell will serve `idl/shell.wit`: a client sends a command line and the shell runs it on its own authority. The endpoint goes from the shell to `wm` and from `wm` to `console` in a launch session, so both need a fixed slot to find it in. The application slots 1–29 are all named, and fixed slots end at `SLOT_DYNAMIC` (30), below which the kernel delivers capabilities into a receive slot.
+
+### Plan (a proposal; the kernel track decides)
+
+- `SLOT_SHELL` in `common/abi.rs` for applications, with `SLOT_DYNAMIC` moved up (the clipboard's `SLOT_CLIPBOARD`, asked for above, can come in the same change).
+- Nothing in `init`: the shell makes the endpoint and lends it itself. `REQUEST_SHELL` goes into `libmind::process` with the tools track's change.
+
+### Acceptance criteria
+
+A launcher fills `SLOT_SHELL` in a launch session and the program holds the endpoint there; the ABI version and the kernel's tests follow the move of `SLOT_DYNAMIC`.
