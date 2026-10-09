@@ -59,3 +59,91 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## An HTTP/1.1 client for a service (700)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+`mind::http` (351-NET-0001) sends one GET with fixed headers and `Connection: close`. It refuses chunked bodies and bodies without `Content-Length`.
+
+The Effector server needs more from its agents:
+- `POST` with a JSON body and `Authorization: Bearer`;
+- a response the server may send chunked, or close-delimited;
+- a wake-up stream it holds open for up to 55 s;
+- uploads of up to 1 GiB with an exact `Content-Length`;
+- `Range` downloads.
+
+Opening a TLS session for every request would mean a handshake every second, since the agent sends a heartbeat at that rate.
+
+### Plan (a proposal; the network track decides)
+
+- **Requests:**
+  - `mind::http` methods `GET`, `POST` and `PUT`;
+  - caller headers, within a bound, with `Host`, `Content-Length` and `Connection` kept by the library;
+  - a request body from a caller `Source`, streamed.
+- **Responses:**
+  - `Transfer-Encoding: chunked`, with chunk-size and trailer bounds;
+  - close-delimited bodies when the caller allows them;
+  - the head up to the present 8 KiB.
+- **Connections:**
+  - HTTP/1.1 kept alive over one transport, so several requests share it;
+  - the response body read in pieces with an idle timeout chosen by the caller (the stream).
+- **Unchanged:** no redirects, still.
+- **Host tests** in `tests/http_host.rs` for each of the above.
+
+### Acceptance criteria
+
+The host tests pass. In QEMU a program sends 100 `POST` requests over one kept-alive HTTPS connection to the 700-EFF-0002 test server, reads a chunked reply, and holds a 55-second stream to its end.
+
+## A pinned leaf certificate and long-lived sessions in `tls` (700)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+The Effector server identifies itself by a self-signed certificate. Its agents trust the SHA-256 of that exact leaf certificate (DER), with a current and a next value during rotation, and they still check that the host name or IP is in the certificate's SAN.
+
+351-NET-0002 proposes a pin of the server's public key (SPKI). That is a different value, and a server cannot be pinned both ways by the same configuration.
+
+The agent also keeps two sessions open for hours. The `tls` service's limits matter here: 8 sessions in the system, and a 5-second idle timeout inside `send` and `close`.
+
+### Plan (a proposal; the network track decides)
+
+- **The pin.** A `connect` with a set of up to two pins, each the SHA-256 of the leaf certificate's DER, instead of a chain to the roots, in the same new minor version of `idl/tls.wit` that 351-NET-0002 adds. Either the leaf-DER kind or the SPKI kind can be chosen per connection.
+- **Kept with a pin:**
+  - the SAN check against the name or address;
+  - validity;
+  - the server-authentication purpose;
+  - `CA:false`.
+- **TLS 1.3 only, as now.** The Effector server accepts TLS 1.2 and later, so 1.3 is enough.
+- **Long-lived sessions.** A session that stays open between requests, and reads that wait without closing it.
+
+### Acceptance criteria
+
+In the `tls` suite:
+- a server is accepted by its leaf pin, and by the next pin;
+- it is refused with another certificate, with a wrong name, and with an expired certificate;
+- a session stays open with no traffic for ten minutes and is then used.
+
+## A flow for a long-running service (700)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+`init` gives a boot service its flow once, and the policy's term and volume bound it: 3600 s and 16 MiB by default. When either runs out, the stack closes the grant's sockets.
+
+The Effector agent talks to one server for as long as the machine runs. Its heartbeats alone come to several megabytes an hour, and packages and files can reach 1 GiB.
+
+### Plan (a proposal; the network track decides)
+
+- **Renewal.** A flow the policy marks renewable (`renew` on the policy line, proposed) is renewed by `netpolicy` before its term ends, without closing sockets, as long as the policy still allows it.
+- **Volume per period.** A volume counted per period (for example, per hour) as well as in total.
+- **A changed address.** A host name is resolved again when the service reconnects, and a changed address is allowed if the name still matches the policy.
+- **Init's part.** Any change to how `init` hands out the flow is a kernel task.
+
+### Acceptance criteria
+
+In the `net` suite, a service with a renewable flow and a one-minute term keeps a connection for five minutes without a break. A flow that is not renewable still ends at its term.

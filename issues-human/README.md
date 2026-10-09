@@ -55,3 +55,11 @@ Whether such terms reach weights trained on the data is a legal question, and th
 - [x] Decide whether MIND Core may ship the GigaSpeech Zipformer. **Decided by the maintainer, 2026-10-08:** any free model may be used and shipped, including models whose terms allow only non-commercial use. Each model's licence and terms are recorded with it in `models/manifest.toml` and travel with it ([251](../issues/251-model-cache-and-model-disk.md)).
 - [x] If not, choose one of the alternatives in 250. Not needed; English keeps the GigaSpeech Zipformer as its compact model, and Parakeet TDT 0.6B v3 (CC BY 4.0) is its quality model.
 - [x] Optionally, the same question for the Russian model, whose training data is unknown. Covered by the same decision.
+
+## 7. An Effector server for MIND Core
+
+Main task [700](../issues/700-effector-agent.md): MIND Core gets an agent for the maintainer's Effector fleet server. The server is the maintainer's own project, outside this repository; its side of the work is its task 75.
+
+- [x] Decide whether the subset of the Effector agent protocol that MIND Core implements may be published in this public repository, as task [700-EFF-0001](../issues/700-EFF-0001-protocol-contract.md) proposes. The subset is the routes, fields and actions the agent uses, without the server's internal weaknesses. **Decided by the maintainer, 2026-10-09:** yes, it may be published; supporting MIND Core is a requirement on the server.
+- [ ] For task [700-EFF-0012](../issues/700-EFF-0012-run-against-the-effector-server.md), provide a test Effector server the QEMU host can reach. Name its build: at least 1.2.0.127, and a build with task 75's part A for the full run. Give the session its HTTPS address, its certificate pin, an agent token for the test machines and an operator account. Keep the token and the account out of the repository.
+- [ ] Say whether MIND Core endpoints may be registered on that server, and under which tag, so that they do not mix with the production terminals.

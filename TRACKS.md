@@ -1,6 +1,6 @@
 # Track registry
 
-**Version:** 1.3 (2026-10-08): the track `DEV`, on-target development, main tasks 650–699, proposed; 1.2 (2026-10-08): the Apple Silicon track `APL`, main tasks 600–649, takes 210 from `PRT`; 1.1 (2026-10-07): an open track's task can be done by an agent whose own task needs it.
+**Version:** 1.4 (2026-10-09): the track `EFF`, the Effector agent, main tasks 700–749, opened at the maintainer's request; 1.3 (2026-10-08): the track `DEV`, on-target development, main tasks 650–699, proposed; 1.2 (2026-10-08): the Apple Silicon track `APL`, main tasks 600–649, takes 210 from `PRT`; 1.1 (2026-10-07): an open track's task can be done by an agent whose own task needs it.
 
 MIND Core is developed in parallel **tracks**. Each track has its own code, its own directories and its own task numbers. **Tracks can be taken and worked on in parallel**: a session (an agent or a person) that takes a track works only in that track's directories, numbers only its own tasks and reaches `main` through the gate. How to work in a track: [AGENTS.md](AGENTS.md). The open tasks themselves: [issues/README.md](issues/README.md).
 
@@ -37,8 +37,9 @@ Requests to another track: `issues/requests-<TRK>.md`. Only the owning track num
 | `ASR` | assurance | Assurance | 500–549 | `docs/assurance/`, fuzzing and fault injection under `tests/` | — | **open** | [500](issues/500-fuzzing-abi-and-idl.md) |
 | `APL` | Apple Silicon | H | 600–649; 210 (numbered before) | `docs/apple-silicon.md` and `apple-silicon_RU.md`; the macOS side of `scripts/build_aarch64.sh` and `03_run_qemu_aarch64.sh`, and Apple's devices in `kernel/src/arch/aarch64/` (device tree, AIC, spin table, DART, watchdog, UART), together with `PRT`; `BootInfo`, DMA regions and the QEMU test harness through `KRN`; `usb_host` for the Type-C ports as `DRV` tasks | — | **open**; its tasks need a person with a Mac ([issues-human](issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)) | [600](issues/600-apple-silicon-mac-vm-host.md) (a virtual machine on a Mac; guide: [docs/apple-silicon.md](docs/apple-silicon.md)), [210](issues/210-apple-silicon-native.md) (natively) |
 | `DEV` | on-target development | — (proposed 2026-10-08; the maintainer confirms the code and range) | 650–699 | new tools for building on the target: a git client, a POSIX layer for ported programs, the Rust toolchain port | — | **proposed** | [650](issues/650-building-on-the-target.md) |
+| `EFF` | the Effector agent | stage V (remote capabilities through a gateway, Article 7); track D (session parsers with minimal authority); no roadmap item yet | 700–749 | `effector/`, `effector_gw/`, `idl/effector.wit`, `docs/effector/`, `libmind` `json` and `zip`, `tests/effector_server.py` and the effector suites | — (opened at the maintainer's request, 2026-10-09) | **open** | [700](issues/700-effector-agent.md): [700-EFF-0001](issues/700-EFF-0001-protocol-contract.md) (the contract), then 0002–0005 (test server, interface and policy, JSON, ZIP), which wait for no other track |
 
-New tracks get a code and a range from 600, in blocks of 50, from the maintainer (AGENTS.md, section 2); the next free block is 700–749.
+New tracks get a code and a range from 600, in blocks of 50, from the maintainer (AGENTS.md, section 2); the next free block is 750–799.
 
 ## Taking a track
 
