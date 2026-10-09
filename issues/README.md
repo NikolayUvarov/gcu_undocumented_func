@@ -82,7 +82,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (full screen and a list of windows in `wm`; clocks asking the RTC service 10 times a second; `update` in the shell for 351; a Wi-Fi setup program for 550; `log:` in the shell's help and in `fm`; `efivar` in the tools guide; the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (the TPM's registers from the firmware's tables; owners for the 2026-10-09 audit's findings); [requests-APP.md](requests-APP.md) (full screen and a list of windows in `wm`; clocks asking the RTC service 10 times a second; `update` in the shell for 351; a Wi-Fi setup program for 550; `log:` in the shell's help and in `fm`; `efivar` in the tools guide; the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
 
 
 ## Finished tasks (`issues-done/`)

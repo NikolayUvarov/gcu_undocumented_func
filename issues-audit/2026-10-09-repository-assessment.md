@@ -117,10 +117,12 @@ All eight findings are real defects of the production code. None was refuted.
 - the update chain beyond its tests;
 - aarch64.
 
-## Proposed routing (for the maintainer)
+## Routing
 
-- **A02–A04 need an owner for `vfs_server`.** `STO` (state and recovery) is the nearest track. The profile row of A04 can be narrowed at once by whoever takes it.
-- **A01** goes to `PRT` (the kernel session) as a request. **A06** goes to the same session, which edits CI, with `ASR` for the gate's tests.
-- **A05** goes to `STO`; **A07** and **A08** to `APP`.
+**The maintainer decided (2026-10-09): the kernel track assigns the owners.** The request is "Owners for the findings of the 2026-10-09 audit" in [issues/requests-KRN.md](../issues/requests-KRN.md). It proposes:
 
-No request or task was filed by this assessment: the owner of `vfs_server` is the maintainer's decision. Once routed, each fix turns its audit probe's assertion around into a regression test.
+- **A02–A04:** an owner for `vfs_server`, which has none; `STO` (state and recovery) is the nearest track. The profile row of A04 can be narrowed at once by whoever takes it.
+- **A01:** `PRT`. **A06:** `KRN`, which keeps CI, with `ASR` for the gate's tests.
+- **A05:** `STO`. **A07** and **A08:** `APP`.
+
+Each fix turns its audit probe's assertion around into a regression test. The issue numbers are recorded here as the owners give them.

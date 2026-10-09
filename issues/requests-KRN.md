@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (1 request waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (2 requests waiting, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -32,3 +32,32 @@ A sketch of all of it, about 70 lines, was run by the storage session on its mac
 - With `-device tpm-crb` (x86) or `-device tpm-tis-device` (aarch64) and `swtpm`, `init` hands `tpm` the registers and `tpm` logs `READY`.
 - Without a TPM, `PLATFORM_TPM` answers `NOT_FOUND` as now.
 
+
+## Owners for the findings of the 2026-10-09 audit
+
+**Recorded by:** the maintainer's assessing session, 2026-10-09. The maintainer decided that the kernel track assigns the owners.
+
+### Problem
+
+The audit of `2cbda21` ([issues-audit/2026-10-09-repository-audit.md](../issues-audit/2026-10-09-repository-audit.md)) has eight findings, all confirmed against the code by [the assessment](../issues-audit/2026-10-09-repository-assessment.md). No issue covers them. Three are in `vfs_server`, which has no owner in [TRACKS.md](../TRACKS.md).
+
+### Plan (a proposal; the kernel track decides)
+
+| Finding | Priority (assessment) | Code | Proposed owner |
+|---|---|---|---|
+| A01: the packager lists programs before it builds | P1 | `scripts/make_usb_image.py` | `PRT` |
+| A02: a failed FAT write loses the free space | P1 | `vfs_server/src/fat.rs`, `main.rs` | the owner of `vfs_server`, to be named (`STO` is nearest) |
+| A03: a failed case-only rename deletes the file | P2 | `vfs_server/src/fat.rs` | the same |
+| A04: the volume reads clean after unflushed or failed writes | P2; the profile row on the dirty state now | `vfs_server/src/fat.rs`, `disk.rs`, `docs/profile/evidence.md` | the same |
+| A05: the block store acknowledges a block it erased | P2; P1 before a durable medium | `blockstore/src/store.rs` | `STO` |
+| A06: CI passes a host test that did not compile; local fixtures can be stale | P1 | `.github/workflows/ci.yml`, `scripts/ci_local.sh` | `KRN`, which keeps CI, with `ASR` |
+| A07: the editors overwrite an existing `<name>.tmp` | P2 | `edit`, `fm` | `APP` |
+| A08: `fm` removes a move's source before the destination is flushed | P1 | `fm` and its `Disk::flush` | `APP` |
+
+- Name an owner for `vfs_server` in TRACKS.md.
+- Each owner numbers a task for its findings, and the number is recorded against the finding in the assessment.
+- Each fix turns its audit probe's assertion around into a regression test (`issues-audit/repro/`).
+
+### Acceptance criteria
+
+Every finding has an owner and an issue number, recorded in the assessment, and TRACKS.md names an owner for `vfs_server`.
