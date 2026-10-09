@@ -9,7 +9,7 @@
 #   --only  the parts to run (default: all three); --tap  also the netbench group over a tap interface (sudo);
 #   --no-merge  test branches as they are; --keep  keep the worktrees; --list  print the groups and exit.
 # Logs: $CI_LOCAL_LOGS (default /tmp/mind-ci-local), one file per group, one directory per branch.
-# Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools,
+# Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm,
 # rustup; the toolchain comes from rust-toolchain.toml. Keep the groups in step with ci.yml.
 set -uo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -94,7 +94,7 @@ host_tests() {
     local t
     rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
     rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http; do
+    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm; do
         rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
     done
     rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1
@@ -136,12 +136,12 @@ fi
 cd "${TREE:-$ROOT}" || exit 2
 # Missing tools are reported up front, not as a failure in the middle of the run.
 missing=()
-for tool in cargo rustup python3 mcopy mkfs.fat qemu-img java; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+for tool in cargo rustup python3 mcopy mkfs.fat qemu-img java swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "Missing: ${missing[*]}" >&2
-    echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools default-jre-headless" >&2
+    echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm swtpm-tools default-jre-headless" >&2
     exit 2
 fi
 rustup toolchain install >/dev/null || exit 2

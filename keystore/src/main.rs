@@ -2,10 +2,12 @@
 #![no_main]
 // Key service (issue 103, MC-11.9, Appendix B.6): the device key lives only here. It is an Ed25519 key made from
 // RDRAND once (no RDRAND: no key, every request answers no-key) and kept across boots in this service's private
-// directory of the boot disk (351-NET-0005; on disk, not sealed: a TPM is next), never exported. Serves
+// directory of the boot disk, sealed by the TPM where there is one (351-NET-0006; else unencrypted, 351-NET-0005),
+// never exported. Serves
 // idl/keystore.wit: the certificate to anyone; signatures only to the signer's badge (the TLS service), only for data of
 // the form the purpose names, and at most BUDGET per boot. Holds: an RTC client (slot 2) for the certificate's start
-// date, a VFS client with its own badge (slot 3) for `system/keystore`.
+// date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
+// (slot 4).
 extern crate alloc;
 
 mod certificate;
@@ -49,6 +51,8 @@ impl Keys {
 
     // The stored seed, or a new one made and stored (351-NET-0005); false without the random source.
     fn seed(seed: &mut [u8; 32]) -> bool {
+        if stored::tpm() { return Self::sealed_seed(seed); }
+        mind::println!("[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED");
         let made = |seed: &mut [u8; 32], why: &str| -> bool {
             if !mind::random::fill(seed) { return false; }
             match stored::store(seed) {
@@ -69,6 +73,49 @@ impl Keys {
             // A damaged file is replaced: servers that knew the old key must be told the new one.
             stored::Loaded::Damaged => made(seed, " ANEW: THE STORED ONE WAS DAMAGED"),
             stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
+        }
+    }
+
+    // With a TPM (351-NET-0006): the sealed key; a key kept unencrypted before is sealed, and its file removed; a blob
+    // this TPM does not open (another machine's, or a TPM cleared since) is replaced by a new key.
+    fn sealed_seed(seed: &mut [u8; 32]) -> bool {
+        let made = |seed: &mut [u8; 32], why: &str| -> bool {
+            if !mind::random::fill(seed) { return false; }
+            match stored::seal(seed) {
+                Ok(()) => mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND SEALED BY THE TPM IN {}", why, stored::SEALED),
+                Err(why_not) => mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {} (THIS BOOT ONLY)", why, why_not),
+            }
+            true
+        };
+        match stored::unseal() {
+            stored::Unsealed::Seed(mut unsealed) => {
+                seed.copy_from_slice(&unsealed);
+                stored::wipe(&mut unsealed);
+                mind::println!("[KEYSTORE] DEVICE KEY FROM {} (SEALED BY THE TPM)", stored::SEALED);
+                if stored::remove_plain() { mind::println!("[KEYSTORE] THE UNENCRYPTED COPY {} REMOVED", stored::FILE); }
+                true
+            }
+            stored::Unsealed::Missing => match stored::load() {
+                // The transition from the interim: the same key, sealed; the unencrypted file goes once the sealed one is written.
+                stored::Loaded::Seed(mut plain) => {
+                    seed.copy_from_slice(&plain);
+                    stored::wipe(&mut plain);
+                    match stored::seal(seed) {
+                        Ok(()) => {
+                            let removed = stored::remove_plain();
+                            mind::println!("[KEYSTORE] DEVICE KEY FROM {} SEALED BY THE TPM IN {}{}", stored::FILE, stored::SEALED, if removed { "; THE UNENCRYPTED COPY REMOVED" } else { "; THE UNENCRYPTED COPY NOT REMOVED" });
+                        }
+                        Err(why) => mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED: {})", stored::FILE, why),
+                    }
+                    true
+                }
+                _ => made(seed, ""),
+            },
+            stored::Unsealed::Refused => made(seed, " ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM"),
+            stored::Unsealed::Damaged => made(seed, " ANEW: THE SEALED ONE WAS DAMAGED"),
+            stored::Unsealed::Unreadable(error) => { mind::println!("[KEYSTORE] SEALED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
+            // The sealed key is kept for the next boot: a key for this boot only.
+            stored::Unsealed::Failed => { mind::println!("[KEYSTORE] THE TPM SERVICE DID NOT UNSEAL THE KEY: A KEY FOR THIS BOOT ONLY"); mind::random::fill(seed) }
         }
     }
 

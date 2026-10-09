@@ -2,7 +2,7 @@
 
 **Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) started it at boot over a RAM disk of its own) · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.7, MC-4.8, MC-4.13
 
-Part of main task [300](../issues/300-checksummed-block-store.md).
+Part of main task [300](300-checksummed-block-store.done).
 
 ## Problem
 

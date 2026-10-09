@@ -3,13 +3,15 @@
 // TLS service (issue 103, Appendix B.6): TLS 1.3 client sessions (rustls, unbuffered API) over flows the clients lend
 // (idl/tls.wit). The service has no network access of its own: every connection goes through the client's socket
 // capability, so the network policy of the client holds. Server certificates are verified against tlsroots.pem on the
-// boot disk; a client certificate is the device certificate, signed for by the key service. Random bytes come from
+// boot disk, or a server is known by the SHA-256 of its public key (connect-pinned, 351-NET-0002); a client certificate
+// is the device certificate, signed for by the key service. Random bytes come from
 // RDRAND only: without it every connection is refused. Holds: an RTC client (slot 2, certificate times), a VFS client
 // (slot 3, the root store), the key service's signer client (slot 4).
 extern crate alloc;
 
 mod device;
 mod pem;
+mod pinned;
 mod provider;
 
 use alloc::boxed::Box;
@@ -34,6 +36,7 @@ const ROOTS_FILE: &str = "tlsroots.pem";
 const SESSIONS: usize = 8;
 const CHUNK: usize = 4096; // largest send or receive (idl/tls.wit)
 const IDLE_MS: u64 = 5000; // longest wait for the peer in send, receive and close
+const PLAIN_MAX: usize = 64 * 1024; // decrypted bytes held for a client before the socket is read again
 
 /// Why a connection failed: a TLS error (logged with its details) or an error for the client.
 enum Failure { Tls(rustls::Error), Client(Error) }
@@ -176,10 +179,12 @@ impl Session {
         Ok((Step::Progress, wrote))
     }
 
-    // Reads what has arrived and decrypts it into `plain`.
+    // Reads what has arrived and decrypts it into `plain`, up to PLAIN_MAX: what the client has not taken yet stays in
+    // the stack's receive window, so a slow client slows the sender instead of filling this service's memory.
     fn poll(&mut self) -> Result<Step, Failure> {
         let deadline = now() + IDLE_MS;
         loop {
+            if self.plain.len() >= PLAIN_MAX { return Ok(Step::Progress); }
             let more = match (self.link.as_mut(), &mut self.incoming) { (Some(link), incoming) => link.fill(incoming)?, _ => return Err(Error::Invalid.into()) };
             let (step, _) = self.pump(None, deadline)?;
             if !more || step == Step::Closed { return Ok(step); }
@@ -231,21 +236,27 @@ impl Service {
         Ok(self.next)
     }
 
-    fn config(&self, device: Option<Arc<device::Device>>) -> Result<ClientConfig, Error> {
-        let roots = roots();
-        if roots.is_empty() { return Err(Error::NoRoots); }
-        let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), self.provider.clone()).build().map_err(|_| Error::NoRoots)?;
+    // The server verified against the root store, or by its pinned key alone.
+    fn config(&self, device: Option<Arc<device::Device>>, pin: Option<[u8; 32]>) -> Result<ClientConfig, Error> {
         let builder = ClientConfig::builder_with_details(self.provider.clone(), Arc::new(provider::Rtc))
-            .with_protocol_versions(&[&rustls::version::TLS13]).map_err(|_| Error::Handshake)?
-            .with_webpki_verifier(verifier);
+            .with_protocol_versions(&[&rustls::version::TLS13]).map_err(|_| Error::Handshake)?;
+        let builder = match pin {
+            Some(pin) => builder.dangerous().with_custom_certificate_verifier(Arc::new(pinned::Pinned { pin, provider: self.provider.clone() })),
+            None => {
+                let roots = roots();
+                if roots.is_empty() { return Err(Error::NoRoots); }
+                builder.with_webpki_verifier(WebPkiServerVerifier::builder_with_provider(Arc::new(roots), self.provider.clone()).build().map_err(|_| Error::NoRoots)?)
+            }
+        };
         Ok(match device { Some(device) => builder.with_client_cert_resolver(device), None => builder.with_no_client_auth() })
     }
 
-    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, timeout: u32) -> Result<Peer, Error> {
+    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, pin: Option<[u8; 32]>, timeout: u32) -> Result<Peer, Error> {
         if !mind::random::available() { return Err(Error::NoEntropy); }
         let server = pki_types::ServerName::try_from(name).map_err(|_| Error::Invalid)?.to_owned();
         let device = if client_certificate { Some(Arc::new(device::Device::new(KEYS).ok_or(Error::Denied)?)) } else { None };
-        let config = Arc::new(self.config(device.clone())?);
+        let config = Arc::new(self.config(device.clone(), pin)?);
+        let how = if pin.is_some() { " BY ITS PINNED KEY" } else { "" };
         let session = self.session(id, pid)?;
         if session.conn.is_some() { return Err(Error::Invalid); }
         let deadline = now() + timeout.clamp(100, 60_000) as u64;
@@ -264,11 +275,14 @@ impl Service {
                 let suite = conn.negotiated_cipher_suite().map_or(0, |s| u16::from(s.suite()));
                 let group = conn.negotiated_key_exchange_group().map_or(0, |g| u16::from(g.name()));
                 let sent = session.device.as_ref().is_some_and(|d| d.sent.load(Ordering::Relaxed));
-                mind::println!("[TLS] SESSION {} OF PID {}: {} VERIFIED, SUITE {:04X}, GROUP {:04X}, CLIENT CERTIFICATE {}", id, pid, name, suite, group, if sent { "SENT" } else { "NOT SENT" });
+                mind::println!("[TLS] SESSION {} OF PID {}: {} VERIFIED{}, SUITE {:04X}, GROUP {:04X}, CLIENT CERTIFICATE {}", id, pid, name, how, suite, group, if sent { "SENT" } else { "NOT SENT" });
                 Ok(Peer { suite, group, client_certificate: sent })
             }
             Err(failure) => {
                 let error = match &failure {
+                    Failure::Tls(rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)) if pin.is_some() => {
+                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: NOT THE PINNED KEY", id, pid, name); Error::Certificate
+                    }
                     Failure::Tls(rustls::Error::InvalidCertificate(why)) => { mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: CERTIFICATE {:?}", id, pid, name, why); Error::Certificate }
                     Failure::Tls(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {} FAILED: {:?}", id, pid, name, error); Error::Handshake }
                     Failure::Client(error) => { mind::println!("[TLS] SESSION {} OF PID {}: {} FAILED: {:?}", id, pid, name, error); *error }
@@ -349,8 +363,15 @@ fn main(_info: &'static BootInfo) {
             Err(reason) => wire::reject(reason),
             Ok((api::Request::Attach { flow }, call)) => api::reply_attach(call, service.attach(flow, pid)),
             Ok((api::Request::Connect { session, name, address, port, client_certificate, timeout_ms }, call)) => {
-                let peer = service.connect(session, pid, name.as_str(), address, port, client_certificate, timeout_ms);
+                let peer = service.connect(session, pid, name.as_str(), address, port, client_certificate, None, timeout_ms);
                 api::reply_connect(call, peer.as_ref().map_err(|e| *e))
+            }
+            Ok((api::Request::ConnectPinned { session, name, address, port, pin, timeout_ms }, call)) => {
+                let peer = match <[u8; 32]>::try_from(pin) {
+                    Ok(pin) => service.connect(session, pid, name.as_str(), address, port, false, Some(pin), timeout_ms),
+                    Err(_) => Err(Error::Invalid),
+                };
+                api::reply_connect_pinned(call, peer.as_ref().map_err(|e| *e))
             }
             Ok((api::Request::Send { session, data }, call)) => api::reply_send(call, service.send(session, pid, data)),
             Ok((api::Request::Receive { session, length }, call)) => {

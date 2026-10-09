@@ -2,7 +2,7 @@
 
 **Type:** tool and tests (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-07) · **Blocked by:** — ([300-KRN-0001](300-KRN-0001-blockstore-at-boot.done) started the store at boot and gave the shell its client) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.3, MC-4.4, MC-4.8, MC-12.1
 
-Part of main task [300](../issues/300-checksummed-block-store.md). It also does the service parts of 301 (`301-STO-0003`) and 302 (`302-STO-0002`).
+Part of main task [300](300-checksummed-block-store.done). It also does the service parts of 301 (`301-STO-0003`) and 302 (`302-STO-0002`).
 
 ## Problem
 
@@ -48,4 +48,4 @@ The block store, objects and names had host tests only. The acceptance criteria 
 - **CI:** the standalone build steps for `blockstore` are gone; `02_build.sh` builds it for both architectures (300-KRN-0001).
 - **Not covered on the platform:**
   - a corrupt block, chunk or name record ([300-STO-0005](300-STO-0005-corruption-on-the-platform.done));
-  - refusals by badge, because the shell's client holds every right ([300-STO-0004](../issues/300-STO-0004-rights-by-badge.md)).
+  - refusals by badge, because the shell's client holds every right ([300-STO-0004](300-STO-0004-rights-by-badge.done)).

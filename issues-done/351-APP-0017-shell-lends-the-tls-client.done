@@ -1,0 +1,22 @@
+# 351-APP-0017 — The shell lends its TLS client for `REQUEST_TLS` — done
+
+**Type:** tool (shell) · **Owner:** `APP` track · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.6, MC-3.11
+
+Numbered from the network track's request in `requests-APP.md` ("The shell lends its TLS client for `REQUEST_TLS`"), for [351-NET-0002](351-NET-0002-https-for-programs.done). Done by the storage session in the tools track's area with the maintainer's permission (2026-10-09). The request is taken from the file.
+
+## Problem
+
+[351-KRN-0034](351-KRN-0034-a-tls-client-for-programs.done) added `REQUEST_TLS` and let `loader` take `SLOT_TLS` in a launch session. No launcher lent the client yet, so `download` could not fetch `https://`.
+
+## Plan and resolution
+
+- **`Shell::start_with`** lends its `SLOT_TLS` client to the program's `SLOT_TLS` when:
+  - the program asks for `REQUEST_TLS`;
+  - the shell holds the client;
+  - the program got a flow grant: TLS without a flow reaches nothing (the TLS service has no network of its own).
+- **Scripts.** A script's program gets it only if the script declares `tls` (msh's words, `docs/msh.md`).
+- **`wm`.** Its line of what it did not lend names `tls`, and `parse` (109-APP-0016), as it names `network`.
+
+**Tested** in the `net` suite on x86 and aarch64 (`https_download_runs`):
+- `download` fetches `https://` with the lent client over its own grant;
+- from a script that declares `console network file parse` but not `tls`, it gets no client and refuses (`HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT`).

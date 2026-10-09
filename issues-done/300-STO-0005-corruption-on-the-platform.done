@@ -2,7 +2,7 @@
 
 **Type:** tests (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-10-08) · **Blocked by:** — · **Roadmap:** track B; Assurance · **Constitution:** MC-4.8, MC-12.1
 
-Part of main task [300](../issues/300-checksummed-block-store.md); split off from 300-STO-0002, 301 and 302.
+Part of main task [300](300-checksummed-block-store.done); split off from 300-STO-0002, 301 and 302.
 
 ## Problem
 

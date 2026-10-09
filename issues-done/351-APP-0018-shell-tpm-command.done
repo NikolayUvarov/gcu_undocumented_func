@@ -1,0 +1,17 @@
+# 351-APP-0018 — The shell's `tpm` command — done
+
+**Type:** tool (shell command) · **Owner:** `APP` track · **Priority:** P3 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.9, MC-3.3
+
+Done for [351-DRV-0015](../issues/351-DRV-0015-tpm-driver.md) by the storage session, in the tools track's area with the maintainer's permission (2026-10-09).
+
+## Problem
+
+Nothing shows whether the machine has a TPM the system drives. Nothing checks, on the platform, that a client without the seal badge cannot seal.
+
+## Plan and resolution
+
+- **`tpm`** prints `TPM 2.0 BY <manufacturer>, CRB|FIFO INTERFACE`, or `TPM: NONE` (`shell/src/tpm.rs`, through `SLOT_TPM`, [351-KRN-0043](351-KRN-0043-tpm-service-at-boot.done)).
+- **`tpm seal <text>`** asks to seal anyway, as a check of the service's rights. The shell's client has no seal badge, so it is refused (`TPM: Rights`), and the service logs the refusal.
+- **Help and Tab completion** know the command.
+
+**Tested** in the `tls` suite's TPM check (`tpm_check`), on x86 and aarch64: without a TPM `tpm` prints `TPM: NONE`. The `TPM 2.0 BY IBM` line and the refused seal passed with `swtpm` on the storage session's machine, with the kernel's half sketched (requests-KRN.md). In the suite they run once that half lands.
