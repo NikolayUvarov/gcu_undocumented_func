@@ -67,6 +67,7 @@ pub fn spawn(name: &str, grant: Option<(usize, u8)>) -> Result<u64> {
     let failed = |error: loader::Error| match error {
         loader::Error::NotFound => Error::NotFound, loader::Error::NoMemory => Error::NoMemory, loader::Error::Rights => Error::Rights,
         loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY), loader::Error::Invalid => Error::Invalid,
+        loader::Error::Unreadable => Error::Other(ERR_IO),
     };
     let endpoint = crate::ipc::Endpoint::LOADER;
     let session = loader::begin(endpoint, name, "")?.map_err(failed)?;

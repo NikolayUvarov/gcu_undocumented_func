@@ -300,3 +300,24 @@ Started from `wm`, `camera` found no camera and ended at once with `camera: no c
 
 The `wm` suite starts `camera` without a camera (or another program that fails at once): its window stays with the message until a key.
 
+## `date set` in the shell (211-KRN-0051)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for [211-KRN-0051](211-KRN-0051-setting-the-clock.md), at the maintainer's request: a way to set the time.
+
+### Problem
+
+`date` prints the RTC's time. Nothing sets it, and the MacBook Pro's clock reads 2022-01-01. `rtc.wit` 1.2 adds `set` for a client with the setting badge, which init gives the shell (211-KRN-0051).
+
+### Plan (a proposal; the tools track decides)
+
+- `date set YYYY-MM-DD HH:MM[:SS]` calls `rtc::set` through the shell's setting client and prints the new time. It says the clock keeps no time zone.
+- The help and `docs/tools` (EN, RU) describe it.
+
+### Acceptance criteria
+
+The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
+
+## Note: the shell's text for `loader.wit` 1.7 `unreadable` (211-KRN-0050)
+
+The kernel track added `unreadable` to the loader's errors. The shell's match on loader errors is exhaustive, so the interface change took the shell's mapping with it: `ERR_IO` → `CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)` in `shell/src/main.rs`. The tools track may word it otherwise. `wm`, `fm` and `console` print loader errors with `{:?}` and show `Unreadable`.
+
