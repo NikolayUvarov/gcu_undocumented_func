@@ -34,7 +34,7 @@ const HELP: [&str; 9] = [
     "F7: find; Shift+F7: next; Ctrl+F7: replace all; Alt+F8: go to line",
     "F9: menu (Options: tab width, overwrite, syntax colours); F1: these keys",
     "Line endings (LF or CRLF) and invalid UTF-8 are kept as they are.",
-    "Saving writes name.tmp and renames it over the file.",
+    "Saving writes its own name.tmp (name.tmp1, ... if taken), then renames it.",
     "",
 ];
 

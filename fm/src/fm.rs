@@ -63,8 +63,8 @@ pub trait Disk {
     fn writable(&mut self, path: &str) -> bool;
     /// The volume of a path.
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
-    /// Writes what is cached for the volume of `path` to the disk.
-    fn flush(&mut self, path: &str);
+    /// Writes what is cached for the volume of `path` to its medium; an error means it may not be there (175-APP-0036).
+    fn flush(&mut self, path: &str) -> Result<(), Failure>;
 }
 
 /// Where a program fm started shows itself.
@@ -170,7 +170,7 @@ impl Op {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Step { MakeDir(String), Copy { from: String, to: String, size: u64 }, Remove(String), Rename { from: String, to: String } }
+enum Step { MakeDir(String), Copy { from: String, to: String, size: u64 }, Remove(String), Rename { from: String, to: String }, Flush(String) }
 
 impl Step {
     fn describe(&self) -> String {
@@ -179,6 +179,7 @@ impl Step {
             Step::Copy { from, to, .. } => format!("Copy {} to {}", display(from), display(to)),
             Step::Remove(path) => format!("Delete {}", display(path)),
             Step::Rename { from, to } => format!("Move {} to {}", display(from), display(to)),
+            Step::Flush(path) => format!("Write {} to its disk", display(path)),
         }
     }
 }
@@ -215,7 +216,9 @@ impl Job {
         Self { op, steps: Vec::new(), index: 0, copying: None, done: 0, total: 0, files: 0, skipped: 0, errors: 0, replace: true, failure: None, choice: 0,
                asking: false, kept: Vec::new(), sources: Vec::new(), target: None, focus: None, buffer: Vec::new() }
     }
-    pub fn steps(&self) -> usize { self.steps.len() }
+    /// The steps the user's entries take, and how many of them are behind: a flush is not one of them.
+    pub fn steps(&self) -> usize { self.steps.iter().filter(|s| !matches!(s, Step::Flush(_))).count() }
+    pub fn at(&self) -> usize { self.steps[..self.index.min(self.steps.len())].iter().filter(|s| !matches!(s, Step::Flush(_))).count() }
 
     // The steps for `from` (a file or a directory tree) copied to `to`.
     fn plan_copy(&mut self, from: &str, to: &str, entry: &Entry, disk: &mut dyn Disk, depth: usize) -> Result<(), String> {
@@ -253,6 +256,8 @@ impl Job {
                 if self.replace && disk.list(&to).is_err() { let _ = disk.remove(&to); } // an existing file is replaced
                 disk.rename(&from, &to).map(|_| true)
             }
+            // The copies are on the target's medium before any source is removed (175-APP-0036).
+            Step::Flush(path) => disk.flush(&path).map(|_| true),
             Step::Copy { from, to, size } => {
                 if self.copying.is_none() {
                     let source = disk.open(&from).ok_or(Failure::NotFound)?;
@@ -436,22 +441,33 @@ impl<'b> Fm<'b> {
         self.editor = Some(editor);
     }
 
-    // Saves the editor's text: `name.tmp` first, then it replaces the file (best effort on FAT).
+    // Saves the editor's text through a staging file of its own (`name.tmp`, else `name.tmp1`, … never one that exists,
+    // 175-APP-0035), flushed to its medium before the old file goes (175-APP-0036); then it replaces the file (best effort
+    // on FAT).
     fn save(path: &str, text: &[u8], disk: &mut dyn Disk) -> Result<usize, String> {
-        let temporary = format!("{}.tmp", path);
+        let mut staged = None;
+        for n in 0..100 {
+            let name = if n == 0 { format!("{}.tmp", path) } else { format!("{}.tmp{}", path, n) };
+            match disk.create(&name, false) {
+                Ok(sink) => { staged = Some((sink, name)); break; }
+                Err(Failure::Exists) => continue,
+                Err(failure) => return Err(failure.text()),
+            }
+        }
+        let Some((mut sink, temporary)) = staged else { return Err(format!("{}.tmp to {}.tmp99 all exist", display(path), display(path))) };
         let written = (|| -> Result<(), Failure> {
-            let mut sink = disk.create(&temporary, true)?;
             for chunk in text.chunks(SLICE) { sink.write(chunk)?; }
-            sink.finish()?;
-            Ok(())
+            sink.finish()
         })();
+        drop(sink);
         if let Err(failure) = written { let _ = disk.remove(&temporary); return Err(failure.text()); }
+        if let Err(failure) = disk.flush(&temporary) { let _ = disk.remove(&temporary); return Err(format!("not written to disk: {}", failure.text())); }
         match disk.remove(path) {
             Ok(()) | Err(Failure::NotFound) => {}
             Err(failure) => { let _ = disk.remove(&temporary); return Err(failure.text()); }
         }
         disk.rename(&temporary, path).map_err(|f| format!("{} (the text is in {})", f.text(), display(&temporary)))?;
-        disk.flush(path);
+        disk.flush(path).map_err(|f| format!("not written to disk: {}", f.text()))?;
         Ok(text.len())
     }
 
@@ -565,6 +581,7 @@ impl<'b> Fm<'b> {
             if let Err(error) = planned { self.notice = Some(error); return; }
             job.sources.push(from.clone());
         }
+        if job.steps.iter().any(|s| matches!(s, Step::Copy { .. } | Step::MakeDir(_))) { job.steps.push(Step::Flush(target.clone())); }
         if op == Op::Move {
             for (from, entry) in &sources { if !same_volume(from, &target) { if let Err(error) = job.plan_remove(from, entry, disk, 0) { self.notice = Some(error); return; } } }
         }
@@ -592,7 +609,7 @@ impl<'b> Fm<'b> {
         let job = self.job.as_mut().unwrap();
         if job.index < job.steps.len() {
             match job.step(disk) {
-                Ok(true) => { job.index += 1; job.files += 1; }
+                Ok(true) => { if !matches!(job.steps[job.index], Step::Flush(_)) { job.files += 1; } job.index += 1; }
                 Ok(false) => {}
                 Err(failure) => { job.failure = Some(failure); job.choice = 0; }
             }
@@ -604,11 +621,14 @@ impl<'b> Fm<'b> {
     fn finish(&mut self, stopped: bool, disk: &mut dyn Disk) {
         let Some(mut job) = self.job.take() else { return };
         job.copying = None; // closes a partly written file
-        for path in job.sources.iter().chain(job.target.iter()) { disk.flush(path); }
+        let mut unwritten = None;
+        for path in job.target.iter().chain(job.sources.iter()) { if let Err(failure) = disk.flush(path) { unwritten.get_or_insert(failure); } }
         let bytes = if job.op == Op::Delete { String::new() } else { format!(", {} bytes", job.done) };
-        let mut text = format!("{} {} of {}{}", if stopped { "Stopped:" } else { job.op.done() }, job.files, job.steps.len(), bytes);
+        let planned = job.steps();
+        let mut text = format!("{} {} of {}{}", if stopped { "Stopped:" } else { job.op.done() }, job.files, planned, bytes);
         if job.skipped > 0 { text += &format!(", {} skipped", job.skipped); }
         if job.errors > 0 { text += &format!(", {} failed", job.errors); }
+        if let Some(failure) = unwritten { text += &format!("; NOT WRITTEN TO DISK: {}", failure.text()); }
         self.notice = Some(text);
         self.panels[self.active].marked.clear();
         // The cursor goes to what was made: the first entry put in a directory, or the new name.
@@ -632,9 +652,14 @@ impl<'b> Fm<'b> {
                 Some(Some(1)) => {
                     let partial = job.copying.is_some();
                     job.drop_copy();
-                    if let Some(Step::Copy { from, to, size }) = job.steps.get(job.index).cloned() {
-                        if partial { let _ = disk.remove(&to); } // a partly written copy is not left behind
-                        job.kept.push(from); job.done += size;
+                    match job.steps.get(job.index).cloned() {
+                        Some(Step::Copy { from, to, size }) => {
+                            if partial { let _ = disk.remove(&to); } // a partly written copy is not left behind
+                            job.kept.push(from); job.done += size;
+                        }
+                        // The copies may not be on their medium: no source of a move is removed.
+                        Some(Step::Flush(_)) => { let sources = job.sources.clone(); job.kept.extend(sources); }
+                        _ => {}
                     }
                     job.failure = None; job.skipped += 1; job.errors += 1; job.index += 1;
                     if job.index >= job.steps.len() { stop = Some(false); }
@@ -835,7 +860,7 @@ impl<'b> Fm<'b> {
                         let path = resolve(&self.panels[self.active].path, &typed);
                         match disk.mkdir(&path) {
                             Ok(()) => {
-                                disk.flush(&path);
+                                if let Err(failure) = disk.flush(&path) { self.notice = Some(format!("{}: not written to disk: {}", display(&path), failure.text())); }
                                 // The cursor goes to the new directory, or to the one it was made in.
                                 let here = self.panels[self.active].path.clone();
                                 let below = if is_root(&here) { panel::volume(&path).1 } else { path.get(here.len() + 1..).unwrap_or("") };
@@ -1088,7 +1113,7 @@ impl<'b> Fm<'b> {
         let (offset, size) = job.copying.as_ref().map_or((0, 0), |c| (c.offset, c.size));
         progress(grid, inner.x + 1, inner.y + 1, inner.w.saturating_sub(2), offset, size, theme.selected, theme.dialog);
         progress(grid, inner.x + 1, inner.y + 3, inner.w.saturating_sub(2), job.done, job.total, theme.selected, theme.dialog);
-        let totals = if job.op == Op::Delete { format!("{} of {}", job.index, job.steps.len()) } else { format!("{} of {}; {} of {} bytes", job.index, job.steps.len(), job.done, job.total) };
+        let totals = if job.op == Op::Delete { format!("{} of {}", job.at(), job.steps()) } else { format!("{} of {}; {} of {} bytes", job.at(), job.steps(), job.done, job.total) };
         grid.text_max(inner.x + 1, inner.y + 4, &totals, inner.w.saturating_sub(2), theme.dialog);
         grid.text_max(inner.x + 1, inner.y + 5, "Esc: stop", inner.w.saturating_sub(2), theme.dialog);
         if job.asking { message(grid, job.op.title(), &["Stop the operation?"], &["Stop", "Continue"], job.choice, theme); }
@@ -1190,7 +1215,7 @@ impl<'b> Fm<'b> {
                                          Some(Dialog::Find { .. }) => "FIND", Some(Dialog::Results { .. }) => "RESULTS", Some(Dialog::Volume { .. }) => "VOLUME",
                                          Some(Dialog::Target { .. }) => "TARGET", Some(Dialog::Mkdir { .. }) => "MKDIR", Some(Dialog::NewFile { .. }) => "NEWFILE",
                                          Some(Dialog::Delete { .. }) => "DELETE", Some(Dialog::Overwrite { .. }) => "OVERWRITE" };
-        let job = match &self.job { None => String::from("NONE"), Some(job) => format!("{}:{}/{}{}", job.op.name(), job.index, job.steps.len(), if job.failure.is_some() { ":FAILED" } else if job.asking { ":ASKING" } else { "" }) };
+        let job = match &self.job { None => String::from("NONE"), Some(job) => format!("{}:{}/{}{}", job.op.name(), job.at(), job.steps(), if job.failure.is_some() { ":FAILED" } else if job.asking { ":ASKING" } else { "" }) };
         let panel = &self.panels[self.active];
         format!("LEFT=/{} {} RIGHT=/{} {} ACTIVE={} CURRENT={} MARKED={} DIALOG={} MENU={} VIEW={} JOB={}", self.panels[0].path, mode(&self.panels[0]), self.panels[1].path,
                 mode(&self.panels[1]), if self.active == 0 { "L" } else { "R" }, panel.current().map_or("", |e| e.name.as_str()), panel.marked.len(), dialog,

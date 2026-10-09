@@ -235,5 +235,5 @@ impl<D: Disk, S: Store + 'static> Disk for WithStore<D, S> {
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
         match on_store(path) { Some(_) => self.store.as_mut()?.volume(), None => self.disk.volume(path) }
     }
-    fn flush(&mut self, path: &str) { if on_store(path).is_none() { self.disk.flush(path); } }
+    fn flush(&mut self, path: &str) -> Result<(), Failure> { if on_store(path).is_none() { self.disk.flush(path) } else { Ok(()) } }
 }
