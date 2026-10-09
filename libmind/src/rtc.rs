@@ -1,5 +1,8 @@
 use crate::ipc::Endpoint;
 
+/// The badge of the rtc client that may set the clock: init gives it to the shell (rtc.wit 1.2, 211-KRN-0051).
+pub const BADGE_SET: u16 = 1;
+
 /// Seconds since midnight from the CMOS RTC (via the ring 3 `rtc` driver, idl/rtc.wit), no time zone.
 pub fn seconds_since_midnight() -> Option<usize> {
     let seconds = crate::idl::rtc::now(Endpoint::RTC).ok()??;

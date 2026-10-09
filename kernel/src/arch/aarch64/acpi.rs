@@ -93,6 +93,7 @@ pub unsafe fn init(rsdp: u64) {
                 }
             }
             // The generic timer: the virtual EL1 timer's GSIV at 64 (a PPI).
+            b"TPM2" => { if let Some(base) = crate::tpm2::registers(table, false).filter(|&b| b < WINDOW) { board::set(&board::TPM, base as usize); } }
             b"GTDT" if table.len() >= 68 => { let ppi = u32_at(table, 64) as usize; if (16..32).contains(&ppi) { board::set(&board::TIMER_PPI, ppi); } }
             // ARM_BOOT_ARCH at 129: bit 0 PSCI compliant, bit 1 PSCI through HVC.
             b"FACP" if table.len() >= 131 => SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed),
@@ -139,15 +140,17 @@ pub unsafe fn power_off() -> ! {
 // Pin controllers of a definition block: those with a window in the identity map. The BCM2711's GPIO, whose _CRS the
 // Raspberry Pi 4 firmware computes at run time, is taken at its fixed address only beside the BCM2711's GIC-400.
 unsafe fn pins(aml: &[u8]) {
-    use super::aml::Pins;
-    super::aml::pin_controllers(aml, |kind, window| {
+    use super::aml::Known;
+    super::aml::known_devices(aml, |kind, window| {
         let window = match (kind, window) {
             (_, Some((base, size))) if base != 0 && size != 0 && base.checked_add(size).is_some_and(|end| end <= WINDOW) => Some((base, size)),
-            (Pins::Bcm2711, None) if board::get(&board::GICD) == BCM2711_GICD => Some((BCM2711_GPIO, 0x1000)),
+            (Known::Bcm2711, None) if board::get(&board::GICD) == BCM2711_GICD => Some((BCM2711_GPIO, 0x1000)),
             _ => None,
         };
+        // The TPM: its first page, locality 0, unless the TPM2 table named a CRB already (351-KRN-0052).
+        if kind == Known::Tpm { if let Some((base, _)) = window { if board::get(&board::TPM) == 0 { board::set(&board::TPM, base as usize); } } return; }
         let Some((base, size)) = window else { serial_print("MIND CORE KERNEL: ACPI: A PIN CONTROLLER WITHOUT A READABLE WINDOW, NOT USED\n"); return };
-        let first = if kind == Pins::Bcm2711 { board::PINS_BCM2711 } else { 0 };
+        let first = if kind == Known::Bcm2711 { board::PINS_BCM2711 } else { 0 };
         let slots = &board::PINS[first..first + crate::abi::PLATFORM_PINS_MAX];
         if slots.iter().any(|s| board::get(&s[0]) == base as usize) { return; } // named in two blocks
         if let Some(slot) = slots.iter().find(|s| board::get(&s[0]) == 0) { board::set(&slot[0], base as usize); board::set(&slot[1], size as usize); }

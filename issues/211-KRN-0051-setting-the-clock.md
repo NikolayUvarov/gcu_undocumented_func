@@ -1,6 +1,6 @@
 # 211-KRN-0051 — Setting the clock: `rtc.wit` 1.2 `set`, on the CMOS RTC and the PL031
 
-**Type:** kernel (the `rtc` service) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-5.6, MC-3.11
+**Type:** kernel (the `rtc` service) · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress (the service's part done and host-tested; `date set` waits for `APP`) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-5.6, MC-3.11
 
 ## Problem
 
@@ -26,6 +26,18 @@ On the MacBook Pro the system log began `STARTED 2022-01-01 04:28:29 BY THE MACH
 
 - **QEMU, x86 and aarch64:** `date set 2030-05-17 12:34:56`, then `date` shows that time, still running. A program without the setting badge is refused with `rights`.
 - **The MacBook Pro:** after `date set`, the next boot's log starts at the right date.
+
+## Progress
+
+**2026-10-09: the service's part.**
+- **The interface.** `idl/rtc.wit` 1.2 has `set` and its `error`.
+- **The service.** `rtc` refuses `set` with `rights` to a client without `mind::rtc::BADGE_SET`. init gives the shell its `SLOT_RTC` client with that badge; programs keep the plain client from the loader. The service logs who set the clock.
+- **The writes.**
+  - CMOS: registers written with status B's SET bit held, in its mode, the weekday included; years 2000 to 2099 only.
+  - PL031: the load register.
+  - Either way the date is read back, and `unavailable` answers a clock that did not take it.
+- **The codec.** It lives in `rtc/src/cmos.rs`. `tests/rtc_host.rs` round-trips every 7th second of the day in BCD and binary, 12 and 24 hours, and checks the date registers (weekday, BCD, the year range).
+- **Left.** `APP`'s `date set`, then the QEMU check of the acceptance criteria on x86 and aarch64, then the MacBook Pro.
 
 ## Related
 
