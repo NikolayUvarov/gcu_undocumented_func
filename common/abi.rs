@@ -209,6 +209,7 @@ pub const ERR_BUSY: usize = usize::MAX - 6; // e.g. the service is already runni
 pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
 pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
 pub const ERR_FOCUS: usize = usize::MAX - 9; // SPAWN_FOREGROUND from a task that does not have the focus (issue 160)
+pub const ERR_IO: usize = usize::MAX - 10; // services only: a drive did not answer or a medium could not be read (211-KRN-0050)
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 

@@ -15,6 +15,7 @@ pub static UART_LINE: AtomicUsize = AtomicUsize::new(1); // SPI number - 32
 pub static RTC: AtomicUsize = AtomicUsize::new(0); // a PL031; 0: none
 pub const VIRT_RTC: usize = 0x0901_0000;
 pub static RTC_LINE: AtomicUsize = AtomicUsize::new(2);
+pub static TPM: AtomicUsize = AtomicUsize::new(0); // a TPM 2.0's locality 0 page (351-KRN-0052); 0: none
 pub static TIMER_PPI: AtomicUsize = AtomicUsize::new(27); // EL1 virtual timer
 pub static GIC_VERSION: AtomicUsize = AtomicUsize::new(3); // 2: GICv2 (GIC-400), the CPU interface in memory
 pub static GICC: AtomicUsize = AtomicUsize::new(0x0801_0000); // GICv2: the CPU interface (each CPU sees its own there)

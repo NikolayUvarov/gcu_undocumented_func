@@ -63,6 +63,9 @@ fn request_flags(read: &mut dyn FnMut(usize, &mut [u8]) -> usize) -> (u32, u32) 
     (0, 0)
 }
 
+// A file error as the loader reports it: a drive that does not answer stays ERR_IO, not an invalid program (211-KRN-0050).
+fn file_error(error: fs::Error) -> Error { if error == fs::Error::Io { Error::Other(ERR_IO) } else { error.into() } }
+
 // The program file of `name` and its task name; boot services and the kernel are not applications.
 fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     let mut path = FixedBuf::<64>::new();
@@ -70,7 +73,7 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     let task = task_name(path.as_bytes());
     // Services are started by init from bootloader images; the kernel itself is not runnable as a program.
     if task.as_bytes() == b"kernel" || BOOT_SERVICES.iter().any(|s| s.as_bytes() == task.as_bytes()) { return Err(Error::NotFound); }
-    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap())?, task))
+    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?, task))
 }
 
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
@@ -82,7 +85,7 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     let size = file.size();
     if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
     let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
-    if file.read_at(0, &mut image.as_mut_slice()[..size])? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
+    if file.read_at(0, &mut image.as_mut_slice()[..size]).map_err(file_error)? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
@@ -184,7 +187,8 @@ impl Launcher {
         if result.is_err() { session.drop_grants(); }
         result.map_err(|error| match error {
             Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory, Error::Rights => loader::Error::Rights,
-            Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_BUSY) => loader::Error::Busy, _ => loader::Error::Invalid,
+            Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_BUSY) => loader::Error::Busy, Error::Other(ERR_IO) => loader::Error::Unreadable,
+            _ => loader::Error::Invalid,
         })
     }
 
@@ -197,7 +201,7 @@ impl Launcher {
 
 // The raw request flags of program `name` (REQUEST_*).
 fn requests(name: &str) -> Result<u32, loader::Error> {
-    let (file, _) = open(name.as_bytes()).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })?;
+    let (file, _) = open(name.as_bytes()).map_err(|error| match error { Error::NotFound => loader::Error::NotFound, Error::Other(ERR_IO) => loader::Error::Unreadable, _ => loader::Error::Invalid })?;
     Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)).0)
 }
 
