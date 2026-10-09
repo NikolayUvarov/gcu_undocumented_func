@@ -25,6 +25,8 @@
   - `package` (begin, chunk, verify, install, uninstall);
   - `update-check`;
   - `reboot`;
+  - `screenshot`;
+  - `test-run` (an `msh` script for 501's test account);
   - `cancel`.
 - **Typed results** say `completed`, `failed`, `denied`, `cancelled` or `unknown` with a reason. All lengths are bounded.
 - **The policy:** `data/effector/policy`, a text file the owner writes with the shell (requests-APP). Its contents:
@@ -34,13 +36,19 @@
   - the delivery root;
   - whether packages may be installed, and the package keys trusted;
   - whether system updates may be checked or applied;
-  - whether a reboot is allowed.
+  - whether a reboot is allowed;
+  - whether test scripts may run in the test account (501), and with which grants at most;
+  - whether the screen may be captured.
   - Anything not named is denied. The file is read at start and on the owner's command, never on the server's.
 - **The audit record:**
   - one line per request, written before the reply: time, command ID, initiator, reason, typed request, decision, result;
-  - it goes to `logd` and to a bounded file `data/effector/audit` that rotates;
+  - it goes to `logd` and to a bounded file `data/effector/audit` that rotates, which the owner can read;
   - the agent's own token and keys never appear in it (MC-10.3);
   - a failed write stops the request (MC-10.6).
+- **Where things are kept:**
+  - the owner's configuration and policy in `data/effector/`;
+  - the token in `effector`'s private directory in `system/`, taken in from the shell's copy, which is then removed;
+  - the command journal in `effector_gw`'s private directory.
 - **The threat analysis** goes in `docs/effector/README.md`:
   - **what each service holds:** its authorities and what it can reach;
   - **if `effector` is taken over:** it can ask for anything, and only the policy limits what is done;

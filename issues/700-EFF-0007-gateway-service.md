@@ -15,7 +15,9 @@
   - the log read badge;
   - `sysinfo`;
   - a writable `vfs` client scoped to `data/effector/` (configuration excluded);
-  - a read-only client for the policy's file roots and `log:`.
+  - a read-only client for the policy's file roots and `log:`;
+  - its own private directory in `system/`, for the command journal;
+  - screen capture, given only if the policy allows it.
 - **The calls of 0003, each checked against the policy, then audited.**
   - **`status`:** boot services and their states from `init.list`, memory and load from `sysinfo`, the release version, the update state.
   - **`service-control`:** start, stop or restart a named service through `init`; never `init`, the shell, `effector` or `effector_gw`.
@@ -29,6 +31,8 @@
     - size and SHA-256 checked;
     - flushed, then renamed;
     - an existing file is kept unless the request allows replacing it.
+  - **`screenshot`:** where the policy allows it, the screen as the shell's `screenshot` takes it (086), returned as an artifact.
+  - **`test-run`:** handed to the test-account runner of 501-ASR-0009 when it exists and the policy allows test runs; `denied` until then.
   - **`cancel`:** of a transfer in progress.
 - **Busy work.** A request that would block the gateway runs with its deadline and does not hold up `status`.
 

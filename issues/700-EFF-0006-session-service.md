@@ -11,18 +11,22 @@ Something on the machine must keep the connection to the server, report the mach
 - **A boot service `effector`, off by default (173).** Its grants from `init`:
   - one flow to the configured server;
   - a `tls` client;
+  - a `parse` client;
   - `rtc`;
   - a read-only `vfs` view of `data/effector/`;
+  - its own private directory in `system/`, for the token;
   - an endpoint to `effector_gw`.
 - **Configuration** in `data/effector/` (written by the owner through the shell):
   - the server's HTTPS URL;
   - the current and next certificate pins (SHA-256 of the leaf certificate);
-  - the token;
+  - the token, taken into the private directory on first start, with the shell's copy removed;
   - the agent ID, made once from `mind::random` and kept.
+- **Trust both ways.** The server's pinned leaf certificate; the machine's token, and the device key's certificate (`tls` offers it), which identifies the machine once Effector accepts agents by device key.
 - **Only HTTPS with a pinned certificate.** There is no plain-HTTP mode and no fallback. A wrong pin, a name mismatch or a redirect stops the connection and is logged.
 - **Heartbeat** every one to two seconds over one kept-alive connection:
   - identity;
-  - `os_version: "mindcore"`, architecture, release version;
+  - `os_version: "mindcore"`, `arch` `x64` or `arm64`, release version;
+  - the device key's fingerprint and the image's manifest hash (350);
   - the boot services from `effector_gw`'s `status`;
   - the update state;
   - `system_state`;
@@ -30,7 +34,8 @@ Something on the machine must keep the connection to the server, report the mach
 - **Commands:**
   - a second connection holds the server's wake-up stream;
   - polling runs after every wake-up and at least every ten seconds;
-  - each command is decoded with `mind::json` into a typed request (0003), and an action without one is answered `denied`.
+  - the service parses only the framing; each head and JSON body goes to `parse` (MC-11.11), and the typed result is checked against what was expected (MC-11.5);
+  - each command becomes a typed request (0003), and an action without one is answered `denied`.
 - **ACK.** The command ID and result go to a journal in `data/effector/` (through `effector_gw`, which holds the write) before the ACK. ACKs are retried with back-off until accepted or past the command's term, and a repeated ID returns the stored result (MC-6.6).
 - **Pin rotation.** `update_agent_config` is accepted only over the verified connection and only within the current-plus-next set. The URL and the policy never change from the server (MC-7.5).
 - **Losing the server.** The service reconnects with back-off and jitter, and nothing local waits for the server (MC-7.6).
@@ -47,7 +52,7 @@ Something on the machine must keep the connection to the server, report the mach
   - a cut stream and a cut connection recover;
   - a repeated command ID is not run twice;
   - an ACK answered with 500 is retried.
-- The service holds only the grants listed above (the `isolation` suite's style of check).
+- The service holds only the grants listed above (the `isolation` suite's style of check), and [docs/network/airlock.md](../docs/network/airlock.md) gains its row.
 
 ## Related
 

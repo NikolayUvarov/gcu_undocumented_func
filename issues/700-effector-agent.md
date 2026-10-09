@@ -1,8 +1,10 @@
 # 700 — The Effector agent: MIND Core managed by the Effector fleet server
 
-**Type:** main task · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later: [requests-NET.md](requests-NET.md) (an HTTP/1.1 client for a service, a pinned leaf certificate, a flow for a long-running service), [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants, a writable scoped `vfs` client, a lifecycle client limited to named services), [requests-UPD.md](requests-UPD.md) (an `updater` client for the gateway, signed application packages), [requests-APP.md](requests-APP.md) (the shell's `effector` command); outside this repository, the Effector server's support for a `mindcore` platform (its task 75) · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
+**Type:** main task · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later: [requests-NET.md](requests-NET.md) (HTTP for a service, a certificate pin and long-lived sessions; JSON in the parser service; a flow for a long-running service), [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants with private directories, a writable scoped `vfs` client, a lifecycle client limited to named services), [requests-UPD.md](requests-UPD.md) (an `updater` client for the gateway, signed application packages), [requests-APP.md](requests-APP.md) (the shell's `effector` command); outside this repository, the Effector server's support for a `mindcore` platform (its task 75) · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
 
 Asked by the maintainer (2026-10-09): a MIND Core machine should be managed by the maintainer's existing fleet server, Effector (project `sst-test-deploy`), as its Windows and Linux terminals are. The server installs software, updates applications, collects diagnostics and data, and controls services and restarts. Opened by the session that surveyed both projects; the `EFF` track is open.
+
+**Revised the same day,** after the maintainer's review and 501's revision, which had planned the same agent inside 501: 700 holds the agent and its contract, and 501 builds its test runs on it. The revision brought in the device key as the machine's identity, the image's manifest hash in the heartbeat, test scripts in a test account, and screenshots. `main`'s new authority map (109) moved JSON parsing into the `parse` service.
 
 ## Problem
 
@@ -27,10 +29,10 @@ MIND Core has no such agent, and several of the parts it needs are missing (surv
 
 - **HTTP.** `mind::http` does GET only. It has no request headers of the caller's (so no `Authorization`), no request bodies, no chunked responses and no kept-alive connections (351-NET-0001).
 - **Trust.** `tls` is TLS 1.3 with CA roots only. No program can pin a server certificate (351-NET-0002 plans an SPKI pin), and no program but `updater` can hold a TLS client yet.
-- **Formats.** There is no JSON and no ZIP reader in userland.
-- **Network grants.** A boot service's flow is granted once by `init` and ends with the policy's term and volume (3600 s and 16 MiB by default). A service that heartbeats for days needs more.
+- **Formats.** There is no JSON and no ZIP reader in userland. Under the authority map ([docs/network/airlock.md](../docs/network/airlock.md), 109), external input is parsed in the `parse` service, which today parses HTTP heads only.
+- **Network grants.** A boot service's flow is granted once by `init` and ends with its term and volume: 3600 s and 16 MiB by default; a policy line can name more, and the owner changes the policy with `netpolicy add` (108). A service that heartbeats for days needs that line, or renewal.
 - **Local authorities.**
-  - Only the shell can read the log or write to `data/`.
+  - Only the shell can read the log or write to `data/`. A service can have a private directory in `system/` (as `keystore` and `netpolicy` do since 351-NET-0005 and 108), which nobody else can open.
   - Only `updater` may ask `init` to reboot.
   - `init`'s lifecycle client is all-or-nothing.
 - **Applications.** They are not verified by the loader (profile, "Not met"), and there is no package format for adding one at run time.
@@ -41,11 +43,22 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 ### Two services, on the network path of Appendix B.6 (MC-11.3, MC-11.11)
 
-**`effector` — the session adapter.**
-- It holds one `netpolicy` flow to the configured server, a `tls` client that checks the pinned leaf certificate, the agent token, `rtc`, and a read-only view of its own configuration.
-- It speaks HTTP/1.1 and JSON with the server and parses everything the server sends.
+**`effector` — the session gateway.**
+- It holds:
+  - one `netpolicy` flow to the configured server;
+  - a `tls` client that checks the pinned leaf certificate and offers the device's certificate;
+  - a `parse` client;
+  - `rtc`;
+  - a read-only view of the owner's configuration;
+  - its own private directory in `system/`, which keeps the agent token.
+- It speaks HTTP/1.1 with the server. Like `download`, it parses nothing but the framing: the HTTP heads and the JSON bodies go to `parse` (MC-11.11, [docs/network/airlock.md](../docs/network/airlock.md)), and it checks the typed result against what it expects (MC-11.5).
 - Each command becomes a typed request of `idl/effector.wit`. A command that has no typed form is answered `denied` without reaching anything else.
 - It holds no local authority beyond its endpoint to the gateway.
+
+**Trust both ways.**
+- The server is trusted by its pinned leaf certificate, current and next.
+- The machine presents the token Effector requires today. It also presents the device key ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), kept across boots) as its client certificate, which identifies the machine once Effector accepts agents by device key (Effector's task 75).
+- The heartbeat carries the device key's fingerprint and the image's manifest hash (350), so a run names its machine and image (MC-12.1).
 
 **`effector_gw` — the gateway.**
 - It holds the local authorities, each granted by `init` and narrowed by the owner's policy:
@@ -54,7 +67,9 @@ The agent must not turn the server into an unchecked remote administrator. Every
   - `sysinfo`;
   - a `vfs` client scoped to its own directories;
   - an `updater` client;
-  - the reboot badge.
+  - the reboot badge;
+  - screen capture, where the policy allows it;
+  - its own private directory for its journal and audit trail.
 - It checks every typed request against the policy, binding it to the permitted scope (MC-3.8). It then executes the request, records it in the audit trail (MC-10.3) and returns a typed result.
 - It never sees HTTP or JSON from the network.
 
@@ -62,13 +77,15 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 - Neither service starts until the owner enables it (`data/services.txt`, 173).
 - The owner writes the configuration and the policy with the shell's `effector` command (requests-APP): server URL, certificate pins, the token, and what the server may do.
+  - `effector` takes the token into its private directory and removes the shell's copy.
+  - The flow's policy line is added with `netpolicy add`, which asks the user (108).
 - The server cannot change the policy or the server URL. Over an already verified connection it may rotate the certificate pin within the current-plus-next set, as Effector's protocol does (MC-7.5).
 
 ### What each Effector action does on MIND Core
 
 | Effector action | On MIND Core | Default policy |
 |---|---|---|
-| heartbeat | identity, `os_version: "mindcore"`, architecture, release version, the boot services and their states (`init.list`), the update state, `system_state`, time | always |
+| heartbeat | identity, `os_version: "mindcore"`, `arch` `x64` or `arm64` (Effector's values), release version, the device key's fingerprint, the image's manifest hash, the boot services and their states (`init.list`), the update state, `system_state`, time | always |
 | `start/stop/restart_service` | `init` for a service named in the policy; never `init` or the shell | services listed by the owner |
 | `collect_logs` | the log ring or a `log:/bootNNNN.log`, by a source name in the policy | allowed sources only |
 | `collect_file` | a file under a policy root | owner's roots only; the agent's own files never |
@@ -78,7 +95,9 @@ The agent must not turn the server into an unchecked remote administrator. Every
 | reboot (when the server has it: Effector 74.12) | `init` reboot through the gateway's badge | off |
 | `refresh_config`, `update_agent_config` | re-read; pin rotation only | always |
 | `cancel_command` | cancels a queued or interruptible typed request | always |
-| `exec`, `exec_v1` (with `health_check`, `run_test`), `powershell_v1`, `console_v1`, `collect_registration`, `screenshot`, `set_hostport` | `denied`: there is no shell; remote code arrives only as a signed package. Test runs in a test account are main task 501's | never |
+| `exec_v1` from `test.run` or `command.exec` | an `msh` script in a test account, with only the grants it declares and the policy allows ([501](501-effector.md), 501-ASR-0009) | off |
+| `screenshot` | the screen, as the shell's `screenshot` takes it (086) | off |
+| `exec`, `exec_v1` from `health_check`, `powershell_v1`, `console_v1`, `console_users_v1`, `collect_registration`, `set_hostport` | `denied`: there is no shell with the agent's capabilities; remote code arrives only as a signed package or a test script | never |
 
 ### Behaviour
 
@@ -136,10 +155,10 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 | Request | Track | Needed by |
 |---|---|---|
-| An HTTP/1.1 client for a service | `NET` | 0006 |
-| A pinned leaf certificate and long-lived sessions in `tls` | `NET` | 0006 |
+| HTTP for a service, a certificate pin and long-lived sessions (shared with 501) | `NET` | 0006 |
+| JSON in the parser service | `NET` | 0006 |
 | A flow for a long-running service | `NET` | 0006 |
-| Boot images and `init`'s grants for `effector` and `effector_gw` | `KRN` | 0006, 0007 |
+| Boot images and `init`'s grants for `effector` and `effector_gw`, with their private directories | `KRN` | 0006, 0007 |
 | A writable `vfs` client scoped to a service's directories | `KRN` | 0007, 0008 |
 | A lifecycle client limited to named services | `KRN` | 0007 |
 | An `updater` client for the gateway | `UPD` | 0009 |
@@ -172,6 +191,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
   - it survives a cut connection and a repeated command ID without running anything twice;
   - every operation appears in the audit trail.
 - **Against the real Effector server, on a build named in the record (0012):** the same operations from the server's web interface and API, recorded with the configuration they ran on.
+- **The authority map** ([docs/network/airlock.md](../docs/network/airlock.md)) has rows for both services, and each meets MC-11.11.
 - **The profile:**
   - says which of these hold, on which configurations, and what is not done (MC-12.3);
   - names the agent in the threat model;
@@ -179,4 +199,4 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 ## Related
 
-[501](501-effector.md) (tests on real hardware, now through this agent), [351](351-self-update.md), 173 (the boot services' configuration; on the kernel track's branch until it merges), [550](550-network-on-real-hardware.md), [351-NET-0002](351-NET-0002-https-for-programs.md), [351-NET-0005](351-NET-0005-persistent-device-key.md), [351-UPD-0007](351-UPD-0007-updater-service.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [500](500-fuzzing-abi-and-idl.md), [docs/profile/threat-model.md](../docs/profile/threat-model.md).
+[501](501-effector.md) (tests on real hardware, now through this agent), [351](351-self-update.md), 173 (the boot services' configuration; on the kernel track's branch until it merges), [550](550-network-on-real-hardware.md), [351-NET-0002](351-NET-0002-https-for-programs.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [109](../issues-done/109-session-parsers.done), [108](../issues-done/108-editable-network-policy.done), [351-UPD-0007](351-UPD-0007-updater-service.md), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [500](500-fuzzing-abi-and-idl.md), [docs/profile/threat-model.md](../docs/profile/threat-model.md).

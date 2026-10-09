@@ -23,8 +23,10 @@ The list of boot images is part of the ABI, and each service's grants are an arm
 - **`effector` gets:**
   - `rtc`;
   - `tls` (`SLOT_TLS`);
+  - a `parse` client (`SLOT_PARSE`, 109);
   - the `netpolicy` flow for program `effector` (renewable, when `NET` adds that);
   - a read-only `vfs` client scoped to `data/effector/`;
+  - its own private directory `system/effector` for the token, as 351-KRN-0040 gives `keystore` its own;
   - an endpoint to `effector_gw`.
   - Nothing else.
 - **`effector_gw` gets:**
@@ -34,8 +36,10 @@ The list of boot images is part of the ABI, and each service's grants are an arm
   - a writable `vfs` client scoped to `data/effector/` and `data/apps/` (the request below);
   - read-only clients for `log:` and the file roots;
   - a client of `updater` (requests-UPD);
-  - an `init` client badged `BADGE_REBOOT`.
-  - No `tls`, no flow, no device key.
+  - an `init` client badged `BADGE_REBOOT`;
+  - its own private directory `system/effector_gw` for the command journal;
+  - screen capture, for the policy's `screenshot`.
+  - No `tls`, no flow, no `parse` client, no device key. The test account's spawn rights are 501's, requested when 501-ASR-0009 starts.
 - **The ABI change** goes with `libmind`, `docs/api` and the `isolation` suite, as AGENTS.md says.
 
 ### Acceptance criteria
@@ -49,11 +53,11 @@ In QEMU, with both enabled, each service holds exactly the listed grants (the `i
 ### Problem
 
 `vfs_server` lets only the shell's `BADGE_USER` client write, and services get read-only clients. The Effector gateway must write:
-- its journal and audit trail;
+- its audit trail, which the owner reads;
 - delivered files;
-- installed applications.
+- installed applications, which the loader must be able to read.
 
-It must not be able to write anywhere else on `data/`.
+It must not be able to write anywhere else on `data/`. A private directory in `system/` (351-KRN-0040, 108-KRN-0041) covers the journal, but not these: other programs, the shell and the loader must read them.
 
 ### Plan (a proposal; the kernel track, or the track that owns `vfs_server`, decides)
 

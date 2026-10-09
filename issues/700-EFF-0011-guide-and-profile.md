@@ -19,6 +19,7 @@
   - **`threat-model.md`:** the Effector server as an adversary, and what the policy bounds;
   - **`bootstrap.md`:** what `init` gives each of the two services;
   - **`network.md`:** the flow, `tls` with a pinned certificate;
+  - **`../network/airlock.md`:** the rows for `effector` and `effector_gw`;
   - **`README.md`:** the rows for MC-10.2, MC-10.7, MC-11.6 and Article 7.
   - Each claim names its suite and configuration.
 - **`docs/tools/`:** the shell's `effector` command, when the tools track adds it.
