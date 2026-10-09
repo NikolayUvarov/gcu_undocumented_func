@@ -34,7 +34,7 @@ Steps 3–5 are done on the synthetic source; step 2 (UVC with isochronous trans
 - **Done — the test source** (`libmind/src/video.rs`), only when the boot disk holds `video/synthetic`: eight colour bars moving left 4 pixels a frame, and the frame number in 32 cells of the bottom 16 rows. The module also has the YUY2 conversion a UVC camera will need.
 - **Done — consent:**
   - `init` gives the gateway's only client to the shell (`SLOT_CAMERA` = 24, so `SLOT_DYNAMIC` is now 25).
-  - The shell lends it for `REQUEST_CAMERA` (8192) only after the user answers yes to `<NAME> ASKS FOR THE CAMERA. ALLOW? (Y/N)`, asked every time.
+  - The shell lends it for `REQUEST_CAMERA` (8192). It asked `<NAME> ASKS FOR THE CAMERA. ALLOW? (Y/N)` every time until 2026-10-09, when the maintainer ruled that a tool started for its purpose gets its device without a question (CONTRIBUTING.md); the camera mark still shows while a stream is open.
   - A script must declare `camera` too (msh's words; `gpio` was added there as well).
 - **Done — the indicator:**
   - `display.wit` 1.1 `camera`: the gateway's heartbeat while a stream is open.
