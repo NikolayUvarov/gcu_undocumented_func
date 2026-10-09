@@ -18,6 +18,7 @@ pub mod checkpoint;
 pub mod cid;
 pub mod control;
 pub mod dag;
+pub mod debug;
 pub mod dev;
 pub mod fs;
 pub mod firmware;
