@@ -8,9 +8,10 @@ e.g. `convert.py dictate-ru.bin encoder=encoder.int8.onnx decoder=decoder.int8.o
 as graphs of their own. Every name in a file shares one table of tensors, so a branch reads what its graph made.
 
 The file, little endian, every section 64-byte aligned:
-    magic "MINDNN01", u32 version (1), u32 graphs, u32 tensors, u32 ops (the op names' count)
+    magic "MINDNN01", u32 version (2), u32 graphs, u32 tensors, u32 ops (the op names' count)
     op names: per op u8 length, the name
-    tensors: per tensor u8 dtype (0 none: a value made at run time), u8 rank, u16 name length, u32 0,
+    tensors: per tensor u8 dtype (0 none: a value made at run time; 1 f32, 2 u8, 3 i8, 4 i32, 5 i64, 6 bool; 7 i8 in
+        panels, below), u8 rank, u16 name length, u32 0,
         u64 data offset (from the start of the file), u64 data bytes, rank * u64 dims, the name
     graphs: per graph u16 name length, the name, u32 inputs, u32 outputs, u32 nodes, ids of inputs, ids of outputs,
         then per node: u16 op, u8 inputs, u8 outputs, u16 attributes, u16 0, input ids (0xFFFFFFFF: absent),
@@ -19,6 +20,10 @@ The file, little endian, every section 64-byte aligned:
     tokens: u32 count, then per token u16 length and its UTF-8 (count 0 without --tokens)
     data: the initializers' bytes
     u32 FNV-1a of everything before it
+
+Version 2 adds code 7: a weight [k, n] that only MatMulInteger reads as its B, with k even and n a multiple of 16, is
+written in panels of 16 columns, one after another; a panel holds for each pair of rows p the pairs (B[2p][j],
+B[2p+1][j]) of its 16 columns j in order (libmind/src/nn/gemm.rs reads it so).
 """
 import struct
 import sys
@@ -139,10 +144,30 @@ class Model:
                         out.update(self.reads(g))
         return out
 
+    def panels(self):
+        # MatMulInteger's i8 weights that nothing else reads, in panels (code 7).
+        import numpy as np
+        uses = {}
+        for name, inputs, outputs, nodes in self.graphs:
+            for t in outputs:
+                uses.setdefault(t, set()).add(("output", 0))
+            for op, ins, outs, attrs, *_ in nodes:
+                for i, t in enumerate(ins):
+                    if t != 0xFFFFFFFF:
+                        uses.setdefault(t, set()).add((self.ops[op], i))
+        for t, used in uses.items():
+            code, dims, raw, name = self.info[t]
+            if used == {("MatMulInteger", 1)} and code == 3 and len(dims) == 2 and dims[0] % 2 == 0 and dims[1] % 16 == 0:
+                k, n = dims
+                b = np.frombuffer(raw, dtype=np.int8).reshape(k // 2, 2, n // 16, 16)
+                self.info[t][0] = 7
+                self.info[t][2] = np.ascontiguousarray(b.transpose(2, 0, 3, 1)).tobytes()
+
     def write(self, path, tokens):
         self.free_lists()
+        self.panels()
         head = bytearray()
-        head += b"MINDNN01" + struct.pack("<IIII", 1, len(self.graphs), len(self.info), len(self.ops))
+        head += b"MINDNN01" + struct.pack("<IIII", 2, len(self.graphs), len(self.info), len(self.ops))
         for op in self.ops:
             head += struct.pack("<B", len(op)) + op.encode()
         pad = lambda b: b.extend(b"\0" * (-len(b) % 64))

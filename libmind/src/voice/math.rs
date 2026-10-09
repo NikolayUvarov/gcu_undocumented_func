@@ -67,30 +67,40 @@ pub fn sqrt(x: f64) -> f64 {
 /// x^y for x >= 0.
 pub fn pow(x: f64, y: f64) -> f64 { if x <= 0.0 { 0.0 } else { exp(y * ln(x)) } }
 
-/// ln x in f32 for x > 0.
+// 1.5 * 2^23: x + MAGIC - MAGIC rounds |x| < 2^22 to an integer, ties to even, and t = x + MAGIC holds it in its
+// low mantissa bits.
+const MAGIC: f32 = 12_582_912.0;
+
+/// ln x in f32 for x > 0 (0: -inf, below 0 or NaN: NaN). Without branches, so that a loop over it vectorizes.
+#[inline]
 pub fn lnf(x: f32) -> f32 {
-    if x <= 0.0 { return f32::NEG_INFINITY; }
-    let bits = x.to_bits();
-    let mut e = ((bits >> 23) & 0xFF) as i32 - 127;
-    if e == -127 { return lnf(x * 8388608.0) - 23.0 * core::f32::consts::LN_2; } // subnormal
-    let mut m = f32::from_bits((bits & 0x007F_FFFF) | 0x3F80_0000);
-    if m > core::f32::consts::SQRT_2 { m *= 0.5; e += 1; }
+    let tiny = x < f32::MIN_POSITIVE;
+    let y = if tiny { x * 8388608.0 } else { x }; // subnormals scaled by 2^23
+    let bits = y.to_bits() as i32;
+    let e = ((bits >> 23) & 0xFF) - 127 - if tiny { 23 } else { 0 };
+    let m = f32::from_bits(((bits & 0x007F_FFFF) | 0x3F80_0000) as u32);
+    let big = m > core::f32::consts::SQRT_2;
+    let (m, e) = (if big { m * 0.5 } else { m }, if big { e + 1 } else { e });
     let z = (m - 1.0) / (m + 1.0);
     let z2 = z * z;
     // 2 atanh z for |z| <= 0.172: six terms are below f32's precision.
     let s = z * (2.0 + z2 * (2.0 / 3.0 + z2 * (2.0 / 5.0 + z2 * (2.0 / 7.0 + z2 * (2.0 / 9.0 + z2 * (2.0 / 11.0))))));
-    e as f32 * core::f32::consts::LN_2 + s
+    let out = e as f32 * core::f32::consts::LN_2 + s;
+    if x > 0.0 && x < f32::INFINITY { out } else if x == 0.0 { f32::NEG_INFINITY } else if x == f32::INFINITY { x } else { f32::NAN }
 }
 
-/// e^x in f32.
+/// e^x in f32, without branches like lnf.
+#[inline]
 pub fn expf(x: f32) -> f32 {
-    if x > 88.7 { return f32::INFINITY; }
-    if x < -103.0 { return 0.0; }
-    let n = (x * core::f32::consts::LOG2_E + if x < 0.0 { -0.5 } else { 0.5 }) as i32;
-    let r = (x - n as f32 * 0.693_145_75) - n as f32 * 1.428_606_8e-6; // ln 2 in two parts (Cody and Waite)
+    let c = x.max(-104.0).min(89.0);
+    let t = c * core::f32::consts::LOG2_E + MAGIC;
+    let n = t - MAGIC;
+    let r = (c - n * 0.693_145_75) - n * 1.428_606_8e-6; // ln 2 in two parts (Cody and Waite)
     // |r| <= 0.347: the Taylor series to r^7.
     let p = 1.0 + r * (1.0 + r * (0.5 + r * (1.0 / 6.0 + r * (1.0 / 24.0 + r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0)))))));
-    if n < -126 { return p * f32::from_bits(((n + 126 + 127) as u32) << 23) * f32::from_bits(1 << 23); }
-    if n > 127 { return f32::INFINITY; }
-    p * f32::from_bits(((n + 127) as u32) << 23)
+    // 2^n in two factors, each a normal number for n in [-150, 129].
+    let k = t.to_bits() as i32 - MAGIC.to_bits() as i32;
+    let half = k >> 1;
+    let out = p * f32::from_bits(((half + 127) << 23) as u32) * f32::from_bits(((k - half + 127) << 23) as u32);
+    if x.is_nan() { x } else { out }
 }

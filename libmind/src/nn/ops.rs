@@ -1,4 +1,5 @@
 //! The ONNX operators the speech models use (opset 13 semantics), on `View`s; every one makes new tensors.
+use super::gemm::{self, Layout, Shape};
 use super::{op_error, DType, Data, Elems, Node, Result, Tensor, View};
 use crate::voice::math;
 use alloc::format;
@@ -8,6 +9,7 @@ use alloc::vec::Vec;
 pub(crate) fn run(op: &str, node: &Node, inputs: &[Option<View<'_>>]) -> Result<Vec<Tensor>> {
     let input = |i: usize| -> Result<View<'_>> { inputs.get(i).copied().flatten().ok_or_else(|| op_error(format!("input {} missing", i))) };
     let one = |t: Tensor| Ok(vec![t]);
+    if inputs.iter().enumerate().any(|(i, v)| v.is_some_and(|v| v.panels) && !(op == "MatMulInteger" && i == 1)) { return Err(op_error("a weight in panels")); }
     match op {
         "Add" | "Sub" | "Mul" | "Div" | "Pow" | "Max" => one(arith(op, input(0)?, input(1)?)?),
         "Equal" | "GreaterOrEqual" => one(compare(op, input(0)?, input(1)?)?),
@@ -97,19 +99,87 @@ fn index_map(shape: &[usize], out: &[usize]) -> Vec<usize> {
     map
 }
 
+// Operands walked over `shape` together, each from its start by its steps per dimension (0 where it repeats). `f`
+// gets each innermost run: the operands' offsets, its length and their steps along it. Dimensions of 1 are dropped
+// and neighbours every operand steps through alike merged, so the runs are as long as they can be.
+fn walk<const N: usize>(shape: &[usize], starts: [isize; N], steps: [&[isize]; N], mut f: impl FnMut([isize; N], usize, [isize; N])) {
+    if shape.contains(&0) { return; }
+    let (mut dims, mut st): (Vec<usize>, Vec<[isize; N]>) = (Vec::new(), Vec::new());
+    for (d, &n) in shape.iter().enumerate() {
+        if n == 1 { continue; }
+        let here: [isize; N] = core::array::from_fn(|o| steps[o][d]);
+        match (dims.last_mut(), st.last_mut()) {
+            (Some(size), Some(last)) if (0..N).all(|o| last[o] == here[o] * n as isize) => { *size *= n; *last = here; }
+            _ => { dims.push(n); st.push(here); }
+        }
+    }
+    let (inner, along) = match (dims.pop(), st.pop()) { (Some(n), Some(s)) => (n, s), _ => (1, [0; N]) };
+    let mut idx = vec![0usize; dims.len()];
+    let mut at = starts;
+    loop {
+        f(at, inner, along);
+        let mut d = dims.len();
+        loop {
+            if d == 0 { return; }
+            d -= 1;
+            idx[d] += 1;
+            for o in 0..N { at[o] += st[d][o]; }
+            if idx[d] < dims[d] { break; }
+            for o in 0..N { at[o] -= st[d][o] * dims[d] as isize; }
+            idx[d] = 0;
+        }
+    }
+}
+
+// The steps of a tensor of shape `shape` broadcast to `out`.
+fn steps_into(shape: &[usize], out: &[usize]) -> Vec<isize> {
+    let own = strides(shape);
+    let mut s = vec![0isize; out.len()];
+    for (i, &d) in shape.iter().enumerate() { if d != 1 { s[out.len() - shape.len() + i] = own[i] as isize; } }
+    s
+}
+
+// The elements of `src` a walk from `start` by `steps` over `shape` meets, in order.
+fn copy_walk<T: Copy>(src: &[T], start: isize, shape: &[usize], steps: &[isize]) -> Vec<T> {
+    let mut out = Vec::with_capacity(shape.iter().product());
+    walk(shape, [start], [steps], |[at], n, [step]| {
+        let at = at as usize;
+        match step {
+            1 => out.extend_from_slice(&src[at..at + n]),
+            0 => out.extend(core::iter::repeat_n(src[at], n)),
+            s => out.extend((0..n).map(|q| src[(at as isize + q as isize * s) as usize])),
+        }
+    });
+    out
+}
+
+fn view_walk(x: Elems<'_>, start: isize, shape: &[usize], steps: &[isize]) -> Data {
+    match x {
+        Elems::F32(v) => Data::F32(copy_walk(v, start, shape, steps)),
+        Elems::I64(v) => Data::I64(copy_walk(v, start, shape, steps)),
+        Elems::I32(v) => Data::I32(copy_walk(v, start, shape, steps)),
+        Elems::U8(v) => Data::U8(copy_walk(v, start, shape, steps)),
+        Elems::I8(v) => Data::I8(copy_walk(v, start, shape, steps)),
+        Elems::Bool(v) => Data::Bool(copy_walk(v, start, shape, steps)),
+    }
+}
+
 // Two inputs broadcast together, an element function over them.
 fn zip_with<A: Copy, B: Copy, C>(a: &[A], sa: &[usize], b: &[B], sb: &[usize], f: impl Fn(A, B) -> C) -> Result<(Vec<usize>, Vec<C>)> {
     let shape = broadcast(sa, sb)?;
     let total: usize = shape.iter().product();
     if a.len() == total && b.len() == total { return Ok((shape, a.iter().zip(b).map(|(&x, &y)| f(x, y)).collect())); }
-    if b.len() == 1 && a.len() == total { let y = b[0]; return Ok((shape, a.iter().map(|&x| f(x, y)).collect())); }
-    if a.len() == 1 && b.len() == total { let x = a[0]; return Ok((shape, b.iter().map(|&y| f(x, y)).collect())); }
-    // b repeats along the leading dimensions (a row vector, say): no index map.
-    if a.len() == total && !b.is_empty() && total % b.len() == 0 && sb.iter().rev().zip(shape.iter().rev()).all(|(x, y)| x == y) {
-        return Ok((shape, a.chunks(b.len()).flat_map(|row| row.iter().zip(b).map(|(&x, &y)| f(x, y)).collect::<Vec<_>>()).collect()));
-    }
-    let (ma, mb) = (index_map(sa, &shape), index_map(sb, &shape));
-    Ok((shape, ma.iter().zip(&mb).map(|(&i, &j)| f(a[i], b[j])).collect()))
+    let mut out = Vec::with_capacity(total);
+    walk(&shape, [0, 0], [&steps_into(sa, &shape), &steps_into(sb, &shape)], |[i, j], n, steps| {
+        let (i, j) = (i as usize, j as usize);
+        match steps {
+            [1, 1] => out.extend(a[i..i + n].iter().zip(&b[j..j + n]).map(|(&x, &y)| f(x, y))),
+            [1, 0] => { let y = b[j]; out.extend(a[i..i + n].iter().map(|&x| f(x, y))) }
+            [0, 1] => { let x = a[i]; out.extend(b[j..j + n].iter().map(|&y| f(x, y))) }
+            [si, sj] => out.extend((0..n as isize).map(|q| f(a[(i as isize + q * si) as usize], b[(j as isize + q * sj) as usize]))),
+        }
+    });
+    Ok((shape, out))
 }
 
 // ---- Element-wise ----
@@ -179,13 +249,18 @@ fn compare(op: &str, a: View<'_>, b: View<'_>) -> Result<Tensor> {
 fn where_(c: View<'_>, x: View<'_>, y: View<'_>) -> Result<Tensor> {
     let Elems::Bool(cond) = c.data else { return Err(op_error("the condition is not bool")) };
     let shape = broadcast(&broadcast(c.shape, x.shape)?, y.shape)?;
-    let (mc, mx, my) = (index_map(c.shape, &shape), index_map(x.shape, &shape), index_map(y.shape, &shape));
-    let pick = |i: usize| if cond[mc[i]] { (true, mx[i]) } else { (false, my[i]) };
-    let n = mc.len();
+    let steps = (steps_into(c.shape, &shape), steps_into(x.shape, &shape), steps_into(y.shape, &shape));
+    fn pick<T: Copy>(cond: &[bool], a: &[T], b: &[T], shape: &[usize], steps: &(Vec<isize>, Vec<isize>, Vec<isize>)) -> Vec<T> {
+        let mut out = Vec::with_capacity(shape.iter().product());
+        walk(shape, [0, 0, 0], [&steps.0, &steps.1, &steps.2], |[c, i, j], n, [sc, si, sj]| {
+            out.extend((0..n as isize).map(|q| if cond[(c + q * sc) as usize] { a[(i + q * si) as usize] } else { b[(j + q * sj) as usize] }));
+        });
+        out
+    }
     let data = match (x.data, y.data) {
-        (Elems::F32(a), Elems::F32(b)) => Data::F32((0..n).map(|i| { let (t, j) = pick(i); if t { a[j] } else { b[j] } }).collect()),
-        (Elems::I64(a), Elems::I64(b)) => Data::I64((0..n).map(|i| { let (t, j) = pick(i); if t { a[j] } else { b[j] } }).collect()),
-        (Elems::Bool(a), Elems::Bool(b)) => Data::Bool((0..n).map(|i| { let (t, j) = pick(i); if t { a[j] } else { b[j] } }).collect()),
+        (Elems::F32(a), Elems::F32(b)) => Data::F32(pick(cond, a, b, &shape, &steps)),
+        (Elems::I64(a), Elems::I64(b)) => Data::I64(pick(cond, a, b, &shape, &steps)),
+        (Elems::Bool(a), Elems::Bool(b)) => Data::Bool(pick(cond, a, b, &shape, &steps)),
         (p, q) => return Err(op_error(format!("{:?} and {:?}", p.dtype(), q.dtype()))),
     };
     Ok(Tensor { shape, data })
@@ -216,12 +291,14 @@ fn unary(op: &str, x: View<'_>) -> Result<Tensor> {
         return Ok(Tensor::i64(x.shape.to_vec(), v.iter().map(|&a| f(a)).collect()));
     }
     let v = f32s(&x)?;
-    let f: fn(f32) -> f32 = match op {
-        "Abs" => |a| a.abs(), "Neg" => |a| -a, "Sign" => |a| if a > 0.0 { 1.0 } else if a < 0.0 { -1.0 } else { 0.0 },
-        "Exp" => math::expf, "Log" => math::lnf, "Sin" => |a| math::sin(a as f64) as f32, "Cos" => |a| math::cos(a as f64) as f32,
-        "Atan" => atanf, "Tanh" => tanhf, "Sigmoid" => |a| 1.0 / (1.0 + math::expf(-a)), _ => |a| a.max(0.0),
+    // A loop per function, so that each inlines and vectorizes.
+    fn each(v: &[f32], f: impl Fn(f32) -> f32) -> Vec<f32> { v.iter().map(|&a| f(a)).collect() }
+    let out = match op {
+        "Abs" => each(v, |a| a.abs()), "Neg" => each(v, |a| -a), "Sign" => each(v, |a| if a > 0.0 { 1.0 } else if a < 0.0 { -1.0 } else { 0.0 }),
+        "Exp" => each(v, math::expf), "Log" => each(v, math::lnf), "Sin" => each(v, |a| math::sin(a as f64) as f32), "Cos" => each(v, |a| math::cos(a as f64) as f32),
+        "Atan" => each(v, atanf), "Tanh" => each(v, tanhf), "Sigmoid" => each(v, |a| 1.0 / (1.0 + math::expf(-a))), _ => each(v, |a| a.max(0.0)),
     };
-    Ok(Tensor::f32(x.shape.to_vec(), v.iter().map(|&a| f(a)).collect()))
+    Ok(Tensor::f32(x.shape.to_vec(), out))
 }
 
 fn clip(x: View<'_>, lo: Option<View<'_>>, hi: Option<View<'_>>) -> Result<Tensor> {
@@ -305,12 +382,11 @@ fn concat(xs: &[View<'_>], a: i64) -> Result<Tensor> {
     let mut shape = first.shape.to_vec();
     shape[a] = xs.iter().map(|x| x.shape.get(a).copied().unwrap_or(0)).sum();
     let blocks: Vec<usize> = xs.iter().map(|x| x.shape[a..].iter().product()).collect();
-    let mut index = Vec::with_capacity(shape.iter().product());
-    for o in 0..outer { for (k, &b) in blocks.iter().enumerate() { for i in 0..b { index.push((k, o * b + i)); } } }
-    let n = index.len();
     macro_rules! join { ($variant:ident) => {{
         let parts: Vec<&[_]> = xs.iter().map(|x| match x.data { Elems::$variant(v) => Ok(v), _ => Err(op_error("mixed types")) }).collect::<Result<_>>()?;
-        Data::$variant((0..n).map(|i| { let (k, j) = index[i]; parts[k][j] }).collect())
+        let mut out = Vec::with_capacity(shape.iter().product());
+        for o in 0..outer { for (part, &b) in parts.iter().zip(&blocks) { out.extend_from_slice(&part[o * b..(o + 1) * b]); } }
+        Data::$variant(out)
     }}; }
     let data = match first.data { Elems::F32(_) => join!(F32), Elems::I64(_) => join!(I64), Elems::I32(_) => join!(I32), Elems::U8(_) => join!(U8), Elems::I8(_) => join!(I8), Elems::Bool(_) => join!(Bool) };
     Ok(Tensor { shape, data })
@@ -334,16 +410,19 @@ fn gather(x: View<'_>, idx: View<'_>, a: i64) -> Result<Tensor> {
 fn gather_elements(x: View<'_>, idx: View<'_>, a: i64) -> Result<Tensor> {
     let a = axis(a, x.shape.len())?;
     let indices = ints(idx)?;
-    let (xs, is) = (strides(x.shape), strides(idx.shape));
+    if idx.shape.len() != x.shape.len() { return Err(op_error("ranks differ")); }
     let dim = x.shape[a] as i64;
+    if indices.iter().any(|&i| i < -dim || i >= dim) { return Err(op_error("index out of range")); }
+    // Each element of the result: x at the index's own position, but along `a` at the index's value.
+    let xs = strides(x.shape);
+    let mut along: Vec<isize> = xs.iter().map(|&s| s as isize).collect();
+    along[a] = 0;
+    let own: Vec<isize> = strides(idx.shape).iter().map(|&s| s as isize).collect();
+    let pick = |i: i64| (if i < 0 { i + dim } else { i }) as usize * xs[a];
     let mut map = Vec::with_capacity(indices.len());
-    for (flat, &i) in indices.iter().enumerate() {
-        let i = if i < 0 { i + dim } else { i };
-        if i < 0 || i >= dim { return Err(op_error("index out of range")); }
-        let mut at = 0;
-        for d in 0..idx.shape.len() { let c = flat / is[d] % idx.shape[d]; at += if d == a { i as usize } else { c } * xs[d]; }
-        map.push(at);
-    }
+    walk(idx.shape, [0, 0], [&along, &own], |[at, k], n, [sa, sk]| {
+        map.extend((0..n as isize).map(|q| (at + q * sa) as usize + pick(indices[(k + q * sk) as usize])));
+    });
     let n = map.len();
     Ok(Tensor { shape: idx.shape.to_vec(), data: gather_elems!(x.data, n, |i: usize| map[i]) })
 }
@@ -366,41 +445,26 @@ fn slice(x: View<'_>, starts: &[i64], ends: &[i64], axes: Option<Vec<i64>>, step
         shape[a] = n as usize;
     }
     let xs = strides(x.shape);
-    let total: usize = shape.iter().product();
-    let os = strides(&shape);
-    let map: Vec<usize> = (0..total).map(|i| (0..rank).map(|d| ((first[d] + (i / os[d] % shape[d].max(1)) as i64 * step[d]) as usize) * xs[d]).sum()).collect();
-    Ok(Tensor { shape, data: gather_elems!(x.data, total, |i: usize| map[i]) })
+    let start: isize = (0..rank).map(|d| first[d] as isize * xs[d] as isize).sum();
+    let steps: Vec<isize> = (0..rank).map(|d| step[d] as isize * xs[d] as isize).collect();
+    let data = view_walk(x.data, start, &shape, &steps);
+    Ok(Tensor { shape, data })
 }
 
 fn transpose(x: View<'_>, perm: &[usize]) -> Result<Tensor> {
-    if perm.len() != x.shape.len() { return Err(op_error("perm")); }
+    if perm.len() != x.shape.len() || perm.iter().any(|&p| p >= perm.len()) { return Err(op_error("perm")); }
     let shape: Vec<usize> = perm.iter().map(|&p| x.shape[p]).collect();
     let xs = strides(x.shape);
-    let src: Vec<usize> = perm.iter().map(|&p| xs[p]).collect();
-    let total = x.numel();
-    let rank = shape.len();
-    let mut map = Vec::with_capacity(total);
-    let mut idx = vec![0usize; rank];
-    let mut at = 0usize;
-    for _ in 0..total {
-        map.push(at);
-        for d in (0..rank).rev() {
-            idx[d] += 1;
-            at += src[d];
-            if idx[d] < shape[d] { break; }
-            at -= src[d] * idx[d];
-            idx[d] = 0;
-        }
-    }
-    Ok(Tensor { shape, data: gather_elems!(x.data, total, |i: usize| map[i]) })
+    let steps: Vec<isize> = perm.iter().map(|&p| xs[p] as isize).collect();
+    let data = view_walk(x.data, 0, &shape, &steps);
+    Ok(Tensor { shape, data })
 }
 
 fn expand(x: View<'_>, target: &[i64]) -> Result<Tensor> {
     let target: Vec<usize> = target.iter().map(|&d| d.max(0) as usize).collect();
     let shape = broadcast(x.shape, &target)?;
-    let map = index_map(x.shape, &shape);
-    let n = map.len();
-    Ok(Tensor { shape, data: gather_elems!(x.data, n, |i: usize| map[i]) })
+    let data = view_walk(x.data, 0, &shape, &steps_into(x.shape, &shape));
+    Ok(Tensor { shape, data })
 }
 
 fn tile(x: View<'_>, repeats: &[i64]) -> Result<Tensor> {
@@ -500,15 +564,35 @@ fn softmax(x: View<'_>, a: i64) -> Result<Tensor> {
     if a != x.shape.len() - 1 { return Err(op_error("only the last axis")); }
     let v = f32s(&x)?;
     let n = x.shape[a].max(1);
-    let mut out = Vec::with_capacity(v.len());
-    for row in v.chunks(n) {
-        let max = row.iter().fold(f32::NEG_INFINITY, |m, &a| m.max(a));
-        let start = out.len();
-        let mut sum = 0.0;
-        for &a in row { let e = math::expf(a - max); sum += e; out.push(e); }
-        for e in &mut out[start..] { *e /= sum; }
+    let mut out = vec![0.0f32; v.len()];
+    for (row, o) in v.chunks(n).zip(out.chunks_mut(n)) {
+        let max = most(row);
+        for (o, &a) in o.iter_mut().zip(row) { *o = math::expf(a - max); }
+        // The sum in eight lanes, so that it vectorizes; then each times its reciprocal, as onnxruntime does.
+        let mut lanes = [0.0f32; 8];
+        let mut chunks = o.chunks_exact(8);
+        for c in &mut chunks { for (l, &e) in lanes.iter_mut().zip(c) { *l += e; } }
+        let sum = lanes.iter().sum::<f32>() + chunks.remainder().iter().sum::<f32>();
+        let scale = 1.0 / sum;
+        for e in o.iter_mut() { *e *= scale; }
     }
     Ok(Tensor::f32(x.shape.to_vec(), out))
+}
+
+// The largest of `v` (NaNs aside), in eight lanes.
+fn most(v: &[f32]) -> f32 {
+    let mut lanes = [f32::NEG_INFINITY; 8];
+    let mut chunks = v.chunks_exact(8);
+    for c in &mut chunks { for (l, &a) in lanes.iter_mut().zip(c) { *l = if a > *l { a } else { *l }; } }
+    lanes.iter().chain(chunks.remainder()).fold(f32::NEG_INFINITY, |m, &a| if a > m { a } else { m })
+}
+
+// The smallest, likewise.
+fn least(v: &[f32]) -> f32 {
+    let mut lanes = [f32::INFINITY; 8];
+    let mut chunks = v.chunks_exact(8);
+    for c in &mut chunks { for (l, &a) in lanes.iter_mut().zip(c) { *l = if a < *l { a } else { *l }; } }
+    lanes.iter().chain(chunks.remainder()).fold(f32::INFINITY, |m, &a| if a < m { a } else { m })
 }
 
 // ---- Products ----
@@ -532,16 +616,8 @@ fn matmul(a: View<'_>, b: View<'_>) -> Result<Tensor> {
     let (x, y) = (f32s(&a)?, f32s(&b)?);
     let (mut shape, m, k, n, pairs) = batches(a.shape, b.shape)?;
     let mut out = vec![0.0f32; pairs.len() * m * n];
-    for (p, &(oa, ob)) in pairs.iter().enumerate() {
-        for i in 0..m {
-            let row = &mut out[(p * m + i) * n..(p * m + i + 1) * n];
-            for kk in 0..k {
-                let s = x[oa + i * k + kk];
-                if s == 0.0 { continue; }
-                let col = &y[ob + kk * n..ob + kk * n + n];
-                for (o, &w) in row.iter_mut().zip(col) { *o += s * w; }
-            }
-        }
+    for (c, &(oa, ob)) in out.chunks_exact_mut((m * n).max(1)).zip(&pairs).filter(|_| m * n > 0) {
+        gemm::f32(&x[oa..], Shape::dense(m, k), &y[ob..], Shape::dense(k, n), c, Shape::dense(m, n));
     }
     if a.shape.len() == 1 { shape.remove(shape.len() - 2); }
     if b.shape.len() == 1 { shape.pop(); }
@@ -551,22 +627,13 @@ fn matmul(a: View<'_>, b: View<'_>) -> Result<Tensor> {
 fn matmul_integer(a: View<'_>, b: View<'_>, za: Option<View<'_>>, zb: Option<View<'_>>) -> Result<Tensor> {
     let Elems::U8(x) = a.data else { return Err(op_error("A is not u8")) };
     let Elems::I8(y) = b.data else { return Err(op_error("B is not i8")) };
-    let za = match za.map(|z| z.data) { Some(Elems::U8(z)) => z[0] as i32, None => 0, _ => return Err(op_error("A's zero point")) };
-    let zb = match zb.map(|z| z.data) { Some(Elems::I8(z)) if z.len() == 1 => z[0] as i32, None => 0, _ => return Err(op_error("B's zero point")) };
+    let za = match za.map(|z| z.data) { Some(Elems::U8(z)) if z.len() == 1 => z[0], None => 0, _ => return Err(op_error("A's zero point")) };
+    let zb = match zb.map(|z| z.data) { Some(Elems::I8(z)) if z.len() == 1 => z[0], None => 0, _ => return Err(op_error("B's zero point")) };
     let (shape, m, k, n, pairs) = batches(a.shape, b.shape)?;
+    let layout = if b.panels { Layout::Panels } else { Layout::Rows };
     let mut out = vec![0i32; pairs.len() * m * n];
-    let mut acc = vec![0i32; n];
-    for (p, &(oa, ob)) in pairs.iter().enumerate() {
-        for i in 0..m {
-            acc.fill(0);
-            for kk in 0..k {
-                let s = x[oa + i * k + kk] as i32 - za;
-                if s == 0 { continue; }
-                let col = &y[ob + kk * n..ob + kk * n + n];
-                for (o, &w) in acc.iter_mut().zip(col) { *o += s * (w as i32 - zb); }
-            }
-            out[(p * m + i) * n..(p * m + i + 1) * n].copy_from_slice(&acc);
-        }
+    for (c, &(oa, ob)) in out.chunks_exact_mut((m * n).max(1)).zip(&pairs).filter(|_| m * n > 0) {
+        gemm::i8(&x[oa..], Shape::dense(m, k), za, &y[ob..], Shape::dense(k, n), layout, zb, c);
     }
     Ok(Tensor { shape, data: Data::I32(out) })
 }
@@ -581,10 +648,14 @@ fn round_even(x: f32) -> f32 {
 
 fn dynamic_quantize(x: View<'_>) -> Result<Vec<Tensor>> {
     let v = f32s(&x)?;
-    let (lo, hi) = v.iter().fold((0.0f32, 0.0f32), |(lo, hi), &a| (lo.min(a), hi.max(a)));
+    let (lo, hi) = (least(v).min(0.0), most(v).max(0.0));
     let scale = (hi - lo) / 255.0;
     let zero = if scale == 0.0 { 0.0 } else { round_even(0.0 - lo / scale).clamp(0.0, 255.0) };
-    let q: Vec<u8> = v.iter().map(|&a| if scale == 0.0 { zero as u8 } else { (round_even(a / scale) + zero).clamp(0.0, 255.0) as u8 }).collect();
+    // Rounded half to even by adding and taking away 1.5 * 2^23 (exact below 2^22, and the clamp keeps it there).
+    const MAGIC: f32 = 12_582_912.0;
+    let q: Vec<u8> = if scale == 0.0 { vec![zero as u8; v.len()] } else {
+        v.iter().map(|&a| ((((a / scale).max(-1024.0).min(1024.0) + MAGIC) - MAGIC) + zero).max(0.0).min(255.0) as u8).collect()
+    };
     Ok(vec![Tensor { shape: x.shape.to_vec(), data: Data::U8(q) }, Tensor::f32(vec![], vec![scale]), Tensor { shape: vec![], data: Data::U8(vec![zero as u8]) }])
 }
 
@@ -602,6 +673,9 @@ fn dequantize(x: View<'_>, scale: View<'_>, zero: Option<View<'_>>) -> Result<Te
     };
     Ok(Tensor::f32(x.shape.to_vec(), out))
 }
+
+// Elements of im2col's block of columns (64 KiB).
+const BLOCK: usize = 16 * 1024;
 
 // Conv over 1 or 2 spatial dimensions, with groups, padding, strides and dilations.
 fn conv(x: View<'_>, w: View<'_>, b: Option<View<'_>>, node: &Node) -> Result<Tensor> {
@@ -624,32 +698,76 @@ fn conv(x: View<'_>, w: View<'_>, b: Option<View<'_>>, node: &Node) -> Result<Te
     let oh = (ih + pt + pb).checked_sub(dh * (kh - 1) + 1).map(|v| v / sh + 1).unwrap_or(0);
     let ow = (iw + pl + pr).checked_sub(dw * (kw - 1) + 1).map(|v| v / sw + 1).unwrap_or(0);
     let opg = cout / group;
-    let mut out = vec![0.0f32; batch * cout * oh * ow];
-    for nb in 0..batch {
-        for oc in 0..cout {
-            let g = oc / opg;
-            let base = bias.map_or(0.0, |b| b[oc]);
-            let plane = &mut out[((nb * cout + oc) * oh) * ow..((nb * cout + oc + 1) * oh) * ow];
-            plane.fill(base);
-            for ic in 0..cpg {
-                let input = &xv[((nb * cin + g * cpg + ic) * ih) * iw..((nb * cin + g * cpg + ic + 1) * ih) * iw];
-                let kernel = &wv[((oc * cpg + ic) * kh) * kw..((oc * cpg + ic + 1) * kh) * kw];
-                for ky in 0..kh {
-                    for kx in 0..kw {
-                        let k = kernel[ky * kw + kx];
-                        if k == 0.0 { continue; }
-                        for oy in 0..oh {
-                            let iy = (oy * sh + ky * dh) as isize - pt as isize;
-                            if iy < 0 || iy >= ih as isize { continue; }
-                            let row = &input[iy as usize * iw..(iy as usize + 1) * iw];
-                            let orow = &mut plane[oy * ow..(oy + 1) * ow];
-                            for (ox, o) in orow.iter_mut().enumerate() {
-                                let ix = (ox * sw + kx * dw) as isize - pl as isize;
-                                if ix >= 0 && ix < iw as isize { *o += k * row[ix as usize]; }
-                            }
+    let (cols, taps) = (oh * ow, cpg * kh * kw);
+    let mut out = vec![0.0f32; batch * cout * cols];
+    for (oc, plane) in out.chunks_exact_mut(cols.max(1)).enumerate().filter(|_| cols > 0) { plane.fill(bias.map_or(0.0, |b| b[oc % cout])); }
+    // Per batch and group: out[opg x cols] += w[opg x taps] col[taps x cols], where col holds, per tap of each input
+    // channel, the input it meets at each output position (im2col), made a block of columns at a time.
+    if cpg == 1 && opg == 1 {
+        // Depthwise: each output plane from its own input plane, tap by tap, a run of an output row at a time.
+        for (plane, (oc, input)) in out.chunks_exact_mut(cols.max(1)).zip((0..batch * cout).map(|p| (p % cout, &xv[p * ih * iw..(p + 1) * ih * iw]))) {
+            for ky in 0..kh {
+                for kx in 0..kw {
+                    let k = wv[(oc * kh + ky) * kw + kx];
+                    // Output columns whose input column lies inside the row: ox * sw + kx * dw - pl in [0, iw).
+                    let shift = (kx * dw) as isize - pl as isize;
+                    let lo = if shift >= 0 { 0 } else { ((-shift) as usize).div_ceil(sw) };
+                    let hi = if (iw as isize) <= shift { 0 } else { ((iw as isize - shift) as usize).div_ceil(sw).min(ow) };
+                    if lo >= hi { continue; }
+                    for oy in 0..oh {
+                        let iy = (oy * sh + ky * dh) as isize - pt as isize;
+                        if iy < 0 || iy >= ih as isize { continue; }
+                        let row = &input[iy as usize * iw..(iy as usize + 1) * iw];
+                        let orow = &mut plane[oy * ow + lo..oy * ow + hi];
+                        let first = (lo * sw) as isize + shift;
+                        if sw == 1 {
+                            for (o, &i) in orow.iter_mut().zip(&row[first as usize..]) { *o += k * i; }
+                        } else {
+                            for (q, o) in orow.iter_mut().enumerate() { *o += k * row[first as usize + q * sw]; }
                         }
                     }
                 }
+            }
+        }
+        let mut shape = vec![batch, cout];
+        if dims == 2 { shape.push(oh); }
+        shape.push(ow);
+        return Ok(Tensor::f32(shape, out));
+    }
+    let pointwise = kh * kw == 1 && sh == 1 && sw == 1 && pt + pl + pb + pr == 0;
+    let block = if pointwise { cols } else { (BLOCK / taps.max(1)).clamp(16, cols.max(16)) };
+    let mut col = if pointwise { Vec::new() } else { vec![0.0f32; taps * block] };
+    for nb in 0..batch {
+        for g in 0..group {
+            let input = &xv[(nb * cin + g * cpg) * ih * iw..(nb * cin + (g + 1) * cpg) * ih * iw];
+            let kernel = &wv[g * opg * taps..(g + 1) * opg * taps];
+            let at = (nb * cout + g * opg) * cols;
+            let mut p0 = 0;
+            while p0 < cols {
+                let width = block.min(cols - p0);
+                let c = &mut out[at + p0..];
+                let sc = Shape { rows: opg, cols: width, stride: cols };
+                if pointwise {
+                    gemm::f32(kernel, Shape::dense(opg, taps), input, Shape::dense(taps, cols), c, sc);
+                } else {
+                    for ic in 0..cpg {
+                        let plane = &input[ic * ih * iw..(ic + 1) * ih * iw];
+                        for ky in 0..kh {
+                            for kx in 0..kw {
+                                let row = &mut col[((ic * kh + ky) * kw + kx) * width..((ic * kh + ky) * kw + kx + 1) * width];
+                                let (mut oy, mut ox) = (p0 / ow, p0 % ow);
+                                for v in row.iter_mut() {
+                                    let (iy, ix) = ((oy * sh + ky * dh) as isize - pt as isize, (ox * sw + kx * dw) as isize - pl as isize);
+                                    *v = if iy >= 0 && iy < ih as isize && ix >= 0 && ix < iw as isize { plane[iy as usize * iw + ix as usize] } else { 0.0 };
+                                    ox += 1;
+                                    if ox == ow { ox = 0; oy += 1; }
+                                }
+                            }
+                        }
+                    }
+                    gemm::f32(kernel, Shape::dense(opg, taps), &col, Shape::dense(taps, width), c, sc);
+                }
+                p0 += width;
             }
         }
     }

@@ -59,4 +59,9 @@ fn elementary_functions() {
     }
     assert_eq!(math::lnf(1.0), 0.0);
     assert!(math::expf(-200.0) == 0.0 && math::expf(200.0).is_infinite());
+    // The edges: subnormals, zero, infinities, NaN, the ends of f32's range.
+    for f in [1e-40f32, 1e-45, f32::MIN_POSITIVE, f32::MAX] { assert!((math::lnf(f) - f.ln()).abs() <= 2e-7 * f.ln().abs(), "lnf {}", f); }
+    assert!(math::lnf(0.0) == f32::NEG_INFINITY && math::lnf(f32::INFINITY) == f32::INFINITY && math::lnf(-1.0).is_nan() && math::lnf(f32::NAN).is_nan());
+    for g in [88.72f32, 88.0, -87.0, -100.0, -103.0] { assert!((math::expf(g) - g.exp()).abs() <= 3e-7 * g.exp() + 1e-45, "expf {}: {} {}", g, math::expf(g), g.exp()); }
+    assert!(math::expf(88.73).is_infinite() && math::expf(f32::NAN).is_nan() && math::expf(f32::NEG_INFINITY) == 0.0);
 }

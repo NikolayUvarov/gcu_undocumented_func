@@ -2,6 +2,7 @@
 //! writes (MINDNN01: the graphs, one table of tensors, the weights' bytes), and an interpreter of the ONNX operators the
 //! speech models use (`ops`). Weights are read in place from the file's bytes; values made at run time are freed after
 //! their last use. No system calls: tests/nn_host.rs includes this module.
+pub mod gemm;
 pub(crate) mod ops;
 
 use alloc::string::String;
@@ -63,16 +64,17 @@ pub struct Tensor { pub shape: Vec<usize>, pub data: Data }
 impl Tensor {
     pub fn f32(shape: Vec<usize>, data: Vec<f32>) -> Self { Self { shape, data: Data::F32(data) } }
     pub fn i64(shape: Vec<usize>, data: Vec<i64>) -> Self { Self { shape, data: Data::I64(data) } }
-    pub fn view(&self) -> View<'_> { View { shape: &self.shape, data: self.data.view() } }
+    pub fn view(&self) -> View<'_> { View { shape: &self.shape, data: self.data.view(), panels: false } }
 }
 
-/// A tensor as an operator reads it.
+/// A tensor as an operator reads it. `panels`: a weight laid out for MatMulInteger (gemm::Layout::Panels), which only
+/// that operator reads.
 #[derive(Clone, Copy, Debug)]
-pub struct View<'a> { pub shape: &'a [usize], pub data: Elems<'a> }
+pub struct View<'a> { pub shape: &'a [usize], pub data: Elems<'a>, pub panels: bool }
 
 impl<'a> View<'a> {
     pub fn numel(&self) -> usize { self.data.len() }
-    pub fn to_tensor(&self) -> Tensor { Tensor { shape: self.shape.to_vec(), data: self.data.to_data() } }
+    pub fn to_tensor(&self) -> Tensor { Tensor { shape: self.shape.to_vec(), data: self.data.to_data() } } // in rows: not for panels
 }
 
 /// An attribute of a node.
@@ -91,7 +93,7 @@ impl Node {
 pub(crate) struct Graph { pub name: String, pub inputs: Vec<u32>, pub outputs: Vec<u32>, pub nodes: Vec<Node> }
 
 // A tensor of the file: a weight (dtype, dims, bytes) or a value made at run time.
-struct Entry { dtype: Option<DType>, dims: Vec<usize>, offset: usize, bytes: usize, name: String }
+struct Entry { dtype: Option<DType>, panels: bool, dims: Vec<usize>, offset: usize, bytes: usize, name: String }
 
 /// A network file in memory: its graphs, its weights read in place, its tokens.
 pub struct Model<'f> {
@@ -128,7 +130,7 @@ impl<'f> Model<'f> {
         let body = &file[..file.len() - 4];
         if check && fnv1a(body) != u32::from_le_bytes(file[file.len() - 4..].try_into().unwrap()) { return Err(bad("checksum")); }
         let mut r = Reader { bytes: body, at: 8 };
-        if r.u32()? != 1 { return Err(bad("version")); }
+        if r.u32()? != 2 { return Err(bad("version")); }
         let (graph_count, tensor_count, op_count) = (r.u32()? as usize, r.u32()? as usize, r.u32()? as usize);
         let mut ops = Vec::with_capacity(op_count);
         for _ in 0..op_count { let n = r.u8()? as usize; ops.push(r.text(n)?); }
@@ -141,11 +143,14 @@ impl<'f> Model<'f> {
             let mut dims = Vec::with_capacity(rank);
             for _ in 0..rank { dims.push(r.u64()? as usize); }
             let name = r.text(name_len)?;
-            let dtype = if code == 0 { None } else { Some(DType::of(code).ok_or(bad("an element type"))?) };
+            // Code 7: i8 in panels for MatMulInteger's B (gemm::Layout::Panels), [k, n] with k even and n a multiple of 16.
+            let panels = code == 7;
+            if panels && (dims.len() != 2 || dims[0] % 2 != 0 || dims[1] % 16 != 0) { return Err(bad("a weight in panels")); }
+            let dtype = if code == 0 { None } else if panels { Some(DType::I8) } else { Some(DType::of(code).ok_or(bad("an element type"))?) };
             if let Some(d) = dtype {
                 if offset % 8 != 0 || offset.checked_add(bytes).is_none_or(|e| e > body.len()) || dims.iter().product::<usize>() * d.size() != bytes { return Err(bad("a weight's place")); }
             }
-            tensors.push(Entry { dtype, dims, offset, bytes, name });
+            tensors.push(Entry { dtype, panels, dims, offset, bytes, name });
         }
         r.align();
         let id = |v: u32| -> Result<u32> { if v == u32::MAX || (v as usize) < tensor_count { Ok(v) } else { Err(bad("a tensor id")) } };
@@ -213,16 +218,17 @@ impl<'f> Model<'f> {
                 DType::Bool => { if bytes.iter().any(|&b| b > 1) { return None; } Elems::Bool(core::slice::from_raw_parts(ptr as *const bool, n)) }
             }
         };
-        Some(View { shape: &e.dims, data })
+        Some(View { shape: &e.dims, data, panels: e.panels })
     }
 
     fn graph(&self, name: &str) -> Result<usize> { self.graphs.iter().position(|g| g.name == name).ok_or_else(|| Error::Missing(String::from(name))) }
 
     /// Runs graph `name` on `inputs` (in the graph's order); its outputs in its order.
-    pub fn run(&self, name: &str, inputs: Vec<Tensor>) -> Result<Vec<Tensor>> { self.run_watched(name, inputs, &mut |_, _| {}) }
+    pub fn run(&self, name: &str, inputs: Vec<Tensor>) -> Result<Vec<Tensor>> { self.run_watched(name, inputs, &mut |_, _, _| {}) }
 
-    /// The same, showing `watch` every value a node of the graph makes, by name (to compare with another runtime).
-    pub fn run_watched(&self, name: &str, inputs: Vec<Tensor>, watch: &mut dyn FnMut(&str, &Tensor)) -> Result<Vec<Tensor>> {
+    /// The same, showing `watch` every value a node of the graph makes: the node's operator, the value's name (to compare
+    /// with another runtime) and the value.
+    pub fn run_watched(&self, name: &str, inputs: Vec<Tensor>, watch: &mut dyn FnMut(&str, &str, &Tensor)) -> Result<Vec<Tensor>> {
         let g = self.graph(name)?;
         let graph = &self.graphs[g];
         if inputs.len() != graph.inputs.len() { return Err(Error::Missing(alloc::format!("{} takes {} inputs", name, graph.inputs.len()))); }
@@ -233,7 +239,7 @@ impl<'f> Model<'f> {
     }
 
     // Runs graph `g`'s nodes in order (ONNX keeps them sorted).
-    fn execute(&self, g: usize, values: &mut [Option<Tensor>], watch: &mut dyn FnMut(&str, &Tensor)) -> Result<()> {
+    fn execute(&self, g: usize, values: &mut [Option<Tensor>], watch: &mut dyn FnMut(&str, &str, &Tensor)) -> Result<()> {
         for node in &self.graphs[g].nodes {
             let op = self.ops[node.op].as_str();
             if op == "If" {
@@ -242,7 +248,7 @@ impl<'f> Model<'f> {
                 let branch = node.graph(if take { "then_branch" } else { "else_branch" }).ok_or_else(|| op_error("If without its branches"))?;
                 self.execute(branch, values, watch)?;
                 for (&out, &made) in node.outputs.iter().zip(&self.graphs[branch].outputs) {
-                    let t = match values[made as usize].take() { Some(t) => t, None => self.weight(made as usize).ok_or_else(|| op_error("If: a branch output"))?.to_tensor() };
+                    let t = match values[made as usize].take() { Some(t) => t, None => self.weight(made as usize).filter(|w| !w.panels).ok_or_else(|| op_error("If: a branch output"))?.to_tensor() };
                     values[out as usize] = Some(t);
                 }
             } else {
@@ -251,7 +257,7 @@ impl<'f> Model<'f> {
                     ops::run(op, node, &inputs).map_err(|e| match e { Error::Op(m) => Error::Op(alloc::format!("{}: {}", op, m)), other => other })?
                 };
                 if made.len() < node.outputs.len() { return Err(op_error(alloc::format!("{} made {} outputs", op, made.len()))); }
-                for (&out, t) in node.outputs.iter().zip(made) { watch(&self.tensors[out as usize].name, &t); values[out as usize] = Some(t); }
+                for (&out, t) in node.outputs.iter().zip(made) { watch(op, &self.tensors[out as usize].name, &t); values[out as usize] = Some(t); }
             }
             for &id in &node.freed { values[id as usize] = None; }
         }

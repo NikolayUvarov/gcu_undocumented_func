@@ -99,6 +99,110 @@ fn products_and_quantization() {
     assert_eq!(floats_of(&y[0]), [-2.0, -2.0, -2.0, 3.0, 12.0, 13.0, 13.0, 12.0]);
 }
 
+// A small generator of test values.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u32 { self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (self.0 >> 33) as u32 }
+    fn below(&mut self, n: u32) -> usize { (self.next() % n) as usize }
+    fn float(&mut self) -> f32 { self.next() as f32 / (1u64 << 31) as f32 - 0.5 }
+}
+
+#[test]
+fn simd_products_equal_plain_loops() {
+    // Where the host has AVX2 and FMA: the same products with and without them, at sizes with every kind of edge.
+    let mut rng = Lcg(7);
+    let none = node(vec![]);
+    for round in 0..60 {
+        let (m, k, n) = (1 + rng.below(14), 1 + rng.below(70), 1 + rng.below(70));
+        let a: Vec<u8> = (0..m * k).map(|_| rng.next() as u8).collect();
+        let b: Vec<i8> = (0..k * n).map(|_| rng.next() as i8).collect();
+        let (za, zb) = (rng.next() as u8, if round % 2 == 0 { 0 } else { rng.next() as i8 });
+        let ins = [Tensor { shape: vec![m, k], data: Data::U8(a) }, Tensor { shape: vec![k, n], data: Data::I8(b) },
+            Tensor { shape: vec![], data: Data::U8(vec![za]) }, Tensor { shape: vec![], data: Data::I8(vec![zb]) }];
+        let fa = f(&[2, m, k], &(0..2 * m * k).map(|_| rng.float()).collect::<Vec<_>>());
+        let fb = f(&[k, n], &(0..k * n).map(|_| rng.float()).collect::<Vec<_>>());
+        let with = (run("MatMulInteger", &none, &ins.iter().collect::<Vec<_>>()), run("MatMul", &none, &[&fa, &fb]));
+        nn::gemm::simd(Some(false));
+        let without = (run("MatMulInteger", &none, &ins.iter().collect::<Vec<_>>()), run("MatMul", &none, &[&fa, &fb]));
+        nn::gemm::simd(Some(true));
+        assert_eq!(with.0, without.0, "{} x {} x {}", m, k, n);
+        assert!(close(floats_of(&with.1[0]), floats_of(&without.1[0])), "{} x {} x {}", m, k, n);
+    }
+    // B laid out in panels as the converter writes MatMulInteger's weights: the same products, with and without SIMD.
+    for &(m, k, n, zb) in &[(1usize, 2usize, 16usize, 0i8), (7, 64, 48, 0), (13, 30, 32, -5), (6, 192, 64, 3)] {
+        let a: Vec<u8> = (0..m * k).map(|_| rng.next() as u8).collect();
+        let b: Vec<i8> = (0..k * n).map(|_| rng.next() as i8).collect();
+        let mut packed = Vec::with_capacity(k * n);
+        for p in 0..n / 16 { for r in 0..k / 2 { for c in 0..16 { packed.push(b[2 * r * n + 16 * p + c]); packed.push(b[(2 * r + 1) * n + 16 * p + c]); } } }
+        let (sa, sb) = (nn::gemm::Shape::dense(m, k), nn::gemm::Shape::dense(k, n));
+        let mut want = vec![0i32; m * n];
+        nn::gemm::i8(&a, sa, 9, &b, sb, nn::gemm::Layout::Rows, zb, &mut want);
+        for simd in [true, false] {
+            nn::gemm::simd(Some(simd));
+            let mut got = vec![0i32; m * n];
+            nn::gemm::i8(&a, sa, 9, &packed, sb, nn::gemm::Layout::Panels, zb, &mut got);
+            assert_eq!(got, want, "panels {} x {} x {}, SIMD {}", m, k, n, simd);
+        }
+        nn::gemm::simd(Some(true));
+        // The operator takes them as its B only.
+        let shape = [k, n];
+        let weight = nn::View { shape: &shape, data: nn::Elems::I8(&packed), panels: true };
+        let ua = Tensor { shape: vec![m, k], data: Data::U8(a.clone()) };
+        let za = Tensor { shape: vec![], data: Data::U8(vec![9]) };
+        let zbt = Tensor { shape: vec![], data: Data::I8(vec![zb]) };
+        let out = nn::ops::run("MatMulInteger", &none, &[Some(ua.view()), Some(weight), Some(za.view()), Some(zbt.view())]).unwrap();
+        assert_eq!(out[0].data, Data::I32(want.clone()));
+        assert!(nn::ops::run("Transpose", &none, &[Some(weight)]).is_err());
+    }
+    println!("SIMD: {}", nn::gemm::simd(None));
+}
+
+#[test]
+fn convolutions_as_products() {
+    // Conv (im2col and the products) against the definition, in 1 and 2 dimensions, with groups, padding, strides
+    // and dilations, and a pointwise one.
+    let mut rng = Lcg(11);
+    let cases: [(&[usize], &[usize], usize, &[i64], &[i64], &[i64]); 5] = [
+        (&[2, 4, 9, 13], &[6, 2, 3, 3], 2, &[1, 2, 1, 0], &[1, 2], &[1, 1]),
+        (&[1, 3, 7, 40], &[5, 3, 1, 1], 1, &[0, 0, 0, 0], &[1, 1], &[1, 1]),
+        (&[1, 4, 6, 11], &[4, 1, 3, 3], 4, &[1, 1, 1, 1], &[2, 1], &[1, 2]),
+        (&[1, 6, 300], &[6, 1, 31], 6, &[15, 15], &[1], &[1]),
+        (&[1, 2, 50], &[4, 2, 5], 1, &[2, 1], &[3], &[2]),
+    ];
+    for (xs, ws, group, pads, strides, dil) in cases {
+        let x = f(xs, &(0..xs.iter().product()).map(|_| rng.float()).collect::<Vec<_>>());
+        let w = f(ws, &(0..ws.iter().product()).map(|_| rng.float()).collect::<Vec<_>>());
+        let bias = f(&[ws[0]], &(0..ws[0]).map(|_| rng.float()).collect::<Vec<_>>());
+        let attrs = node(vec![("group", ints_attr(&[group as i64])), ("pads", ints_attr(pads)), ("strides", ints_attr(strides)), ("dilations", ints_attr(dil))]);
+        let got = run("Conv", &attrs, &[&x, &w, &bias]).remove(0);
+        // The definition, on [batch, channels, height, width] (height 1 in 1-D).
+        let two = xs.len() == 4;
+        let (ih, iw, kh, kw) = if two { (xs[2], xs[3], ws[2], ws[3]) } else { (1, xs[2], 1, ws[2]) };
+        let (pt, pl, pb, pr) = if two { (pads[0], pads[1], pads[2], pads[3]) } else { (0, pads[0], 0, pads[1]) };
+        let ((sh, sw), (dh, dw)) = if two { ((strides[0], strides[1]), (dil[0], dil[1])) } else { ((1, strides[0]), (1, dil[0])) };
+        let oh = ((ih as i64 + pt + pb - dh * (kh as i64 - 1) - 1) / sh + 1) as usize;
+        let ow = ((iw as i64 + pl + pr - dw * (kw as i64 - 1) - 1) / sw + 1) as usize;
+        let (cin, cout, cpg) = (xs[1], ws[0], ws[1]);
+        let (xv, wv, bv) = (floats_of(&x), floats_of(&w), floats_of(&bias));
+        let mut want = vec![0.0f32; xs[0] * cout * oh * ow];
+        for nb in 0..xs[0] { for oc in 0..cout { for oy in 0..oh { for ox in 0..ow {
+            let g = oc / (cout / group);
+            let mut s = bv[oc];
+            for ic in 0..cpg { for ky in 0..kh { for kx in 0..kw {
+                let (iy, ix) = (oy as i64 * sh + ky as i64 * dh - pt, ox as i64 * sw + kx as i64 * dw - pl);
+                if iy < 0 || ix < 0 || iy >= ih as i64 || ix >= iw as i64 { continue; }
+                s += wv[((oc * cpg + ic) * kh + ky) * kw + kx] * xv[((nb * cin + g * cpg + ic) * ih + iy as usize) * iw + ix as usize];
+            }}}
+            want[((nb * cout + oc) * oh + oy) * ow + ox] = s;
+        }}}}
+        let mut shape = vec![xs[0], cout];
+        if two { shape.push(oh); }
+        shape.push(ow);
+        assert_eq!(got.shape, shape);
+        assert!(close(floats_of(&got), &want), "{:?} * {:?}", xs, ws);
+    }
+}
+
 // The model file read into 8-byte aligned memory (its weights are read in place).
 fn load(path: &str) -> Vec<u64> {
     let bytes = std::fs::read(path).unwrap();
@@ -149,12 +253,13 @@ fn clips_against_onnxruntime() {
         let out = model.run("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])]).unwrap();
         let Data::F32(got) = &out[0].data else { panic!() };
         let text = greedy(&model, got, out[0].shape[1], out[0].shape[2]);
-        spent += start.elapsed();
+        let took = start.elapsed();
+        spent += took;
         audio += frames;
         let want = floats(format!("{}/encoder_out.f32", dir));
         let mean = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).sum::<f32>() / got.len() as f32;
         let scale = want.iter().map(|a| a.abs()).sum::<f32>() / want.len() as f32;
-        println!("{}: {} frames, encoder mean difference {:.3} of {:.3}; {}", clip.file_name().unwrap().to_string_lossy(), frames, mean, scale, text);
+        println!("{}: {} frames in {:.2} s, encoder mean difference {:.3} of {:.3}; {}", clip.file_name().unwrap().to_string_lossy(), frames, took.as_secs_f32(), mean, scale, text);
         assert!(mean < 0.1 * scale, "{} against {}", mean, scale);
         let want_text = std::fs::read_to_string(format!("{}/text.txt", dir)).unwrap();
         let (a, b): (Vec<&str>, Vec<&str>) = (text.split_whitespace().collect(), want_text.split_whitespace().collect());
@@ -195,7 +300,7 @@ fn first_departure_from_onnxruntime() {
     }
     let mut reported = 0;
     let mut checked = 0;
-    model.run_watched("encoder", vec![f(&[1, 100, 80], &features), i(&[1], &[100])], &mut |name, t| {
+    model.run_watched("encoder", vec![f(&[1, 100, 80], &features), i(&[1], &[100])], &mut |_, name, t| {
         let Some((dtype, shape, file)) = index.get(name) else { return };
         checked += 1;
         let raw = std::fs::read(format!("{}/{}", dump, file)).unwrap();
@@ -213,4 +318,33 @@ fn first_departure_from_onnxruntime() {
         if diff > std::env::var("MIND_DICTATE_TOLERANCE").ok().and_then(|t| t.parse().ok()).unwrap_or(1e-3) { bad(format!("relative difference {}", diff)); reported += 1; }
     }).unwrap();
     println!("checked {} values, {} departed", checked, reported);
+}
+
+#[test]
+fn profile_by_operator() {
+    // Debugging aid (MIND_DICTATE_PROFILE=1 with the model and a reference clip): where the encoder spends its time,
+    // by operator, and its slowest nodes.
+    let (Ok(path), Ok(reference), Ok(_)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_REFERENCE"), std::env::var("MIND_DICTATE_PROFILE")) else { return };
+    let words = load(&path);
+    let model = nn::Model::parse(bytes(&words), false).unwrap();
+    let features = floats(format!("{}/features.f32", reference));
+    let frames = features.len() / 80;
+    let mut totals: std::collections::BTreeMap<String, (f64, usize)> = Default::default();
+    let mut nodes: Vec<(f64, String, Vec<usize>)> = Vec::new();
+    let mut last = std::time::Instant::now();
+    let start = last;
+    model.run_watched("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])], &mut |op, name, value| {
+        let now = std::time::Instant::now();
+        let e = totals.entry(op.to_string()).or_default();
+        e.0 += (now - last).as_secs_f64();
+        e.1 += 1;
+        nodes.push(((now - last).as_secs_f64(), format!("{} {}", op, name), value.shape.clone()));
+        last = now;
+    }).unwrap();
+    let mut v: Vec<_> = totals.into_iter().collect();
+    v.sort_by(|a, b| b.1 .0.partial_cmp(&a.1 .0).unwrap());
+    println!("{} frames in {:.2} s", frames, start.elapsed().as_secs_f64());
+    for (op, (s, n)) in v.iter().take(30) { println!("{:>24} {:>8.3} s {:>6}", op, s, n); }
+    nodes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    for (s, name, shape) in nodes.iter().take(15) { println!("{:>8.3} s {} {:?}", s, name, shape); }
 }

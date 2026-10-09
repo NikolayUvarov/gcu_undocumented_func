@@ -1,0 +1,74 @@
+# 250-APP-0022 — Fast products: an 8 s utterance in under 1 s on one core with AVX2 — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [250](../issues/250-voice-dictation.md) (step 3, speed) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+[250-APP-0021](250-APP-0021-network-interpreter.done) ran the Russian model at 0.59 of real time on one core, in scalar code. The acceptance of 250 asks for an 8 s utterance in under 1 s on one core of an x86 with AVX2.
+
+Profile of one 11.5 s clip (6.8 s):
+
+| Where the time went | Seconds |
+|---|---|
+| int8 and f32 products (`MatMulInteger`, `MatMul`) | 3.3 |
+| `Conv`, mostly the front end's pointwise and depthwise convolutions | 1.9 |
+| Element-wise operators: broadcasting through an index per element, `exp` and `ln` that could not vectorize, `DynamicQuantizeLinear` | 1.6 |
+
+## Plan
+
+- **`mind::nn::gemm`:** the products under `MatMul`, `MatMulInteger` and `Conv`.
+  - AVX2 with FMA when CPUID and XCR0 say the processor has them and the system saves their registers; else plain loops.
+  - f32: blocks of 6 rows by 16 columns in FMA.
+  - int8: exact in i32, as before. A less its zero point in i16 pairs along k, B widened to i16, `vpmaddwd`. Every product and pair sum fits i32, so the result is the same to the bit with and without SIMD.
+- **The network file, version 2:** `convert.py` lays out each i8 weight that only `MatMulInteger` reads, as its B, in panels of 16 columns, rows in pairs (tensor code 7). One load per pair of rows then gives `vpmaddwd` its operand, and a panel is read straight through. The interpreter refuses such a weight anywhere else. Files of version 1 must be converted again.
+- **`Conv`:**
+  - depthwise: tap by tap over runs of output rows;
+  - otherwise: im2col in 64 KiB blocks, then the f32 product;
+  - pointwise: the product directly on the input.
+- **Element-wise operators:**
+  - Broadcasting, `Where`, `Slice`, `Transpose`, `Expand` and `GatherElements` walk strided runs instead of building an index per element. Dimensions every operand steps through alike are merged into longer runs.
+  - `expf` and `lnf` are branch-free, so that loops over them vectorize.
+  - `Softmax`, and `DynamicQuantizeLinear`'s minimum and maximum, reduce in eight lanes. Its rounding adds and takes away 1.5·2²³ (half to even, as before).
+- **`Model::run_watched`** also names each node's operator, so `profile_by_operator` reports time by operator and the slowest nodes.
+
+## Acceptance criteria
+
+- **In CI (`tests/nn_host.rs`, debug build):**
+  - `MatMulInteger` gives the same i32 with and without SIMD, at 60 sizes with every kind of edge (odd k, columns not a multiple of 16 or 8, zero points), and with B in panels.
+  - `MatMul` agrees with and without SIMD to 1e-5 relative.
+  - `Conv` equals its definition in one and two dimensions, with groups, padding, strides and dilations, depthwise and pointwise.
+  - A weight in panels is refused by any other operator.
+- **`tests/fbank_host.rs`:** the branch-free `expf` and `lnf` agree with std's to 2–3·10⁻⁷ relative, also at subnormals, zero, the infinities, NaN and the ends of the f32 range.
+- **With the model (by hand):**
+  - on the ten FLEURS clips the text stays within 2 % of onnxruntime's words;
+  - an 8 s utterance is recognized (encoder and greedy search) in under 1 s on one core with AVX2.
+
+## Resolution
+
+- **Code:**
+  - [`libmind/src/nn/gemm.rs`](../libmind/src/nn/gemm.rs): new;
+  - [`libmind/src/nn/ops.rs`](../libmind/src/nn/ops.rs) and [`mod.rs`](../libmind/src/nn/mod.rs): the products, the strided walks, version 2 and the panels;
+  - [`libmind/src/voice/math.rs`](../libmind/src/voice/math.rs): `expf` and `lnf`;
+  - [`scripts/voice_dictate/convert.py`](../scripts/voice_dictate/convert.py): version 2 and the panels.
+- **Measured on this host** by `clips_against_onnxruntime`: a shared Xeon at 2.8 GHz, one thread, the AVX2 path. The features are kaldi-native-fbank's from `reference.py`; our fbank takes milliseconds per utterance.
+  - **Words:** still 192 of 193 equal onnxruntime's (the same proper name).
+  - **Ten clips, 115.2 s of speech:** 10.9 s for encoder and greedy search, 0.095 of real time (was 67.8 s).
+  - **Each clip:**
+    - 7.2 s: 0.55 s
+    - 8.3 s: 0.68 s
+    - 9.2 s: 0.77 s
+    - 19.4 s: 2.16 s (attention grows with the square of the length)
+  - **The encoder alone on the 8.3 s clip, about 0.8 s:**
+    - `MatMulInteger`: 0.28–0.34 s;
+    - `Conv`: 0.10 s;
+    - the rest: under 0.05 s per operator type.
+  - The host's numbers are not the system's (MC-12.1). The run in QEMU, and on the hardware, are still to be measured.
+- **Not done here:**
+  - VNNI (`vpdpbusd`) where the processor has it;
+  - NEON on aarch64: blocked on FP/SIMD at EL0 ([requests-KRN.md](../issues/requests-KRN.md));
+  - the run in the system;
+  - WER on all 272 sentences.
+
+## Related
+
+[250](../issues/250-voice-dictation.md), [250-APP-0021](250-APP-0021-network-interpreter.done), [153](153-xsave-avx-state.done).
