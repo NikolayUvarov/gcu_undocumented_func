@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.7 (2026-10-09): a cut sweep leaves no erased block indexed · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -80,7 +80,9 @@ A store of layout 1 is refused with `layout` and left as it is (MC-4.13); nothin
   - Non-blank sectors outside every record are counted as damaged. The scan resynchronizes at the next valid header, so a damaged header loses only its own record.
 - **Reading.** A get reads the record again and checks it against the CID. A block whose bytes do not match is reported corrupt and never returned. It also leaves the index, so a put of the same bytes stores a new copy elsewhere.
 - **Limits.**
-  - A block is at most 16 KiB, and the index holds 4096 blocks (the service's static memory).
+  - A block is at most 16 KiB.
+  - **The index** is a hash table with open addressing (251-STO-0013), 56 bytes a slot. The service sizes it from the medium at mount: room for a block per 8 sectors and at least 4096 blocks, at most 2^20 slots (`slots_for`). It takes as many slots as its memory quota allows, halving down to the least, and logs `[BLOCKSTORE] INDEX: <slots> SLOTS (<KiB> KiB) FOR <sectors> SECTORS`. A large index takes seven eighths of its slots, a small one all of them; `stat` gives that as `CAPACITY`. A medium of more than 2^32 sectors (2 TiB) is refused with `too-large`, since an entry names a sector in 32 bits.
+  - An insert or a lookup does not move other entries; a removal moves back only those of its run (deletion without tombstones). 100 000 blocks go in, are found after a remount, and half of them collected leave the rest found (`tests/blockstore_host.rs`).
   - A put that finds no room collects once (below); if there is still none, it is refused with `full`. A store with more blocks than the index holds is not mounted at all.
   - Bytes already held are not written again.
   - **One framing.** Only a record's first sector may start with a record's magic (`MIND-BLK`, `MIND-REF`, `MIND-TXN`, `MIND-PIN`, `MIND-DEL`). A put whose bytes would start a later sector of their record with one is refused with `invalid`; these are 8 given bytes at offsets 428 + 512k of the block. Otherwise a scan that resumes after a damaged header could take a client's bytes for a record. For a block that would only be harmless, since it is checked against its CID, but for a name it would hand over authority (302-STO-0001). An object holding such bytes at those offsets of a chunk cannot be stored yet.
@@ -233,6 +235,38 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - once the leases have ended, a fill of a full medium writes new blocks into the room its puts' collections free; a file nothing retains is gone, and a file kept as a name's earlier version stays;
 - the history of three versions; a second name of the same object counted once in `usage`; a publication and a pin past the quota refused with `quota`; a pin of an object a name already retains, listed and charged nothing more; a removal and an unpin;
 - the store mounts again with no damage, the removal and the other name as they were, no pin.
+
+## Speech models in the store (251-STO-0014) — built; the QEMU check and the 3 GiB run are still to be run
+
+`blocks models import [id]` stores the models of a model disk (`models:`, [251](../../issues/251-model-cache-and-model-disk.md)):
+- **The manifest.** `blocks` reads `models:MANIFEST.json`, at most 60 000 bytes, and has the parser service read it (`parse::model`, `mind::models` over `mind::json`): it never parses the disk's JSON itself. For each model the service gives the id, its files with their sizes and SHA-256, and the bounds of the model's entry in the text.
+- **One object per model**, written as a stream through `dag::Builder`:
+
+  ```
+  MIND-MODEL 1
+  id <id>
+  entry <n>
+  <the manifest's entry: n bytes, licence and terms included>
+  file <size> <sha256> <path>      one line per file, in the manifest's order
+  data
+  <the files' bytes, one after another in that order>
+  ```
+
+  Neither `blocks` nor the store holds a model whole: a chunk at a time goes from the file to the store, through the SHA-256 that checks it.
+- **Checked as it is read.** A file whose size or SHA-256 differs from the manifest stops that model: it is not named, and the blocks written so far are freed by the next collection once their leases end.
+- **Named** `models/<id>`, with compare-and-swap on the name's current version. The name retains the object, so a collection keeps every file of the model.
+
+`blocks models get <id> <path> <file>` resolves the name, reads the object's header and copies one file out, checked against its SHA-256 again.
+
+Tests:
+- `tests/models_host.rs` (passes): the JSON reader against Python's `json`, and the manifest of `models/manifest.toml` read model by model as `scripts/models.py` writes it.
+- The `disks` check of the `vfs` suite (not run yet): a model disk imported into a store disk, its files read back with their SHA-256, also after the store restarted; a model whose file differs is not named.
+- `tests/blockstore_host.rs`, `a_three_gibibyte_object_fits` (ignored by default, for a local run; not run yet): an object of 3 GiB through `dag::Builder` into a store on a file.
+
+Not provided:
+- reading a model into a memory object a recognizer maps (251-STO-0015);
+- a 3 GiB model on the platform: QEMU without KVM reads about 4 MB/s;
+- the store's memory quota for a large index (requests-KRN.md).
 
 ## Authority (300-STO-0004)
 

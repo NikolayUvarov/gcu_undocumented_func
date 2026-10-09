@@ -132,3 +132,15 @@ pub fn read_manifest(endpoint: Endpoint, text: &[u8], mut each: impl FnMut(&rele
     }
     if rebuild.done() { Ok((headers, files.unwrap_or(0) as usize)) } else { Err(Refused::Lied) }
 }
+
+/// The record of model `index` of a model manifest (`mind::models`), with up to 8 of its files from `start`.
+pub fn model_record(text: &[u8], index: u32, start: u32) -> Result<parse::Model, crate::models::Malformed> {
+    let mut files = [crate::models::File::EMPTY; 8];
+    let (count, model, n) = crate::models::read(text, index as usize, start as usize, &mut files)?;
+    let mut page = List::default();
+    for f in &files[..n] {
+        page.push(parse::ModelFile { path: Text::new(f.path.as_str()).unwrap_or_default(), size: f.size, sha256: List::from_slice(&f.sha256).unwrap_or_default() });
+    }
+    Ok(parse::Model { models: count as u32, id: Text::new(model.id.as_str()).unwrap_or_default(), entry_start: model.start as u32,
+                      entry_length: (model.end - model.start) as u32, files: model.files as u32, page })
+}

@@ -38,6 +38,8 @@ pub mod mem;
 pub mod network;
 pub mod parse;
 pub mod release;
+pub mod json;
+pub mod models;
 pub mod tpm;
 pub mod netring;
 pub mod output;

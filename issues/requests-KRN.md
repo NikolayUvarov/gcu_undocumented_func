@@ -71,6 +71,25 @@ CI runs the test on every push, and a finding fails the host-test step.
 
 Only `updater` holds a client with `BADGE_UPDATE`; it reads as before and may write only the update zone.
 
+## A memory quota for `blockstore` that fits its disk's index
+
+**Recorded by:** the storage session, 2026-10-09, for [251-STO-0013](251-STO-0013-an-index-that-grows-with-the-medium.md) (the speech models of 251-STO-0010).
+
+### Problem
+
+The block store's index now grows with its medium: 56 bytes a slot, room for a block per 8 sectors (`slots_for` in `blockstore/src/store.rs`). `blockstore` allocates the slots at mount and halves them until its memory quota allows.
+
+Its quota is the default 16 MiB (`HEAP_MAX_BYTES`), so the index stays under about 14 MiB, roughly 230 000 blocks of 16 KiB: 3.5 GiB of objects. A model disk of several such models, or a store disk larger than that, would mount with an index too small to hold every block, and mounting refuses such a store whole.
+
+### Plan (a proposal; the kernel track decides)
+
+- In `init`'s quotas, `"blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() }`, next to `windows` and `compositor`, with 64 MiB. That is an index of 2^20 slots (56 MiB) and the rest of what it holds now.
+- Or a quota computed from the store disk's size, if `init` knows it when it starts `blockstore`.
+
+### Acceptance criteria
+
+On a store disk of 8 GiB, `[BLOCKSTORE] INDEX:` reports the slots `slots_for` asks for, not a halved number.
+
 ## The `devicetree` suite misses the kernel's line when CI is slow
 
 **Recorded by:** the storage session, 2026-10-09: its branch's CI run for 29741e7 failed in "aarch64 (programs, shell and four CPUs)" on this suite alone; the next commit, with the same code, passed. The tools branch saw it in 2 of 5 runs (37891849301, 37892537807) and passed it 3 of 3 times on its machine. The suite is [210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done)'s.
