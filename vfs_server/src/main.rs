@@ -5,8 +5,9 @@
 // client that opened it (PID and badge) and carries a zone: what it may change. A client's badge decides the zone of a
 // root: applications get read-only roots; the user's badge (the shell's client) writes anywhere on `ram` and `log` and
 // in the boot disk's `data` directory only, so boot files and models are never writable. A handle opened from another
-// never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle). Each boot's system log goes to the log
-// volume (journal.rs).
+// never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle). The boot disk's `system/` holds the
+// private directories of services (351-NET-0005): only the client with the directory's badge may open, read or write
+// it. Each boot's system log goes to the log volume (journal.rs).
 extern crate alloc;
 mod disk;
 mod fat;
@@ -19,7 +20,7 @@ use disk::{Disk, Shared};
 use fat::{Node, Volume};
 use journal::Journal;
 use mind::abi::*;
-use mind::fs::{BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
 use mind::idl::wire::Call;
@@ -32,12 +33,25 @@ const HANDLES: usize = 96;
 
 /// What a handle may change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Zone { ReadOnly, Writable, BootRoot }
+enum Zone { ReadOnly, Writable, BootRoot, BootReadOnly, System, Hidden }
+
+// The private directories of the boot disk's `system/`, each with the only badge that may open, read or write it.
+const PRIVATE: [(&str, u16); 2] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY)];
 
 impl Zone {
-    // The zone of `name` below a directory of this zone: below the boot root only `data` is writable.
-    fn below(self, name: &str) -> Zone {
-        match self { Zone::BootRoot => if fat::same_name(name, "data") { Zone::Writable } else { Zone::ReadOnly }, zone => zone }
+    // The zone of `name` below a directory of this zone, for a client with `badge`: below the boot root `data` is the
+    // user's to write and `system` holds private directories; below `system` everything is hidden but the client's own.
+    fn below(self, name: &str, badge: u16) -> Zone {
+        match self {
+            Zone::BootRoot if fat::same_name(name, "data") => Zone::Writable,
+            Zone::BootRoot | Zone::BootReadOnly if fat::same_name(name, "system") => Zone::System,
+            Zone::BootRoot | Zone::BootReadOnly => Zone::ReadOnly,
+            Zone::System => match PRIVATE.iter().find(|(dir, _)| fat::same_name(name, dir)) {
+                Some(&(_, owner)) if owner == badge => Zone::Writable,
+                _ => Zone::Hidden,
+            },
+            zone => zone,
+        }
     }
 }
 
@@ -107,15 +121,18 @@ impl Server {
     }
 
     // From directory node `node` (zone `zone`) along `parts`; `create` makes missing directories where allowed.
-    fn walk(&mut self, volume: usize, mut node: Node, mut zone: Zone, parts: &[&str], create: bool) -> Result<(Node, Zone), Error> {
+    fn walk(&mut self, volume: usize, mut node: Node, mut zone: Zone, parts: &[&str], create: bool, badge: u16) -> Result<(Node, Zone), Error> {
         for part in parts {
-            let next = zone.below(part);
+            let next = zone.below(part, badge);
+            if next == Zone::Hidden { return Err(Error::Denied); }
             let v = &mut self.volumes[volume].volume;
             node = match v.find(&node, part) {
                 Ok(entry) if entry.node.is_dir() => entry.node,
                 Ok(_) => return Err(Error::NotDirectory),
                 Err(fat::Error::NotFound) if create => {
-                    if next != Zone::Writable { return Err(if v.writable() { Error::Denied } else { Error::ReadOnly }); }
+                    // `system` itself is made by the first service that makes its private directory.
+                    let owner = next == Zone::System && PRIVATE.iter().any(|&(_, b)| b == badge);
+                    if next != Zone::Writable && !owner { return Err(if v.writable() { Error::Denied } else { Error::ReadOnly }); }
                     v.create(&node, part, true, now()).map_err(error)?
                 }
                 Err(e) => return Err(error(e)),
@@ -132,7 +149,7 @@ impl Server {
         let h = self.get(dir, sender, badge)?;
         let (volume, node, zone) = (h.volume, h.node, h.zone);
         if !node.is_dir() { return Err(Error::NotDirectory); }
-        let (node, zone) = self.walk(volume, node, zone, folders, false)?;
+        let (node, zone) = self.walk(volume, node, zone, folders, false, badge)?;
         Ok((volume, node, zone, name))
     }
 
@@ -185,7 +202,7 @@ impl Server {
                         return self.add(Handle { owner: sender, badge, volume, node, name: dir_name, zone });
                     }
                     let volume = self.volumes.iter().position(|m| m.name.eq_ignore_ascii_case(name)).ok_or(Error::NotFound)?;
-                    let zone = match self.volumes[volume].name { _ if !user => Zone::ReadOnly, "" => Zone::BootRoot, "models" => Zone::ReadOnly, _ => Zone::Writable };
+                    let zone = match self.volumes[volume].name { "" if user => Zone::BootRoot, "" => Zone::BootReadOnly, _ if !user => Zone::ReadOnly, "models" => Zone::ReadOnly, _ => Zone::Writable };
                     let node = self.volumes[volume].volume.root();
                     self.add(Handle { owner: sender, badge, volume, node, name: String::new(), zone })
                 })();
@@ -197,7 +214,7 @@ impl Server {
                     let h = self.get(dir, sender, badge)?;
                     let (volume, node, zone, name) = (h.volume, h.node, h.zone, h.name.clone());
                     if !node.is_dir() { return Err(Error::NotDirectory); }
-                    let (node, zone) = self.walk(volume, node, zone, &parts, create)?;
+                    let (node, zone) = self.walk(volume, node, zone, &parts, create, badge)?;
                     let name = parts.last().map_or(name, |p| String::from(*p));
                     self.add(Handle { owner: sender, badge, volume, node, name, zone })
                 })();
@@ -206,7 +223,8 @@ impl Server {
             Request::Open { dir, path, mode } => {
                 let result = (|| {
                     let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
-                    let zone = zone.below(name);
+                    let zone = zone.below(name, badge);
+                    if zone == Zone::Hidden { return Err(Error::Denied); }
                     let write = mode & (MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) != 0;
                     if write { self.writable(zone, volume)?; }
                     let v = &mut self.volumes[volume].volume;
@@ -277,7 +295,7 @@ impl Server {
             Request::Remove { dir, path } => {
                 let result = (|| {
                     let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
-                    self.writable(zone.below(name), volume)?;
+                    self.writable(zone.below(name, badge), volume)?;
                     let v = &mut self.volumes[volume].volume;
                     let entry = v.find(&parent, name).map_err(error)?;
                     v.remove(&parent, name).map_err(error)?;
@@ -298,8 +316,8 @@ impl Server {
                     let (volume, source, source_zone, name) = self.parent(dir, sender, badge, from.as_str())?;
                     let (target_volume, destination, target_zone, new_name) = self.parent(target, sender, badge, to.as_str())?;
                     if volume != target_volume { return Err(Error::Invalid); }
-                    self.writable(source_zone.below(name), volume)?;
-                    self.writable(target_zone.below(new_name), volume)?;
+                    self.writable(source_zone.below(name, badge), volume)?;
+                    self.writable(target_zone.below(new_name, badge), volume)?;
                     let v = &mut self.volumes[volume].volume;
                     let old = v.find(&source, name).map_err(error)?.node;
                     let moved = v.rename(&source, name, &destination, new_name).map_err(error)?;
@@ -314,7 +332,7 @@ impl Server {
                     let (volume, zone) = (h.volume, h.zone);
                     let m = &mut self.volumes[volume];
                     let free = m.volume.free_clusters().map_err(error)? as u64 * m.volume.cluster_bytes() as u64;
-                    Ok((m.name, m.volume.label(), m.volume.bits(), m.volume.total_bytes(), free, m.volume.cluster_bytes(), m.volume.writable() && zone != Zone::ReadOnly))
+                    Ok((m.name, m.volume.label(), m.volume.bits(), m.volume.total_bytes(), free, m.volume.cluster_bytes(), m.volume.writable() && matches!(zone, Zone::Writable | Zone::BootRoot)))
                 })();
                 let volume = result.map(|r| vfs::Volume { name: text(r.0), label: text(&r.1), fat_bits: r.2, bytes: r.3, free: r.4, cluster: r.5, writable: r.6 });
                 vfs::reply_volume(call, volume.as_ref().map_err(|e| *e))
@@ -332,7 +350,13 @@ impl Server {
                     let h = self.get(dir, sender, badge)?;
                     if !h.node.is_dir() { return Err(Error::NotDirectory); }
                     // Never more than the caller's handle: writable only where the handle is.
-                    let zone = if writable && h.zone == Zone::Writable { Zone::Writable } else { Zone::ReadOnly };
+                    // A read-only scope keeps what its directory hides: the boot root's and `system`'s private directories.
+                    let zone = match h.zone {
+                        Zone::Writable if writable => Zone::Writable,
+                        Zone::BootRoot | Zone::BootReadOnly => Zone::BootReadOnly,
+                        Zone::System => Zone::System,
+                        _ => Zone::ReadOnly,
+                    };
                     let (volume, node, name) = (h.volume, h.node, h.name.clone());
                     self.sweep_scopes();
                     let index = self.scopes.iter().position(Option::is_none).ok_or(Error::Handles)?;

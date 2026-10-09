@@ -1,0 +1,19 @@
+# 109-APP-0016 — The shell lends its parser client for `REQUEST_PARSE` — done
+
+**Type:** tool (shell) · **Owner:** `APP` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [109](109-session-parsers.done) · **Constitution:** MC-11.11, MC-3.11
+
+Done for the network track's main task 109 by the storage session, in the tools track's area with the maintainer's permission (2026-10-09).
+
+## Problem
+
+A program that hands the bytes it got from outside to `parse` needs a client of it, and only its launcher can lend one.
+
+## Plan and resolution
+
+- **The shell lends its client.** A program whose request note has `REQUEST_PARSE` gets the shell's `SLOT_PARSE` client in its own `SLOT_PARSE` (`shell/src/main.rs`).
+- **Nothing to ask the user.** The service holds no authority, so a client of it gives a program none.
+- **A script's programs** get it only if the script declares `parse` (`requires: … parse`; `shell/src/msh.rs`, `docs/msh.md`), like every other request.
+
+**Tested** in the `net` suite on x86 and aarch64:
+- `download` gets the client and every head goes through `parse`;
+- from a script that declares `console network file` but not `parse`, `download` starts without it and refuses (`NO PARSER SERVICE`).

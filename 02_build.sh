@@ -85,6 +85,7 @@ USER_CRATES=(
     "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
+    "parse:parse:parse.elf"
     "netcheck:netcheck:netcheck.elf"
     "download:download:download.elf"
     "windows:windows:windows.elf"

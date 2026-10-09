@@ -1,0 +1,19 @@
+/// Parser service (`parse`, 109-NET-0008, MC-11.11, Appendix B.6): turns bounded bytes from outside into typed messages,
+/// so the program that holds the network and the files does not parse them itself. It holds nothing but its own
+/// endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
+/// of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
+/// says against what it asked for (MC-11.5).
+package mind:parse@1.0.0;
+
+interface parse {
+    /// Why a request failed: `malformed`, the bytes are not of the form asked for.
+    enum error { malformed }
+
+    /// An HTTP/1.x response head. `length` is `Content-Length` when `has-length`. When `has-range`, `Content-Range` is
+    /// bytes `range-start` to `range-end` (inclusive) of `range-total`, or nothing of `range-total` when
+    /// `range-unsatisfied` (`bytes */total`). `chunked`: a transfer coding other than identity.
+    record http-head { status: u16, has-length: bool, length: u64, has-range: bool, range-unsatisfied: bool, range-start: u64, range-end: u64, range-total: u64, chunked: bool }
+
+    /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
+    http-head: func(head: bytes<8192>) -> result<http-head, error>;
+}

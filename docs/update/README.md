@@ -28,7 +28,7 @@ The build signs each boot volume it stages. `02_build.sh` signs `usb_root/` and 
 
 The UEFI bootloader (`bootloader/src/verify.rs`) checks the volume before it loads anything:
 1. It reads `MANIFEST.SIG` and `MANIFEST`, and checks the signature against the public key built into it (`verify_strict` of `ed25519-dalek`). A missing file or a bad signature stops the boot.
-2. It reads each image it will use (the kernel and every boot service on the volume: 30 images on x86, 27 on aarch64), and checks its size and SHA-256 against the manifest's line before it parses or keeps it. An image the manifest does not list, or lists otherwise, stops the boot. A boot service missing from the volume stops it too if the manifest lists it; one the manifest does not list (a service of the other architecture, or the `updater` until it is built) is left out, and `init` does not start it (351-KRN-0022).
+2. It reads each image it will use (the kernel and every boot service on the volume: 31 images on x86, 28 on aarch64 while the `updater` is not built), and checks its size and SHA-256 against the manifest's line before it parses or keeps it. An image the manifest does not list, or lists otherwise, stops the boot. A boot service missing from the volume stops it too if the manifest lists it; one the manifest does not list (a service of the other architecture, or the `updater` until it is built) is left out, and `init` does not start it (351-KRN-0022).
 
 A stop prints `BOOT ERROR: <file>: <reason>` on the serial line and the UEFI console, and the machine halts. The reasons are `file not found`, `bad signature`, `another manifest format`, `not in the manifest` and `not as the manifest says`.
 

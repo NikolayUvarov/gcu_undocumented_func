@@ -164,6 +164,7 @@ pub const BADGE_REBOOT: u16 = 1;
 /// The badge of the shell's lifecycle client: set, so no copy of it can be badged for `reboot` (a badge is set once).
 pub const BADGE_LIFECYCLE: u16 = 2;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
+pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).
