@@ -331,6 +331,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [300-STO-0004](../issues-done/300-STO-0004-rights-by-badge.done) | Rights to the block store by badge; a client that may only read refused `put` and `publish` on the platform | done (2026-10-09) |
 | [300](../issues-done/300-checksummed-block-store.done) | A checksummed block store with content addresses (track B, first step) | done (2026-10-09) |
 | [351-KRN-0043](../issues-done/351-KRN-0043-tpm-service-at-boot.done) | `init` starts the TPM service; `PLATFORM_TPM`, `SLOT_TPM`; `keystore`'s seal client (for DRV and NET; the kernel's lookup is a request) | done (2026-10-09) |
+| [351-APP-0018](../issues-done/351-APP-0018-shell-tpm-command.done) | The shell's `tpm` command: the TPM, and a refused seal as a check (for DRV) | done (2026-10-09) |
 | [109](../issues-done/109-session-parsers.done) | Session parsers with minimal authority (Airlock, track D): the authority map, the parser service, `download` through it | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
