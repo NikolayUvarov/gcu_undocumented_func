@@ -5253,7 +5253,14 @@ def trial_check(args, disk):
             vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
             try:
                 require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
-                require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
+                # init's verdict may come after the shell's prompt; `logs` drains, so the readings add up.
+                verdict = ""
+                for _ in range(60):
+                    verdict += vm.command("logs 1", raw=True)
+                    if "[INIT] TRIAL BOOT" in verdict:
+                        break
+                    time.sleep(.25)
+                require(verdict, "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
                 vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
                 out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
                 require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
