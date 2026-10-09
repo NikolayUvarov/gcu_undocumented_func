@@ -58,6 +58,9 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked through dbx: done and tested in QEMU (OVMF), the run on a real PC remains | `UPD`, with `PRT` | P2 | the maintainer's PC (issues-human 5) | track C |
 | [251-STO-0010](251-STO-0010-speech-models-in-the-store.md) | Speech models in the block store: a model disk imported as named, pinned objects, read back by name | `STO` | P3 | requests-KRN (a durable disk for the store) | track B |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable disk for the store ([requests-KRN.md](requests-KRN.md)); 351-UPD-0007 | track B, C |
+| [109](109-session-parsers.md) | Session parsers with minimal authority (track D): the authority map, a parser service, `download` through it | `NET` (main task) | P2 | — | track D |
+| [109-NET-0008](109-NET-0008-parser-service.md) | The parser service `parse`: bounded bytes in, typed messages out, nothing else held | `NET` | P2 | — | track D |
+| [109-NET-0009](109-NET-0009-download-through-the-parser.md) | `download` parses nothing itself: response heads through `parse` | `NET` | P2 | 109-NET-0008 | track D |
 | [351-NET-0002](351-NET-0002-https-for-programs.md) | HTTPS for programs (`download` over a `tls` session of its own grant) and trust for the update server (a pinned key or shipped roots) | `NET` | P1 | requests-KRN (`REQUEST_TLS`), requests-APP (the shell lends its TLS client) | track D |
 | [351-NET-0004](351-NET-0004-ssh-client.md) | An SSH client: curve25519, ssh-ed25519, a pinned host key, SFTP reads | `NET` | P3 | — | track D |
 | [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) | The device key sealed by a TPM instead of stored unencrypted | `NET` | P2 | 351-DRV-0015 | track D |
@@ -292,5 +295,6 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [108](../issues-done/108-editable-network-policy.done) | The network policy changed while the system runs (track D, "editable policy"): kept in the broker's private directory, a change only after the user's yes; `netpolicy.wit` 1.1 | done (2026-10-09) |
 | [108-KRN-0041](../issues-done/108-KRN-0041-netpolicy-private-directory.done) | `init` gives `netpolicy` a VFS client with its own badge | done (2026-10-09) |
 | [108-APP-0015](../issues-done/108-APP-0015-netpolicy-command.done) | The shell's `netpolicy [add|remove <line>]`, which asks the user first | done (2026-10-09) |
+| [109-NET-0007](../issues-done/109-NET-0007-airlock-authority-map.done) | The authority map of every adapter of external input, against MC-11.11 and B.6 (`docs/network/airlock.md`) | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).
