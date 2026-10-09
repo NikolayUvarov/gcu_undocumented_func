@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036) and the marked window (211-APP-0037). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036) the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039) and the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -24,27 +24,6 @@ The maintainer wants a tool to turn boot services on and off and to order them w
 ### Acceptance criteria
 
 The `tools` suite runs `svc disable tts`, reboots, and finds `tts` off in `svc boot`. `svc disable logd` is refused.
-
-## The shell's commands in `wm`'s `console` (211)
-
-**Recorded by:** the kernel track (KRN), 2026-10-09, for main task [211](211-intel-pc-from-a-sata-ssd.md) at the maintainer's request, after a run on the MacBook Pro.
-
-### Problem
-
-Before `wm` starts, the shell's commands all work on its screen. In `wm` the user has `console`, which starts programs and has a few built-ins of its own, but the shell's commands do not work there. `reboot` is the example the maintainer gave; `ps`, `kill`, `logs`, `svc`-like lifecycle commands, `sync` and the network diagnostics are others. The maintainer asks to be able to use the shell, with its commands, from `wm` too.
-
-The commands need the shell's authorities (process control, which `REBOOT` requires, the lifecycle client, the operator's network client). `console` holds none of them, and a second shell with all of them in every window would spread them.
-
-### Plan (a proposal; the tools track decides)
-
-- `console` sends a line it does not know to the shell, over an endpoint the shell lends it, and shows the answer. The shell runs the command on its own authority, as if typed on its screen, and sends back what it printed.
-- The shell decides which commands it takes from `console`. Those that change the machine (`reboot`, `halt`, `kill`) ask for confirmation in the console window, as the consent prompts do.
-- Or a window that is a view of the shell's own session. Either way only the shell holds the authorities.
-- The help in `console` lists the shell's commands it accepts.
-
-### Acceptance criteria
-
-The `wm` suite opens `console`. `ps` there lists the tasks. `reboot` there, once confirmed, resets the machine (QEMU exits under `-no-reboot`). A command the shell does not take from `console` is refused with a message.
 
 ## `cpus` names AVX-512 and AMX (174-KRN-0037)
 
@@ -83,23 +62,6 @@ The `smp` suite with `--cpu-model max` still sees `FPU=XSAVE+AVX` on every CPU. 
 ### Acceptance criteria
 
 A host test of `wm`'s routing passes a horizontal step to the window under the pointer, and `view` scrolls a wide image sideways by it. On the MacBook Pro a three-finger swipe left or right moves a wide image in `view`.
-
-## A program that ends at once in a window leaves its message on view (158, 211)
-
-**Recorded by:** the kernel track (KRN), 2026-10-09, after the maintainer's run on the MacBook Pro: "`camera` — nothing happens when it starts".
-
-### Problem
-
-Started from `wm`, `camera` found no camera and ended at once with `camera: no camera (the video gateway lists none)`. It printed to its text window (`WINDOW 1 OF PID 30: Text 256X112`), and the window closed when the program ended, so the user saw nothing. Every program that fails at its start behaves so in `wm`.
-
-### Plan (a proposal; the tools track decides)
-
-- When a program in a text window ends with a nonzero status, `wm` (or `libmind::windowed`) keeps the window, with its last lines and `ENDED (STATUS n): PRESS A KEY`, until a key or a click.
-- A program that ends with status 0 closes its window as now.
-
-### Acceptance criteria
-
-The `wm` suite starts `camera` without a camera (or another program that fails at once): its window stays with the message until a key.
 
 ## `date set` in the shell (211-KRN-0051)
 
