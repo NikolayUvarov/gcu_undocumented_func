@@ -5005,12 +5005,8 @@ def tpm_check(args, cpu):
         vm, log, sealed = boot("a")
         try:
             interface = "FIFO" if args.arch == "aarch64" else "CRB"
-            ready = vm.service_logs("tpm", "[TPM] ")
-            # The kernel's half (PLATFORM_TPM from the firmware's tables) is a request to the kernel track: until it
-            # lands the TPM service finds none, and only the path without a TPM above is checked.
-            if "[TPM] NO TPM" in ready:
-                print("SKIP: sealing by the TPM: the kernel does not hand out the TPM's registers yet (issues/requests-KRN.md); the key service without a TPM checked", flush=True)
-                return
+            # The kernel hands out the TPM's registers from the TPM2 table (x86) or the DSDT (aarch64) (351-KRN-0052).
+            ready = vm.service_logs("tpm", "[TPM] READY")
             require(ready, f"[TPM] READY: TPM 2.0 BY IBM, {interface} INTERFACE")
             require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
             require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")

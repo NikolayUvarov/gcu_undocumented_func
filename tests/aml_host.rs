@@ -20,14 +20,14 @@ fn memory32(base: u32, size: u32) -> Vec<u8> { let mut v = vec![0x86, 9, 0, 1]; 
 fn interrupt(gsiv: u32) -> Vec<u8> { let mut v = vec![0x89, 6, 0, 0x01, 1]; v.extend(gsiv.to_le_bytes()); v }
 const END: [u8; 2] = [0x79, 0];
 
-fn scan(aml: &[u8]) -> Vec<(Pins, Option<(u64, u64)>)> { let mut out = Vec::new(); pin_controllers(aml, |k, w| out.push((k, w))); out }
+fn scan(aml: &[u8]) -> Vec<(Known, Option<(u64, u64)>)> { let mut out = Vec::new(); known_devices(aml, |k, w| out.push((k, w))); out }
 
 #[test]
 fn qemus_pl061_with_a_static_window() {
     let resources = [memory32(0x0903_0000, 0x1000), interrupt(39), END.to_vec()].concat();
     let gpio = device(b"GPO0", &[name_string(b"_HID", "ARMH0061"), name_string(b"_UID", "0"), buffer_name(b"_CRS", &resources)].concat());
     let uart = device(b"COM0", &[name_string(b"_HID", "ARMH0011"), buffer_name(b"_CRS", &[memory32(0x0900_0000, 0x1000), END.to_vec()].concat())].concat());
-    assert_eq!(scan(&[uart, gpio].concat()), [(Pins::Pl061, Some((0x0903_0000, 0x1000)))]);
+    assert_eq!(scan(&[uart, gpio].concat()), [(Known::Pl061, Some((0x0903_0000, 0x1000)))]);
 }
 
 #[test]
@@ -36,7 +36,7 @@ fn the_raspberry_pi_4s_gpio_without_a_static_window() {
     let rbuf = buffer_name(b"RBUF", &[memory32(0, 0xB4), interrupt(145), END.to_vec()].concat());
     let method = [0x14, 0x0B, b'_', b'C', b'R', b'S', 0x08, 0xA4, b'R', b'B', b'U', b'F', 0x00, 0x00].to_vec(); // Method (_CRS) { Return (RBUF) }
     let gpio = device(b"GPI0", &[name_string(b"_HID", "BCM2845"), name_string(b"_CID", "BCM2845"), rbuf, method].concat());
-    assert_eq!(scan(&gpio), [(Pins::Bcm2711, None)]);
+    assert_eq!(scan(&gpio), [(Known::Bcm2711, None)]);
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn a_qword_window_above_4_gib() {
     let mut qword = vec![0x8A, 43, 0, 0, 0x0C, 0x01];
     for value in [0u64, 0x10_0000_0000, 0x10_0000_0FFF, 0, 0x1000] { qword.extend(value.to_le_bytes()); }
     let gpio = device(b"GPO1", &[name_string(b"_HID", "ARMH0061"), buffer_name(b"_CRS", &[qword, END.to_vec()].concat())].concat());
-    assert_eq!(scan(&gpio), [(Pins::Pl061, Some((0x10_0000_0000, 0x1000)))]);
+    assert_eq!(scan(&gpio), [(Known::Pl061, Some((0x10_0000_0000, 0x1000)))]);
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn another_devices_crs_is_not_taken() {
     // A PL061 without a _CRS of its own, followed by a device that has one: no window.
     let gpio = device(b"GPO0", &name_string(b"_HID", "ARMH0061"));
     let other = device(b"OTHR", &[name_string(b"_HID", "ABCD0001"), buffer_name(b"_CRS", &[memory32(0x1000, 0x1000), END.to_vec()].concat())].concat());
-    assert_eq!(scan(&[gpio, other].concat()), [(Pins::Pl061, None)]);
+    assert_eq!(scan(&[gpio, other].concat()), [(Known::Pl061, None)]);
 }
 
 #[test]
@@ -63,4 +63,39 @@ fn unknown_ids_truncated_and_garbage_blocks_give_nothing() {
     for cut in 0..full.len() { let _ = scan(&full[..cut]); } // every truncation: no panic
     let noise: Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
     let _ = scan(&noise);
+}
+
+// 351-KRN-0052: QEMU's tpm-tis-device on aarch64 virt, a device MSFT0101 with a static Memory32Fixed window.
+#[test]
+fn a_tpm_device_and_its_window() {
+    let tpm = device(b"TPM0", &[name_string(b"_HID", "MSFT0101"), buffer_name(b"_CRS", &[memory32(0x0C00_0000, 0x5000), END.to_vec()].concat())].concat());
+    assert_eq!(scan(&tpm), [(Known::Tpm, Some((0x0C00_0000, 0x5000)))]);
+}
+
+// The ACPI TPM2 table: the CRB's control area at 40, the start method at 48.
+#[path = "../kernel/src/tpm2.rs"]
+mod tpm2;
+
+fn tpm2_table(control: u64, method: u32) -> Vec<u8> {
+    let mut t = vec![0u8; 64];
+    t[..4].copy_from_slice(b"TPM2");
+    t[4..8].copy_from_slice(&64u32.to_le_bytes());
+    t[40..48].copy_from_slice(&control.to_le_bytes());
+    t[48..52].copy_from_slice(&method.to_le_bytes());
+    t
+}
+
+#[test]
+fn tpm2_table_names_locality_0() {
+    // QEMU's tpm-crb on x86: the control area at 0xFED40040, locality 0's page at 0xFED40000.
+    assert_eq!(tpm2::registers(&tpm2_table(0xFED4_0040, 7), true), Some(0xFED4_0000));
+    assert_eq!(tpm2::registers(&tpm2_table(0xFED4_0040, 8), false), Some(0xFED4_0000)); // a CRB with an ACPI start
+    // A FIFO without an address: the PC Client page on x86; on aarch64 the DSDT names it.
+    assert_eq!(tpm2::registers(&tpm2_table(0, 6), true), Some(0xFED4_0000));
+    assert_eq!(tpm2::registers(&tpm2_table(0, 6), false), None);
+    // Start methods the TPM service does not drive, a short table, another table.
+    assert_eq!(tpm2::registers(&tpm2_table(0xFED4_0040, 11), true), None);
+    assert_eq!(tpm2::registers(&tpm2_table(0xFED4_0040, 7)[..48], true), None);
+    let mut other = tpm2_table(0xFED4_0040, 7); other[..4].copy_from_slice(b"TCPA");
+    assert_eq!(tpm2::registers(&other, true), None);
 }
