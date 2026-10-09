@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036) the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039) and the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036) the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039) the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`) and Russian speech on the MacBook Pro (252-APP-0041). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -83,23 +83,6 @@ The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
 ## Note: the shell's text for `loader.wit` 1.7 `unreadable` (211-KRN-0050)
 
 The kernel track added `unreadable` to the loader's errors. The shell's match on loader errors is exhaustive, so the interface change took the shell's mapping with it: `ERR_IO` → `CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)` in `shell/src/main.rs`. The tools track may word it otherwise. `wm`, `fm` and `console` print loader errors with `{:?}` and show `Unreadable`.
-
-## Russian speech is barely intelligible on the MacBook Pro (252)
-
-**Recorded by:** the kernel track (KRN), 2026-10-09, at the maintainer's request after a run on the MacBook Pro: "Russian audio output is barely understandable, very poor, with clicks". The task is to find out whether it can be fixed.
-
-### Problem
-
-`tts` runs its 16 kHz formant synthesizer and upsamples to 48 kHz for `audio_gw`. On the Mac's speakers Russian is hard to follow. The clicks are looked for in the driver (551-DRV-0010: polled playback without an interrupt). How intelligible the voice is, is the synthesizer's.
-
-### Plan (a proposal; the tools track decides)
-
-- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
-- Then the cheapest gains: the upsampler's filter, and the Russian rules and voice parameters. 252's neural synthesis is the larger step.
-
-### Acceptance criteria
-
-A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
 
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
