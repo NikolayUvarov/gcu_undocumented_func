@@ -25,6 +25,7 @@ pub mod gfx;
 pub mod gpio;
 pub mod heap;
 pub mod hid;
+pub mod http;
 pub mod idl;
 pub mod input;
 pub mod ipc;

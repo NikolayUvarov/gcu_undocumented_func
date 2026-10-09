@@ -7,7 +7,8 @@
 //!
 //! What a client may do comes from the badge of its endpoint capability (issue 102): the operator's badge (the shell)
 //! may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
-//! protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
+//! protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants (and, since 2.3,
+//! looks up the names a policy gives, `resolve`); an
 //! unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
 //!
 //! Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
@@ -15,6 +16,8 @@
 //! gateway; `config` describes that default interface, `interfaces` all of them.
 //!
 //! 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
+//!
+//! 2.3 (351-NET-0003): the policy badge may `resolve`, for the host names of the policy file.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -24,7 +27,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 2, 0);
+pub const VERSION: (u8, u8, u8) = (2, 3, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.

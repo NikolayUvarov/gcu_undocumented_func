@@ -1,0 +1,48 @@
+# 351-NET-0001 — HTTP downloads for programs: `mind::http` and `download`, resumed after a cut — done
+
+**Type:** network (library, tool) · **Owner:** `NET` track · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+
+Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (the kernel track, for 351), by the storage session working the network track at the maintainer's request (2026-10-08). The request's HTTPS part is [351-NET-0002](../issues/351-NET-0002-https-for-programs.md), its names in the policy [351-NET-0003](351-NET-0003-names-in-the-network-policy.done).
+
+## Problem
+
+There is no HTTP client a program can use: the shell's `fetch` and `https` show a page and save nothing. The updater needs to fetch a release of about 30 MiB into a file, and to go on after a cut connection rather than start again.
+
+## Plan
+
+- `mind::http` (`libmind/src/http.rs`): one GET with `Range` from an offset, the body streamed into a sink, over a transport the caller gives. No allocation, no authority of its own. Host tests.
+- `download FILE URL [--sha256 HEX] [--tries N]`: through its own flow grant and a client confined to the file's directory. It resumes a partial file and a cut connection, and checks the SHA-256.
+- `scripts/serve_release.py` answers single byte ranges, serves plain HTTP too, and can cut a response (a test hook).
+- A test in the `net` suite on x86 and aarch64: 30 MiB with the connection cut at 10 MiB.
+
+## Acceptance criteria
+
+In QEMU, `download` fetches 30 MiB over HTTP from the release server into a `vfs` file through its own grant. The connection is cut midway and the download resumes with `Range`. The result's SHA-256 matches. A download given up on is resumed by the next run.
+
+## Related
+
+[351](../issues/351-self-update.md), [351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [docs/network/downloads.md](../docs/network/downloads.md).
+
+## Resolution
+
+Done on 2026-10-08 by the storage session working the network track at the maintainer's request.
+
+- **`libmind/src/http.rs` (`mind::http`):**
+  - `Url::parse`;
+  - `get`: a GET from an offset with `Range`, a head of at most 8 KiB, 200, 206 and 416 for a complete file. A chunked body, a redirect, another status, a missing length or a range other than the one asked for is refused. A cut after the body began ends the GET where it got to;
+  - the caller's `Transport` and `Sink`, so the library holds no authority. No allocation.
+  - Host tests in `tests/http_host.rs` (8), in CI and the local gate.
+- **`download FILE URL [--sha256 HEX] [--tries N]` (`download/`, in the build):**
+  - it asks for `REQUEST_NETWORK`, `REQUEST_FILE` and `REQUEST_CONSOLE`;
+  - it resumes a partial file and a cut connection, writes in 64 KiB pieces and checks the SHA-256;
+  - it refuses `https://` until a program can hold a TLS client (351-NET-0002).
+
+  Named `download` because the shell has a `fetch` command.
+- **`scripts/serve_release.py`:** single byte ranges (206, 416), plain HTTP with `--plain`, and a hook that cuts the next response for a path.
+- **The `net` suite (`download_check`, in its own VM; on x86 the boot disk is on AHCI):** passes on x86 with 30 MiB, and on aarch64 with 8 MiB cut at 3 MiB. `vfs_server` writes a sector per block request and walks the file's chain on every write, so 30 MiB took more than 10 minutes on emulated aarch64.
+  - 30 MiB through `download`'s own grant, cut at 10 MiB and resumed with `Range`, SHA-256 matching (on aarch64 8 MiB cut at 3 MiB);
+  - a second run finds the file complete;
+  - a run given up on is resumed by the next;
+  - a 404, a port outside the grant, `https://` and a file outside the writable directories are refused.
+- **Docs:** [docs/network/downloads.md](../docs/network/downloads.md), the API table, the README's program list, and evidence rows for x86 and aarch64.
+- **Requests:** `REQUEST_TLS` to the kernel track (`requests-KRN.md`), and the shell's lending of its TLS client to the tools track (`requests-APP.md`). Both are for 351-NET-0002.

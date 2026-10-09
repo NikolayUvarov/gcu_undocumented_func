@@ -3,7 +3,8 @@
 // Network policy broker (issue 102, Appendix B.6): grants flow capabilities according to `netpolicy.txt` on the boot
 // disk. A grant is a network stack client minted with its own badge; the stack lets its holder reach only what the
 // broker registered for that badge (destinations, a term, a volume). Serves idl/netpolicy.wit to launchers; every
-// grant, refusal, expiry and revocation goes to the system log. Holds: a stack client to mint from (slot 2), a VFS
+// grant, refusal, expiry and revocation goes to the system log, and so does the address a host name of the policy
+// resolved to when a grant was made (351-NET-0003). Holds: a stack client to mint from (slot 2), a VFS
 // client to read the policy (slot 3), the stack's policy client (slot 4).
 extern crate alloc;
 
@@ -32,23 +33,59 @@ fn parse_ip(text: &str) -> Option<u32> {
     parts.next().is_none().then_some(u32::from_be_bytes(address))
 }
 
+// The resolver the policy names for its host names (`resolver A.B.C.D[:PORT]`); (0, 0): the stack's DNS server.
+fn resolver(text: &str) -> (u32, u16) {
+    for line in text.lines() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        if words.len() == 2 && words[0].eq_ignore_ascii_case("resolver") {
+            let (address, port) = words[1].split_once(':').unwrap_or((words[1], "53"));
+            if let (Some(address), Ok(port)) = (parse_ip(address), port.parse::<u16>()) { return (address, port); }
+        }
+    }
+    (0, 0)
+}
+
+// A host name as DNS has it: dot-separated labels of letters, digits and hyphens, at least one letter.
+fn is_name(word: &str) -> bool {
+    word.len() <= 253 && word.bytes().any(|b| b.is_ascii_alphabetic())
+        && word.split('.').all(|label| !label.is_empty() && label.len() <= 63 && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+}
+
+// The address of `name` now (351-NET-0003): the grant keeps it, later changes of the name do not follow.
+fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> {
+    match socket::resolve(CONTROL, name, server, port, 3000) {
+        Ok(Ok(address)) if address != 0 => {
+            let [a, b, c, d] = address.to_be_bytes();
+            mind::println!("[NETPOLICY] {}: {} IS {}.{}.{}.{}", program, name, a, b, c, d);
+            Some(address)
+        }
+        Ok(Err(error)) => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED ({:?})", program, name, error); None }
+        _ => { mind::println!("[NETPOLICY] {}: {} NOT RESOLVED (NO ANSWER)", program, name); None }
+    }
+}
+
 // The rules, term and volume the policy names for `program`. Lines: `program address tcp|udp|icmp [port [seconds
-// [bytes]]]` or `program dns` (UDP to the configured DNS server, port 53); `#` starts a comment. The grant gets the
-// shortest term and the smallest volume any of its lines names (the defaults where none does).
+// [bytes]]]` or `program dns` (UDP to the configured DNS server, port 53); `#` starts a comment. The address may be a
+// host name, looked up when the grant is made at the `resolver` the file names (else the stack's DNS server); a name
+// that does not resolve gives no rule. The grant gets the shortest term and the smallest volume any of its lines names
+// (the defaults where none does).
 fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
     let (mut rules, mut seconds, mut bytes) = (Vec::new(), u32::MAX, u64::MAX);
     let Ok(file) = mind::fs::File::open(POLICY_FILE) else { return (rules, 0, 0) };
     let mut text = alloc::vec![0u8; file.size().min(64 * 1024)];
     let len = file.read_at(0, &mut text).unwrap_or(0);
-    for line in core::str::from_utf8(&text[..len]).unwrap_or("").lines() {
+    let text = core::str::from_utf8(&text[..len]).unwrap_or("");
+    let resolver = resolver(text);
+    for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         let words: Vec<&str> = line.split_whitespace().collect();
-        if words.len() < 2 || !words[0].eq_ignore_ascii_case(program) { continue; }
+        if words.len() < 2 || !words[0].eq_ignore_ascii_case(program) || words[0].eq_ignore_ascii_case("resolver") { continue; }
         let rule = if words[1].eq_ignore_ascii_case("dns") {
             (dns != 0).then_some(Rule { address: dns, port: 53, protocol: Protocol::Udp })
         } else {
             let protocol = match words.get(2).map(|w| w.to_ascii_lowercase()) { Some(p) if p == "tcp" => Protocol::Tcp, Some(p) if p == "udp" => Protocol::Udp, Some(p) if p == "icmp" => Protocol::Icmp, _ => continue };
-            parse_ip(words[1]).filter(|&a| a != 0).map(|address| Rule { address, port: words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), protocol })
+            let address = parse_ip(words[1]).or_else(|| if is_name(words[1]) { lookup(program, words[1], resolver) } else { None });
+            address.filter(|&a| a != 0).map(|address| Rule { address, port: words.get(3).and_then(|p| p.parse().ok()).unwrap_or(0), protocol })
         };
         let Some(rule) = rule else { continue };
         if rules.len() < 16 { rules.push(rule); }

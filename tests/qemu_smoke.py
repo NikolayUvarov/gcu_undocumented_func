@@ -7,6 +7,7 @@ FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
 import codecs
+import hashlib
 import json
 import http.server
 import math
@@ -33,6 +34,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
+import serve_release  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -4220,6 +4222,62 @@ def _msix_only(vm):
     assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
 
 
+def download_check(args, disk):
+    """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
+    the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
+    and resumed by the next run; what the grant, the server and the file's directory refuse. On x86 the boot disk is on
+    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request
+    and walks the file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
+    files = Path(tempfile.mkdtemp(prefix="mind-download-"))
+    size, cut = (30 << 20, 10 << 20) if args.arch == "x86_64" else (8 << 20, 3 << 20)
+    big, small = os.urandom(size), os.urandom(200_000)
+    (files / "big.bin").write_bytes(big)
+    (files / "small.bin").write_bytes(small)
+    # The release server, the first response for each file cut short (a test hook).
+    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000})
+    port = release.server_address[1]
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    try:
+        download_runs(vm, release, port, big, small, cut)
+    finally:
+        vm.close()
+        release.shutdown()
+        shutil.rmtree(files, ignore_errors=True)
+        (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def download_runs(vm, release, port, big, small, cut):
+    url = f"http://10.0.2.2:{port}"
+    size = len(big)
+
+    def run(command, until, timeout=8):
+        # The program's lines, up to the prompt after its last one.
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=until)
+    digest = hashlib.sha256(big).hexdigest()
+    out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+        require(out, line)
+    assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
+    out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
+    require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
+    print(f"PASS: download: {size >> 20} MiB over HTTP through its own grant, the connection cut at {cut >> 20} MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
+    out = run(f"download data/small.bin {url}/small.bin --tries 1", "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 50000 BYTES")
+    require(out, "DOWNLOAD: CONNECTION CUT AT 50000 OF 200000, RESUMING")
+    small_digest = hashlib.sha256(small).hexdigest()
+    out = run(f"download data/small.bin {url}/small.bin --sha256 {small_digest}", f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    require(out, "DOWNLOAD: RESUMING data/small.bin AT 50000")
+    assert release.requests[-1] == ("/small.bin", "bytes=50000-"), release.requests
+    require(run(f"download data/x.bin {url}/missing.bin", "DOWNLOAD: HTTP: Status(404)"), "DOWNLOAD: HTTP: Status(404)")
+    require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
+    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: HTTPS"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT")
+    require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
+    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -4228,9 +4286,12 @@ def net_suite(args, disk):
     threading.Thread(target=web.serve_forever, daemon=True).start()
     dns = _dns_server()
     web_port, dns_port = web.server_address[1], dns.getsockname()[1]
-    # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing.
-    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n")
+    # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing;
+    # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
+    (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
+                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n")
     shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
+    shutil.copyfile(disk / "netcheck.elf", disk / "named.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -4279,6 +4340,12 @@ def net_suite(args, disk):
             time.sleep(.25)
         assert ended, vm.command(f"logs {holder}")
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] REVOKED 2 OF netcheck: 1 COPIES REMOVED, 1 SOCKETS CLOSED")
+        # Names in the policy (351-NET-0003): the address a name resolved to when the grant was made, and nothing else.
+        checks = vm.command(f"named tcp:10.0.2.2:{web_port} tcp:10.0.2.3:{web_port}")
+        require(checks, f"NETCHECK tcp:10.0.2.2:{web_port} OK"); require(checks, f"NETCHECK tcp:10.0.2.3:{web_port} Denied")
+        log = vm.command("dmesg -s netpolicy")
+        for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
+            require(log, line)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -4331,6 +4398,7 @@ def net_suite(args, disk):
         vm.close()
         web.shutdown(); dns.close()
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
+    download_check(args, disk)
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
     # and one driver's restart leaves the other card working and gives the new instance its own card back.
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
@@ -4402,7 +4470,7 @@ def net_suite(args, disk):
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
-          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked), two cards on two networks "
+          "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)

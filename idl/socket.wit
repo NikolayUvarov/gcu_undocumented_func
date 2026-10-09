@@ -6,7 +6,8 @@
 ///
 /// What a client may do comes from the badge of its endpoint capability (issue 102): the operator's badge (the shell)
 /// may do anything; a flow grant's badge only what the policy broker registered for it (`policy-set`: destinations,
-/// protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants; an
+/// protocols, a term and a volume), and is refused (`denied`) otherwise; the policy badge registers grants (and, since 2.3,
+/// looks up the names a policy gives, `resolve`); an
 /// unbadged client is refused. Major version 2: `denied` and the badge rules change what 1.0 calls may answer.
 ///
 /// Several cards (issue 105, 2.1): each card driver is one interface with its own configuration (DHCP per card). A flow
@@ -14,7 +15,9 @@
 /// gateway; `config` describes that default interface, `interfaces` all of them.
 ///
 /// 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
-package mind:socket@2.2.0;
+///
+/// 2.3 (351-NET-0003): the policy badge may `resolve`, for the host names of the policy file.
+package mind:socket@2.3.0;
 
 interface socket {
     /// Why a request failed.
