@@ -61,7 +61,7 @@ Any free model may be used (the maintainer, 2026-10-08), so these licences diffe
 
 ## Proprietary files (neither in this repository nor in any image)
 
-Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume. A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
+Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. It keeps them in `proprietary/`, the separate store for all such components in the working tree, which `.gitignore` excludes. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume. A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
 
 | Files | Needed by | Source | Script |
 |---|---|---|---|
