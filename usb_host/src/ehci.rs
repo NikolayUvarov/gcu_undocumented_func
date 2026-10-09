@@ -24,9 +24,10 @@ const ACTIVE: u32 = 0x80; const HALTED: u32 = 0x40; const BUFFER_ERROR: u32 = 0x
 const PID_OUT: u32 = 0; const PID_IN: u32 = 1 << 8; const PID_SETUP: u32 = 2 << 8; const CERR: u32 = 3 << 10; const IOC: u32 = 1 << 15; const TOGGLE: u32 = 1 << 31;
 const T: u32 = 1; const TYPE_QH: u32 = 2;
 
-const RING: usize = 8; const QUEUE: usize = 8; const MAX_INTERRUPTS: usize = 8;
+const RING: usize = 8; const QUEUE: usize = 8; const MAX_INTERRUPTS: usize = 16;
 const MAX_DEVICES: usize = 16; const MAX_PIPES: usize = 6; const MAX_DEPTH: u8 = 5;
 const SCAN_TRIES: u8 = 3;
+const SWEEP_MS: u64 = 5_000; // every hub port is looked at this often; between, only those its status endpoint names
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Control, Bulk, Interrupt }
@@ -318,21 +319,21 @@ impl Ehci {
 pub struct Device {
     address: u8, root: u8, depth: u8, speed: u8,
     parent: Option<(usize, u8)>, tt: Option<(u8, u8)>,
-    hub_ports: u8, failed: u16,
+    hub_ports: u8, failed: u16, status: Option<usize>, pending: u16,
     pub generation: u16, ep0: usize, pipes: [(u8, usize); MAX_PIPES], pipe_count: usize,
     pub interfaces: [Iface; MAX_INTERFACES], pub count: usize,
 }
 
 pub struct Bus {
     pub hc: Ehci, pub devices: [Option<Device>; MAX_DEVICES], generation: u16, addresses: u128,
-    root_tries: [u8; 16], root_failed: u16, name: u8,
+    root_tries: [u8; 16], root_failed: u16, name: u8, swept: u64,
 }
 
 impl Bus {
     pub fn new(hc: Ehci, name: u8) -> Self {
         mind::println!("[USB] EHCI {}: {} PORTS", name, hc.ports);
         for port in 1..=hc.ports { mind::println!("[USB] EHCI {} PORT {} PORTSC {:08X}", name, port, hc.port_status(port)); }
-        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name }
+        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name, swept: 0 }
     }
 
     pub fn control(&mut self, index: usize, request_type: u8, request: u8, value: u16, windex: u16, length: u16) -> Result<usize, u32> {
@@ -359,11 +360,28 @@ impl Bus {
                 mind::println!("[USB] EHCI {} PORT {}: DEVICE NOT SET UP (COMPLETION {}, PORTSC {:08X}, TRY {} OF {})", self.name, port, self.hc.last, self.hc.port_status(port), self.root_tries[port], SCAN_TRIES);
             }
         }
+        // Hub ports: those the hub's status endpoint names, and all of them every SWEEP_MS or without one. Each port asked
+        // is a control transfer: asking all of them four times a second kept usb_host from its clients (211-DRV-0017).
+        let now = mind::time::uptime_ms() as u64;
+        let sweep = now >= self.swept + SWEEP_MS;
+        if sweep { self.swept = now; }
         for hub in 0..MAX_DEVICES {
             let Some(device) = self.devices[hub] else { continue };
-            for port in 1..=device.hub_ports {
+            if device.hub_ports == 0 { continue; }
+            let mut pending = device.pending;
+            match device.status.and_then(|qh| self.hc.armed(qh)) {
+                Some(armed) if !sweep => {
+                    if self.hc.take_reports(armed, |report| { for (i, &byte) in report.iter().take(2).enumerate() { pending |= (byte as u16) << (8 * i); } }).is_err() { pending = 0xFFFE; }
+                }
+                _ => pending = 0xFFFE,
+            }
+            if let Some(d) = self.devices[hub].as_mut() { d.pending = 0; }
+            for port in (1..=device.hub_ports).filter(|&p| pending & 1 << p != 0) {
                 let Some((status, change)) = self.hub_port(hub, port) else { break };
                 if change & 1 != 0 { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); } // CLEAR_FEATURE C_PORT_CONNECTION
+                // Enable and over-current changes are cleared too, or the status endpoint would name the port on every poll.
+                if change & 2 != 0 { let _ = self.control(hub, 0x23, 1, 17, port as u16, 0); }
+                if change & 8 != 0 { let _ = self.control(hub, 0x23, 1, 19, port as u16, 0); }
                 let bit = 1u16 << port;
                 if change & 1 != 0 { if let Some(d) = self.devices[hub].as_mut() { d.failed &= !bit; } }
                 let child = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent == Some((hub, port))));
@@ -407,7 +425,7 @@ impl Bus {
         let tt = parent.and_then(|(p, port)| { let hub = self.devices[p]?; if hub.speed == 3 && speed < 3 { Some((hub.address, port)) } else { hub.tt } });
         // Address 0 with the smallest packet size, for the first 8 bytes of the device descriptor and SET_ADDRESS.
         let zero = self.hc.pipe(0, 0, speed, if speed == 3 { 64 } else { 8 }, tt, Kind::Control)?;
-        let mut device = Device { address: 0, root, depth, speed, parent, tt, hub_ports: 0, failed: 0, generation: 0, ep0: zero, pipes: [(0, 0); MAX_PIPES], pipe_count: 0, interfaces: [Iface::default(); MAX_INTERFACES], count: 0 };
+        let mut device = Device { address: 0, root, depth, speed, parent, tt, hub_ports: 0, failed: 0, status: None, pending: 0, generation: 0, ep0: zero, pipes: [(0, 0); MAX_PIPES], pipe_count: 0, interfaces: [Iface::default(); MAX_INTERFACES], count: 0 };
         self.devices[index] = Some(device);
         let first = self.control(index, 0x80, 6, 0x0100, 0, 8).ok().map(|_| self.hc.small(8)[7] as u16);
         let addressed = first.is_some() && self.control(index, 0x00, 5, address as u16, 0, 0).is_ok();
@@ -475,7 +493,13 @@ impl Bus {
             let (ports, power) = (descriptor[2].min(15), descriptor[5] as u64 * 2);
             for port in 1..=ports { let _ = self.control(index, 0x23, 3, 8, port as u16, 0); } // SET_FEATURE PORT_POWER
             mind::time::sleep(power.clamp(20, 500) as usize);
-            if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; }
+            // The status endpoint: a bit for each port whose status changed, polled on the periodic schedule.
+            let endpoint = interfaces[..count].iter().filter(|i| i.info.class == CLASS_HUB).flat_map(|i| i.info.endpoints().iter().copied()).find(|e| e.is_interrupt() && e.is_in());
+            let status = endpoint.and_then(|e| {
+                let qh = self.hc.pipe(device.address, e.address & 0xF, device.speed, e.packet, device.tt, Kind::Interrupt)?;
+                if self.hc.arm(qh, e.packet) { Some(qh) } else { self.hc.drop_pipe(qh); None }
+            });
+            if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; d.status = status; d.pending = 0xFFFE; }
         }
         Some(())
     }
@@ -485,6 +509,7 @@ impl Bus {
         for child in 0..MAX_DEVICES { if self.devices[child].is_some_and(|d| d.parent.is_some_and(|p| p.0 == index)) { self.remove(child); } }
         let Some(device) = self.devices[index].take() else { return };
         for &(_, qh) in &device.pipes[..device.pipe_count] { self.hc.drop_pipe(qh); }
+        if let Some(qh) = device.status { self.hc.drop_pipe(qh); }
         self.hc.drop_pipe(device.ep0);
         if device.address != 0 { self.addresses &= !(1 << device.address); }
         mind::println!("[USB] EHCI {} DEVICE {} GONE", self.name, device.address);

@@ -1,6 +1,6 @@
-# 211-DRV-0016 — `usb_hid`: an interface it does not serve is claimed once, not without end
+# 211-DRV-0016 — `usb_hid`: an interface it does not serve is claimed once, not without end — done
 
-**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 211) · **Priority:** P0 · **Status:** in progress (fixed; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.3, MC-11.4
+**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 211) · **Priority:** P0 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.3, MC-11.4
 
 ## Problem
 
@@ -26,6 +26,17 @@ An interface given up after failed retries had the same flaw, every half second.
 - The QEMU `usb` suites (x86, aarch64) pass as before.
 - On the MacBook Pro the two lines appear once. The internal keyboard types in the shell. The trackpad's interface is claimed (`[USB_HID] 05AC:0263 INTERFACE 2 …`), and as a pointer it moves the cursor in `wm`.
 
+## Resolution
+
+`usb_hid/src/main.rs` keeps an interface it does not serve, or one it gave up on, claimed and unpolled (`declined`, up to 8; past that it is released and the pass ends there). The list is cleared when `usb_host` restarts (`Peer`). The QEMU `usb` suite passed (x86).
+
+On the MacBook Pro (LOG:boot0001.log, 2026-10-09):
+- interface 1 of 05AC:0263 was logged once (`NEITHER KEYBOARD NOR POINTER, LEFT ALONE`);
+- interface 0 became the keyboard and interface 2 a mouse (`ID 2, X AT BIT 8 (8 BITS), Y AT BIT 16`);
+- the maintainer reports every keyboard and mouse working, internal and external.
+
+They lagged by about a second: [211-DRV-0017](../issues/211-DRV-0017-usb-input-delayed-by-hub-polling.md).
+
 ## Related
 
-[211-DRV-0004](211-DRV-0004-ehci.md), [211-KRN-0021](211-KRN-0021-registers-inside-a-page.md), `usb_hid/src/main.rs`.
+[211-DRV-0004](../issues/211-DRV-0004-ehci.md), [211-KRN-0021](../issues/211-KRN-0021-registers-inside-a-page.md), `usb_hid/src/main.rs`.
