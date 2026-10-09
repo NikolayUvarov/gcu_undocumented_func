@@ -1,8 +1,9 @@
 /// The USB host controller driver `usb_host` and its class drivers (issue 164): `usb_host` owns the xHCI controller,
-/// enumerates devices (through hubs) and hands each interface to one class driver; `usb_hid` and `usb_storage` are its
-/// clients. A client's badge names the device class it may claim (`mind::usb::BADGE_HID`, `BADGE_STORAGE`), so a class
-/// driver reaches only its own interfaces (MC-3.3). Data travel through the client's buffer, lent with `attach`.
-package mind:usb@1.1.0;
+/// enumerates devices (through hubs) and hands each interface to one class driver; `usb_hid`, `usb_storage` and
+/// `video_gw` (a camera's, 158) are its clients. A client's badge names the device class it may claim
+/// (`mind::usb::BADGE_HID`, `BADGE_STORAGE`, `BADGE_VIDEO`), so a class driver reaches only its own interfaces (MC-3.3).
+/// Data travel through the client's buffer, lent with `attach`.
+package mind:usb@1.2.0;
 
 interface usb {
     /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -31,4 +32,15 @@ interface usb {
     /// as two length bytes, low first, and the report. The first call starts polling with that length; a later one with
     /// another length is refused (invalid).
     reports-up-to: func(handle: u32, address: u8, longest: u16) -> result<u16, error-code>;
+    /// 1.2 (158): selects alternate setting `alternate` of the claimed interface (SET_INTERFACE) and writes its
+    /// description (`mind::usb::Interface`: that setting's endpoints, an isochronous one's packet as the descriptor's
+    /// wMaxPacketSize) at the buffer's start. The setting's isochronous IN endpoint starts streaming into a queue of
+    /// usb_host's (on EHCI; xHCI refuses such a setting for now); setting 0 stops it. Errors as for `control`; invalid,
+    /// no such setting or one that cannot stream.
+    select: func(handle: u32, alternate: u8) -> result<_, error-code>;
+    /// 1.2 (158): the packets the selected setting's isochronous IN endpoint `address` received since the last call,
+    /// written at `offset` in the buffer, at most `length` bytes: each as two length bytes, low first (bit 15 set when
+    /// the controller reported an error for it), and the packet; empty packets are left out. Returns the bytes written.
+    /// Packets that do not fit wait for the next call; while usb_host's queue is full, new ones are dropped (and counted).
+    isochronous: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
 }

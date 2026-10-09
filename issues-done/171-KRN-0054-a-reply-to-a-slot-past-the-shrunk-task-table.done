@@ -1,0 +1,43 @@
+# 171-KRN-0054 — A reply to a client whose slot the task table dropped fails with ERR_PEER, not a kernel panic — done
+
+**Type:** kernel bug · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** track A (issue 171) · **Constitution:** MC-6.1 (a failure stays in its domain), MC-1.1
+
+## Problem
+
+This was the storage session's request in `requests-KRN.md` (2026-10-09). It came from its local gate: the branch at 10375c2 merged with `main` at a9ac93f, a branch that changes no kernel file. The group "aarch64: GICv2 with GICv2m" failed in the `normal` suite's `applications_until_memory_ends`, right after `kill 165`:
+
+```
+KERNEL PANIC: index out of bounds: the len is 1 but the index is 2 at src/scheduler.rs:438:19 CPU=2 PID=3 NAME=rtc
+```
+
+- **The read that panics.** `awaits_reply` reads `self.tasks[client]`. The task table (171-KRN-0002) drops empty chunks at its end. `Table::index` indexed `chunks[index / CHUNK]` and panicked for a slot in a chunk that `shrink` had dropped.
+- **How it got there.** A client waited for `rtc`'s reply in the table's second chunk and was killed. The chunk emptied and went. `rtc`'s reply then looked at the client's slot.
+- **Timing.** It depends on timing: the other groups running the same suite passed.
+
+## Plan
+
+- **The table.** The task table goes into a module of its own, `kernel/src/task_table.rs`, so the host tests can build it.
+- **A slot past the end.** It reads as an empty one: `Index` gives a `None` the table holds. A write to it goes to a spare empty slot that is emptied again each time, so nothing written there stays. A slot kept across a shrink then finds no task, like a slot whose task was reaped. So `awaits_reply` is false and the reply fails with `ERR_PEER`.
+- **A host test** in `tests/runtime.rs`.
+
+## Acceptance criteria
+
+- A reply to a client whose slot's chunk was dropped fails with `ERR_PEER` to the server and does not panic.
+- The host test: a slot past the end after a shrink reads and writes as empty; the first chunk is kept.
+- The gate passes, its aarch64 GICv2 group among the rest.
+
+## Resolution
+
+**What changed.**
+- **The table's own module.** The task table moved out of `scheduler.rs` into `kernel/src/task_table.rs`, so the host tests build it.
+- **A slot past the end reads as empty.** `Index` gives the table's own `None`.
+- **A write past the end stays nowhere.** `IndexMut` gives a spare empty slot that is emptied each time, so nothing written there stays.
+- **The reply.** `awaits_reply` then finds no task in a slot whose chunk `shrink` dropped. The reply returns `ERR_PEER` to the server (`reply`'s existing path), and `fail_reply` is not reached for it.
+
+**Evidence.**
+- **Host test.** `tests/runtime.rs` `a_task_slot_kept_across_a_shrink_reads_as_empty`: a task in the second chunk, the chunk dropped once empty, then the slot read and written as empty; the first chunk is kept.
+- **Not reproduced.** The race itself (a client killed while it waits, its chunk dropped before the server replies) was not reproduced in QEMU. It showed once, in the aarch64 GICv2 group. That group runs in the gate of the commit that carries this.
+
+## Related
+
+[171](../issues-done/171-limits-from-the-hardware.done) (the growing task table), [171-KRN-0002](../issues-done/171-KRN-0002-task-and-endpoint-tables.done).
