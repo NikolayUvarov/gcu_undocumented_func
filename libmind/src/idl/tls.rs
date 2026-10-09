@@ -4,7 +4,8 @@
 //! connections too; the service holds no network access of its own. Server certificates are verified against the root
 //! store `tlsroots.pem` on the boot disk. With `client-certificate`, the device certificate is offered when a server
 //! asks for one and the key service signs the handshake: the TLS service never sees the private key. A session belongs
-//! to the process that attached it; the service runs one handshake at a time.
+//! to the process that attached it; the service runs one handshake at a time. 1.1 adds `connect-pinned`: a server known
+//! by its key alone, such as the update server (351-NET-0002).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -14,7 +15,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:tls";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -128,6 +129,28 @@ pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::R
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<512>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
+/// As `connect`, the server verified by its key alone (1.1): the SHA-256 of its certificate's SubjectPublicKeyInfo
+/// must be `pin` (32 bytes), or the connection is refused (`certificate`). No root, name or validity period is
+/// checked; the handshake's signature by that key is. `name` is sent as the server name.
+pub fn connect_pinned(endpoint: Endpoint, session: u32, name: &str, address: u32, port: u16, pin: &[u8], timeout_ms: u32) -> Result<core::result::Result<Peer, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        session.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<253>(name, &mut w).ok_or(SysError::Invalid)?;
+        address.encode(&mut w).ok_or(SysError::Invalid)?;
+        port.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_bytes::<32>(pin, &mut w).ok_or(SysError::Invalid)?;
+        timeout_ms.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 5, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Peer as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -140,6 +163,7 @@ pub enum Request<'a> {
     Receive { session: u32, length: u32 },
     Close { session: u32 },
     Certificate,
+    ConnectPinned { session: u32, name: Text<253>, address: u32, port: u16, pin: &'a [u8], timeout_ms: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -196,6 +220,19 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Certificate, call))
         }
+        7 => {
+            let (call, length) = wire::take_buffer(request, cap, 5, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let session = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let name = <Text<253> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let address = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let port = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let pin = codec::decode_bytes::<32>(&mut r).ok_or(Reject::Invalid)?;
+            let timeout_ms = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::ConnectPinned { session, name, address, port, pin, timeout_ms }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -223,4 +260,8 @@ pub fn reply_close(call: Call, value: core::result::Result<(), Error>) -> Result
 pub fn reply_certificate(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_bytes::<512>(value, w))
+}
+pub fn reply_connect_pinned(call: Call, value: core::result::Result<&Peer, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

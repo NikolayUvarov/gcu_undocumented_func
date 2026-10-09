@@ -1,0 +1,23 @@
+/// TPM service (`tpm`, 351-DRV-0015, MC-11.9): the only holder of the TPM 2.0's registers (CRB or FIFO), which `init`
+/// gives it from the firmware's tables. It seals secrets to this TPM and unseals them for the client with the seal
+/// badge (the key service); no call sends a raw command. A sealed blob opens only in the TPM that sealed it: the TPM
+/// derives its storage key from its own seed. There is no policy on the boot state yet: whoever holds the seal badge
+/// on this machine can unseal. Every seal, unseal and refusal is logged with the client's PID.
+package mind:tpm@1.0.0;
+
+interface tpm {
+    /// `no-tpm`: the machine has none; `rights`: the client's badge does not allow the call; `invalid`: a secret or
+    /// blob of the wrong size or form; `refused`: the TPM refused (a blob another TPM sealed, or an error it logged).
+    enum error { no-tpm, rights, invalid, refused }
+
+    /// The TPM: its manufacturer (four ASCII letters, as TPM_PT_MANUFACTURER gives them) and whether its interface is
+    /// the CRB (else the FIFO).
+    record info { manufacturer: u32, crb: bool }
+
+    /// Any client.
+    info: func() -> result<info, error>;
+    /// Seals `secret` (1 to 128 bytes) to this TPM; the blob to keep (seal badge only).
+    seal: func(secret: bytes<128>) -> result<bytes<1024>, error>;
+    /// The secret of a blob this TPM sealed (seal badge only).
+    unseal: func(blob: bytes<1024>) -> result<bytes<128>, error>;
+}

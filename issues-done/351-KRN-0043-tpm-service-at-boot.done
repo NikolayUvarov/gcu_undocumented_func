@@ -1,0 +1,27 @@
+# 351-KRN-0043 — `init` starts the TPM service; `PLATFORM_TPM` and `SLOT_TPM` — done
+
+**Type:** kernel (init, ABI constants) · **Owner:** `KRN` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.9, MC-3.3, MC-12.4, Appendix B.6
+
+Done for [351-DRV-0015](../issues/351-DRV-0015-tpm-driver.md) and [351-NET-0006](../issues/351-NET-0006-device-key-sealed-by-a-tpm.md) by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09): grant lines in `init` and constants in `common/abi.rs`.
+
+## Problem
+
+The TPM service `tpm` must be the only holder of the TPM's registers. The key service needs a client of it that may seal, and the shell one that may not.
+
+## Plan and resolution
+
+- **A boot service.** `common/abi.rs`: `tpm` / `tpm.elf` in `BOOT_SERVICES` and `BOOT_FILES`, before `keystore`, which needs it at start. So `BOOT_IMAGES` is 31. `02_build.sh` builds it.
+- **`PLATFORM_TPM`** (0x30): the `PLATFORM_MMIO` index of the TPM's registers of locality 0.
+  - `init` mints it into `tpm`'s slot 2 when the kernel has it, and starts `tpm` without it otherwise.
+  - The kernel's half is a request to the kernel and porting tracks ([requests-KRN.md](../issues/requests-KRN.md), "The TPM's registers from the firmware's tables"): reading the place from the ACPI `TPM2` table or the DSDT's `MSFT0101`. It is in `kernel/src/arch/`, which is not this permission's.
+- **The clients:**
+  - `keystore` gets a `tpm` client with `mind::tpm::BADGE_SEAL` in its slot 4;
+  - the shell gets an unbadged one in `SLOT_TPM` (29), for the `tpm` command; `SLOT_DYNAMIC` moves to 30.
+- **`svc`'s HOLDS** has `tpm`'s line, and `keystore`'s now names its VFS and TPM clients.
+- **The ABI version stays 4,** as with 109-KRN-0042: `BootInfo.programs` grows by one image, and everything comes from one build.
+
+**Tested** on x86 and aarch64 in every suite that boots, by the harness's services list:
+- `tpm` runs and logs `NO TPM`;
+- `keystore` starts with its new client and says it has no TPM (`tls` suite).
+
+On the storage session's machine, with a sketch of the kernel's half applied (not committed), `init` handed `tpm` the registers of QEMU's `tpm-crb` with `swtpm`, and the whole chain of 351-NET-0006 passed on x86 (`tpm-crb`) and aarch64 (`tpm-tis-device`).

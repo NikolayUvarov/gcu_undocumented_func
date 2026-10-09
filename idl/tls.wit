@@ -3,8 +3,9 @@
 /// connections too; the service holds no network access of its own. Server certificates are verified against the root
 /// store `tlsroots.pem` on the boot disk. With `client-certificate`, the device certificate is offered when a server
 /// asks for one and the key service signs the handshake: the TLS service never sees the private key. A session belongs
-/// to the process that attached it; the service runs one handshake at a time.
-package mind:tls@1.0.0;
+/// to the process that attached it; the service runs one handshake at a time. 1.1 adds `connect-pinned`: a server known
+/// by its key alone, such as the update server (351-NET-0002).
+package mind:tls@1.1.0;
 
 interface tls {
     /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -29,4 +30,8 @@ interface tls {
     close: func(session: u32) -> result<_, error>;
     /// The device certificate (DER), from the key service.
     certificate: func() -> result<bytes<512>, error>;
+    /// As `connect`, the server verified by its key alone (1.1): the SHA-256 of its certificate's SubjectPublicKeyInfo
+    /// must be `pin` (32 bytes), or the connection is refused (`certificate`). No root, name or validity period is
+    /// checked; the handshake's signature by that key is. `name` is sent as the server name.
+    connect-pinned: func(session: u32, name: string<253>, address: u32, port: u16, pin: bytes<32>, timeout-ms: u32) -> result<peer, error>;
 }

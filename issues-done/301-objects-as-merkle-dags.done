@@ -4,7 +4,7 @@
 
 ## Problem
 
-The block store holds blocks of at most 16 KiB ([300](../issues/300-checksummed-block-store.md)). MC-4.2 asks that published objects and structural manifests are immutable and verifiable by content. Appendix B.3 continues the path from immutable blocks to manifests and a Merkle-DAG: an object of any size is named by one root CID, and every part of it can be verified on the way from the root.
+The block store holds blocks of at most 16 KiB ([300](300-checksummed-block-store.done)). MC-4.2 asks that published objects and structural manifests are immutable and verifiable by content. Appendix B.3 continues the path from immutable blocks to manifests and a Merkle-DAG: an object of any size is named by one root CID, and every part of it can be verified on the way from the root.
 
 ## Plan
 
@@ -35,7 +35,7 @@ The `STO` track numbers its tasks itself and may change the split.
 
 ## Related
 
-[docs/storage](../docs/storage/README.md); [300](../issues/300-checksummed-block-store.md); Constitution Article 4, Appendix B.3.
+[docs/storage](../docs/storage/README.md); [300](300-checksummed-block-store.done); Constitution Article 4, Appendix B.3.
 
 ## Resolution
 
