@@ -1,11 +1,17 @@
 //! Host tests of the network interpreter (libmind/src/nn, 250): the operators on small tensors against values worked
 //! out by hand; and, when MIND_DICTATE_MODEL names a converted model and MIND_DICTATE_REFERENCE the directory
-//! scripts/voice_dictate/reference.py wrote, the encoder against onnxruntime on the same features.
+//! scripts/voice_dictate/reference.py wrote, the encoder against onnxruntime on the same features; with
+//! MIND_DICTATE_SET (a directory of 16 kHz WAVs and refs.tsv, as scripts/voice_v3/prep.py writes it), the word error
+//! rate of the whole chain: our features, our network, greedy search.
 extern crate alloc;
 #[path = "../libmind/src/nn/mod.rs"]
 mod nn;
 #[path = "../libmind/src/voice/math.rs"]
 pub mod math;
+#[path = "../libmind/src/voice/fbank.rs"]
+mod fbank;
+#[path = "../libmind/src/voice/dictation.rs"]
+mod dictation;
 mod voice { pub use super::math; }
 
 use nn::{Data, Tensor};
@@ -66,6 +72,11 @@ fn shapes() {
     assert_eq!(run("Range", &none, &[&i(&[], &[10]), &i(&[], &[3]), &i(&[], &[-3])])[0].data, Data::I64(vec![10, 7, 4]));
     let m = run("ReduceMean", &node(vec![("axes", ints_attr(&[2])), ("keepdims", ints_attr(&[1]))]), &[&x]);
     assert_eq!((m[0].shape.clone(), floats_of(&m[0])[..2].to_vec()), (vec![2, 3, 1], vec![1.5, 5.5]));
+    // The English model's: ReduceMax, Greater, Identity.
+    let most = run("ReduceMax", &node(vec![("axes", ints_attr(&[1])), ("keepdims", ints_attr(&[0]))]), &[&x]);
+    assert_eq!((most[0].shape.clone(), floats_of(&most[0])[..4].to_vec()), (vec![2, 4], vec![8.0, 9.0, 10.0, 11.0]));
+    assert_eq!(run("Greater", &none, &[&i(&[3], &[1, 5, 3]), &i(&[], &[3])])[0].data, Data::Bool(vec![false, true, false]));
+    assert_eq!(run("Identity", &none, &[&x])[0], x);
     let scattered = run("ScatterND", &none, &[&f(&[4], &[0.0; 4]), &i(&[2, 1], &[3, 1]), &f(&[2], &[9.0, 8.0])]);
     assert_eq!(floats_of(&scattered[0]), [0.0, 8.0, 0.0, 9.0]);
 }
@@ -216,21 +227,6 @@ fn bytes(words: &[u64]) -> &[u8] { unsafe { std::slice::from_raw_parts(words.as_
 
 fn floats(path: String) -> Vec<f32> { std::fs::read(path).unwrap().chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect() }
 
-// Greedy search over the decoder and joiner, as reference.py does over onnxruntime's: the text.
-fn greedy(model: &nn::Model, enc: &[f32], frames: usize, dim: usize) -> String {
-    let mut context = [0i64, 0];
-    let decode = |context: &[i64; 2]| model.run("decoder", vec![i(&[1, 2], context)]).unwrap().remove(0);
-    let mut dec = decode(&context);
-    let mut found = Vec::new();
-    for t in 0..frames {
-        let logit = model.run("joiner", vec![f(&[1, dim], &enc[t * dim..(t + 1) * dim]), dec.clone()]).unwrap().remove(0);
-        let Data::F32(l) = &logit.data else { panic!() };
-        let y = l.iter().enumerate().fold((0, f32::NEG_INFINITY), |b, (k, &v)| if v > b.1 { (k, v) } else { b }).0;
-        if y != 0 { found.push(y); context = [context[1], y as i64]; dec = decode(&context); }
-    }
-    found.iter().map(|&y| model.tokens[y].as_str()).collect::<String>().replace('\u{2581}', " ").trim().to_string()
-}
-
 #[test]
 fn clips_against_onnxruntime() {
     // MIND_DICTATE_REFERENCE: a directory of clips, each a directory reference.py wrote. The encoder's output differs
@@ -241,7 +237,8 @@ fn clips_against_onnxruntime() {
         return;
     };
     let words = load(&path);
-    let model = nn::Model::parse(bytes(&words), true).unwrap();
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let model = dictation.model();
     let mut clips: Vec<_> = std::fs::read_dir(&reference).unwrap().map(|e| e.unwrap().path()).filter(|p| p.join("text.txt").exists()).collect();
     clips.sort();
     let (mut audio, mut spent, mut words, mut differ) = (0usize, std::time::Duration::ZERO, 0usize, 0usize);
@@ -252,7 +249,7 @@ fn clips_against_onnxruntime() {
         let start = std::time::Instant::now();
         let out = model.run("encoder", vec![f(&[1, frames, 80], &features), i(&[1], &[frames as i64])]).unwrap();
         let Data::F32(got) = &out[0].data else { panic!() };
-        let text = greedy(&model, got, out[0].shape[1], out[0].shape[2]);
+        let text = dictation.search(got, out[0].shape[1], out[0].shape[2]).unwrap();
         let took = start.elapsed();
         spent += took;
         audio += frames;
@@ -347,4 +344,88 @@ fn profile_by_operator() {
     for (op, (s, n)) in v.iter().take(30) { println!("{:>24} {:>8.3} s {:>6}", op, s, n); }
     nodes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     for (s, name, shape) in nodes.iter().take(15) { println!("{:>8.3} s {} {:?}", s, name, shape); }
+}
+
+// Text as scripts/voice_v3/evaluate.py compares it: lower case, ё as е, letters, digits and apostrophes inside words.
+fn normalize(text: &str) -> String {
+    let lower: String = text.to_lowercase().replace('ё', "е");
+    let spaced: String = lower.chars().map(|c| if c.is_alphanumeric() || c == '\'' { c } else { ' ' }).collect();
+    spaced.split_whitespace().map(|w| w.trim_matches('\'')).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+// Edit distance between two sequences.
+fn distance<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, x) in a.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let next = (row[j + 1] + 1).min(row[j] + 1).min(diagonal + (x != y) as usize);
+            diagonal = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    row[b.len()]
+}
+
+#[test]
+fn word_error_rate_of_a_test_set() {
+    // By hand: MIND_DICTATE_MODEL and MIND_DICTATE_SET (MIND_DICTATE_LIMIT: the first N sentences). 16-bit mono WAVs
+    // at 16 kHz with a 44-byte header; refs.tsv holds per line the file, its length and the reference text.
+    let (Ok(path), Ok(set)) = (std::env::var("MIND_DICTATE_MODEL"), std::env::var("MIND_DICTATE_SET")) else { return };
+    let limit = std::env::var("MIND_DICTATE_LIMIT").ok().and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
+    let words = load(&path);
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let refs = std::fs::read_to_string(format!("{}/refs.tsv", set)).unwrap();
+    let (mut audio, mut spent, mut word_errors, mut ref_words, mut char_errors, mut ref_chars) = (0.0f64, 0.0f64, 0, 0, 0, 0);
+    for line in refs.lines().take(limit) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let wav = std::fs::read(format!("{}/{}", set, fields[0])).unwrap();
+        assert!(&wav[..4] == b"RIFF" && u16::from_le_bytes([wav[22], wav[23]]) == 1 && u32::from_le_bytes(wav[24..28].try_into().unwrap()) == 16000);
+        let samples: Vec<i16> = wav[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        let start = std::time::Instant::now();
+        let text = dictation.text(&samples).unwrap();
+        spent += start.elapsed().as_secs_f64();
+        audio += samples.len() as f64 / 16000.0;
+        let (hyp, reference) = (normalize(&text), normalize(fields[2]));
+        let (h, r): (Vec<&str>, Vec<&str>) = (hyp.split(' ').filter(|w| !w.is_empty()).collect(), reference.split(' ').collect());
+        let errors = distance(&h, &r);
+        let (hc, rc): (Vec<char>, Vec<char>) = (hyp.chars().collect(), reference.chars().collect());
+        (word_errors, ref_words, char_errors, ref_chars) = (word_errors + errors, ref_words + r.len(), char_errors + distance(&hc, &rc), ref_chars + rc.len());
+        if errors > 0 { println!("{}: {} errors\n  ours: {}\n  ref:  {}", fields[0], errors, hyp, reference); }
+    }
+    println!("WER {:.2} % ({} of {} words), CER {:.2} %; {:.1} s of speech in {:.1} s ({:.3} of real time)",
+        100.0 * word_errors as f64 / ref_words as f64, word_errors, ref_words, 100.0 * char_errors as f64 / ref_chars as f64, audio, spent, spent / audio);
+}
+
+// tests/fbank_host.rs's test signal (5300 samples), which the tools suite also gives `dictate` as fbank.wav.
+fn fbank_signal() -> Vec<i16> {
+    let mut state: u64 = 12345;
+    (0..5300i64).map(|i| {
+        state = (state * 1103515245 + 12345) % (1 << 31);
+        let noise = ((state >> 16) % 2001) as i64 - 1000;
+        let phase = i % 37;
+        let triangle = if phase < 37 / 2 { (phase * 2 * 6000).div_euclid(37) - 6000 } else { 6000 - ((phase - 37 / 2) * 2 * 6000).div_euclid(37) };
+        let square = if (i / 1000) % 2 == 0 { if i % 113 < 56 { 3000 } else { -3000 } } else { 0 };
+        (triangle + square + noise).clamp(-32768, 32767) as i16
+    }).collect()
+}
+
+/// The toy transducer's text of the test signal; the tools suite expects it from `dictate` in the system.
+const TOY_TEXT: &str = "нет нет дом нет нет дом нет нет дом нет нет дом нет нет";
+
+#[test]
+fn the_toy_transducer() {
+    // tests/dictate_toy.bin (scripts/voice_dictate/toy.py): the whole chain on a few KB of random weights, with and
+    // without SIMD, gives one text.
+    let words = load("tests/dictate_toy.bin");
+    let dictation = dictation::Dictation::new(nn::Model::parse(bytes(&words), true).unwrap()).unwrap();
+    let samples = fbank_signal();
+    let with = dictation.text(&samples).unwrap();
+    nn::gemm::simd(Some(false));
+    let without = dictation.text(&samples).unwrap();
+    nn::gemm::simd(Some(true));
+    println!("toy text: {:?}", with);
+    assert_eq!(with, without);
+    assert_eq!(with, TOY_TEXT);
 }

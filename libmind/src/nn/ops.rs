@@ -12,7 +12,8 @@ pub(crate) fn run(op: &str, node: &Node, inputs: &[Option<View<'_>>]) -> Result<
     if inputs.iter().enumerate().any(|(i, v)| v.is_some_and(|v| v.panels) && !(op == "MatMulInteger" && i == 1)) { return Err(op_error("a weight in panels")); }
     match op {
         "Add" | "Sub" | "Mul" | "Div" | "Pow" | "Max" => one(arith(op, input(0)?, input(1)?)?),
-        "Equal" | "GreaterOrEqual" => one(compare(op, input(0)?, input(1)?)?),
+        "Equal" | "Greater" | "GreaterOrEqual" => one(compare(op, input(0)?, input(1)?)?),
+        "Identity" => one(input(0)?.to_tensor()),
         "Where" => one(where_(input(0)?, input(1)?, input(2)?)?),
         "Abs" | "Neg" | "Sign" | "Exp" | "Log" | "Sin" | "Cos" | "Atan" | "Tanh" | "Sigmoid" | "Relu" => one(unary(op, input(0)?)?),
         "Clip" => one(clip(input(0)?, inputs.get(1).copied().flatten(), inputs.get(2).copied().flatten())?),
@@ -31,7 +32,7 @@ pub(crate) fn run(op: &str, node: &Node, inputs: &[Option<View<'_>>]) -> Result<
         "Range" => one(range(input(0)?, input(1)?, input(2)?)?),
         "ConstantOfShape" => one(constant_of_shape(&ints(input(0)?)?, node)?),
         "ScatterND" => one(scatter_nd(input(0)?, input(1)?, input(2)?)?),
-        "ReduceMean" | "ReduceSum" => {
+        "ReduceMean" | "ReduceSum" | "ReduceMax" => {
             let axes = match node.ints("axes") { Some(a) => Some(a.to_vec()), None => inputs.get(1).copied().flatten().map(ints).transpose()? };
             one(reduce(op, input(0)?, axes, node.int("keepdims").unwrap_or(1) != 0)?)
         }
@@ -236,10 +237,10 @@ fn arith(op: &str, a: View<'_>, b: View<'_>) -> Result<Tensor> {
 }
 
 fn compare(op: &str, a: View<'_>, b: View<'_>) -> Result<Tensor> {
-    let eq = op == "Equal";
+    let (eq, gt) = (op == "Equal", op == "Greater");
     let (shape, v) = match (a.data, b.data) {
-        (Elems::F32(x), Elems::F32(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else { p >= q })?,
-        (Elems::I64(x), Elems::I64(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else { p >= q })?,
+        (Elems::F32(x), Elems::F32(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else if gt { p > q } else { p >= q })?,
+        (Elems::I64(x), Elems::I64(y)) => zip_with(x, a.shape, y, b.shape, |p, q| if eq { p == q } else if gt { p > q } else { p >= q })?,
         (Elems::Bool(x), Elems::Bool(y)) if eq => zip_with(x, a.shape, y, b.shape, |p, q| p == q)?,
         (p, q) => return Err(op_error(format!("{:?} and {:?}", p.dtype(), q.dtype()))),
     };
@@ -543,11 +544,21 @@ fn reduce(op: &str, x: View<'_>, axes: Option<Vec<i64>>, keep: bool) -> Result<T
     let out_n: usize = shape_kept.iter().product();
     let shape = if keep { shape_kept } else { x.shape.iter().enumerate().filter(|(i, _)| !axes.contains(i)).map(|(_, &d)| d).collect() };
     match x.data {
+        Elems::F32(v) if op == "ReduceMax" => {
+            let mut most = vec![f32::NEG_INFINITY; out_n];
+            for (i, &m) in map.iter().enumerate() { if v[i] > most[m] || v[i].is_nan() { most[m] = v[i]; } }
+            Ok(Tensor::f32(shape, most))
+        }
         Elems::F32(v) => {
             let mut sums = vec![0.0f32; out_n];
             for (i, &m) in map.iter().enumerate() { sums[m] += v[i]; }
             if op == "ReduceMean" { for s in sums.iter_mut() { *s /= count.max(1) as f32; } }
             Ok(Tensor::f32(shape, sums))
+        }
+        Elems::I64(v) if op == "ReduceMax" => {
+            let mut most = vec![i64::MIN; out_n];
+            for (i, &m) in map.iter().enumerate() { most[m] = most[m].max(v[i]); }
+            Ok(Tensor::i64(shape, most))
         }
         Elems::I64(v) => {
             let mut sums = vec![0i64; out_n];

@@ -1239,6 +1239,7 @@ def tools_suite(vm):
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
     fbank_check(vm)
+    dictate_check(vm)
     monitors_check(vm)
 
 
@@ -1263,6 +1264,27 @@ def fbank_check(vm):
     assert worst < 2e-3, worst
     print(f"PASS: dictate's features in the system equal kaldi-native-fbank's ({head[2]} frames, largest difference {worst:.1e}, "
           f"{int(head[3]) / 1000:.1f} ms)", flush=True)
+
+
+# The toy transducer's text of the test signal (tests/nn_host.rs, TOY_TEXT).
+TOY_TEXT = "нет нет дом нет нет дом нет нет дом нет нет дом нет нет"
+
+
+def dictate_check(vm):
+    """250: dictate runs the whole chain in the system (a network file read and checked, features, encoder, greedy
+    search) and gives the host's text, with tests/dictate_toy.bin (scripts/voice_dictate/toy.py) in place of the 71 MB
+    model; and refuses a damaged file."""
+    if vm.arch != "x86_64":
+        print("SKIP: dictate is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
+        return
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("dictate --model toy.bin fbank.wav")
+    simd = re.search(r"DICTATE: MODEL 9604 BYTES, READ IN \d+ MS, CHECKED IN \d+ MS; SIMD (AVX2|NONE)", out)
+    assert simd and f"TEXT: {TOY_TEXT}" in out and "331 MS OF SPEECH" in out, out[-2000:]
+    require(run("dictate --model toy-damaged.bin fbank.wav"), "dictate: toy-damaged.bin: Format(\"checksum\")")
+    print(f"PASS: dictate in the system: the toy transducer's text is the host's (SIMD {simd[1]}); a damaged file is refused", flush=True)
 
 
 def table_row(screen, pattern):
@@ -5850,10 +5872,15 @@ def main():
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite == "tools":
-                # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's.
+                # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
+                # and runs the toy transducer on it; one byte changed in a copy fails its checksum.
                 with wave.open(str(disk / "fbank.wav"), "wb") as out:
                     out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
                     out.writeframes(struct.pack(f"<{len(FBANK_SIGNAL)}h", *FBANK_SIGNAL))
+                toy = bytearray((ROOT / "tests/dictate_toy.bin").read_bytes())
+                (disk / "toy.bin").write_bytes(toy)
+                toy[len(toy) // 2] ^= 1
+                (disk / "toy-damaged.bin").write_bytes(toy)
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
                 note = elf.index(b"MINDREQ1") + 8

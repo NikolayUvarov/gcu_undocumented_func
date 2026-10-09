@@ -1,0 +1,57 @@
+# 250-APP-0025 — `dictate` in the system: an 8.3 s clip gives the host's text under QEMU — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [250](../issues/250-voice-dictation.md) (steps 1, 5 and 7, x86) · **Roadmap:** track G · **Constitution:** MC-4.2, MC-11.5, MC-12.1
+
+## Problem
+
+The engine ran only in host tests. `dictate` could print features but not text. Nothing put a converted model on the model disk or checked it against a manifest. CI cannot carry the 71 MB model.
+
+## Plan
+
+- **`mind::voice::dictation`:** the chain shared by the host tests and the program:
+  - the features of the whole utterance;
+  - the encoder;
+  - greedy search over the decoder and the joiner, one symbol at most per frame.
+
+  The search moved there from the test in 250-APP-0024.
+- **`dictate [--model FILE] file.wav`:**
+  - It reads a network file into 8-byte words, so the weights are read in place, and hashes it with SHA-256 while reading.
+  - A model on `models:` is used only if `MANIFEST.json` lists that hash for it (MC-4.2: content verified before use). Any file must also pass its own checksum.
+  - It then prints the text and the time each step took: reading, checking, recognizing. It also prints whether AVX2 was used.
+  - It asks for a 384 MiB memory quota.
+  - The text is only printed (MC-11.5).
+  - The default model is `models:asr-ru-vosk-0.54/dictate.bin`.
+- **`scripts/models.py disk --add PATH=FILE`:** puts a file made from a model on the disk. Its size and SHA-256 go under `"added"` in `MANIFEST.json`.
+- **A toy transducer for CI:** `scripts/voice_dictate/toy.py` makes three tiny ONNX graphs with the models' interface. They use int8 products (in panels), dynamic quantization, a depthwise Conv, an embedding and a joiner. Its random weights (seed 250) are converted to `tests/dictate_toy.bin` (9604 bytes, committed). Its text means nothing, but host and system must agree on it.
+
+## Acceptance criteria
+
+- **Host (`tests/nn_host.rs`, CI):** the toy transducer's text of the test signal is the same with and without SIMD, and equals the recorded text.
+- **System (`tools` suite, x86):**
+  - `dictate --model toy.bin fbank.wav` prints that text;
+  - a copy with one byte changed is refused by its checksum.
+- **System with the real model (by hand, x86 QEMU):**
+  - an 8.3 s FLEURS clip gives the host's text;
+  - the model's SHA-256 is checked against `MANIFEST.json`.
+
+## Resolution
+
+- **Code:**
+  - [`libmind/src/voice/dictation.rs`](../libmind/src/voice/dictation.rs);
+  - [`dictate/src/main.rs`](../dictate/src/main.rs);
+  - [`scripts/models.py`](../scripts/models.py);
+  - [`scripts/voice_dictate/toy.py`](../scripts/voice_dictate/toy.py) and [`tests/dictate_toy.bin`](../tests/dictate_toy.bin);
+  - `dictate_check` in [`tests/qemu_smoke.py`](../tests/qemu_smoke.py).
+- **By hand, under QEMU without KVM** (x86, 4 CPUs, `-cpu max`, a shared host). The model disk was made with `models.py disk --add asr-ru-vosk-0.54/dictate.bin=dictate-ru.bin`, and the FLEURS clip 10582851702303651044 (8.34 s) was on the boot disk.
+  - **Text:** «если вы хотите находиться рядом со сценой вам нужно приехать заранее чтобы найти место для кэмпинга вблизи от музыки», the same as the host's and as onnxruntime's.
+  - **Time:** the 71 MB model was read and hashed in 16.5 s, and its SHA-256 matched `MANIFEST.json`. The checksum and parsing took 0.3 s, and recognition 54.2 s with AVX2 under TCG.
+  - These are emulation times, not the hardware's (MC-12.1). On the host the same clip takes 0.68 s.
+- **Not done here:**
+  - **aarch64:** programs may not use FP/SIMD there yet ([requests-KRN.md](../issues/requests-KRN.md)).
+  - **The model in shared memory** (step 5): each `dictate` reads its own copy.
+  - **Push-to-talk into `edit` and `fm`** (step 6).
+  - **A CI check with the real model:** CI does not carry it.
+
+## Related
+
+[250](../issues/250-voice-dictation.md), [250-APP-0024](250-APP-0024-word-error-rate-of-our-engine.done), [251-APP-0023](251-APP-0023-faster-model-reading.done), [251](../issues/251-model-cache-and-model-disk.md).

@@ -221,6 +221,9 @@ impl<'f> Model<'f> {
         Some(View { shape: &e.dims, data, panels: e.panels })
     }
 
+    /// Whether the file has a graph `name`.
+    pub fn has(&self, name: &str) -> bool { self.graph(name).is_ok() }
+
     fn graph(&self, name: &str) -> Result<usize> { self.graphs.iter().position(|g| g.name == name).ok_or_else(|| Error::Missing(String::from(name))) }
 
     /// Runs graph `name` on `inputs` (in the graph's order); its outputs in its order.
@@ -254,7 +257,10 @@ impl<'f> Model<'f> {
             } else {
                 let made = {
                     let inputs = (0..node.inputs.len()).map(|i| self.input(values, node, i)).collect::<Result<Vec<_>>>()?;
-                    ops::run(op, node, &inputs).map_err(|e| match e { Error::Op(m) => Error::Op(alloc::format!("{}: {}", op, m)), other => other })?
+                    ops::run(op, node, &inputs).map_err(|e| match e {
+                        Error::Op(m) => Error::Op(alloc::format!("{} ({}): {}", op, node.outputs.first().map_or("", |&o| self.tensors[o as usize].name.as_str()), m)),
+                        other => other,
+                    })?
                 };
                 if made.len() < node.outputs.len() { return Err(op_error(alloc::format!("{} made {} outputs", op, made.len()))); }
                 for (&out, t) in node.outputs.iter().zip(made) { watch(op, &self.tensors[out as usize].name, &t); values[out as usize] = Some(t); }

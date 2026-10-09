@@ -14,6 +14,8 @@ MIND_DICTATE_MODEL=dictate-ru.bin MIND_DICTATE_REFERENCE=refs rustc ... tests/nn
 
 - `fbank_reference.py OUT`: kaldi-native-fbank's features of an integer test signal, for `tests/fbank_reference.txt`.
 - `convert.py OUT NAME=model.onnx... [--tokens tokens.txt]`: ONNX graphs to a `MINDNN01` file (the format is in the script's docstring and in `libmind/src/nn/mod.rs`). Version 2 lays out `MatMulInteger`'s weights in panels for `mind::nn::gemm`; files of version 1 must be converted again.
+- `toy.py OUT`: a toy transducer with the models' interface and random weights, converted to `tests/dictate_toy.bin` (9.6 KB), so that the host tests and the `tools` suite run `dictate`'s whole chain without the 71 MB model.
+- `models.py disk OUT.img asr-ru-vosk-0.54 --add asr-ru-vosk-0.54/dictate.bin=dictate-ru.bin`: the model disk with the converted model, which `dictate` uses by default after checking its SHA-256 against the disk's `MANIFEST.json`.
 - `MIND_DICTATE_PROFILE=1` with the model and one clip's directory: `profile_by_operator` in `tests/nn_host.rs` prints the encoder's time by operator and its slowest nodes.
 - `reference.py MODEL_DIR clip.wav OUT_DIR`: features, onnxruntime's encoder output, and greedy search's tokens and text.
 - `dump.py model.onnx features.f32 FRAMES OUT_DIR`: every value onnxruntime makes, to find where `mind::nn` departs from it (with `MIND_DICTATE_DUMP` in `tests/nn_host.rs`).

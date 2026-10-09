@@ -5,7 +5,8 @@
 
 e.g. `convert.py dictate-ru.bin encoder=encoder.int8.onnx decoder=decoder.int8.onnx joiner=joiner.int8.onnx
 --tokens tokens.txt`. Needs the `onnx` package. Constant nodes become initializers, and an `If` keeps its two branches
-as graphs of their own. Every name in a file shares one table of tensors, so a branch reads what its graph made.
+as graphs of their own. One table holds every tensor; each top graph has its own names, which its branches share, so a
+branch reads what its graph made.
 
 The file, little endian, every section 64-byte aligned:
     magic "MINDNN01", u32 version (2), u32 graphs, u32 tensors, u32 ops (the op names' count)
@@ -41,16 +42,19 @@ def fnv1a(data):
 
 class Model:
     def __init__(self):
-        self.tensors = {}   # name -> id
+        self.tensors = {}   # (top graph, name) -> id
+        self.scope = ""
         self.info = []      # id -> [dtype, dims, raw bytes or None, name]
         self.graphs = []    # (name, inputs, outputs, nodes)
         self.ops = []
 
     def tensor(self, name):
-        if name not in self.tensors:
-            self.tensors[name] = len(self.info)
+        # Names are the top graph's own: the encoder's and the decoder's "/Constant_output_0" are two tensors.
+        key = (self.scope, name)
+        if key not in self.tensors:
+            self.tensors[key] = len(self.info)
             self.info.append([0, [], None, name])
-        return self.tensors[name]
+        return self.tensors[key]
 
     def initializer(self, proto, name=None):
         import onnx.numpy_helper as nh
@@ -228,6 +232,7 @@ def main():
         rest = rest[:at] + rest[at + 2:]
     for item in rest:
         name, path = item.split("=", 1)
+        model.scope = name
         model.graph(name, onnx.load(path).graph)
     size = model.write(out, tokens)
     print(f"{out}: {len(model.graphs)} graphs, {len(model.info)} tensors, ops {' '.join(model.ops)}; {size} bytes")
