@@ -2,6 +2,7 @@ use crate::abi::*;
 use crate::input::{Events, Queue};
 use crate::memory::{Frames, Region};
 use crate::task_state::{self, State};
+use crate::task_table::Table;
 use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -117,28 +118,6 @@ struct IrqBinding { ep: usize, slot: usize, pid: u64, pending: bool, unacked: bo
 #[derive(Clone, Copy)]
 struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
 const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
-// The task table (issue 171): chunks of 32 slots added as needed and dropped when empty at the end. A task never moves:
-// the system call path holds raw pointers to tasks while the table may grow.
-const CHUNK: usize = 32;
-struct Table<T> { chunks: Vec<alloc::boxed::Box<[Option<T>]>> }
-impl<T> Table<T> {
-    fn new() -> Self { let mut table = Self { chunks: Vec::new() }; assert!(table.grow(), "task table"); table }
-    fn grow(&mut self) -> bool {
-        let mut chunk = Vec::new();
-        if self.chunks.try_reserve(1).is_err() || chunk.try_reserve_exact(CHUNK).is_err() { return false; }
-        for _ in 0..CHUNK { chunk.push(None); }
-        self.chunks.push(chunk.into_boxed_slice()); true
-    }
-    // Drops empty chunks at the end, keeping the first.
-    fn shrink(&mut self) { while self.chunks.len() > 1 && self.chunks.last().unwrap().iter().all(Option::is_none) { self.chunks.pop(); } }
-    fn len(&self) -> usize { self.chunks.len() * CHUNK }
-    fn iter(&self) -> impl Iterator<Item = &Option<T>> { self.chunks.iter().flat_map(|c| c.iter()) }
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Option<T>> { self.chunks.iter_mut().flat_map(|c| c.iter_mut()) }
-    fn ptr(&mut self, index: usize) -> *mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] }
-}
-impl<T> core::ops::Index<usize> for Table<T> { type Output = Option<T>; fn index(&self, index: usize) -> &Option<T> { &self.chunks[index / CHUNK][index % CHUNK] } }
-impl<T> core::ops::IndexMut<usize> for Table<T> { fn index_mut(&mut self, index: usize) -> &mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] } }
-
 struct Scheduler {
     boot: BootInfo, tasks: Table<TaskBox>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
