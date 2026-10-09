@@ -160,6 +160,7 @@ pub const REQUEST_BLOCKSTORE: u32 = 16384; // the shell's block store client in 
 pub const REQUEST_BLOCKSTORE_READ: u32 = 32768; // a block store client that may only get, in SLOT_BLOCKSTORE (300-KRN-0024)
 pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in SLOT_FIRMWARE, lent once the user agreed (351-KRN-0027)
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
+pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

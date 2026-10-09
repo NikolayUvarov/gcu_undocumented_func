@@ -22,7 +22,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "an RTC client; the device key in memory",
+    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "an RTC client; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
@@ -335,6 +335,8 @@ impl Init {
                 grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_NETPOLICY)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "netstack", mind::network::BADGE_POLICY)?, CLIENT);
             }
+            // The parser service holds its endpoint and the log only: it parses outside bytes for others (109-NET-0008).
+            "parse" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "parse")?, ALL); }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
             // The key service makes the device key itself (RDRAND), needs the date for its certificate, and keeps the key
@@ -392,6 +394,7 @@ impl Init {
                 self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
                 grants.add(SLOT_SOCKET, self.badged(&mut minted, "netstack", mind::network::BADGE_OPERATOR)?, CLIENT); // every destination
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
+                self.lend(&mut grants, SLOT_PARSE, "parse")?;
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);

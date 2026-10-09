@@ -1,0 +1,27 @@
+# 109-KRN-0042 — `init` starts the parser service; `SLOT_PARSE` and `REQUEST_PARSE` — done
+
+**Type:** kernel (init, ABI constants, loader) · **Owner:** `KRN` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [109](109-session-parsers.done) · **Constitution:** MC-11.11, MC-3.3, MC-3.11, MC-12.4, Appendix B.6
+
+Done for the network track's main task 109 by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09).
+
+## Problem
+
+The parser service `parse` ([109-NET-0008](109-NET-0008-parser-service.done)) must run with nothing but its own endpoint, and a program must be able to ask its launcher for a client of it.
+
+## Plan and resolution
+
+- **A boot service.** `common/abi.rs`: `parse` / `parse.elf` in `BOOT_SERVICES` and `BOOT_FILES` after `netpolicy`, so `BOOT_IMAGES` is 30. `02_build.sh` builds it.
+- **What `init` gives it:** its server endpoint, and the `logd` client every service gets; nothing else. Its line in `svc`'s HOLDS: "nothing but its endpoint". The shell gets a client (below).
+- **`SLOT_PARSE` 28** is the shell's client, which it lends to a program's same slot. `SLOT_DYNAMIC` moves to 29.
+- **`REQUEST_PARSE` 262144** in `libmind::process`.
+- **`loader`** accepts `SLOT_PARSE` among the slots a launcher may fill in a launch session.
+- **The ABI version stays 4.** `BootInfo.programs` grows by one image, which moves the fields after it. As when 300-KRN-0001 added a boot image, the bootloader, the kernel and the programs come from one build and one signed manifest. The kernel track may choose to count this as a new version.
+
+The numbers follow those the kernel session took on `main` the same day (`SLOT_BLOCKSTORE_READ` 26, `SLOT_FIRMWARE` 27, `REQUEST_TLS` 131072).
+
+**Tested** in the `net` suite on x86 and aarch64 ([109-NET-0009](109-NET-0009-download-through-the-parser.done)):
+- `parse` runs;
+- `stat caps` shows it holding two capabilities, its endpoint and a `logd` client;
+- killed, it is restarted behind the same endpoint.
+
+The services list of the test harness has it.
