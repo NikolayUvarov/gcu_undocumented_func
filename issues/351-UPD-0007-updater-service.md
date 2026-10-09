@@ -35,7 +35,7 @@ Something on the device has to turn a published release into a staged, verified 
 | Task | Track | What | State |
 |---|---|---|---|
 | [351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) | `UPD` | `mind::release`: the channel and the manifest read in their one encoding, and encoded again | done |
-| [351-NET-0011](351-NET-0011-parse-release-metadata.md) | `NET` | `parse` reads channels and manifests for the updater (`idl/parse.wit` 1.1) | open |
+| [351-NET-0011](../issues-done/351-NET-0011-parse-release-metadata.done) | `NET` | `parse` reads channels and manifests for the updater (`idl/parse.wit` 1.1) | done |
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | `UPD` | The update zone in `vfs_server` | built; the badge's grant waits for `init` |
 | [351-KRN-0022](351-KRN-0022-updater-grants.md) | `KRN` | `updater` as a boot service with its grants | done on the kernel branch, not yet on `main` |
 | this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | open |

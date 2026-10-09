@@ -40,7 +40,7 @@ Done. `tests/release_host.rs` (in the host test lists of CI and `scripts/ci_loca
 - manifests from `sign_manifest.py`, and the build's own `usb_root` and `aarch64_root` manifests where they are built, encode again to their text;
 - 17 other forms are refused, among them the order by components (`voice/model.bin` before `voice.elf`).
 
-The parser service's requests are [351-NET-0011](../issues/351-NET-0011-parse-release-metadata.md); the updater's check is part of 351-UPD-0007.
+The parser service's requests are [351-NET-0011](351-NET-0011-parse-release-metadata.done); the updater's check is part of 351-UPD-0007.
 
 ## Related
 
