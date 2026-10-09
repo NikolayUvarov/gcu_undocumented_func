@@ -1,0 +1,55 @@
+# 000-APP-0030 — Syntax colours in `edit` — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track G · **Constitution:** MC-12.2
+
+## Problem
+
+The tools plan's phase T4 names syntax highlighting, and `edit`'s section said "later: syntax highlighting (Rust, TOML, WIT, Markdown)". The editor showed every byte in one colour.
+
+## Plan
+
+- **`mind::tui::syntax`** (no allocation, so any program with `tui` may use it):
+  - A language is chosen by the file's extension: Rust, C, Python, shell, msh, WIT, TOML, INI, JSON or Markdown.
+  - `Language::line` gives each byte of a line a kind: text, keyword, type, string, number, comment or metadata.
+  - It returns the state the line leaves for the next one: a block comment (nested in Rust), a string that goes on (Rust's `"…"` and `r#"…"#`, Python's triple quotes), or a Markdown fence.
+  - `style` gives each kind a colour on the theme's panel: the Borland IDE colours on the classic blue, softer ones on the dark theme.
+- **`edit`:**
+  - It keeps the state at the start of each line it has drawn. The buffer reports the first line an edit changed, and the states after it are dropped and recomputed as far as the screen needs.
+  - The status line names the language.
+  - F9 Options → "Syntax colours on / off".
+  - A selection and invalid UTF-8 keep their own colours.
+  - Saving under another extension changes the language.
+
+## Acceptance criteria
+
+- `tests/syntax_host.rs`:
+  - every language on lines worked out by hand, one mark per byte;
+  - states carried over lines (a nested comment, a raw string, a Markdown fence);
+  - languages by file name;
+  - no panic on 4 000 random lines in every starting state.
+- `tests/edit_host.rs` `syntax_colours`:
+  - keyword and comment colours on screen;
+  - a comment closed by typing and opened again by undo;
+  - the selection over colours;
+  - the option off and on;
+  - every line deleted;
+  - "save as" a `.txt`.
+- The `edit` QEMU suite: a Rust file shows its keyword white, plain text cyan and its comment grey on the blue panel, pixel for pixel, and the status line names Rust.
+
+## Resolution
+
+- **Code:**
+  - [`libmind/src/tui/syntax.rs`](../libmind/src/tui/syntax.rs) (new);
+  - [`edit/src/editor.rs`](../edit/src/editor.rs) and [`buffer.rs`](../edit/src/buffer.rs): the states and the first changed line.
+- **Tests:**
+  - [`tests/syntax_host.rs`](../tests/syntax_host.rs) (new, in CI's host tests);
+  - [`tests/edit_host.rs`](../tests/edit_host.rs);
+  - the `edit` suite in [`tests/qemu_smoke.py`](../tests/qemu_smoke.py).
+- **Docs:** [docs/tools §4.2](../docs/tools/README.md) (EN and RU).
+- **Not done here:**
+  - colours in `view`, which reads a file through a 64 KiB window and so cannot know what an earlier line left open;
+  - languages other than the ten.
+
+## Related
+
+[docs/tools §4.2, §5](../docs/tools/README.md), [067](067-editor.done).

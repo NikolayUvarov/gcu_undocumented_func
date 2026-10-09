@@ -3730,12 +3730,26 @@ def edit_check(vm):
     leave(f10, "[EDIT] DONE")
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
     require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
+    require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
+    start("ram:colour.rs")
+    keys(b"\x1b[F", "LINE=1 COL=18 ")  # End: the cursor's underline off the cells checked
+    time.sleep(.3)
+    _, size, _, _ = vm.screenshot().split(b"\n", 3)
+    width, height = map(int, size.split())
+    x0, y0 = width % 8 // 2, height % 16 // 2 + 16
+    check_text16(vm, x0, y0, "fn", 0xFFFFFF, 0x0000AA)
+    check_text16(vm, x0 + 3 * 8, y0, "main", 0x55FFFF, 0x0000AA)
+    check_text16(vm, x0 + 10 * 8, y0, "// note", 0xAAAAAA, 0x0000AA)
+    assert canon("Rust") in screen_text(vm)[0]
+    vm.serial(enter=False)
+    leave(f10, "[EDIT] DONE")
     # vfs_server made a scope for each start and ended those whose editor had exited.
     scopes = vm.command("dmesg -s vfs_server")
     for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
         require(scopes, made)
     require(scopes, "ENDED")
-    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory", flush=True)
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory; a Rust file in its colours", flush=True)
 
 
 def edit_suite(args):

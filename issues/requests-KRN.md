@@ -46,3 +46,25 @@ The kernel also keeps the line where a test can read it after boot (its log ring
 ### Acceptance criteria
 
 The check no longer depends on how much guest work a 10 ms step covers.
+
+## A slot and a request flag for the system clipboard (000-APP-0032)
+
+**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0032](000-APP-0032-system-clipboard.md) (the tools plan's phase T4: the system clipboard).
+
+### Problem
+
+`edit` (Ctrl+C/X/V), `fm`'s command line and the shell's line each keep their own text, so nothing can be copied from one program to another. The tools track writes the clipboard: `idl/clipboard.wit` and a `clipboard` service that holds the text. It needs a way to reach the programs that ask for it.
+
+### Plan (a proposal; the kernel track decides)
+
+The same way as the parser service (109-KRN-0042):
+
+- `init` starts `clipboard` and gives the shell a client.
+- `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are added in `common/abi.rs` and `libmind::process`.
+- A launcher may fill the slot in a launch session.
+
+The shell lends its client only to a program that asks for it, and `msh` gets a `clipboard` word. What the service answers, and to whom, is in 000-APP-0032.
+
+### Acceptance criteria
+
+A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
