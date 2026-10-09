@@ -107,7 +107,7 @@ The maintainer or the owning track reviews and merges it.
 **`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. Only the maintainer builds it, to try a fix on a real machine at once, without waiting for the tests.
 
 - **An agent never builds, tests or gates `fast-test`** (a strict rule): no build, no test suite, no `scripts/ci_local.sh` on it or on a worktree of it. Builds, tests and gates run only on the agent's own branch.
-- An agent of the maintainer pushes a commit there as soon as the commit builds on its own branch, before running its tests: it merges its branch into `fast-test`, or fast-forwards it, resolves any conflict in the merge, and pushes the merge as it is. Never force-push it.
+- **The order:** an agent of the maintainer commits on its own branch and makes sure it builds there; then merges its branch into `fast-test` (or fast-forwards it), resolves any conflict in the merge, and pushes the merge as it is; only then runs the tests and the gate, on its own branch. Never force-push `fast-test`.
 - When `main` moves, it is merged into `fast-test`.
 - Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the gate.
 - A build from `fast-test` is not evidence of anything (section 1) until its commits pass the gate.
@@ -154,7 +154,7 @@ Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given be
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
 Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
-Build, test and gate only your own branch; merge it into fast-test once it builds, and never build or test fast-test.
+Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.
 Before pushing: run the tests the change touches (scripts/ci_local.sh for the full set) and update docs/profile if a stated guarantee changed.
