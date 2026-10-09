@@ -4,15 +4,17 @@ extern crate alloc;
 // download FILE URL [--sha256 HEX] [--tries N]: downloads URL into FILE over HTTP/1.1 with mind::http (351-NET-0001). A
 // file already partly there, and a connection cut midway, are resumed with `Range`. The network is the flow grant its
 // launcher got from the policy broker (name lookups too, with a `download dns` line), the file a client confined to its
-// directory (REQUEST_FILE). https needs a TLS client, which no launcher lends a program yet.
+// directory (REQUEST_FILE). The response head is parsed by the parser service (REQUEST_PARSE, 109-NET-0009), which holds
+// neither; download checks what it says against what it asked for. https needs a TLS client, which no launcher lends a
+// program yet.
 use alloc::vec::Vec;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE};
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Sink, Transport, Url};
 use mind::idl::socket;
 use mind::ipc::Endpoint;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_FILE);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_FILE | REQUEST_PARSE);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const IDLE_MS: usize = 15_000; // no progress for this long: the connection counts as cut
@@ -137,6 +139,9 @@ fn main(_info: &'static BootInfo) {
     let Ok(url) = Url::parse(url) else { fail(format_args!("NOT AN http:// URL: {}", url)) };
     if url.https { fail(format_args!("HTTPS NEEDS A TLS CLIENT, WHICH NO LAUNCHER LENDS A PROGRAM YET")); }
     if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
+    // It does not parse response heads itself: without the parser service it does not download (MC-11.11).
+    if mind::dev::cap_info(SLOT_PARSE).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PARSER SERVICE")); }
+    let mut parser = mind::parse::Service(Endpoint(SLOT_PARSE));
     // The client the launcher lent is confined to the file's directory.
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
         let (volume, rest) = fs::split(path);
@@ -173,7 +178,7 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(error)) => { mind::println!("DOWNLOAD: CONNECT: {:?}", error); mind::time::sleep(1000); continue; }
             Err(_) => fail(format_args!("NO NETWORK GRANT")),
         };
-        let result = http::get(&mut tcp, &url, offset, &mut output, &mut http::Local);
+        let result = http::get(&mut tcp, &url, offset, &mut output, &mut parser);
         drop(tcp);
         if output.flush().is_err() || output.failed { fail(format_args!("CANNOT WRITE {}", path)); }
         match result {

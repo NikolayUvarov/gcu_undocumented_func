@@ -4263,11 +4263,13 @@ def download_check(args, disk):
     big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
     (files / "small.bin").write_bytes(small)
-    # The release server, the first response for each file cut short (a test hook).
-    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000})
+    # The release server, the first response for each file cut short, and a malformed head for /bad.bin (test hooks).
+    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000}, raw={"/bad.bin": BAD_HEAD})
     port = release.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    # A script that lends download everything it asks for but the parser service (109-NET-0009).
+    (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
@@ -4306,6 +4308,39 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
     require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+    parser_check(vm, url)
+
+
+BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
+
+
+def parser_check(vm, url):
+    """109-NET-0008, 0009: every response head above was parsed in `parse`, which holds its endpoint and the log client
+    and nothing else; a malformed head is refused there, and download, given everything but the parser, refuses."""
+    out = vm.command(f"download data/bad.bin {url}/bad.bin --tries 1")
+    require(out, "DOWNLOAD: HTTP: Head")
+    real = vm.services()
+    log, head = vm.command("dmesg -s parse"), len(BAD_HEAD.split(b"\r\n\r\n")[0])
+    assert re.search(fr"\[PARSE\] REFUSED AN HTTP HEAD FOR PID \d+: MALFORMED \({head} BYTES\)", log), log
+    # Its capabilities: its own endpoint (served by it) and a client of logd; no memory, device, privilege or other client.
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    text = vm.command(f"stat caps {real['parse']}", raw=True)
+    caps = re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=(\d+) .*?EP=(\d+)", text, re.M)
+    held = sorted((int(slot), int(kind), servers.get(int(ep))) for slot, kind, ep in caps)
+    require(text, "STAT CAPS VERSION=2 COUNT=2 ")
+    assert held == [(1, 1, real["parse"]), (12, 1, real["logd"])], (held, text)
+    out = vm.command("msh noparse.msh")
+    require(out, "DOWNLOAD: NO PARSER SERVICE")
+    # Killed, it is restarted by init behind the same endpoint: the shell's client reaches the new instance.
+    require(vm.command(f"kill {real['parse']}", raw=True), f"KILLED PID={real['parse']}")
+    for _ in range(40):
+        if vm.services().get("parse", real["parse"]) != real["parse"]:
+            break
+        time.sleep(.25)
+    assert vm.services()["parse"] != real["parse"], vm.services()
+    out = vm.command(f"download ram:again.bin {url}/small.bin")
+    require(out, "DOWNLOAD: DONE 200000 BYTES")
+    print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
 
 
 def net_suite(args, disk):

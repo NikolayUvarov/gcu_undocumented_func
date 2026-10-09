@@ -1,6 +1,6 @@
-# 109 — Session parsers with minimal authority (Airlock)
+# 109 — Session parsers with minimal authority (Airlock) — done
 
-**Type:** main task (network) · **Owner:** `NET` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track D ("session parsers with minimal authority") · **Constitution:** MC-11.3, MC-11.4, MC-11.5, MC-11.11, Appendix B.6
+**Type:** main task (network) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** track D ("session parsers with minimal authority") · **Constitution:** MC-11.3, MC-11.4, MC-11.5, MC-11.11, Appendix B.6
 
 Asked for by the maintainer (2026-10-09), after 351-NET-0005 and 108. Broken down and carried out by the storage session working the network track.
 
@@ -23,7 +23,7 @@ MC-11.11 forbids a domain that parses untrusted external input from also holding
 
 ## Plan: the tasks
 
-1. **[109-NET-0007](../issues-done/109-NET-0007-airlock-authority-map.done), the authority map** (done) (`docs/network/airlock.md`). Every adapter of external input in the system today: what it parses, in which process, with which authorities, and where that falls short of MC-11.11 and B.6. This covers:
+1. **[109-NET-0007](109-NET-0007-airlock-authority-map.done), the authority map** (done) (`docs/network/airlock.md`). Every adapter of external input in the system today: what it parses, in which process, with which authorities, and where that falls short of MC-11.11 and B.6. This covers:
    - DHCP, ARP, DNS and TCP in `netstack`;
    - TLS records and X.509 in `tls`;
    - the HTTP head in `download`;
@@ -31,12 +31,12 @@ MC-11.11 forbids a domain that parses untrusted external input from also holding
    - ELF in the kernel and the loader;
    - the boot manifest in the bootloader;
    - images and media in the tools.
-2. **[109-NET-0008](109-NET-0008-parser-service.md), a parser service `parse`.**
-   - `init` starts it with nothing but its own endpoint and the system log (109-KRN-0042): no files, no network, no spawn, no devices.
+2. **[109-NET-0008](109-NET-0008-parser-service.done), a parser service `parse`** (done).
+   - `init` starts it with nothing but its own endpoint and the system log ([109-KRN-0042](109-KRN-0042-parser-service-at-boot.done)): no files, no network, no spawn, no devices.
    - It turns bounded bytes into typed messages (`idl/parse.wit`), statelessly: the HTTP response head first.
    - Its parsing code is the one `mind::http` had, tested on the host.
    - If it crashes, `init` restarts it (Article 6).
-3. **[109-NET-0009](109-NET-0009-download-through-the-parser.md), `download` through the parser.**
+3. **[109-NET-0009](109-NET-0009-download-through-the-parser.done), `download` through the parser** (done).
    - `download` no longer parses raw response heads. It hands the head bytes to `parse` and gets a typed head back.
    - It still checks the domain's own conditions itself (MC-11.5): the range starts where it asked, and the length fits.
    - A malformed head is refused by `parse`. A head that crashes `parse` costs a restart of `parse`, not `download`'s grant or file.
@@ -53,4 +53,16 @@ MC-11.11 forbids a domain that parses untrusted external input from also holding
 
 ## Related
 
-[351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [351-UPD-0007](351-UPD-0007-updater-service.md), [docs/network/downloads.md](../docs/network/downloads.md).
+[351-NET-0001](351-NET-0001-http-downloads.done), [351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [docs/network/downloads.md](../docs/network/downloads.md).
+
+## Resolution
+
+All three tasks are done, with the kernel and tools tracks' parts made for them: [109-KRN-0042](109-KRN-0042-parser-service-at-boot.done) (`init` starts `parse`; `SLOT_PARSE`, `REQUEST_PARSE`) and [109-APP-0016](109-APP-0016-shell-lends-the-parser.done) (the shell lends the client).
+- [docs/network/airlock.md](../docs/network/airlock.md) is the authority map, and the profile's MC-11.3/11.11 row cites it.
+- `download` passes its suite in the `net` suite, on x86 and aarch64, with every response head parsed in `parse`. `stat caps` shows `parse` holding its endpoint and a `logd` client, and nothing else.
+- A malformed head is refused and logged there.
+
+The recorded items:
+- **Per-session parser instances:** [109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md).
+- **The updater's metadata through `parse`:** a plan item of [351-UPD-0007](../issues/351-UPD-0007-updater-service.md).
+- **B.6's external medium path:** recorded as a gap in the authority map; it is not the network track's, and no task has it yet.

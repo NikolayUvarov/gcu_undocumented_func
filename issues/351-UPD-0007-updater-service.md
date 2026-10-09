@@ -22,6 +22,7 @@ Something on the device has to turn a published release into a staged, verified 
   - `fetch` downloads every blob the manifest names into the inactive slot, resuming a partial file, and checks every hash.
   - `apply` writes the trial boot record and asks `init` to restart.
   - `rollback` writes a record that points at the last confirmed slot.
+- **Parsing outside the updater** (MC-11.11, [109](../issues-done/109-session-parsers.done)): the updater holds the update zone, so it parses no metadata from the network itself. The channel and the manifests go through the parser service `parse` (new requests in `idl/parse.wit`), as `download`'s response heads do; the updater checks the signatures and the typed answers.
 - **Sources:** an HTTPS URL, an `ssh://` URL in phase 3, or a directory on a disk (for a USB stick). One verification path serves all three.
 - **Status** is visible to the shell and `sysinfo`: current, staged, trial and last-known-good versions, and the last error.
 - **Images with slots** (moved here from 351-UPD-0006, which left the images in the root layout until a slot can be staged):
