@@ -4016,6 +4016,33 @@ def speech_wav(phrases=SPEECH):
     return header + b"data" + struct.pack("<I", len(pcm)) + pcm, starts
 
 
+def ehci_suite(args):
+    """211-DRV-0004, 0017, 0018: usb_host's EHCI driver, as on an Intel Mac: a high-speed keyboard on QEMU's usb-ehci
+    with a tablet on xHCI, then the other way round. The keys arrive both times (the trackpad commit's queues once
+    overflowed usb_host's stack as it set up EHCI, which QEMU's other suites, without EHCI, did not see)."""
+    import copy
+    pc = copy.copy(args)
+    pc.machine = "pc,i8042=off"
+    for name, extra in (("on EHCI", ["-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0", "-device", "usb-ehci,id=ehci", "-device", "usb-kbd,bus=ehci.0,usb_version=2"]),
+                        ("on xHCI", ["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-ehci,id=ehci", "-device", "usb-tablet,bus=ehci.0,usb_version=2"])):
+        vm = VM(pc, IMAGE, extra=extra)
+        try:
+            host = vm.command("dmesg -s usb_host", raw=True)
+            require(host, "[USB] EHCI 0: 6 PORTS")
+            require(host, "[USB] EHCI 0 0627:0001 ADDRESS 1 (HIGH SPEED)")
+            vm.send("run keys\n"); vm.expect("[KEYS] READY"); time.sleep(.3)
+            start = len(vm.log)
+            for key in ("a", "b", "c"):
+                vm.hmp(f"sendkey {key}"); time.sleep(.2)
+            time.sleep(.8); vm.collect()
+            got = re.findall(r"\[KEYS\] code=Char mods=- char=([abc])", vm.log[start:])
+            assert got == ["a", "b", "c"], (name, vm.log[start:])
+            vm.send_bytes(b"\x1b"); vm.expect("EXITED. SHELL RESUMED.")
+        finally:
+            vm.close()
+    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types, and the other way round", flush=True)
+
+
 def hda_suite(args):
     """551-DRV-0010: Intel HD Audio in audio_gw. QEMU's intel-hda with a duplex codec (a line out and a line in): the
     gateway finds the paths, beep's tones reach the wav backend through the output stream, and listen records a second
@@ -5832,7 +5859,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5877,6 +5904,9 @@ def main():
             continue
         if suite == "updater":
             updater_suite(args, args.updater_elf)
+            continue
+        if suite == "ehci":
+            ehci_suite(args)
             continue
         if suite == "hda":
             hda_suite(args)

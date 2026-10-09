@@ -62,7 +62,7 @@ X86_GROUPS=(
     "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb,ehci"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"

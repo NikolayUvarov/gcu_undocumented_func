@@ -67,7 +67,7 @@ jobs:
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
-            args: --suites keys,shell,tools,windows,wm,tablet,usb
+            args: --suites keys,shell,tools,windows,wm,tablet,usb,ehci
           - name: files and block writes
             args: --suites vfs,edit,disk,block,store,storefaults,updater
           - name: NVMe boot disk
