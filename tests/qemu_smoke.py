@@ -3448,17 +3448,12 @@ def video_pattern(sequence, x, y, width, height):
 
 
 def camera_check(vm):
-    """camera (issue 158) on the synthetic source: the shell asks before lending the camera, a refused program runs
-    without it; a still and 3 s of video; the camera mark while the stream is open, gone after it."""
-    def ask(command, answer):
-        vm.send(command + "\n")
-        vm.expect("CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)")
-        vm.send_bytes(answer)
-    ask("camera -s data/cam.bmp", b"n")
-    require(vm.expect("SHELL RESUMED."), "camera: no camera was granted")
-    time.sleep(.2); vm.collect(); vm.output = ""
-    ask("camera -s data/cam.bmp", b"y")
-    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", vm.expect("SHELL RESUMED.", timeout=30))
+    """camera (issue 158) on the synthetic source: the shell lends the camera without a question (the program's start is
+    the request); a still and 3 s of video; the camera mark while the stream is open, gone after it."""
+    vm.send("camera -s data/cam.bmp\n")
+    taken = vm.expect("SHELL RESUMED.", timeout=30)
+    assert "ALLOW?" not in taken, taken
+    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", taken)
     assert still, vm.log[-2000:]
     time.sleep(.2); vm.collect(); vm.output = ""
     def stalled(*report):
@@ -3473,7 +3468,7 @@ def camera_check(vm):
         path = r"camera|video_gw|vfs_server|compositor|nvme|ata|ahci|ramdisk|rtc|logd|sysmon"
         waits = [vm.command(f"stat {pid}", raw=True) for pid in re.findall(rf"^(\d+) (?:{path}) ", ps, re.M)]
         raise AssertionError(report + (ps, waits, vm.service_logs("video_gw")))
-    ask("camera -r 10 -t 3 data/cam.avi", b"y")
+    vm.send("camera -r 10 -t 3 data/cam.avi\n")
     vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
     opened = time.monotonic()
     time.sleep(1)
@@ -3507,7 +3502,7 @@ def camera_check(vm):
     require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
     assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: camera: the shell asks first and a refused program runs without the camera; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 

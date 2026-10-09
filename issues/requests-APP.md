@@ -121,3 +121,25 @@ The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
 ## Note: the shell's text for `loader.wit` 1.7 `unreadable` (211-KRN-0050)
 
 The kernel track added `unreadable` to the loader's errors. The shell's match on loader errors is exhaustive, so the interface change took the shell's mapping with it: `ERR_IO` → `CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)` in `shell/src/main.rs`. The tools track may word it otherwise. `wm`, `fm` and `console` print loader errors with `{:?}` and show `Unreadable`.
+
+## Russian speech is barely intelligible on the MacBook Pro (252)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, at the maintainer's request after a run on the MacBook Pro: "Russian audio output is barely understandable, very poor, with clicks". The task is to find out whether it can be fixed.
+
+### Problem
+
+`tts` runs its 16 kHz formant synthesizer and upsamples to 48 kHz for `audio_gw`. On the Mac's speakers Russian is hard to follow. The clicks are looked for in the driver (551-DRV-0010: polled playback without an interrupt). How intelligible the voice is, is the synthesizer's.
+
+### Plan (a proposal; the tools track decides)
+
+- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
+- Then the cheapest gains: the upsampler's filter, and the Russian rules and voice parameters. 252's neural synthesis is the larger step.
+
+### Acceptance criteria
+
+A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
+
+## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
+
+The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
+

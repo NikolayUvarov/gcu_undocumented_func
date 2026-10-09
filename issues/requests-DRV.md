@@ -6,6 +6,8 @@ The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other
 
 ## The MacBook Pro's camera: UVC over EHCI (158)
 
+**Reported again on 2026-10-09** (fast-test fe6e7e250512): `camera` starts in its window in `wm` and shows nothing, still `[VIDEO] NO CAMERA`. The maintainer asks for it to work; the shell's question before lending the camera is gone (CONTRIBUTING.md).
+
 **Recorded by:** the kernel track (KRN), 2026-10-09, for main task [158](158-video-capture.md), after the maintainer's run on the MacBook Pro (fast-test 57242b9c78ff): `camera` does nothing there.
 
 ### Problem
