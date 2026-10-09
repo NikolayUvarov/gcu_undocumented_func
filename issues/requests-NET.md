@@ -59,3 +59,22 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## HTTP for a service, and a certificate pin (501)
+
+**Recorded by:** the maintainer's session, 2026-10-09, for main task [501](501-effector.md) (the `ASR` track is open) at the maintainer's request.
+
+### Problem
+
+The effector of 501 is an agent of Effector, a test server that already exists. Its protocol posts JSON (a heartbeat every second, acknowledgements, operation results) and polls with GET. `libmind::http` (351-NET-0001) makes one GET per connection, has no POST, and refuses a chunked body. A Go server sends a response without `Content-Length` as chunked once it outgrows its buffer. A new TLS handshake every second is also costly on the target.
+
+Effector's agents pin the server by the SHA-256 of its leaf certificate, with a second pin for rotation. [351-NET-0002](351-NET-0002-https-for-programs.md) plans a pin by the server's public key (SPKI).
+
+### Plan (a proposal; the network track decides)
+
+- `libmind::http`: a request with a method and a body (POST with `Content-Length`); a response with `Content-Length` or chunked; several requests over one transport (keep-alive). The size limits are stated.
+- `tls`: a `connect` that accepts the server by one or two pins, so a pin can rotate. Either the SHA-256 of the leaf certificate, as Effector's agents use, or 351-NET-0002's SPKI pin with Effector giving its agents that value. One minor version of `idl/tls.wit` for both 351-NET-0002 and this.
+
+### Acceptance criteria
+
+In QEMU, a service posts a JSON body and reads a chunked response, then a second request, over one TLS session to a test server. A server that matches neither pin is refused.
