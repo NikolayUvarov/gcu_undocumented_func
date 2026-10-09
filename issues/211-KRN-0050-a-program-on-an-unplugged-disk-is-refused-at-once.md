@@ -36,6 +36,16 @@ What happens, from the code:
 - **After the replug,** `run app` starts the program and `vfs_server` logs that the drive answers again. The boot log holds records from the time the disk was out, as far as logd's ring kept them.
 - **The MacBook Pro.** The same: a refusal with the reason, not a hang. How fast depends on `DRV`'s part.
 
+## Progress
+
+**2026-10-09: QEMU x86 passes** (`tests/usb_image_smoke.py`, xHCI, the boot disk unplugged with `device_del`):
+- `run memmap` was refused with `CANNOT READ THE PROGRAM` after 4.1 s, and `ps` answered;
+- `vfs_server` logged that the drive did not answer;
+- after `drive_add` and `device_add`, memmap started, and `vfs_server` logged that the drive answered again;
+- this boot's log on `log:` holds the lines from the time without the disk.
+
+In QEMU, `usb_host` sees the disconnection at once, so the wait is `usb_storage`'s 2-second reclaim. The MacBook Pro's 30-second waits are `DRV`'s part. Left: the aarch64 run of the same test (in the gate) and the Mac.
+
 ## Related
 
 [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the journal), [requests-DRV.md](requests-DRV.md), [requests-APP.md](requests-APP.md).

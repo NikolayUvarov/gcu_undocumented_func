@@ -44,22 +44,17 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
 
-def unplugged(vm, booted):
+def unplugged(vm, booted, name):
     # 211-KRN-0050: with the boot disk unplugged, a program on it is refused soon, with the reason, and the shell answers;
     # plugged in again, programs start again. memmap was not run before, so none of it is in vfs_server's cache.
+    # Only the shell's built-in commands from here until the disk is back: dmesg is a program on the disk.
     vm.hmp("device_del usbstick")
-    for _ in range(50):
-        if "DISCONNECTED" in vm.command("dmesg -s usb_host", raw=True):
-            break
-        time.sleep(.2)
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
     started = time.monotonic()
-    vm.send("run memmap\n")
-    vm.expect("CANNOT READ THE PROGRAM", timeout=60)
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")  # the command's own wait is 8 s
     took = time.monotonic() - started
-    assert took < 15, f"the refusal took {took:.1f} s"
-    vm.expect("MIND> ")
     require(vm.command("ps"), "shell")
-    require(vm.command("dmesg -s vfs_server", raw=True), "DRIVE DOES NOT ANSWER")
+    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
     print(f"unplugged: run memmap refused in {took:.1f} s")
     vm.hmp(f"drive_add 0 if=none,id=usbdisk2,format=raw,file={booted}")
     vm.hmp("device_add usb-storage,drive=usbdisk2,id=usbstick")
@@ -69,8 +64,15 @@ def unplugged(vm, booted):
             break
     else:
         raise AssertionError("memmap does not start after the disk is plugged in again")
-    require(vm.command("dmesg -s vfs_server", raw=True), "DRIVE ANSWERS AGAIN")
+    require(vm.service_logs("vfs_server", "DRIVE ANSWERS AGAIN"), "DRIVE ANSWERS AGAIN")
     require(vm.command("sync"), "OK")
+    # The records of the time without the disk reach this boot's log once it is back (the journal kept them).
+    for _ in range(40):
+        saved = vm.command(f"cat log:{name}", raw=True)
+        if "DRIVE ANSWERS AGAIN" in saved:
+            break
+        time.sleep(1)
+    require(saved, "DRIVE DOES NOT ANSWER")
     time.sleep(3)  # the journal's save after the replug, flushed
 
 
@@ -134,7 +136,7 @@ def run(args, booted):
         require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
         require(vm.command("sync"), "OK")
         time.sleep(3)  # the journal's last save, flushed
-        unplugged(vm, booted)
+        unplugged(vm, booted, name)
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-image{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
@@ -159,7 +161,8 @@ def run(args, booted):
     assert read("acpi/RSDP.bin").startswith(b"RSD PTR ")
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
-          "VFS over xHCI USB mass storage through usb_host; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
+          "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
+          "and plugged in again; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":
