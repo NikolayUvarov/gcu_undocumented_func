@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-09; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-09; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md); on the kernel branch, the panic in `awaits_reply` became 171-KRN-0054 and the `devicetree` suite's pacing 210-KRN-0055) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -44,29 +44,6 @@ Its quota is the default 16 MiB (`HEAP_MAX_BYTES`), so the index stays under abo
 
 On a store disk of 8 GiB, `[BLOCKSTORE] INDEX:` reports the slots `slots_for` asks for, not a halved number.
 
-## A kernel panic in `awaits_reply` after the task table shrank
-
-**Recorded by:** the storage session, 2026-10-09, from its local gate (`scripts/ci_local.sh --ref claude/relaxed-meitner-5bmhpz`, the branch at 10375c2 merged with `main` at a9ac93f; the branch changes no kernel file).
-
-### Problem
-
-The group "aarch64: GICv2 with GICv2m" failed in the `normal` suite's `applications_until_memory_ends`, right after `kill 165`:
-
-```
-KERNEL PANIC: index out of bounds: the len is 1 but the index is 2 at src/scheduler.rs:438:19 CPU=2 PID=3 NAME=rtc
-```
-
-Line 438 is `awaits_reply`: `self.tasks[client]`. `Table::index` (`&self.chunks[index / CHUNK][index % CHUNK]`) panics for a slot in a chunk that `shrink` dropped. So when `rtc` replied to a client whose task had ended, the table had shrunk under that client's slot: the second chunk emptied as the suite's applications were killed. The other groups that run the same suite passed, so it depends on timing. GICv2 changes how interrupts reach CPU 2.
-
-### Plan (a proposal; the kernel track decides)
-
-- `Table::get(index) -> Option<&Option<T>>`, `None` past the end, used wherever a slot is held across a point where the table may shrink: `awaits_reply`, `fail_reply`, the reply paths, timeouts. Or `Index` gives a static `None` past the end, as an empty slot reads.
-- A host or QEMU case: a client killed while it waits for a reply, in the table's second chunk, with the chunk dropped before the server replies.
-
-### Acceptance criteria
-
-A reply to a client whose slot's chunk was dropped fails with `ERR_PEER` to the server and does not panic.
-
 ## QEMU's vvfat crashes in the aarch64 boot suite on `main` at 661147f
 
 **Recorded by:** the storage session, 2026-10-09, from its local gate and runs of `tests/aarch64_smoke.py` on plain `main`.
@@ -94,24 +71,3 @@ Measured on this machine, with the build of each tree:
 ### Acceptance criteria
 
 The group passes in repeated runs (say 5 of 5) on `main`.
-
-## The `devicetree` suite misses the kernel's line when CI is slow
-
-**Recorded by:** the storage session, 2026-10-09: its branch's CI run for 29741e7 failed in "aarch64 (programs, shell and four CPUs)" on this suite alone; the next commit, with the same code, passed. The suite is [210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done)'s.
-
-### Problem
-
-`devicetree_suite` (`tests/qemu_smoke.py`) stops the machine once the bootloader prints `BOOT: DEVICE TREE AT …`. It then runs it on in steps of `cont`, 10 ms, `stop`, and reads the screen for the kernel's `MIND CORE KERNEL: DEVICE TREE AT …`. The failure was `AssertionError: (<re.Match … 'BOOT: DEVICE TREE AT 0x47ef6000, 1052672 BYTES'>, None)` after all 500 steps.
-
-Measured on the storage session's machine (aarch64, the branch's build):
-- `vm.hmp()` waits 10 ms per byte of the command before sending it, so each step lets the machine run about 110 ms, not 10 ms.
-- The stop after the bootloader's line comes as late: by the first look, the kernel's line is already on the screen.
-- The line stays visible for about four such steps (about 450 ms), then init's services scroll it off. A slow runner that lets the machine run longer before a stop misses it, and every later step looks in vain.
-
-### Proposed fix
-
-Stop and continue through QMP itself (`vm.qmp("stop")`, `vm.qmp("cont")`) in that suite, for the first stop and in the loop. Each step then lets the machine run 11–20 ms, and the line stayed at the top for more than 20 steps in the same measurement. The suite asserts the same thing.
-
-### Acceptance criteria
-
-The suite passes on aarch64 as before; its steps no longer go through the monitor's typing pace.
