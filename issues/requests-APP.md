@@ -178,3 +178,24 @@ The maintainer wants a tool to turn boot services on and off and to order them w
 ### Acceptance criteria
 
 The `tools` suite runs `svc disable tts`, reboots, and finds `tts` off in `svc boot`. `svc disable logd` is refused.
+
+## The shell's commands in `wm`'s `console` (211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for main task [211](211-intel-pc-from-a-sata-ssd.md) at the maintainer's request, after a run on the MacBook Pro.
+
+### Problem
+
+Before `wm` starts, the shell's commands all work on its screen. In `wm` the user has `console`, which starts programs and has a few built-ins of its own, but the shell's commands do not work there. `reboot` is the example the maintainer gave; `ps`, `kill`, `logs`, `svc`-like lifecycle commands, `sync` and the network diagnostics are others. The maintainer asks to be able to use the shell, with its commands, from `wm` too.
+
+The commands need the shell's authorities (process control, which `REBOOT` requires, the lifecycle client, the operator's network client). `console` holds none of them, and a second shell with all of them in every window would spread them.
+
+### Plan (a proposal; the tools track decides)
+
+- `console` sends a line it does not know to the shell, over an endpoint the shell lends it, and shows the answer. The shell runs the command on its own authority, as if typed on its screen, and sends back what it printed.
+- The shell decides which commands it takes from `console`. Those that change the machine (`reboot`, `halt`, `kill`) ask for confirmation in the console window, as the consent prompts do.
+- Or a window that is a view of the shell's own session. Either way only the shell holds the authorities.
+- The help in `console` lists the shell's commands it accepts.
+
+### Acceptance criteria
+
+The `wm` suite opens `console`. `ps` there lists the tasks. `reboot` there, once confirmed, resets the machine (QEMU exits under `-no-reboot`). A command the shell does not take from `console` is refused with a message.
