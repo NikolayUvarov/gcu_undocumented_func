@@ -19,6 +19,7 @@ pub mod rtc;
 pub mod socket;
 pub mod sysinfo;
 pub mod tls;
+pub mod tpm;
 pub mod tts;
 pub mod usb;
 pub mod vfs;
