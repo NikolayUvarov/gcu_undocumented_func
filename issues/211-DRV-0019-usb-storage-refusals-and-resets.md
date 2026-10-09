@@ -31,6 +31,25 @@ So the real device behaved in a way the log cannot show:
 - In QEMU, a hot unplug and plug of the USB boot disk logs the loss, the return and the reset (QEMU's disk reports a unit attention after it is plugged), and the system goes on writing its log.
 - The next MacBook Pro run with a hot plug says in its log what the adapter answered.
 
+## Progress
+
+**2026-10-09, QEMU** (`fast-test` d3da6d0, `device_del` of the USB boot disk for 30 s, then `device_add`):
+- The log shows the loss, the return and the reset QEMU's disk reports.
+- `vfs_server` reports the drive silent, then answering again (the kernel track's change).
+- The log volume keeps everything; `fsck.fat` finds nothing.
+
+**2026-10-09, MacBook Pro A1398** (d3da6d0, one boot; the disk unplugged at 07:26:00 by the machine's clock for 31 s):
+- The log shows the disconnect at 55.17 s, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, and the connect at 87.92 s. Then `THE DEVICE IS BACK, THE SAME CAPACITY`, and `vfs_server`'s drive answers again.
+- The times agree with the machine's clock.
+- Nothing was lost: the header, `hw0001.txt` and every line are there.
+- The adapter refused no command, SYNCHRONIZE CACHE included. It reported no unit attention after its SSD had lost power, so a reset cannot be learned from this adapter.
+
+**Found while reading the retry path, fixed:**
+- A write repeated after a lost interface, or after a unit attention, sent wrong data. READ CAPACITY, TEST UNIT READY's REQUEST SENSE and the sense of the refusal wrote their answers at `DATA`, where the write's data waited. The first 8–18 bytes of its first sector were replaced.
+- The comment said the data was still in place. That has been wrong since issue 164 for a lost interface.
+- Probes and sense data now use their own part of the buffer (`PROBE`).
+- In the run above, the interrupted command was a read, so this did not happen there. It may explain damaged sectors after earlier hot plugs.
+
 ## Related
 
 [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log on `log:`), `usb_storage/src/main.rs`, `idl/block.wit`.

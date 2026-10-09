@@ -12,6 +12,7 @@ use mind::ipc::Endpoint;
 use mind::usb::Host;
 
 const CBW: usize = 0; const CSW: usize = 64; const DATA: usize = 4096; // in the buffer lent to usb_host
+const PROBE: usize = 512; // probes and sense data: never where a write's data waits for a retry
 const CLAIM_TRIES: usize = 20; // usb_host may still be setting the device up
 
 // The claimed interface and its Bulk-Only Transport state.
@@ -23,8 +24,8 @@ struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool
 // How a BOT cycle ended: done with the bytes moved, refused by the device (CHECK CONDITION), or the interface is gone.
 enum Cycle { Done(usize), Refused, Gone }
 
-// One BOT cycle: CBW on bulk OUT, data in or out (already at DATA when sent), CSW on bulk IN.
-fn bot_cycle(host: &mut Host, bot: &mut Bot, command: &[u8], length: usize, send: bool) -> Cycle {
+// One BOT cycle: CBW on bulk OUT, data in or out at `at` (already there when sent), CSW on bulk IN.
+fn bot_cycle(host: &mut Host, bot: &mut Bot, command: &[u8], length: usize, send: bool, at: usize) -> Cycle {
     bot.tag = bot.tag.wrapping_add(1);
     let cbw = &mut host.buffer_mut()[CBW..CBW + 31];
     cbw.fill(0);
@@ -32,7 +33,7 @@ fn bot_cycle(host: &mut Host, bot: &mut Bot, command: &[u8], length: usize, send
     cbw[12] = if length > 0 && !send { 0x80 } else { 0 }; cbw[14] = command.len() as u8; cbw[15..15 + command.len()].copy_from_slice(command);
     if host.bulk(bot.handle, bot.out, CBW, 31).is_err() { return Cycle::Gone; }
     let moved = if length == 0 { 0 } else {
-        match host.bulk(bot.handle, if send { bot.out } else { bot.input }, DATA, length) {
+        match host.bulk(bot.handle, if send { bot.out } else { bot.input }, at, length) {
             Ok(moved) => moved,
             Err(mind::sys::Error::NotFound | mind::sys::Error::Peer) => return Cycle::Gone,
             Err(_) => 0, // a stalled data stage still ends with a CSW
@@ -60,8 +61,8 @@ impl Sense {
 }
 
 fn sense(host: &mut Host, bot: &mut Bot) -> Option<Sense> {
-    match bot_cycle(host, bot, &[0x03, 0, 0, 0, 18, 0], 18, false) {
-        Cycle::Done(n) if n >= 14 => { let b = &host.buffer()[DATA..DATA + 14]; Some(Sense { key: b[2] & 0x0F, asc: b[12], ascq: b[13] }) }
+    match bot_cycle(host, bot, &[0x03, 0, 0, 0, 18, 0], 18, false, PROBE) {
+        Cycle::Done(n) if n >= 14 => { let b = &host.buffer()[PROBE..PROBE + 14]; Some(Sense { key: b[2] & 0x0F, asc: b[12], ascq: b[13] }) }
         _ => None,
     }
 }
@@ -91,15 +92,15 @@ fn claim(host: &mut Host) -> Option<Bot> {
 fn capacity(host: &mut Host, bot: &mut Bot) -> Option<(u64, bool)> {
     let mut reset = false;
     for _ in 0..5 {
-        match bot_cycle(host, bot, &[0x00, 0, 0, 0, 0, 0], 0, false) {
+        match bot_cycle(host, bot, &[0x00, 0, 0, 0, 0, 0], 0, false, PROBE) {
             Cycle::Done(_) => break,
             Cycle::Refused => if sense(host, bot).is_some_and(Sense::reset) { reset = true; },
             Cycle::Gone => return None,
         }
         mind::time::sleep(50);
     }
-    let Cycle::Done(_) = bot_cycle(host, bot, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8, false) else { return None };
-    let reply = &host.buffer()[DATA..DATA + 8];
+    let Cycle::Done(_) = bot_cycle(host, bot, &[0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], 8, false, PROBE) else { return None };
+    let reply = &host.buffer()[PROBE..PROBE + 8];
     let last = u32::from_be_bytes(reply[..4].try_into().unwrap()) as u64; let size = u32::from_be_bytes(reply[4..8].try_into().unwrap());
     (size == 512).then_some((last + 1, reset))
 }
@@ -113,7 +114,7 @@ impl Storage {
         let (sectors, _) = capacity(&mut host, &mut bot)?; // a reset at power-on is expected
         // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
         // writable; a write it refuses fails anyway.
-        let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false), Cycle::Done(_)) && host.buffer()[DATA + 2] & 0x80 != 0;
+        let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false, PROBE), Cycle::Done(_)) && host.buffer()[PROBE + 2] & 0x80 != 0;
         Some(Self { host, bot, sectors, protected, lost: false, seen: [(0, Sense { key: 0, asc: 0, ascq: 0 }); SEEN], seen_count: 0 })
     }
 
@@ -128,14 +129,14 @@ impl Storage {
 
     // A command. A refusal is explained in the log and, after a unit attention, the command is repeated once. If the
     // interface was lost, it is claimed again and the command repeated; the loss, the return and a reset are logged.
-    fn run(&mut self, command: &[u8], length: usize, send: bool) -> Option<usize> {
-        match bot_cycle(&mut self.host, &mut self.bot, command, length, send) {
+    fn run(&mut self, command: &[u8], length: usize, send: bool, at: usize) -> Option<usize> {
+        match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) {
             Cycle::Done(moved) => return Some(moved),
             Cycle::Refused => {
                 let sense = sense(&mut self.host, &mut self.bot);
                 self.refused(command[0], sense);
                 if !sense.is_some_and(Sense::attention) { return None; }
-                return match bot_cycle(&mut self.host, &mut self.bot, command, length, send) { Cycle::Done(moved) => Some(moved), _ => None };
+                return match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Some(moved), _ => None };
             }
             Cycle::Gone => {}
         }
@@ -153,7 +154,7 @@ impl Storage {
         mind::println!("[USB] STORAGE: THE DEVICE IS BACK, THE SAME CAPACITY{}", if reset { "; IT WAS RESET: WRITES IT HAD NOT MADE DURABLE MAY BE LOST" } else { "" });
         self.lost = false;
         self.bot = bot;
-        match bot_cycle(&mut self.host, &mut self.bot, command, length, send) { Cycle::Done(moved) => Some(moved), _ => None }
+        match bot_cycle(&mut self.host, &mut self.bot, command, length, send, at) { Cycle::Done(moved) => Some(moved), _ => None }
     }
 }
 
@@ -162,7 +163,7 @@ impl Driver for Storage {
     fn read(&mut self, lba: u64, count: usize, out: &mut [u8]) -> bool {
         let lba = (lba as u32).to_be_bytes(); let blocks = (count as u16).to_be_bytes();
         let command = [0x28, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0];
-        match self.run(&command, count * 512, false) {
+        match self.run(&command, count * 512, false, DATA) {
             Some(got) if got == count * 512 => { out[..got].copy_from_slice(&self.host.buffer()[DATA..DATA + got]); true }
             _ => false,
         }
@@ -171,11 +172,11 @@ impl Driver for Storage {
         let bytes = count * 512;
         let lba = (lba as u32).to_be_bytes(); let blocks = (count as u16).to_be_bytes();
         let command = [0x2A, 0, lba[0], lba[1], lba[2], lba[3], 0, blocks[0], blocks[1], 0];
-        // A repeated command after a lost interface finds the data still in place: the buffer is ours.
+        // A repeated write finds its data still in place: probes and sense data use PROBE, not DATA (211-DRV-0019).
         self.host.buffer_mut()[DATA..DATA + bytes].copy_from_slice(&data[..bytes]);
-        self.run(&command, bytes, true) == Some(bytes)
+        self.run(&command, bytes, true, DATA) == Some(bytes)
     }
-    fn flush(&mut self) -> bool { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false).is_some() } // SYNCHRONIZE CACHE(10)
+    fn flush(&mut self) -> bool { self.run(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0, false, PROBE).is_some() } // SYNCHRONIZE CACHE(10)
     fn read_only(&self) -> bool { self.protected }
 }
 
