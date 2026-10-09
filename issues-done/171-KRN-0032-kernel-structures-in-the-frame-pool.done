@@ -1,6 +1,6 @@
 # 171-KRN-0032 — Each task's kernel structures in the frame pool, charged to its payers — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-09), except the 6 GiB run, split into [171-KRN-0033](../issues/171-KRN-0033-six-gib-until-the-pool-ends.md) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-09; the 6 GiB run in [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done)) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-1.7, MC-3.13, MC-5.1
 
 The tools track's request "Kernel structures outside the 64 MiB arena" in `issues/requests-KRN.md` (2026-10-06), from the limit 171's resolution named.
 
@@ -28,7 +28,7 @@ On a machine with gigabytes of RAM the arena, not the RAM, bounded how many task
 
 ## Resolution
 
-Done on 2026-10-09 for 512 MiB, on x86 and aarch64. The 6 GiB run is [171-KRN-0033](../issues/171-KRN-0033-six-gib-until-the-pool-ends.md).
+Done on 2026-10-09 for 512 MiB, on x86 and aarch64. The 6 GiB run is [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done).
 
 - **`memory::Frames`**: an `Allocator` over the frame pool. It falls back to the arena before the pool is ready and on the host; `frames::owns` tells them apart on free. `Box::try_new_in` needs `allocator_ext` (the pinned nightly; `allocator_api` is stable there).
 - **The task record** is a `Box<Task, Frames>`; the task table keeps an 8-byte pointer a slot. The capability table, generations and nodes are `Vec<_, Frames>`. The context, info/mailbox and exit pages are `Region::task`. So are the page tables, whose list is a `Vec<Region, Frames>`.
@@ -49,4 +49,4 @@ Done on 2026-10-09 for 512 MiB, on x86 and aarch64. The 6 GiB run is [171-KRN-00
 
 ## Related
 
-[171](171-limits-from-the-hardware.done), [171-KRN-0033](../issues/171-KRN-0033-six-gib-until-the-pool-ends.md), [168](168-task-memory-charged-to-spawner.done).
+[171](171-limits-from-the-hardware.done), [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done), [168](168-task-memory-charged-to-spawner.done).

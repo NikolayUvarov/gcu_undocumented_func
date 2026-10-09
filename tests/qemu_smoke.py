@@ -461,7 +461,7 @@ def gibibytes(memory):
     return int(number) / (1 if unit in "Gg" and unit else 1024)
 
 
-def applications_until_memory_ends(vm):
+def applications_until_memory_ends(vm, others=0):
     """Issue 171: no fixed count of applications. Clocks, each with its screen, start until the frame pool runs out, far
     past the 32 tasks the kernel's table used to hold; the refusal is clean and the system goes on. With more than 40
     tasks, uptime and top count every one (171-APP-0002). Once they end, the frame pool is back where it was, and the
@@ -490,7 +490,7 @@ def applications_until_memory_ends(vm):
     at_peak, arena = frames_free(vm), heap_used(vm) - baseline
     assert at_peak < (48 << 20), f"{at_peak >> 20} MiB of the frame pool left at the refusal"
     assert arena < len(pids) * 4096, f"{arena} bytes of arena for {len(pids)} clocks"
-    assert len(task_rows(vm)) == len(pids), (len(task_rows(vm)), len(pids))
+    assert len(task_rows(vm)) == len(pids) + others, (len(task_rows(vm)), len(pids), others)  # others: programs started before
     assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system goes on after the refusal"
     peak = len(pids)
     # 45 stay for the monitors: a hundred and more clocks drawing every second leave an emulated machine little time.
@@ -760,6 +760,12 @@ def normal_suite(vm):
         applications_until_memory_ends(vm)
     if memory > 4:
         ram_above_4g(vm)
+        # 171-KRN-0033: a large machine runs out at its frame pool too, not at the arena. memtest holds all but about
+        # 400 MiB (40-odd programs), then clocks start until the pool ends, as on the default machine.
+        holders = hold_frames(vm, frames_free(vm), 400)
+        applications_until_memory_ends(vm, others=len(holders))
+        for pid in holders:
+            vm.command(f"kill {pid}")
 
 
 def keys_suite(vm):
