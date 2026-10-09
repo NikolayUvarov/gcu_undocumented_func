@@ -2437,9 +2437,11 @@ def blockstore_check(vm):
     """300-KRN-0001 (requested by the storage track): init starts the block store over a RAM disk of its own (ramdisk#1)
     and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    # `logs` drains: the index's line, printed before READY, is read in the same output.
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
     # The index is sized from the medium (251-STO-0013): the least, 4681 slots for 4096 blocks, on 8 MiB.
-    require(vm.service_logs("blockstore", "[BLOCKSTORE] INDEX"), "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     real = vm.services()
     assert "ramdisk#1" in real, real
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
