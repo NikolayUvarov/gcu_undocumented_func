@@ -1,0 +1,141 @@
+MIND Core repository audit validation — 2026-10-09 (Europe/Moscow)
+Audited HEAD: 2cbda21b9a7af31bb12c6e90e92514e2fcf98a7e
+Compiler: rustc 1.101.0-nightly (c36f14571 2026-10-01)
+
+EXISTING HOST SUITES
+40 Rust binaries: tests/runtime.rs and every tests/*_host.rs, including tts_host.rs.
+Commands: rustc --edition=2021 --test tests/<name>.rs -o <temporary-binary>
+          <temporary-binary>
+voice_host.rs was compiled with -O, as in CI.
+Python suites: python3 tests/<name>.py (six names listed below).
+Every suite was run independently, so a failure could not skip later suites.
+
+runtime.rs: exit 0; test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+tts_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+aml_host.rs: exit 0; test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+beep_host.rs: exit 0; test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+block_host.rs: exit 0; test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+blockstore_host.rs: exit 0; test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+bmp_host.rs: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+boot_slots_host.rs: exit 0; test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+checkpoint_host.rs: exit 0; test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+cid_host.rs: exit 0; test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+clock_host.rs: exit 0; test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+console_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+dag_host.rs: exit 0; test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+edit_host.rs: exit 0; test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+fat_host.rs: exit 0; test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+fm_host.rs: exit 0; test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+gpio_host.rs: exit 0; test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+heap_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+hid_host.rs: exit 0; test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+http_host.rs: exit 0; test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+idl_host.rs: exit 0; test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+jpeg_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+keys_host.rs: exit 0; test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+line_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+logd_host.rs: exit 0; test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+monitor_host.rs: exit 0; test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+netring_host.rs: exit 0; test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+pins_host.rs: exit 0; test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+rtc_host.rs: exit 0; test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+say_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+script_host.rs: exit 0; test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+search_host.rs: exit 0; test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+sysmon_host.rs: exit 0; test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+tui_host.rs: exit 0; test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+video_host.rs: exit 0; test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+viewer_host.rs: exit 0; test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+virtio_input_host.rs: exit 0; test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+voice_host.rs: exit 0; test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.96s
+window_host.rs: exit 0; test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+wm_host.rs: exit 0; test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+idl_test.py: exit 0; 13 tests, OK.
+font_test.py: exit 0; 5 tests, OK.
+test_usb_writer.py: exit 0; 8 tests, OK.
+manifest_test.py: exit 0; 7 tests, OK.
+release_test.py: initial exit 1 (sandbox socket creation denied); permitted rerun exit 0, 8 tests, OK.
+test_context_export.py: exit 0; 8 tests, OK.
+
+Rust harness total: 348 reported passes, including seven FAT cases that returned early.
+Python total after release-test rerun: 49 cases passed.
+
+FAT LIMITATION
+Missing mkfs.fat, fsck.fat and mtools:
+  fat12, fat16, fat32, reads_files_made_by_mtools, format_makes_a_volume_the_tools_accept,
+  random_operations_match_a_model, check_finds_what_fsck_finds: early return, not executed.
+  reformat_replaces_the_volume_in_place: memory checks ran, external fsck subcheck skipped.
+  stamps and reads_a_model_disk_made_by_fat32_py ran.
+
+RELEASE-TEST ENVIRONMENT FAILURE
+Initial exception: PermissionError: [Errno 1] Operation not permitted
+  socket.socket() via serve_release.serve() in test_a_release_served_over_https.
+Permitted rerun: python3 tests/release_test.py; 8 tests in 1.157s, OK.
+The rerun emitted a ResourceWarning for an unclosed test SSL socket; no assertion failed.
+
+EXISTING ELF FIXTURES USED BY tests/runtime.rs
+No OS build was performed. These SHA-256 values identify the pre-existing fixtures only:
+e507d8bf83fd425a262c10a292aa9f3acf4c8bdb2a7595556bb3599685778d82  usb_root/app.elf
+a1ba18ee0e994c2705931e2d96b96b7c705a52f25d88006fa1e4b38749a1cc93  usb_root/app2.elf
+f8642ca7dc38360ee2cbacfe843728986fcf08c42c76cfaedf2033e71f00e200  usb_root/clock.elf
+8f0f5a00b2e9160841442afee39fd5d2e7d3362363c22c6a56eb259896118da7  usb_root/dzen-clock.elf
+
+NOT RUN
+Complete OS build; full scripts/ci_local.sh gate; QEMU x86/aarch64 suites;
+real hardware; TLC; FAT external-tool checks. Native QEMU and FAT tools are absent.
+GitHub status was not fetched. No current upstream/CI status is certified.
+
+AUDIT REPRODUCTIONS
+Commands are recorded in repro/README.md. All ten probes reproduced their defects.
+Exit 0 in these checks means BUG OBSERVED, not FIX VALIDATED.
+
+[fat reproductions; exit 0]
+
+running 4 tests
+failed growth: free before=93, free after=0, lost=93, directory cluster=0
+test failed_growth_leaks_all_free_clusters ... ok
+after unflushed allocation and remount: clean bit=0x8000, dirty=false
+test allocation_clears_dirty_flag_without_a_flush ... ok
+after failed flush: dirty=false
+test failed_flush_still_marks_volume_clean ... ok
+failed case rename: filler files=510, original missing, lost=1
+test failed_case_change_deletes_the_original_file ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+[blockstore reproductions; exit 0]
+
+running 1 test
+after collect I/O failure: put returned Ok; immediate get=Err(Corrupt)
+test put_acknowledges_an_erased_block_after_failed_collection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+[build reproductions; exit 0]
+PACKAGER: application created after import is omitted from files(x86_64)
+GITHUB HOST STEP: rustc returned 42, but the extracted step returned 0
+LOCAL FIXTURES: panic-test cargo returned 42, but x86_fixtures returned 0
+
+[fm reproductions; exit 0]
+warning: unused import: `glob`
+ --> /mnt/c/common_virtual/Culture/gcu_undocumented_func/libmind/src/pattern.rs:6:23
+  |
+6 | pub use crate::mask::{glob, matches};
+  |                       ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: 1 warning emitted
+
+
+running 2 tests
+SAVE: unrelated todo.txt.tmp disappeared after F2
+test audit_save_destroys_an_existing_temporary_name ... ok
+MOVE: source deletion: flushes=0
+test audit_move_removes_source_before_any_destination_flush ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+Production sources remained unchanged; report and reproductions were written only in issues-audit/.
