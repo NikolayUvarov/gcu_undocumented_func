@@ -185,6 +185,9 @@ impl Resampler {
     /// The input is already at 16 kHz: samples are only downmixed, not filtered.
     pub fn passthrough(&self) -> bool { self.up == 1 && self.down == 1 }
 
+    /// The filter in Q16, phase after phase, oldest input first in each (`tts` keeps 16 → 48 kHz as a table).
+    pub fn coefficients(&self) -> &[i32] { &self.coefficients }
+
     /// Converts whole frames of interleaved `input` and appends the 16 kHz mono samples to `out`.
     pub fn process(&mut self, input: &[i16], out: &mut Vec<i16>) {
         let channels = self.channels as i32;
