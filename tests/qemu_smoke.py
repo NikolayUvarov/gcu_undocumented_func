@@ -1846,6 +1846,12 @@ def smp_suite(vm):
     assert time.monotonic() - start < 5, "init must not wait for the applications"
     for pid in range(1, count + 1):
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    # The rtc restarted while the applications ran took the next free slot of the task table, which may be past its
+    # first chunk of 32 (the killed one is reaped after its successor starts): restarted again now, it takes a slot in
+    # the first chunk, and the table gives the second back. Then the kernel heap is exactly where it was.
+    rtc = vm.services()["rtc"]
+    require(vm.command(f"kill {rtc}", raw=True), "KILLED PID=")
+    require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
     assert heap_used(vm) == baseline
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
