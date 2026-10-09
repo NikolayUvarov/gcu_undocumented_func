@@ -190,7 +190,7 @@ pub fn wellspring(vendor: u16, product: u16) -> bool {
     vendor == 0x05AC && matches!(product, 0x0245..=0x0247 | 0x0249..=0x024E | 0x0252..=0x0254 | 0x0259..=0x025B | 0x0262..=0x0264)
 }
 /// The mode switch: read feature report 0 of interface 0 (GET_REPORT, value 0x300, 8 bytes), set byte 0 to 1 (0x08: the
-/// mouse mode again) and write it back (SET_REPORT).
+/// mouse mode again) and write it back (SET_REPORT). The device answers on the vendor interface with a 2-byte packet.
 pub const WELLSPRING_MODE: (u16, u16, u8) = (0x300, 8, 0x01);
 /// The longest packet: the header and 16 fingers.
 pub const WELLSPRING_LONGEST: u16 = (TRACKPAD_HEADER + 16 * TRACKPAD_FINGER) as u16;
@@ -213,9 +213,10 @@ pub struct Trackpad { fingers: usize, last: Option<(i32, i32)>, carry: (i32, i32
 impl Trackpad {
     pub fn new() -> Self { Self::default() }
 
-    /// One packet at `now` (ms); `out` gets pointer events.
-    pub fn feed(&mut self, packet: &[u8], now: u64, out: &mut impl FnMut(usize)) {
-        if packet.len() < TRACKPAD_HEADER { return; }
+    /// One packet at `now` (ms); `out` gets pointer events. False: not a packet of fingers (the mode switch's answer,
+    /// or the device still in its mouse mode), and nothing done.
+    pub fn feed(&mut self, packet: &[u8], now: u64, out: &mut impl FnMut(usize)) -> bool {
+        if !fingers(packet) { return false; }
         let (mut count, mut sum) = (0usize, (0i32, 0i32));
         for finger in packet[TRACKPAD_HEADER..].chunks_exact(TRACKPAD_FINGER) {
             if u16::from_le_bytes([finger[16], finger[17]]) == 0 { continue; }
@@ -254,7 +255,7 @@ impl Trackpad {
             if self.axis == 1 { wheel = self.scroll.1 / SCROLL_STEP; self.scroll.1 -= wheel * SCROLL_STEP; }
             if self.axis == 2 { across = -(self.scroll.0 / SCROLL_STEP); self.scroll.0 += across * SCROLL_STEP; }
             if wheel != 0 || across != 0 || changed { out(pointer_scroll(held, 0, 0, wheel.clamp(-8, 7), across.clamp(-8, 7))); }
-            return;
+            return true;
         }
         // One finger moves the pointer, and any number while the pad is held (a drag); faster strokes go further.
         let (dx, dy) = if count == 1 || held != 0 {
@@ -264,7 +265,7 @@ impl Trackpad {
             self.carry = (x % MOTION_DIVISOR, y % MOTION_DIVISOR);
             (x / MOTION_DIVISOR, y / MOTION_DIVISOR)
         } else { (0, 0) };
-        if dx == 0 && dy == 0 && !changed { return; }
+        if dx == 0 && dy == 0 && !changed { return true; }
         let (mut dx, mut dy) = (dx, dy);
         loop {
             let (sx, sy) = (dx.clamp(-256, 255), dy.clamp(-256, 255));
@@ -272,5 +273,11 @@ impl Trackpad {
             (dx, dy) = (dx - sx, dy - sy);
             if dx == 0 && dy == 0 { break; }
         }
+        true
     }
+}
+
+/// A packet of fingers: the header and whole fingers.
+pub fn fingers(packet: &[u8]) -> bool {
+    packet.len() >= TRACKPAD_HEADER && (packet.len() - TRACKPAD_HEADER) % TRACKPAD_FINGER == 0
 }

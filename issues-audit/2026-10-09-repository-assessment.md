@@ -125,4 +125,14 @@ All eight findings are real defects of the production code. None was refuted.
 - **A01:** `PRT`. **A06:** `KRN`, which keeps CI, with `ASR` for the gate's tests.
 - **A05:** `STO`. **A07** and **A08:** `APP`.
 
-Each fix turns its audit probe's assertion around into a regression test. The issue numbers are recorded here as the owners give them.
+Each fix turns its audit probe's assertion around into a regression test.
+
+**Decided by the kernel track (2026-10-09), main task [175](../issues/175-audit-2026-10-09.md):**
+- `vfs_server` joins `KRN`.
+- A01: [175-PRT-0007](../issues/175-PRT-0007-image-lists-programs-after-the-build.md).
+- A02: [175-KRN-0047](../issues/175-KRN-0047-fat-failed-growth-gives-clusters-back.md).
+- A03: [175-KRN-0048](../issues/175-KRN-0048-fat-case-rename-keeps-the-file.md).
+- A04: [175-KRN-0049](../issues/175-KRN-0049-fat-clean-only-after-a-good-flush.md); its profile row is narrowed in the same commit.
+- A05: a request in [requests-STO.md](../issues/requests-STO.md).
+- A06: [175-KRN-0046](../issues/175-KRN-0046-ci-fails-on-every-build-failure.md).
+- A07, A08: requests in [requests-APP.md](../issues/requests-APP.md), which `APP` may start at once.

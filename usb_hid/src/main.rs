@@ -22,9 +22,15 @@ const RETRY_MS: u64 = 5000; // an interface that could not be set up is tried ag
 const RETRIES: u8 = 5;
 const SHOWN: u8 = 3; // a pointer's first reports are logged, for a mouse that does not move the cursor (211-DRV-0003)
 const DECLINED: usize = 8; // interfaces this driver does not serve, kept claimed so that usb_host does not offer them again
+const SWITCH_AFTER_MS: u64 = 1000; // a trackpad's mode switch waits until its device's other interfaces are set up
+const SWITCH_GAP_MS: usize = 250; // between reading and writing the mode: the device takes it in its own time (FreeBSD's wsp)
+const FINGERS_HOLD_MS: u64 = 300; // a trackpad's mouse interface is ignored this long after a packet of fingers
+const PADS: usize = 2;
+const LENGTHS: usize = 6; // a trackpad's first packet of each length is logged
 
 enum Kind { Keyboard(Keyboard), Pointer(Pointer), Trackpad(Trackpad) }
-struct Device { handle: u32, info: Interface, endpoint: u8, kind: Kind, complained: bool, shown: u8, ids: [u64; 4], misses: u8 }
+// `switch`: a trackpad's mode switch still to make, through interface 0's handle, at a time; `seen`: its packet lengths.
+struct Device { handle: u32, info: Interface, endpoint: u8, kind: Kind, complained: bool, shown: u8, ids: [u64; 4], misses: u8, switch: Option<(u32, u64)>, seen: [u16; LENGTHS] }
 // An interface kept claimed after its setup failed, so that the others are claimed meanwhile.
 struct Failed { handle: u32, info: Interface, at: u64, tries: u8 }
 
@@ -44,26 +50,21 @@ fn report_ids(descriptor: &[u8]) -> [u64; 4] {
 // says where X and Y are (the boot protocol for a boot mouse whose descriptor cannot be read). Err(None): not a device
 // this driver serves; Err(Some): a request failed.
 // `keyboard`: the handle of interface 0 of the same device when this driver holds it (an Apple trackpad's mode switch
-// goes there); `trackpad`: this device's trackpad already reads its fingers.
-fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: Option<u32>, trackpad: bool) -> Result<Device, Option<Error>> {
+// goes there).
+fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: Option<u32>, now: u64) -> Result<Device, Option<Error>> {
     let endpoint = info.endpoints().iter().find(|e| e.is_interrupt() && e.is_in()).ok_or(None)?.address;
     let (number, name) = (info.number as u16, (info.vendor, info.product));
     // Each interface claimed, for a machine whose keys do not arrive (211-DRV-0003).
     if first { mind::println!("[USB_HID] {:04X}:{:04X} INTERFACE {}: SUBCLASS {} PROTOCOL {}, ENDPOINT {:02X}", name.0, name.1, number, info.subclass, info.protocol, endpoint); }
-    let device = |kind, ids| Device { handle, info: *info, endpoint, kind, complained: false, shown: 0, ids, misses: 0 };
+    let device = |kind, ids| Device { handle, info: *info, endpoint, kind, complained: false, shown: 0, ids, misses: 0, switch: None, seen: [0; LENGTHS] };
     // An Apple trackpad (211-DRV-0018): its vendor interface gives every finger once the device is in its multitouch
-    // mode; its mouse interface is then left alone. Without the switch the mouse interface serves as before.
-    if wellspring(name.0, name.1) {
-        if info.subclass == 1 && info.protocol == 2 && trackpad { mind::println!("[USB_HID] {:04X}:{:04X} MOUSE INTERFACE LEFT ALONE: THE TRACKPAD GIVES ITS FINGERS", name.0, name.1); return Err(None); }
-        if info.subclass == 0 && info.protocol == 0 {
-            let Some(control) = keyboard else { mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: INTERFACE 0 NOT HELD, MOUSE MODE KEPT", name.0, name.1); return Err(None) };
-            let (value, length, on) = WELLSPRING_MODE;
-            let switched = host.control(control, 0xA1, 0x01, value, 0, length).ok().filter(|&n| n == length as usize).map(|_| host.buffer_mut()[0] = on)
-                .and_then(|_| host.control(control, 0x21, 0x09, value, 0, length).ok());
-            if switched.is_none() { mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: MODE SWITCH REFUSED, MOUSE MODE KEPT", name.0, name.1); return Err(None); }
-            mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: MULTITOUCH MODE, FINGERS FROM ENDPOINT {:02X}", name.0, name.1, endpoint);
-            return Ok(device(Kind::Trackpad(Trackpad::new()), [0; 4]));
-        }
+    // mode, switched a little later. Its mouse interface serves all the same, and is ignored while fingers arrive.
+    if wellspring(name.0, name.1) && info.subclass == 0 && info.protocol == 0 {
+        let Some(control) = keyboard else { mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: INTERFACE 0 NOT HELD, THE MOUSE INTERFACE SERVES", name.0, name.1); return Err(None) };
+        // Its report descriptor, for packets that are not fingers.
+        if first { if let Ok(n) = host.control(handle, 0x81, 6, 0x2200, number, 1024) { dump(name, "TRACKPAD REPORT DESCRIPTOR", &host.buffer()[..n]); } }
+        mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: FINGERS FROM ENDPOINT {:02X} AFTER THE MODE SWITCH IN {} MS", name.0, name.1, endpoint, SWITCH_AFTER_MS);
+        return Ok(Device { switch: Some((control, now + SWITCH_AFTER_MS)), ..device(Kind::Trackpad(Trackpad::new()), [0; 4]) });
     }
     let _ = host.control(handle, 0x21, 0x0A, 0, number, 0); // SET_IDLE 0: reports only on change
     if info.subclass == 1 && info.protocol == 1 {
@@ -86,12 +87,35 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
     Ok(device(Kind::Pointer(pointer), ids))
 }
 
-// For an interface being set up: the handle of interface 0 of its device when held as a keyboard, and whether that
-// device's trackpad already gives its fingers.
-fn held(devices: &[Option<Device>], info: &Interface) -> (Option<u32>, bool) {
+// For an interface being set up: the handle of interface 0 of its device when held as a keyboard.
+fn held(devices: &[Option<Device>], info: &Interface) -> Option<u32> {
     let same = |d: &&Device| d.info.vendor == info.vendor && d.info.product == info.product && d.info.speed == info.speed;
-    let keyboard = devices.iter().flatten().filter(same).find(|d| d.info.number == 0 && matches!(d.kind, Kind::Keyboard(_))).map(|d| d.handle);
-    (keyboard, devices.iter().flatten().filter(same).any(|d| matches!(d.kind, Kind::Trackpad(_))))
+    devices.iter().flatten().filter(same).find(|d| d.info.number == 0 && matches!(d.kind, Kind::Keyboard(_))).map(|d| d.handle)
+}
+
+// Bytes for the log, 32 a line.
+fn dump(name: (u16, u16), what: &str, bytes: &[u8]) {
+    mind::println!("[USB_HID] {:04X}:{:04X} {}: {} BYTES", name.0, name.1, what, bytes.len());
+    for line in bytes[..bytes.len().min(160)].chunks(32) { mind::println!("[USB_HID]   {:02X?}", line); }
+}
+
+// A trackpad's multitouch mode (211-DRV-0018): interface 0's feature report read, byte 0 set, written back, and read
+// again for the log. False: refused.
+fn switch(host: &mut Host, control: u32, name: (u16, u16)) -> bool {
+    let (value, length, on) = WELLSPRING_MODE;
+    let n = (length as usize).min(8);
+    let read = |host: &mut Host| host.control(control, 0xA1, 0x01, value, 0, length).ok().filter(|&got| got == n).map(|_| {
+        let mut mode = [0u8; 8]; mode[..n].copy_from_slice(&host.buffer()[..n]); mode
+    });
+    let Some(mode) = read(host) else { mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: MODE NOT READ, MOUSE MODE KEPT", name.0, name.1); return false };
+    mind::time::sleep(SWITCH_GAP_MS);
+    host.buffer_mut()[..n].copy_from_slice(&mode[..n]);
+    host.buffer_mut()[0] = on;
+    if host.control(control, 0x21, 0x09, value, 0, length).is_err() { mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: MODE SWITCH REFUSED, MOUSE MODE KEPT", name.0, name.1); return false; }
+    mind::time::sleep(SWITCH_GAP_MS);
+    let after = read(host);
+    mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD: MODE {:02X?} WRITTEN WITH BYTE 0 = {:02X}, READ BACK {:02X?}", name.0, name.1, &mode[..n], on, after.as_ref().map(|a| &a[..n]));
+    true
 }
 
 mind::entry!(main);
@@ -104,6 +128,8 @@ fn main(_info: &'static BootInfo) {
     let mut declined = [0u32; DECLINED]; let mut declined_count = 0;
     let mut decoder = Ps2::new();
     let mut claimed_at = 0u64;
+    // A trackpad's last packet of fingers, by vendor and product: its device's mouse interface is ignored meanwhile.
+    let mut pads = [(0u16, 0u16, 0u64); PADS];
     let deliver = |decoder: &mut Ps2, byte: u8| { if let Some(event) = decoder.feed(byte) { mind::keyboard::deliver("USB_HID", decoder, event); } };
     loop {
         let now = mind::time::uptime_ms() as u64;
@@ -111,8 +137,8 @@ fn main(_info: &'static BootInfo) {
         for entry in failed.iter_mut() {
             let Some(retry) = entry.as_mut().filter(|f| now >= f.at) else { continue };
             let Some(free) = devices.iter().position(Option::is_none) else { break };
-            let (keyboard, trackpad) = held(&devices, &retry.info);
-            match setup(&mut host, retry.handle, &retry.info, false, keyboard, trackpad) {
+            let keyboard = held(&devices, &retry.info);
+            match setup(&mut host, retry.handle, &retry.info, false, keyboard, now) {
                 Ok(device) => { devices[free] = Some(device); *entry = None; }
                 Err(Some(error)) if retry.tries < RETRIES && !matches!(error, Error::NotFound | Error::Peer) => { retry.tries += 1; retry.at = now + RETRY_MS; }
                 Err(error) => {
@@ -128,8 +154,8 @@ fn main(_info: &'static BootInfo) {
             claimed_at = now.max(1);
             while let Some(free) = devices.iter().position(Option::is_none) {
                 let Ok((handle, info)) = host.claim() else { break };
-                let (keyboard, trackpad) = held(&devices, &info);
-                match setup(&mut host, handle, &info, true, keyboard, trackpad) {
+                let keyboard = held(&devices, &info);
+                match setup(&mut host, handle, &info, true, keyboard, now) {
                     Ok(device) => devices[free] = Some(device),
                     Err(Some(error)) if !matches!(error, Error::NotFound | Error::Peer) => {
                         mind::println!("[USB_HID] {:04X}:{:04X} INTERFACE {} NOT SET UP: {:?}, TRIED AGAIN IN {} S", info.vendor, info.product, info.number, error, RETRY_MS / 1000);
@@ -145,6 +171,11 @@ fn main(_info: &'static BootInfo) {
         }
         for entry in devices.iter_mut() {
             let Some(device) = entry.as_mut() else { continue };
+            if let Some((control, at)) = device.switch {
+                if now < at { continue; }
+                device.switch = None;
+                switch(&mut host, control, (device.info.vendor, device.info.product));
+            }
             let mut events = [[0u8; WELLSPRING_LONGEST as usize]; 8]; let mut lengths = [0usize; 8]; let mut count = 0;
             let mut keep = |report: &[u8]| {
                 if count < 8 { let n = report.len().min(WELLSPRING_LONGEST as usize); events[count][..n].copy_from_slice(&report[..n]); lengths[count] = n; count += 1; }
@@ -156,8 +187,16 @@ fn main(_info: &'static BootInfo) {
                 match &mut device.kind {
                     Kind::Keyboard(keyboard) => keyboard.feed(report, now, &mut |byte| deliver(&mut decoder, byte)),
                     Kind::Trackpad(pad) => {
-                        if device.shown < SHOWN { device.shown += 1; mind::println!("[USB_HID] {:04X}:{:04X} FINGERS: {} BYTES, {:02X?}", device.info.vendor, device.info.product, report.len(), &report[..report.len().min(36)]); }
-                        pad.feed(report, now, &mut |event| { let _ = mind::dev::input_key(event, event, false); });
+                        let name = (device.info.vendor, device.info.product);
+                        let fingers = pad.feed(report, now, &mut |event| { let _ = mind::dev::input_key(event, event, false); });
+                        if fingers { let at = pads.iter().position(|p| (p.0, p.1) == name || p.0 == 0).unwrap_or(0); pads[at] = (name.0, name.1, now); }
+                        // The first packet of each length, for a trackpad whose fingers do not arrive.
+                        let length = report.len() as u16;
+                        if let Some(slot) = device.seen.iter_mut().find(|l| **l == 0 || **l == length).filter(|l| **l == 0) {
+                            *slot = length;
+                            mind::println!("[USB_HID] {:04X}:{:04X} TRACKPAD PACKET: {} BYTES, {}, {:02X?}", name.0, name.1, report.len(),
+                                           if fingers { "FINGERS" } else { "NOT FINGERS" }, &report[..report.len().min(36)]);
+                        }
                     }
                     Kind::Pointer(pointer) => {
                         if device.shown < SHOWN { device.shown += 1; mind::println!("[USB_HID] {:04X}:{:04X} REPORT {:02X?}", device.info.vendor, device.info.product, report); }
@@ -171,7 +210,9 @@ fn main(_info: &'static BootInfo) {
                                 mind::println!("[USB_HID] {:04X}:{:04X} SENDS BOOT REPORTS: BOOT PROTOCOL USED", device.info.vendor, device.info.product);
                             }
                         }
-                        pointer.events(report, &mut |event| { let _ = mind::dev::input_key(event, event, false); });
+                        let name = (device.info.vendor, device.info.product);
+                        let quiet = pads.iter().any(|p| (p.0, p.1) == name && now.saturating_sub(p.2) <= FINGERS_HOLD_MS);
+                        if !quiet { pointer.events(report, &mut |event| { let _ = mind::dev::input_key(event, event, false); }); }
                     }
                 }
             }
