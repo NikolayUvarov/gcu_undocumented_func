@@ -94,18 +94,39 @@ Size is what the runtime loads. CER is in %: "24" on all 24 sentences, "8" on th
 | Russian | Piper `irina` (63 MB), or Vosk TTS 0.7 voice 3 (247 MB, Apache-2.0 throughout) | Vosk TTS 0.9, voice 3 or 2 (937 MB) |
 | English | Kitten TTS nano (24 MB) | Kokoro-82M, `am_michael` or `af_heart` (354 MB; an int8 export of v1.1 takes 168 MB with its voices, not measured yet) |
 
+### The maintainer's choice (2026-10-08)
+
+The maintainer listened to the voices and chose eight: a female and a male voice for each language and variant. Pitch tells them apart: the female voices sit at 171–232 Hz, the male ones at 103–147 Hz.
+
+| | Russian `compact` | Russian `quality` | English `compact` | English `quality` |
+|---|---|---|---|---|
+| female | Vosk TTS 0.7, speaker 0 | ESpeech TTS-1 RL-V2 in the voice of FLEURS sentence 1825 | Piper `lessac` | Kokoro-82M `bf_emma` |
+| male | Vosk TTS 0.7, speaker 3 | Vosk TTS 0.9, speaker 4 | Piper `ryan` | Piper `ryan` |
+
+All eight are in `models/manifest.toml`, and every file was fetched and matched its SHA-256 on this host. Together they take 5.3 GB.
+
+- **ESpeech** needs three models more: the Vocos vocoder, RUAccent's stress models and the reference recording.
+  - Its reference is a FLEURS recording (CC BY 4.0), and the attribution travels with it.
+  - The speaker agreed to FLEURS, not to being a system's voice. A recording made with its speaker's consent can take its place without other changes.
+  - On a CPU ESpeech takes 26 s per second of speech, so the system can use it only for phrases made ahead of time, unless it has a GPU.
+- **Terms that limit use:**
+  - Piper `ryan` was trained on RyanSpeech (CC BY-NC-SA 4.0), Piper `lessac` on the Blizzard 2013 Lessac data (a research licence).
+  - The maintainer allowed any free licence (issues-human, section 6), and each model's terms are in the manifest.
+- **What the cache leaves out:** espeak-ng (GPL-3.0), which the Piper and Kokoro runtimes use for phonemes. MIND Core will make its own phonemes (step 3).
+
 ## Plan
 
-1. **The choice.** The maintainer listens to the voices on a listening page made by `scripts/voice_tts/page.py` (four sentences per voice, with the measurements) and picks a `compact` and a `quality` voice per language.
-2. **The cache.** The chosen models go into `models/manifest.toml` with their licences and terms, so `scripts/models.py` fetches them and puts them on the model disk (251).
+1. **The choice** (done, above). The maintainer listens to the voices on a listening page made by `scripts/voice_tts/page.py` (four sentences per voice, with the measurements) and picks a `compact` and a `quality` voice per language.
+2. **The cache** (done). The chosen models are in `models/manifest.toml` with their licences, terms and voices, so `scripts/models.py` fetches them and puts them on the model disk (251).
 3. **Phonemes.**
-   - Piper, Kokoro and Kitten take espeak-ng phonemes. espeak-ng is GPL-3.0 and cannot be built into MIND Core.
+   - Piper and Kokoro take espeak-ng phonemes. espeak-ng is GPL-3.0 and cannot be built into MIND Core.
    - So the `phonetics` crate (our own letter-to-sound rules and stress dictionary) learns to give the IPA symbols these models expect. It is checked against espeak-ng on the host only.
-   - Vosk TTS has its own Russian dictionary and rules.
+   - Vosk TTS has its own Russian dictionary and rules, and ESpeech reads letters with stress marks from RUAccent.
 4. **The engine** in `mind::tts`, `no_std` with `alloc`, for the chosen families:
    - VITS (Piper, Vosk TTS 0.7): a text encoder, a duration predictor, a flow and a HiFi-GAN decoder.
    - Vosk TTS 0.9: a duration predictor, a diffusion transformer over several steps, and a BERT for prosody. It is the largest to port and the slowest per sentence.
-   - StyleTTS 2 (Kokoro, Kitten): a text encoder, a style vector per voice, a duration and prosody predictor, and an iSTFTNet decoder.
+   - StyleTTS 2 (Kokoro): a text encoder, a style vector per voice, a duration and prosody predictor, and an iSTFTNet decoder.
+   - F5-TTS (ESpeech): a diffusion transformer over 32 steps, the Vocos vocoder and RUAccent's stress models. It runs only ahead of time on a CPU, so it is the last to port.
    - Host test: our audio equals onnxruntime's within a set tolerance on the 24 sentences.
 5. **The service.** `tts` speaks with the chosen voice from `models:` and keeps the formant synthesizer as the fallback without a model disk. The model is one read-only memory object (150), and the service holds no other authority (MC-8.1, MC-11.11).
 6. **QEMU suite:** the system phrases spoken by the neural voice are recognized by the host recognizer as in this comparison.
@@ -114,7 +135,7 @@ Tasks are numbered `252-APP-MMMM` from the tools track's next counter.
 
 ## Acceptance criteria
 
-- The maintainer has chosen a `compact` and a `quality` voice for each language by ear. Each is in `models/manifest.toml` with its licence and terms, and `scripts/models.py fetch --role tts` fetches it.
+- The maintainer has chosen the voices by ear, and each is in `models/manifest.toml` with its licence and terms; `scripts/models.py fetch --role tts` fetches them (done 2026-10-08).
 - MIND Core speaks the system's phrases with the chosen voice on x86 and aarch64 (QEMU), from the model disk of 251.
 - Its speech of the 24 sentences is within 0.5 CER points of the published model, measured as above.
 - Nothing uses the network. The synthesizer holds the text, the model and its audio line, and no other authority (MC-8.1, MC-11.11).
