@@ -239,6 +239,7 @@ fn details_window_and_keys() {
     assert!(lines.iter().any(|l| l.contains("4 regions, 76.0K mapped")), "the guard page is not mapped: {:?}", lines);
     assert!(lines.iter().any(|l| l == "Endpoints (slot→index): 2→6"), "{:?}", lines);
     assert!(lines.iter().any(|l| l.ends_with(", kernel 40.0K")), "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "CPU budget: no limit; band system"), "{:?}", lines);
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("Task 5")), "{:#?}", screen);
     assert_eq!(top.key(chr('x'), &mut source), Flow::Ignored, "other keys wait while the window is open");
@@ -318,7 +319,28 @@ fn columns_fit_the_screen() {
         assert!(used <= width || columns.len() <= 5, "{} {:?}", width, columns);
         for name in ["PID", "NAME", "%CPU"] { assert!(columns.iter().any(|c| c.0 == name), "{} lacks {}", width, name); }
     }
-    assert_eq!(top::Top::columns(159).len(), 13);
+    assert_eq!(top::Top::columns(159).len(), 14);
+}
+
+#[test]
+fn cpu_budgets() {
+    // The budget `budget` in the shell sets (scheduling contexts, C7): in the table and in a task's details.
+    assert_eq!(text::budget(0, 0, false), "-");
+    assert_eq!(text::budget(20_000_000, 100_000_000, false), "20/100");
+    assert_eq!(text::budget(2_500_000, 10_000_000, true), "2.5/10*", "spent: it waits for its next period");
+    assert_eq!(text::budget_line(20_000_000, 100_000_000, 1, false), "CPU budget: 20 ms per 100 ms (20.0% of a CPU); band application");
+    assert_eq!(text::budget_line(20_000_000, 100_000_000, 1, true), "CPU budget: 20 ms per 100 ms (20.0% of a CPU); band application; spent: waits for its next period");
+    let mut source = system();
+    let budgeted = source.tasks.iter_mut().find(|t| t.pid == 5).unwrap();
+    (budgeted.budget_ns, budgeted.period_ns, budgeted.throttled) = (20_000_000, 100_000_000, true);
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    let screen = draw(&mut top, 159, 30);
+    let header = screen.iter().find(|l| l.contains("PPID")).unwrap();
+    assert!(header.trim_end().ends_with("BUDGET"), "{}", header);
+    let row = screen.iter().find(|l| l.contains(" loader ")).unwrap();
+    assert!(row.trim_end().ends_with("20/100*"), "{}", row);
+    assert!(screen.iter().find(|l| l.contains(" init ")).unwrap().trim_end().ends_with(" -"));
 }
 
 fn physmap() -> Vec<Range> {
@@ -449,8 +471,8 @@ fn root_quota_in_the_endpoint_column() {
     top.refresh(&mut source).unwrap();
     let screen = draw(&mut top, 160, 30);
     let init = screen.iter().find(|l| l.contains(" init ")).unwrap();
-    assert!(init.trim_end().ends_with(" 65302") && !init.contains("65535"), "{:?}", init);
-    assert!(screen.iter().any(|l| l.contains(" busy ") && l.trim_end().ends_with(" 0/4")), "{:#?}", screen);
+    assert!(init.contains(" 65302 ") && !init.contains("65535"), "{:?}", init); // BUDGET comes after EP
+    assert!(screen.iter().any(|l| l.contains(" busy ") && l.contains(" 0/4 ")), "{:#?}", screen);
 }
 
 #[test]

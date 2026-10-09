@@ -221,6 +221,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [211-APP-0013](../issues-done/211-APP-0013-log-volume-and-efivar-in-the-tools.done) | `log:` in the shell's help, `fm`, `df` and `fsck`; `efivar` in the tools guide; scripts may declare `firmware` and `blockstore`; `--help` asks for no privilege | done (2026-10-09) |
 | [211-APP-0014](../issues-done/211-APP-0014-wm-full-screen-and-window-list.done) | `wm`: Alt+F gives the window in front the whole screen without its frame or the bars, and its frame back; Alt+L lists the windows with their PIDs and states | done (2026-10-09) |
 | [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, only with a flow grant and, in a script, `requires: tls` (requested by NET for 351-NET-0002) | done (2026-10-09) |
+| [000-APP-0018](../issues-done/000-APP-0018-cpu-budgets-in-top.done) | `top` shows the CPU budget `budget` sets: a BUDGET column (ms per period, `*` while spent) and a line in a task's details | done (2026-10-09) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

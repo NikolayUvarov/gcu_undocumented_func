@@ -56,7 +56,8 @@ impl Source for Client {
         paged(40, |start| Ok(take(sysinfo::tasks(Endpoint::SYSINFO, start))?.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
             image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, retained: t.retained, wait: t.wait_on as u64, heap_blocks: t.heap_blocks, caps: t.caps,
             quota_tasks: t.quota_tasks as u32, used_tasks: t.used_tasks as u32, quota_endpoints: t.quota_endpoints as u32, used_endpoints: t.used_endpoints as u32,
-            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel }).collect()))
+            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel,
+            budget_ns: t.budget_ns, period_ns: t.period_ns, band: t.band, throttled: t.throttled }).collect()))
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
         paged(64, |start| Ok(take(sysinfo::cpus(Endpoint::SYSINFO, start))?.as_slice().iter()

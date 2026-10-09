@@ -1292,6 +1292,7 @@ def monitors_check(vm):
     baseline = heap_used(vm)
     clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
     tasks = BASE + 2  # the services, clock and the monitor
+    require(vm.command(f"budget {clock} 20 100"), f"BUDGET PID={clock} 20 MS PER 100 MS")  # top shows it (000-APP-0018)
     # top: the task table agrees with ps; details, sorting, filter and tree.
     vm.send("top\n")
     vm.expect("[TOP] READY")
@@ -1301,6 +1302,7 @@ def monitors_check(vm):
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
     assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))

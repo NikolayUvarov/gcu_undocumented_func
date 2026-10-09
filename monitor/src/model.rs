@@ -13,6 +13,9 @@ pub struct Task {
     pub name: String, pub state: u8, pub cpu: u8, pub flags: u8,
     /// Kernel memory for the task: context, mailbox, info and exit pages, page tables.
     pub kernel: u64,
+    /// Its CPU budget per period (0: no limit; `budget` in the shell), its band (0 system, 1 application) and whether
+    /// it spent its budget and waits for its next period.
+    pub budget_ns: u64, pub period_ns: u64, pub band: u8, pub throttled: bool,
 }
 
 /// Flags of a task (idl/sysinfo.wit `task.flags`, as sysmon sets them from `mind::stat::TASK_*`).
