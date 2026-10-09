@@ -31,7 +31,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `tts` | server endpoint, client endpoint of `audio_gw` |
 | `virtio_net`, `virtio_net#1` | server endpoint (one per instance: the first and the second VirtIO card in PCI order, issue 105); if a VirtIO network card (1AF4:1041 or 1000) is present: the memory BAR holding its modern configuration structures and an MSI-X vector (the IRQ line if MSI-X cannot be set up), or for a legacy-only card its I/O BAR0 and IRQ line; 160 KiB DMA |
 | `netstack` | server endpoint, a client of `virtio_net` (slot 2) and of `virtio_net#1` (slot 3) |
-| `netpolicy` | server endpoint, an unbadged `netstack` client to mint grants from (slot 2), a `vfs_server` client (slot 3), a `netstack` client with the policy badge (slot 4) |
+| `netpolicy` | server endpoint, an unbadged `netstack` client to mint grants from (slot 2), a `vfs_server` client with its own badge (slot 3: reads the shipped policy, and alone opens `system/netpolicy`, where the changed policy is kept, 108), a `netstack` client with the policy badge (slot 4) |
 | `keystore` | server endpoint, an `rtc` client (slot 2), a VFS client with its own badge (slot 3) for its private directory `system/keystore` (351-NET-0005); no network: the device key leaves its memory only for that directory |
 | `tls` | server endpoint, an `rtc` client (slot 2), a `vfs_server` client (slot 3, the root store), a `keystore` client with the signer's badge (slot 4); no network access of its own: clients lend their flows |
 | `windows` | server endpoint, its own unbadged client (slot 2, lent to window managers for the programs they start); no screen, no input, no files |

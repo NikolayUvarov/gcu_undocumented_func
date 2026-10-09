@@ -3,6 +3,11 @@
 //! (MC-11.6). A grant is an endpoint capability of the network stack with its own badge; the stack lets its holder
 //! reach only the destinations, for the term and up to the volume the policy names for the program. Every grant,
 //! refusal and revocation is written to the system log. Its clients are launchers (the shell).
+//!
+//! 1.1 (108): the policy can be changed while the system runs. The changed policy is kept in the broker's private
+//! directory of the boot disk (`system/netpolicy/netpolicy.txt`, which only the broker opens), and the broker reads it
+//! in place of the shipped `netpolicy.txt`. Only a launcher holds a client: the shell asks the user before it adds or
+//! removes a line. Grants made before a change keep their rules; the next grant follows the change.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,15 +17,16 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:netpolicy";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
+/// `unwritable` (1.1): the change could not be stored, so it was not made.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NoPolicy = 0, NoNetwork = 1, Limit = 2, NotFound = 3, Invalid = 4 }
+pub enum Error { #[default] NoPolicy = 0, NoNetwork = 1, Limit = 2, NotFound = 3, Invalid = 4, Unwritable = 5 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoPolicy), 1 => Some(Self::NoNetwork), 2 => Some(Self::Limit), 3 => Some(Self::NotFound), 4 => Some(Self::Invalid), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoPolicy), 1 => Some(Self::NoNetwork), 2 => Some(Self::Limit), 3 => Some(Self::NotFound), 4 => Some(Self::Invalid), 5 => Some(Self::Unwritable), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -99,6 +105,51 @@ pub fn list(endpoint: Endpoint) -> Result<List<Grant, 32>> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Grant, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
+/// The lines of the policy in force, from line `start` (comments and blank lines left out) (1.1).
+pub fn lines(endpoint: Endpoint, start: u32) -> Result<List<Text<160>, 16>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 2594, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Text<160>, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
+/// Adds `line` at the end of the policy; a line that is not a rule, a `dns` line or a `resolver` line is refused
+/// (invalid) (1.1).
+pub fn add(endpoint: Endpoint, line: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<160>(line, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// Removes every line equal to `line` (spaces aside); returns how many (1.1).
+pub fn remove(endpoint: Endpoint, line: &str) -> Result<core::result::Result<u32, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<160>(line, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `netpolicy` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -107,6 +158,9 @@ pub enum Request {
     Bind { badge: u16, pid: u64 },
     Revoke { program: Text<16> },
     List,
+    Lines { start: u32 },
+    Add { line: Text<160> },
+    Remove { line: Text<160> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -147,6 +201,30 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::List, call))
         }
+        6 => {
+            let mut copy = [0u8; 4];
+            let (call, length) = wire::take_buffer(request, cap, 2594, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Lines { start }, call))
+        }
+        7 => {
+            let mut copy = [0u8; 162];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let line = <Text<160> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Add { line }, call))
+        }
+        8 => {
+            let mut copy = [0u8; 162];
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let line = <Text<160> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Remove { line }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -170,4 +248,15 @@ pub fn reply_revoke(call: Call, value: core::result::Result<u32, Error>) -> Resu
 }
 pub fn reply_list(call: Call, value: &[Grant]) -> Result<()> {
     wire::reply_buffer(call, |w| codec::encode_slice::<Grant, 32>(value, w))
+}
+pub fn reply_lines(call: Call, value: &[Text<160>]) -> Result<()> {
+    wire::reply_buffer(call, |w| codec::encode_slice::<Text<160>, 16>(value, w))
+}
+pub fn reply_add(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_remove(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

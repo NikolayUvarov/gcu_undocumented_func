@@ -1,0 +1,45 @@
+# 108 — The network policy changed while the system runs, with the user's yes — done
+
+**Type:** main task (network) · **Owner:** `NET` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+
+Asked for by the maintainer (2026-10-09): "a protected zone, with changes confirmed by the user". Done by the storage session working the network track, with the kernel and tools tracks' parts made in their areas with the maintainer's permission.
+
+## Problem
+
+The policy broker read `netpolicy.txt` from the boot disk, which nothing in the running system may write. A change needed a new boot volume. Letting a program write the policy would let it grant itself the network.
+
+## Plan
+
+- **The changed policy** lives in the broker's private directory `system/netpolicy`, which only its VFS badge opens (351-NET-0005's private directories). The broker reads it in place of the shipped file.
+- **`idl/netpolicy.wit` 1.1** adds `lines`, `add` and `remove`. The broker checks every line, stores the change whole, and logs it with the PID that asked.
+- **`init`** gives the broker the badged VFS client ([108-KRN-0041](108-KRN-0041-netpolicy-private-directory.done)).
+- **The shell's `netpolicy` command** asks the user before every change ([108-APP-0015](108-APP-0015-netpolicy-command.done)). Only the shell holds a client of the broker.
+
+## Acceptance criteria
+
+In QEMU:
+- a change is made only after the user answers yes;
+- the next grant follows it, and it survives a reboot;
+- the shell and programs cannot open the changed policy.
+
+## Resolution
+
+Done on 2026-10-09.
+- **`netpolicy`:**
+  - It reads `system/netpolicy/netpolicy.txt`, else `netpolicy.new` (a change cut short), else the shipped `netpolicy.txt`.
+  - `add` takes only a line it understands: a rule, `program dns`, or `resolver A.B.C.D[:PORT]`, with no comment.
+  - `remove` takes out every line equal to the one given, spaces aside.
+  - A change is written beside the old file and then replaces it. It is logged (`POLICY CHANGED BY PID n: ADDED …`, `REMOVED …`), and so is a refusal.
+- **`idl/netpolicy.wit` 1.1.0** adds the three calls and the error `unwritable`. The bindings are regenerated.
+- **The shell** (108-APP-0015): `netpolicy [add <line> | remove <line>]`, a question answered on the keyboard or the serial line first.
+- **`init`** (108-KRN-0041): the broker's VFS client carries `BADGE_NETPOLICY`.
+- **Tests,** passing on x86 and aarch64:
+  - in the `net` suite (`policy_edit_check`):
+    - refused without a yes;
+    - an added line gives the next grant its rule;
+    - a line that is not policy refused;
+    - a removed line takes it away;
+    - the shell refused the private directory;
+    - the log lines;
+  - in the `tls` suite's raw-image check: a change kept after a reboot.
+- **Docs:** [docs/network/policy.md](../docs/network/policy.md) (the lines, where the policy lives, how it changes), the profile's MC-11.6 row, the threat model ("Program changing the network policy"), bootstrap, the README, the IDL table.
