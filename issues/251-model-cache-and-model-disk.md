@@ -61,4 +61,4 @@ Tasks are numbered `251-APP-MMMM` from 0010.
 
 ## Related
 
-[250](250-voice-dictation.md), [252](252-neural-speech-synthesis.md), [scripts/voice_v3](../scripts/voice_v3/README.md), [150](../issues-done/150-user-memory-beyond-the-arena.done), [300](300-checksummed-block-store.md).
+[250](250-voice-dictation.md), [252](252-neural-speech-synthesis.md), [scripts/voice_v3](../scripts/voice_v3/README.md), [150](../issues-done/150-user-memory-beyond-the-arena.done), [300](../issues-done/300-checksummed-block-store.done).

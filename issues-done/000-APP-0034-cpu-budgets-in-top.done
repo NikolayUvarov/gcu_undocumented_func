@@ -1,6 +1,8 @@
-# 000-APP-0018 — `top` shows CPU budgets — done
+# 000-APP-0034 — `top` shows CPU budgets — done
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** stage II (C7, scheduling contexts) · **Constitution:** MC-5.1, MC-5.3
+
+_Numbered 000-APP-0018 in the tools branch's commits until main's own 351-APP-0018 (2026-10-09); renumbered at the merge._
 
 ## Problem
 

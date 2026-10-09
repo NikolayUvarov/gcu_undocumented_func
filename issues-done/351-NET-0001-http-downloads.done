@@ -2,7 +2,7 @@
 
 **Type:** network (library, tool) · **Owner:** `NET` track · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
-Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (the kernel track, for 351), by the storage session working the network track at the maintainer's request (2026-10-08). The request's HTTPS part is [351-NET-0002](../issues/351-NET-0002-https-for-programs.md), its names in the policy [351-NET-0003](351-NET-0003-names-in-the-network-policy.done).
+Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (the kernel track, for 351), by the storage session working the network track at the maintainer's request (2026-10-08). The request's HTTPS part is [351-NET-0002](351-NET-0002-https-for-programs.done), its names in the policy [351-NET-0003](351-NET-0003-names-in-the-network-policy.done).
 
 ## Problem
 

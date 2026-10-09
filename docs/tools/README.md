@@ -215,7 +215,7 @@ Text (wrap on/off, search, go to offset, UTF-8) and hex (offset, 16 bytes per li
 ### 4.4 `top`
 
 - **Header:** uptime; tasks running / ready / sleeping / blocked; a busy bar per CPU; load averages; kernel memory used/free; IPC per second; faults since boot.
-- **Table:** PID, PPID, NAME, STATE (RUN, READY, SLEEP, SEND, RECV, CALL, IRQ, EXIT), CPU, %CPU, TIME, SYSC/s, HEAP, SHARED, CAPS, EP, BUDGET (the CPU budget the shell's `budget` sets, as ms per period, `*` while the task waits for its next period; 000-APP-0018); services marked. A task's details name its budget and band.
+- **Table:** PID, PPID, NAME, STATE (RUN, READY, SLEEP, SEND, RECV, CALL, IRQ, EXIT), CPU, %CPU, TIME, SYSC/s, HEAP, SHARED, CAPS, EP, BUDGET (the CPU budget the shell's `budget` sets, as ms per period, `*` while the task waits for its next period; 000-APP-0034); services marked. A task's details name its budget and band.
 - **Keys:** P/M/N/T sort by CPU, memory, PID, time; S hide services; t tree by spawner; Enter — details of a task (address-space summary, capabilities, what it waits for); k kill and r restart through `init`'s lifecycle interface (C6) — before C6 the key shows "use KILL in the shell"; `+`/`-` refresh interval; q or Esc quit.
 - %CPU comes from run-time deltas in ns (F5); without them from tick deltas, with the 10 ms resolution stated on screen.
 

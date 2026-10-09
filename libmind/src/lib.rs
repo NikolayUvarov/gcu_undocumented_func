@@ -37,6 +37,7 @@ pub mod mask;
 pub mod mem;
 pub mod network;
 pub mod parse;
+pub mod tpm;
 pub mod netring;
 pub mod output;
 pub mod platform;

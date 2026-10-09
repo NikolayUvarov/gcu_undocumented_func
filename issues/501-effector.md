@@ -1,6 +1,6 @@
 # 501 — The effector: tests on real hardware, driven by a test server
 
-**Type:** main task · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open (proposed) · **Blocked by:** [550](550-network-on-real-hardware.md) (the network on the MacBook Pro); from `NET` ([requests-NET.md](requests-NET.md), recorded for 351): TLS for a service other than the shell, and a persistent device key · **Roadmap:** Assurance "evidence tied to configuration" · **Constitution:** MC-12.1, MC-12.2, MC-12.9, MC-2.3, MC-10.2, MC-11.9
+**Type:** main task · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open (proposed) · **Blocked by:** [550](550-network-on-real-hardware.md) (the network on real hardware); the description of Effector's agent protocol (the maintainer); `init`'s grants for a service of its own (`KRN`). Done meanwhile: a persistent device key ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done)), TLS with a pinned server key for programs ([351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done)) · **Roadmap:** Assurance "evidence tied to configuration" · **Constitution:** MC-12.1, MC-12.2, MC-12.9, MC-2.3, MC-10.2, MC-11.9
 
 Asked by the maintainer (2026-10-08): tests should run on real hardware without the maintainer typing them. Opened by the kernel session; the `ASR` track is open.
 
@@ -20,11 +20,28 @@ Every check on a real machine today is typed by the maintainer and read from pho
 - **Evidence.** Each run is recorded with its configuration: the machine, the firmware and its settings, the image's manifest hash (350), the bundle and any seed. The profile cites a run for that configuration only. A passing run is evidence of what was run, not a proof (MC-12.2).
 - **Its own risk.** The effector lets the server run code on the device, within the test account. It is off by default, turned on by the machine's owner, and [docs/profile/threat-model.md](../docs/profile/threat-model.md) names it when it lands.
 
+## The server is Effector (the maintainer, 2026-10-09)
+
+The maintainer decided that the server is **Effector** (`sst-test-deploy`, a role of RDS Commander Suite), and that the effector on MIND Core is an agent of it. It is to give direct updates and tests on bare metal once the network (550) and the agent are ready. This replaces the host program of the design above and the protocol of 501-ASR-0007.
+
+- **What Effector offers** (its operator API, OpenAPI 1.2.0):
+  - endpoints and their telemetry;
+  - a queue of idempotent operations with timeouts: named tests, file collection and delivery checked by SHA-256, screenshots, log collection, software packages and agent self-update, an interactive console, and arbitrary commands;
+  - terminal reservations and an audit of every operation.
+- **What the agent must speak:** Effector's agent protocol (an agent bearer token; command poll and acknowledgement, file transfer, telemetry, its configuration, package download and results). Its description is not in the operator API. It is needed from `sst-test-deploy` before work starts.
+- **How it maps onto MIND Core:**
+  - **The connection** goes out over HTTPS through the agent's own flow grant (a `netpolicy` line for the server). The server is verified by its pinned key (`tls.wit` 1.1 `connect-pinned`, 351-NET-0002), so no root store is needed. The target listens on no port.
+  - **The agent's identity** is the device key (`keystore`), kept across boots (351-NET-0005) and sealed by a TPM where there is one (351-NET-0006, waiting for the kernel's half).
+  - **Parsing** (MC-11.11): the agent holds the network and update authority, so the server's messages are parsed in `parse` (109), in new typed requests of `idl/parse.wit`, and the agent checks the typed answers.
+  - **Named tests** run in the test account with only the grants their bundle declares. **Files** go only to the agent's own directories. **Screenshots** are the shell's, and **logs** come under the read grant.
+  - **Updates** go only through `updater` (351-UPD-0007), signed, with the trial boot. The agent never writes disks or boot files.
+  - **Arbitrary commands and the interactive console** run with the test account's authority at most, never with the agent's (MC-3.11). Otherwise they are not offered.
+
 ## Plan: tasks
 
 | Task | Track | What |
 |---|---|---|
-| 501-ASR-0007 | `ASR` (open) | The protocol: messages, the bundle format, result records and their versions, as an IDL file or a documented wire format (MC-2.3); and the host server, tested against a guest in QEMU |
+| 501-ASR-0007 | `ASR` (open) | Effector's agent protocol as MIND Core speaks it: the messages it takes, their typed forms in `idl/parse.wit`, the bundle and result records (MC-2.3); tested against an Effector server and a guest in QEMU |
 | 501-ASR-0008 | `ASR` (open) | The client service on the target: connection, authentication, the test account, log and screenshot streaming, updates through `updater` |
 | `init`'s grants (not numbered yet) | `KRN` | TLS, a `netpolicy` flow to the server, the log read grant, screen capture and the test account's spawn rights for the effector; numbered by the kernel track when 501-ASR-0008 needs them |
 

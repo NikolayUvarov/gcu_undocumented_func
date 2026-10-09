@@ -2,7 +2,7 @@
 
 **Type:** library (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-06) · **Blocked by:** — · **Roadmap:** track B "Checksummed block store → CID and immutable blocks" · **Constitution:** MC-4.2, MC-4.13, MC-12.2
 
-Part of main task [300](../issues/300-checksummed-block-store.md).
+Part of main task [300](300-checksummed-block-store.done).
 
 ## Problem
 

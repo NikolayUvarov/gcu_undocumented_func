@@ -4,7 +4,7 @@
 
 ## Problem
 
-The block store kept every block until its medium was full ([300](../issues/300-checksummed-block-store.md), [302](302-names-and-current-roots.done)).
+The block store kept every block until its medium was full ([300](300-checksummed-block-store.done), [302](302-names-and-current-roots.done)).
 
 - **MC-4.5:** version history has explicit links and a retention policy. The garbage collector takes into account published roots, pinned snapshots, operations in progress and obligations to consumers.
 - **MC-4.11:** the right to access an object and the obligation to retain it are distinct. Retention has a party responsible for accounting, a term or termination condition, and a link to a quota.

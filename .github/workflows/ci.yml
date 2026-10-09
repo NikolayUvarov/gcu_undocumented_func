@@ -31,7 +31,7 @@ jobs:
           rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || exit 1
           rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || exit 1
           # Any test that fails fails the step, not only the last one in the loop.
-          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http fbank nn russian syntax; do
+          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax; do
             rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests" || exit 1
           done
           # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
@@ -98,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: QEMU, OVMF and FAT tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf dosfstools mtools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf dosfstools mtools swtpm swtpm-tools
       - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Build
@@ -185,7 +185,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: QEMU for aarch64, AAVMF and FAT tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 qemu-utils ipxe-qemu dosfstools mtools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm qemu-efi-aarch64 qemu-utils ipxe-qemu dosfstools mtools swtpm swtpm-tools
       - name: Toolchain from rust-toolchain.toml
         run: rustup toolchain install
       - name: Build for aarch64

@@ -1,6 +1,8 @@
-# 550-APP-0017 — `wifi`: choosing a Wi-Fi network and typing its passphrase
+# 550-APP-0033 — `wifi`: choosing a Wi-Fi network and typing its passphrase
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** the network track's 802.11 station and its configuration interface (`idl/wifi.wit`, proposed; "An 802.11 station and WPA2-PSK" in [requests-NET.md](requests-NET.md)) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
+
+_Numbered 550-APP-0017 in the tools branch's commits until main's own 351-APP-0017 (2026-10-09); renumbered at the merge._
 
 Numbered from the kernel track's request in `requests-APP.md` (2026-10-08, for 550 at the maintainer's request). That file went once every request in it was numbered.
 

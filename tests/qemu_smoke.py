@@ -42,7 +42,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -1368,7 +1368,7 @@ def monitors_check(vm):
     baseline = heap_used(vm)
     clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
     tasks = BASE + 2  # the services, clock and the monitor
-    require(vm.command(f"budget {clock} 20 100"), f"BUDGET PID={clock} 20 MS PER 100 MS")  # top shows it (000-APP-0018)
+    require(vm.command(f"budget {clock} 20 100"), f"BUDGET PID={clock} 20 MS PER 100 MS")  # top shows it (000-APP-0034)
     # top: the task table agrees with ps; details, sorting, filter and tree.
     vm.send("top\n")
     vm.expect("[TOP] READY")
@@ -1944,6 +1944,12 @@ def smp_suite(vm):
     assert time.monotonic() - start < 5, "init must not wait for the applications"
     for pid in range(1, count + 1):
         require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
+    # The rtc restarted while the applications ran took the next free slot of the task table, which may be past its
+    # first chunk of 32 (the killed one is reaped after its successor starts): restarted again now, it takes a slot in
+    # the first chunk, and the table gives the second back. Then the kernel heap is exactly where it was.
+    rtc = vm.services()["rtc"]
+    require(vm.command(f"kill {rtc}", raw=True), "KILLED PID=")
+    require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
     assert heap_used(vm) == baseline
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
@@ -2567,6 +2573,15 @@ def store_suite(vm):
     require(blocks("put ram:note.txt"), f"PUT {note} SIZE 12")
     require(blocks(f"get {note} ram:copy.txt"), "GOT 12 BYTES")
     require(vm.command("cat ram:copy.txt"), "hello store")
+    # 300-STO-0004: blocksro asks only to read and holds the client badged get alone (300-KRN-0024). It reads; a put
+    # and a publish are refused, and the store logs each with its badge.
+    require(vm.command(f"blocksro get {note} ram:ro.txt"), "GOT 12 BYTES")
+    out = vm.command("blocksro put ram:note.txt")
+    require(out, "blocks: put:"); require(out, "Rights")
+    require(vm.command(f"blocksro publish ro {note}"), "blocks: publish ro: Rights")
+    log = vm.service_logs("blockstore", "REFUSED Publish")
+    assert re.search(r"\[BLOCKSTORE\] REFUSED Put FOR PID \d+ \(BADGE 1\)", log) and re.search(r"\[BLOCKSTORE\] REFUSED Publish FOR PID \d+ \(BADGE 1\)", log), log
+    require(blocks("resolve ro"), "blocks: resolve ro: NotFound")
     # Names: compare-and-swap on the version; only roots whose blocks are all stored.
     require(blocks(f"publish obj {root}"), "PUBLISHED obj VERSION 1")
     require(blocks(f"publish obj {note}"), "blocks: publish obj: Conflict")
@@ -2594,8 +2609,9 @@ def store_suite(vm):
     assert re.search(r"COLLECTED 0 BLOCKS [0-2] NAMES [0-2] SECTORS", first), first
     require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
     require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
-    print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; names by "
-          "compare-and-swap, only complete roots; a full medium refused; a restarted store finds blocks and names again", flush=True)
+    print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; a client that may only "
+          "read is refused put and publish; names by compare-and-swap, only complete roots; a full medium refused; a restarted "
+          "store finds blocks and names again", flush=True)
     # What no name retains goes once its lease (60 s after the last put or the mount) has ended: a file put and never
     # published goes; the file kept as obj's second version stays, retained by the name's history (303-STO-0003).
     require(vm.command("write ram:loose.txt never named"), "WROTE 12 BYTES")
@@ -4421,10 +4437,12 @@ def policy_edit_check(vm, web_port):
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
-    and resumed by the next run; what the grant, the server and the file's directory refuse. On x86 the boot disk is on
-    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request
-    and walks the file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
+    and resumed by the next run; what the grant, the server and the file's directory refuse. The same over HTTPS
+    (351-NET-0002), the server trusted by its pinned key or by the roots. On x86 the boot disk is on AHCI: the IDE
+    driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request and walks the
+    file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
     files = Path(tempfile.mkdtemp(prefix="mind-download-"))
+    certificates = Path(tempfile.mkdtemp(prefix="mind-download-tls-"))
     size, cut = (30 << 20, 10 << 20) if args.arch == "x86_64" else (8 << 20, 3 << 20)
     big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
@@ -4432,17 +4450,30 @@ def download_check(args, disk):
     # The release server, the first response for each file cut short, and a malformed head for /bad.bin (test hooks).
     release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000}, raw={"/bad.bin": BAD_HEAD})
     port = release.server_address[1]
+    # The same files over HTTPS: the test CA's server (in tlsroots.pem), and one from a CA nobody trusts.
+    _certificates(certificates)
+    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
+    rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
+    tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
-    (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
-    # A script that lends download everything it asks for but the parser service (109-NET-0009).
+    (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port)))
+    # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
+    # TLS takes random bytes from RDRAND only.
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
+        https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
     finally:
         vm.close()
-        release.shutdown()
+        for server in (release, secure, rogue):
+            server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
+        shutil.rmtree(certificates, ignore_errors=True)
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
 
 
@@ -4470,11 +4501,49 @@ def download_runs(vm, release, port, big, small, cut):
     assert release.requests[-1] == ("/small.bin", "bytes=50000-"), release.requests
     require(run(f"download data/x.bin {url}/missing.bin", "DOWNLOAD: HTTP: Status(404)"), "DOWNLOAD: HTTP: Status(404)")
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
-    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: HTTPS"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT")
+    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
-    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
+    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
+
+
+def _spki_pin(certificate):
+    """The SHA-256 of a certificate's SubjectPublicKeyInfo (DER), in hex: what `download --pin` takes."""
+    key = subprocess.run(["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"], check=True, capture_output=True).stdout
+    der = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "der"], input=key, check=True, capture_output=True).stdout
+    return hashlib.sha256(der).hexdigest()
+
+
+def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
+    """351-NET-0002: download over a TLS session of the TLS service on its own flow grant, the server trusted by its
+    pinned key alone or by the roots in tlsroots.pem; a wrong pin and an untrusted server refused; without the TLS
+    client (a script that does not declare tls) https is refused."""
+    url, size = f"https://10.0.2.2:{port}", len(big)
+
+    def run(command, until, timeout=8):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=until)
+    digest = hashlib.sha256(big).hexdigest()
+    out = run(f"download data/tls.bin {url}/big.bin --pin {pins['server']} --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=1200)
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+        require(out, line)
+    assert secure.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], secure.requests
+    log = vm.command("dmesg -s tls")
+    require(log, "10.0.2.2 VERIFIED BY ITS PINNED KEY, SUITE")
+    small_digest = hashlib.sha256(small).hexdigest()
+    require(run(f"download ram:roots.bin {url}/small.bin --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    print(f"PASS: download over HTTPS: {size >> 20} MiB through a TLS session on its own grant, cut at {cut >> 20} MiB and resumed with Range, the server verified by its pinned key; another file verified by the roots", flush=True)
+    rogue = f"https://10.0.2.2:{rogue_port}"
+    require(run(f"download ram:x.bin {url}/small.bin --pin {'0' * 64}", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
+    require(run(f"download ram:x.bin {rogue}/small.bin", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
+    # A pinned key is trusted whoever signed its certificate.
+    require(run(f"download ram:rogue.bin {rogue}/small.bin --pin {pins['rogue']} --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// URLS")
+    log = vm.command("dmesg -s tls")
+    require(log, "10.0.2.2 REFUSED: NOT THE PINNED KEY"); require(log, "10.0.2.2 REFUSED: CERTIFICATE UnknownIssuer")
+    require(vm.command("msh notls.msh"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")
+    print("PASS: download over HTTPS: a wrong pin and a server from an untrusted CA refused; a pinned key trusted whoever signed it; without the TLS client (a script without tls) https refused", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
@@ -4753,7 +4822,7 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
-    # Copies of clock that also ask for the network and the TLS client (351-APP-0028): tlsclock has a rule in the
+    # Copies of clock that also ask for the network and the TLS client (351-APP-0017): tlsclock has a rule in the
     # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
     elf = bytearray((disk / "clock.elf").read_bytes())
     note = elf.index(b"MINDREQ1") + 8
@@ -4839,6 +4908,7 @@ def tls_suite(args, disk):
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
     device_key_check(args, with_entropy)
+    tpm_check(args, with_entropy)
 
 
 def device_key_check(args, cpu):
@@ -4871,6 +4941,7 @@ def device_key_check(args, cpu):
         vm, log, first = boot()
         try:
             require(log, "[KEYSTORE] DEVICE KEY MADE AND STORED IN system/keystore/device.key (ON DISK, NOT SEALED)")
+            require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
             # The shell's client lists system/ but opens nothing below it, and writes nothing there.
             require(vm.command("ls system"), "keystore")
             require(vm.command("cat system/keystore/device.key"), "ERROR: CAT: DENIED")
@@ -4900,7 +4971,7 @@ def device_key_check(args, cpu):
 
 
 def tls_lending_check(vm, servers, tls):
-    """351-APP-0028: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
+    """351-APP-0017: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
     flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
     service = {ep for ep, server in servers.items() if server == tls}
 
@@ -4924,6 +4995,89 @@ def tls_lending_check(vm, servers, tls):
     assert tls_lent, out
     print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
           "grant, and to a script's program only if the script declares tls", flush=True)
+
+
+def tpm_check(args, cpu):
+    """351-DRV-0015, 351-KRN-0043, 351-NET-0006: a TPM 2.0 (swtpm; a CRB on x86, the FIFO of tpm-tis-device on aarch64)
+    driven by the TPM service, which init gives its registers from the firmware's tables. On one raw image: a boot without
+    a TPM keeps the device key unencrypted (the interim); a boot with TPM A seals that key and removes the plain file; A
+    again unseals the same key; another TPM, B, does not open the blob, and a new key is made and sealed. The shell's
+    client, without the seal badge, is refused a seal."""
+    if not raw_tools() or not shutil.which("swtpm"):
+        print("SKIP: the TPM check needs swtpm, mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-tpm-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        image, start, fs_sectors = raw_fat_image(temp)
+        part = f"{image}@@{start * 512}"
+        device = "tpm-tis-device" if args.arch == "aarch64" else "tpm-crb"
+
+        def boot(tpm=None):
+            # A swtpm for each boot, on the state directory of TPM `tpm`.
+            swtpm, extra = None, []
+            if tpm:
+                (temp / tpm).mkdir(exist_ok=True)
+                socket_path = temp / f"{tpm}.sock"
+                swtpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={temp / tpm}", "--ctrl", f"type=unixio,path={socket_path}", "--flags", "startup-clear"],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for _ in range(50):
+                    if socket_path.exists():
+                        break
+                    time.sleep(.1)
+                extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
+            vm.swtpm = swtpm
+            log = vm.service_logs("keystore", "PUBLIC KEY")
+            name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
+            assert name, log
+            return vm, log, name[1]
+
+        def close(vm):
+            vm.close()
+            if vm.swtpm:
+                vm.swtpm.kill(); vm.swtpm.wait()
+
+        def stored(name):
+            return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
+        vm, log, plain = boot()
+        try:
+            require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            require(vm.service_logs("tpm", "[TPM] NO TPM"), "[TPM] NO TPM")
+            require(vm.command("tpm"), "TPM: NONE")
+        finally:
+            close(vm)
+        assert stored("device.key") and not stored("device.sealed")
+        vm, log, sealed = boot("a")
+        try:
+            interface = "FIFO" if args.arch == "aarch64" else "CRB"
+            ready = vm.service_logs("tpm", "[TPM] ")
+            # The kernel's half (PLATFORM_TPM from the firmware's tables) is a request to the kernel track: until it
+            # lands the TPM service finds none, and only the path without a TPM above is checked.
+            if "[TPM] NO TPM" in ready:
+                print("SKIP: sealing by the TPM: the kernel does not hand out the TPM's registers yet (issues/requests-KRN.md); the key service without a TPM checked", flush=True)
+                return
+            require(ready, f"[TPM] READY: TPM 2.0 BY IBM, {interface} INTERFACE")
+            require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
+            require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")
+            require(vm.command("tpm seal not mine"), "TPM: Rights")
+            log = vm.command("dmesg -s tpm")
+            assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
+        finally:
+            close(vm)
+        assert sealed == plain, (plain, sealed)
+        assert stored("device.sealed") and not stored("device.key")
+        vm, log, again = boot("a")
+        close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
+        assert again == plain, (plain, again)
+        # The disk without its TPM: another TPM does not open the blob.
+        vm, log, other = boot("b")
+        close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
+        assert other != plain, (plain, other)
+        fsck_volume(image, start, fs_sectors)
+    print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
+          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
@@ -6035,6 +6189,12 @@ def main():
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
+            if suite == "store":
+                # blocksro: blocks asking only to read (REQUEST_BLOCKSTORE_READ 32768 for REQUEST_BLOCKSTORE 16384).
+                elf = bytearray((disk / "blocks.elf").read_bytes())
+                note = elf.index(b"MINDREQ1") + 8
+                elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
+                (disk / "blocksro.elf").write_bytes(elf)
             if suite == "tools":
                 # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
                 # and runs the toy transducer on it; one byte changed in a copy fails its checksum.
