@@ -3,7 +3,7 @@
 // efivar: the firmware's boot variables (351-KRN-0027): the boot entries, the order, the entry booted now and the one
 // to boot next once. A console program; the shell lends the firmware privilege after asking the user.
 use mind::abi::BootInfo;
-use mind::firmware::{self, BOOT_VARIABLE, GLOBAL};
+use mind::firmware::{self, APPEND, AUTHENTICATED, BOOT_VARIABLE, GLOBAL, IMAGE_SECURITY};
 use mind::sys::Error;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FIRMWARE);
@@ -54,9 +54,25 @@ fn set_numbers(name: &str, values: &[u16]) {
     }
 }
 
+// Appends a signed signature list from `path` (EFI_VARIABLE_AUTHENTICATION_2 and the list, as sbvarsign writes it) to
+// db, dbx or KEK: the firmware takes it only if a key it trusts signed it (351-KRN-0028).
+fn append(name: &str, path: &str) {
+    let guid = match name { "db" | "dbx" => IMAGE_SECURITY, "KEK" => GLOBAL, _ => { mind::println!("efivar: append takes db, dbx or KEK"); return; } };
+    let file = match mind::fs::File::open(path) { Ok(file) => file, Err(e) => { mind::println!("efivar: {}: {:?}", path, e); return; } };
+    let most = mind::abi::FIRMWARE_BUFFER - mind::abi::FIRMWARE_HEADER - 2 * name.len();
+    if file.size() == 0 || file.size() > most { mind::println!("efivar: {}: {} bytes, 1 to {}", path, file.size(), most); return; }
+    let Some(mut pages) = mind::mem::Pages::new(file.size()) else { mind::println!("efivar: out of memory"); return };
+    let data = pages.as_mut_slice();
+    let length = match file.read_at(0, &mut data[..file.size()]) { Ok(n) => n, Err(e) => { mind::println!("efivar: {}: {:?}", path, e); return; } };
+    match firmware::set(name, &guid, BOOT_VARIABLE | AUTHENTICATED | APPEND, &data[..length]) {
+        Ok(()) => mind::println!("{} APPENDED: {} BYTES", name, length),
+        Err(e) => mind::println!("efivar: {}: {:?}", name, e),
+    }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("efivar — the firmware's boot variables.\nUsage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext\nboot: the boot entries, the order, the entry booted now and the next one.");
+    mind::about!("efivar — the firmware's boot variables.\nUsage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext | append db|dbx|KEK <file>\nboot: the boot entries, the order, the entry booted now and the next one.\nappend: a signed signature list (sbvarsign's output) added to db, dbx or KEK.");
     let args = mind::process::args_str();
     let mut words = args.split_whitespace();
     match (words.next(), words.next()) {
@@ -77,6 +93,7 @@ fn main(_info: &'static BootInfo) {
             Ok(()) | Err(Error::NotFound) => mind::println!("BootNext DELETED"),
             Err(e) => mind::println!("efivar: BootNext: {:?}", e),
         },
-        _ => mind::println!("Usage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext"),
+        (Some("append"), Some(name)) => match words.next() { Some(path) => append(name, path), None => mind::println!("Usage: efivar append db|dbx|KEK <file>") },
+        _ => mind::println!("Usage: efivar [boot] | bootnext <hex> | bootorder <hex>,<hex>... | delete bootnext | append db|dbx|KEK <file>"),
     }
 }

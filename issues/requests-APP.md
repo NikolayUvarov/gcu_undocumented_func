@@ -135,7 +135,7 @@ The `tools` suite finds `log:` in `help` where the image has the partition. `fm`
 
 ### Plan (a proposal; the tools track decides)
 
-- A row in `docs/tools/README.md` and `README_RU.md`: what `efivar` shows, its three write forms, the consent prompt, and that it works on x86 for now (351-KRN-0028).
+- A row in `docs/tools/README.md` and `README_RU.md`: what `efivar` shows, its write forms (`bootnext`, `bootorder`, `delete bootnext`, `append db|dbx|KEK <file>`), the consent prompt, on x86 and aarch64.
 - Whether a script may declare `firmware` (the user would still be asked each time) is the tools track's decision.
 - `df` and `fsck` list `log:` as they list `models:` (211-KRN-0019).
 

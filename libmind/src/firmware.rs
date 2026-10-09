@@ -12,6 +12,12 @@ pub const BOOTSERVICE_ACCESS: u32 = 2;
 pub const RUNTIME_ACCESS: u32 = 4;
 /// What boot variables carry.
 pub const BOOT_VARIABLE: u32 = NON_VOLATILE | BOOTSERVICE_ACCESS | RUNTIME_ACCESS;
+/// A write signed with a key the firmware trusts (EFI_VARIABLE_AUTHENTICATION_2 before the data): db, dbx, KEK, PK.
+pub const AUTHENTICATED: u32 = 0x20;
+/// The data is added to the variable's, not put in its place (a signature list appended to db or dbx).
+pub const APPEND: u32 = 0x40;
+/// EFI_IMAGE_SECURITY_DATABASE_GUID: D719B2CB-3D3A-4596-A3BC-DAD00E67656F, where db and dbx live.
+pub const IMAGE_SECURITY: [u8; 16] = [0xCB, 0xB2, 0x19, 0xD7, 0x3A, 0x3D, 0x96, 0x45, 0xA3, 0xBC, 0xDA, 0xD0, 0x0E, 0x67, 0x65, 0x6F];
 
 // The request in `page`: GUID, attributes, the name's length in UTF-16 units, the data's length, the name, the data.
 fn request(page: &mut [u8], name: &str, guid: &[u8; 16], attributes: u32, data: &[u8]) -> Result<usize> {

@@ -142,6 +142,8 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends sbsigntool python3-virt-firmware
           python3 tests/secure_boot_smoke.py
+          # A dbx update from the running system, signed with our KEK (351-KRN-0028).
+          python3 tests/dbx_update_smoke.py
       - name: Logs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -21,7 +21,7 @@ In QEMU with OVMF, a program with the grant sets `BootNext` to a second boot ent
 
 ## Resolution
 
-Done on 2026-10-08 for x86. aarch64 and authenticated writes (`dbx`) are split into [351-KRN-0028](../issues/351-KRN-0028-uefi-variables-aarch64-and-dbx.md).
+Done on 2026-10-08 for x86. aarch64 and authenticated writes (`dbx`) are split into [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.done).
 
 - **ABI 4** (`common/abi.rs`):
   - `BootInfo.efi_runtime`: the bootloader's `system_table.runtime_services()`, zeroed in the copy each task gets.
@@ -49,4 +49,4 @@ Done on 2026-10-08 for x86. aarch64 and authenticated writes (`dbx`) are split i
 
 ## Related
 
-[351-KRN-0022](../issues/351-KRN-0022-updater-grants.md) (the updater's grant of the privilege), [351-KRN-0028](../issues/351-KRN-0028-uefi-variables-aarch64-and-dbx.md), [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md).
+[351-KRN-0022](../issues/351-KRN-0022-updater-grants.md) (the updater's grant of the privilege), [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.done), [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md).
