@@ -1835,6 +1835,13 @@ def avx_expected(vm, fixture=None):
         assert fixture is None or "CALLS, AVX" in fixture, fixture
     elif model is None:
         assert len(re.findall(r"FPU=FXSAVE", cpus)) == vm.cpus, cpus
+    if vm.arch != "aarch64":
+        # 174-KRN-0037: the area holds the enabled components; the padded test kernel's is AMX's size.
+        state = re.search(r"VECTOR STATE: (XSAVE|FXSAVE), XCR0 0x([0-9A-F]+), (\d+) BYTES A TASK", vm.log)
+        assert state, vm.log[-3000:]
+        assert state[1] == ("XSAVE" if model == "max" else "FXSAVE") or model not in (None, "max"), state[0]
+        padded = "xsave-pad" in (getattr(vm.args, "kernel", None) or "")
+        assert (int(state[3]) >= 11 * 1024) == padded, (state[0], padded)
 
 
 def smp_suite(vm):

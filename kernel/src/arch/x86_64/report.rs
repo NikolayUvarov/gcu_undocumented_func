@@ -213,5 +213,5 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
 
 /// The platform section: what the kernel chose on this machine.
 pub fn kernel(out: &mut String) {
-    let _ = writeln!(out, "  architecture      x86-64\n  interrupt mode    {}\n  vector state      XCR0 {:#X}", if crate::cpu::x2apic() { "x2APIC" } else { "xAPIC" }, crate::context::saved_state());
+    let _ = writeln!(out, "  architecture      x86-64\n  interrupt mode    {}\n  vector state      XCR0 {:#X}, {} B a task and an interrupt entry", if crate::cpu::x2apic() { "x2APIC" } else { "xAPIC" }, crate::context::saved_state(), crate::context::area());
 }

@@ -6,6 +6,7 @@
 use core::arch::global_asm;
 
 pub const SIZE: usize = 304; // 37 words, 16-byte aligned
+pub fn size() -> usize { SIZE }
 const X0: usize = 0; const SP_EL0: usize = 31; const ELR: usize = 32; const SPSR: usize = 33; const ESR: usize = 34; const FAR: usize = 35; const KIND: usize = 36;
 pub const MSI_FIRST: usize = 16;
 // Vector kinds (the pushed KIND word).

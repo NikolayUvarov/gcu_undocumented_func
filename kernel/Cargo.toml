@@ -16,6 +16,7 @@ loader-abi-test = [] # expects ABI_VERSION + 1 from the bootloader (211-KRN-0012
 trial-test = [] # a trial boot's deadline is at most 15 s (351-KRN-0014)
 x2apic-test = [] # the boot CPU switches to x2APIC before the kernel reads the mode, as many PCs' firmware leaves it (211-PRT-0002)
 bar-move-test = [] # packs a small BAR into another device's page, as Apple's firmware does, then grants it (211-KRN-0021)
+xsave-pad-test = [] # the vector area padded to AMX's size (11 KiB), for the larger frames QEMU cannot emulate (174-KRN-0037)
 
 [profile.release]
 panic = "abort"

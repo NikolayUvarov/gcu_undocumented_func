@@ -199,3 +199,19 @@ The commands need the shell's authorities (process control, which `REBOOT` requi
 ### Acceptance criteria
 
 The `wm` suite opens `console`. `ps` there lists the tasks. `reboot` there, once confirmed, resets the machine (QEMU exits under `-no-reboot`). A command the shell does not take from `console` is refused with a message.
+
+## `cpus` names AVX-512 and AMX (174-KRN-0037)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for [174-KRN-0037](174-KRN-0037-every-vector-state-component.md).
+
+### Problem
+
+The kernel now saves AVX-512's and AMX's state components where the processor has them. `STAT_CPUS.xsave` carries them (XCR0: `0xE0` AVX-512, `0x60000` AMX), and `BootInfo.cpu_features` has `FEATURE_AVX`, `FEATURE_AVX512` and `FEATURE_AMX`. `shell/src/observe.rs` prints `FPU=XSAVE+AVX` for any of them, so a user cannot tell from `cpus` that the wider units are usable.
+
+### Plan
+
+`cpus` prints `FPU=XSAVE+AVX`, then `+AVX512` and `+AMX` for each group whose bits are all set. The `XSAVE+AVX` prefix stays, because the `busy` and `smp` suites match it.
+
+### Acceptance criteria
+
+The `smp` suite with `--cpu-model max` still sees `FPU=XSAVE+AVX` on every CPU. A machine with AVX-512 shows `+AVX512` (the profile records it).

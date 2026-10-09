@@ -65,6 +65,9 @@ pub const TRIAL_DEADLINE_S: u32 = 120;
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct LaunchRecord { pub key: [u8; 16], pub test_key: u32, pub images: u32 }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
+pub const FEATURE_AVX: u64 = 2; // x86: AVX and AVX2 registers are saved per task (174-KRN-0037)
+pub const FEATURE_AVX512: u64 = 4; // x86: AVX-512's ZMM and opmask registers are saved per task
+pub const FEATURE_AMX: u64 = 8; // x86: AMX's tile configuration and tiles are saved per task
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -524,7 +527,8 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub kernel_bytes: u64, // the task record, context, mailbox, info and exit pages, page tables, the capability table: in the frame pool, charged to its payers (171-KRN-0032)
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
-// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
+// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX, 0xE0 AVX-512, 0x60000 AMX), 0 with
+// FXSAVE (issue 153, 174-KRN-0037).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }
 // Task memory (bytes) by category, the kernel arena, the frame pool and the global limits. `largest_free` is searched for (trial allocations) only when
 // msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.

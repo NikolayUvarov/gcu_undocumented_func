@@ -114,21 +114,36 @@ pub unsafe fn enable_protection(bsp: bool) {
     cr4 |= (1 << 9) | (1 << 10);
     // Flush inherited global translations as well. No user FSGSBASE or PCID.
     cr4 &= !((1 << 7) | (1 << 16) | (1 << 17) | (1 << 18));
-    // XSAVE with x87, SSE and AVX state when the CPU has both (issue 153); the BSP decides, the APs follow.
+    // XSAVE with every state component programs can use when the CPU has XSAVE and AVX (issue 153, 174-KRN-0037);
+    // the BSP decides, the APs follow.
     let features = core::arch::x86_64::__cpuid(1).ecx;
     let avx = features & (1 << 26) != 0 && features & (1 << 28) != 0;
     let xsave = if bsp { avx } else { crate::context::XSAVE.load(Ordering::Acquire) };
     if xsave { cr4 |= 1 << 18; }
     asm!("mov cr4, {}", in(reg) cr4);
-    if xsave {
-        asm!("xsetbv", in("ecx") 0u32, in("eax") XCR0 as u32, in("edx") 0u32);
-        assert!(core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize <= crate::context::AREA, "XSAVE area too large");
+    let xcr0 = if !xsave { 0 } else if bsp { components() } else { crate::context::XCR0.load(Ordering::Acquire) };
+    if xsave { asm!("xsetbv", in("ecx") 0u32, in("eax") xcr0 as u32, in("edx") (xcr0 >> 32) as u32); }
+    let size = if xsave { core::arch::x86_64::__cpuid_count(0xD, 0).ebx as usize } else { 512 };
+    if bsp {
+        crate::context::set_area(size);
+        crate::context::XCR0.store(xcr0, Ordering::Release);
+        crate::context::XSAVE.store(xsave, Ordering::Release);
     }
-    if bsp { crate::context::XSAVE.store(xsave, Ordering::Release); }
+    assert!(size <= crate::context::area(), "XSAVE area too large");
 }
 
-/// x87, SSE and AVX state components (XCR0) when XSAVE is used.
-pub const XCR0: u64 = 0b111;
+// x87, SSE and AVX, and where CPUID 0xD lists all of a group: AVX-512's opmask, ZMM_Hi256 and Hi16_ZMM, AMX's
+// XTILECFG and XTILEDATA.
+fn components() -> u64 {
+    let leaf = core::arch::x86_64::__cpuid_count(0xD, 0);
+    let supported = (leaf.edx as u64) << 32 | leaf.eax as u64;
+    let mut xcr0 = 0b111;
+    for group in [AVX512, AMX] { if supported & group == group { xcr0 |= group; } }
+    xcr0
+}
+/// XCR0's AVX-512 and AMX components.
+pub const AVX512: u64 = 0b111 << 5;
+pub const AMX: u64 = 0b11 << 17;
 
 pub unsafe fn activate(root: usize) {
     asm!("mov cr3, {}", in(reg) root);
