@@ -180,7 +180,13 @@ impl Init {
 
     // A PCI device BAR of the expected kind (port range or MMIO), or NotFound.
     fn bar(minted: &mut Minted, device: usize, bar: usize, kind: usize) -> Result<usize> {
+        // A BAR that shared its page with another kind of device moves when granted (211-KRN-0021): logged here, as a
+        // machine without COM1 shows no kernel line by then.
+        let at = || mind::dev::device_config_at(SLOT_DEV0, device, 0x10 + 4 * bar).map(|v| v & !0xF).unwrap_or(0);
+        let before = at();
         let slot = minted.mint(PLATFORM_DEVICE_BAR, device, bar)?;
+        let after = at();
+        if after != before { mind::println!("[INIT] DEVICE {} BAR {}: REGISTERS MOVED FROM {:08X} TO {:08X}, A PAGE OF THEIR OWN", device, bar, before, after); }
         if cap_info(slot).0 == kind { Ok(slot) } else { Err(Error::NotFound) }
     }
 
@@ -249,7 +255,10 @@ impl Init {
                 // behind them; each its BAR0 and its own DMA region.
                 for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
                     let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
-                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => { mind::println!("[INIT] EHCI {}: REGISTERS NOT GRANTED ({:?})", nth, e); continue } };
+                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => {
+                        let at = mind::dev::device_config_at(SLOT_DEV0, ehci, 0x10).unwrap_or(0) & !0xF;
+                        mind::println!("[INIT] EHCI {}: REGISTERS AT {:08X} NOT GRANTED ({:?})", nth, at, e); continue
+                    } };
                     grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
                 }
             }
