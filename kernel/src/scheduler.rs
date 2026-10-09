@@ -609,6 +609,16 @@ impl Scheduler {
         }
     }
 
+    // `bytes` in frames of their own, as a read-only memory object (kept for the system's life: asked for once a boot).
+    fn copy_out(bytes: &[u8]) -> Result<Capability, usize> {
+        let size = bytes.len().max(1).next_multiple_of(4096);
+        let region = Region::task(size, 4096).map_err(|_| ERR_NO_MEMORY)?;
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), region.ptr(), bytes.len()); }
+        let base = region.ptr() as usize;
+        core::mem::forget(region);
+        Ok(Capability::Memory(base, size, CAP_READ))
+    }
+
     // Another kind of device with memory registers in the pages of `bar` of device `a`.
     fn page_sharer(&self, a: usize, bar: pci::Bar) -> Option<usize> {
         let (start, end, class) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096), self.devices[a].class);
@@ -721,6 +731,9 @@ impl Scheduler {
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
             PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
+            // The hardware report and the ACPI tables, as read-only copies in frames of their own (174-KRN-0038).
+            PLATFORM_REPORT => Self::copy_out(&crate::report::build(&self.boot, &self.devices)),
+            PLATFORM_ACPI_TABLE => Self::copy_out(crate::report::acpi_table(a).ok_or(ERR_NOT_FOUND)?),
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
                 let bytes = a.checked_next_multiple_of(4096).filter(|&n| n > 0).ok_or(ERR_INVALID)?;
@@ -1487,6 +1500,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         let event = context::event(sp);
         match event {
             Event::Stop => cpu::halt_here(),
+            // A checked read of a register the CPU may not have (the hardware report) resumes as "absent".
+            Event::KernelFault { pc, .. } if crate::arch::report::resume_after_fault(pc).is_some() => { context::resume_at(sp, crate::arch::report::resume_after_fault(pc).unwrap()); return sp; }
             Event::KernelFault { code, pc, error } => { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error); cpu::halt_all(); }
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}

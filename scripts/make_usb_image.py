@@ -41,7 +41,8 @@ LOG_LABEL = b"MIND LOG   "
 LOG_SECTORS = 64 * 1024 * 1024 // SECTOR
 LOG_ALIGN = 2048  # 1 MiB
 LOG_SPC = 4  # 2 KiB clusters: about 32 700 of them
-LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.LOG (the last 50 boots are kept).\r\n"
+LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.LOG (the last 50 boots are kept),\r\n"
+              b"the same boot's hardware report as HWNNNN.TXT, and the firmware's ACPI tables in the folder ACPI.\r\n"
               b"This partition is an ordinary FAT16 volume: read it on any computer, and send the logs with a report\r\n"
               b"of what happened (docs/write-disk.md, section 9). On MIND CORE it is log: (ls log:, cat log:boot0001.log).\r\n")
 

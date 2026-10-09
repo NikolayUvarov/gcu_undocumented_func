@@ -163,6 +163,8 @@ pub fn exit_stub(mailbox: u64) -> [u8; 36] {
 pub unsafe fn prepare_stack(_stack: usize, size: usize) -> usize { crate::paging::USER_STACK + size }
 
 // `destination` is a task's context record.
+/// Never needed on aarch64: no checked read faults (arch/aarch64/report.rs).
+pub unsafe fn resume_at(_sp: usize, _pc: u64) {}
 pub unsafe fn save(sp: usize, destination: usize) { core::ptr::copy(sp as *const u8, destination as *mut u8, SIZE); }
 
 pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {

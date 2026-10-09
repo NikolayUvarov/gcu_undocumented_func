@@ -139,6 +139,11 @@ pub const IRQ_LINES: [u8; 11] = [1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14];
 pub unsafe fn registers(sp: usize) -> &'static [u64; 22] {
     &*(*(sp.wrapping_add(AREA) as *const usize) as *const [u64; 22])
 }
+// The interrupted kernel code resumes at `pc` with RAX and RDX zero (a checked MSR read that faulted).
+pub unsafe fn resume_at(sp: usize, pc: u64) {
+    let registers = *(sp.wrapping_add(AREA) as *const usize) as *mut u64;
+    *registers.add(17) = pc; *registers.add(14) = 0; *registers.add(11) = 0;
+}
 // `destination` is 64-byte aligned (XSAVE).
 pub unsafe fn save(sp: usize, destination: usize) {
     core::ptr::copy_nonoverlapping(sp as *const u8, destination as *mut u8, AREA);

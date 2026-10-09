@@ -35,6 +35,9 @@ unsafe fn cpu(index: usize) -> *mut Cpu {
     core::ptr::addr_of_mut!(CPUS).cast::<Cpu>().add(index)
 }
 
+/// Whether the local APICs run in x2APIC mode (211-PRT-0002).
+pub fn x2apic() -> bool { X2APIC.load(Ordering::Relaxed) }
+
 pub fn id() -> usize {
     let apic = unsafe { if X2APIC.load(Ordering::Relaxed) { read(0x20) } else { read(0x20) >> 24 } } as usize;
     INDEX[apic & 255].load(Ordering::Relaxed) as usize

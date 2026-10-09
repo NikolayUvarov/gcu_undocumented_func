@@ -5,6 +5,7 @@
 // each service's capabilities for restarts and gives up the platform privilege (MC-3.12). As the lifecycle owner it
 // restarts failed services within a budget and serves idl/init.wit: start, list, stop and restart services, stop an
 // application.
+mod hardware;
 mod legacy;
 
 use mind::abi::*;
@@ -694,6 +695,8 @@ fn main(info: &'static BootInfo) {
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
     }
     mind::println!("[INIT] READY");
+    // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
+    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to.
     loop {

@@ -1,6 +1,6 @@
 # 174-KRN-0038 — A complete hardware report on every boot
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-1.2, MC-10.2, MC-10.4, MC-12.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-1.2, MC-10.2, MC-10.4, MC-12.1
 
 ## Problem
 
@@ -47,6 +47,41 @@ The kernel builds the report, since it alone sees the CPU's model-specific regis
 
 - **QEMU, x86 and aarch64:** the report holds every section, the CPU's brand and every PCI function `devices` lists, and the ACPI tables as files that match the firmware's. A machine with and without a log volume is covered.
 - **The MacBook Pro:** the report and `log:acpi/` are on the USB drive after a boot. Its PCI section names both GPUs and both EHCI controllers with their BARs, and its kernel ring shows the lines the screen lost.
+
+## Progress
+
+**2026-10-09: written at every boot, x86 and aarch64.**
+
+- **Kernel.**
+  - `kernel/src/klog.rs` keeps the kernel's last 32 KiB of lines: every `serial_print`, so also what the screen lost.
+  - `kernel/src/report.rs` builds the text: the CPU part (`arch/*/report.rs`), the firmware's memory map, every ACPI table decoded, every PCI function, the kernel's choices and the ring.
+    - The ACPI decoding covers the MADT, FADT, MCFG, HPET, DMAR and IVRS (an IOMMU), SRAT and SLIT (NUMA), TPM2 and BGRT.
+    - Each PCI function gets its BARs, bridge windows, capabilities (MSI, MSI-X, PCI Express link, power management) and 256 bytes of configuration space; GPUs and NPUs are marked, and an NVIDIA GPU's `PMC_BOOT_0` is read.
+  - `PLATFORM_REPORT` and `PLATFORM_ACPI_TABLE` give read-only copies.
+- **x86 CPU section.**
+  - Every CPUID leaf and subleaf raw, then decoded:
+    - feature names as Linux spells them;
+    - caches, from leaf 4, AMD's 0x8000_001D, or 0x8000_0005/6;
+    - topology, and the core type on hybrid CPUs;
+    - XSAVE components with sizes and offsets;
+    - TSC and nominal frequencies.
+  - Microcode, and the model-specific registers for frequency and power (Intel: platform info, turbo ratios, HWP, RAPL, thermal; AMD: P-states, CPPC). `rdmsr` runs with a fault fixup, so a register the CPU lacks reads as "absent".
+- **aarch64 CPU section.**
+  - MIDR, MPIDR, the ID_AA64 registers raw and decoded: FP, SIMD, SVE, SME, MTE, BTI, pointer authentication, crypto, RNDR, address size, granules, PAN, VHE.
+  - Caches from CLIDR and CCSIDR, and the timer's frequency.
+- **init** (`init/src/hardware.rs`), before it drops the platform privilege:
+  - writes `log:hwNNNN.txt`, numbered after this boot's `bootNNNN.log`, and keeps the last 50 as the boot logs are kept;
+  - writes every table to `log:acpi/<SIG>.bin` (RSDP and the DSDT included; SSDTs numbered);
+  - without a log volume, writes `ram:hardware.txt`;
+  - logs `[INIT] HARDWARE REPORT: …`.
+- **Tests.**
+  - The `normal` suite (x86 and aarch64) finds `ram:hardware.txt` with the report's header, the CPU section and the started CPUs.
+  - `usb_image_smoke.py` reads `HWNNNN.TXT` and `ACPI/*.bin` from the log partition on the host. It checks every section and the kernel's own lines, and that FACP, DSDT and APIC each have their signature and length, and the RSDP its signature.
+- **Docs:** `docs/api` (the two kinds), the disk-writing guide (section 9, EN and RU), the log volume's README.
+
+Left:
+- the MacBook Pro's report;
+- the later steps of 174: SMBIOS (the bootloader to pass its entry point), the drivers' devices (NVMe identify, USB descriptors, HDA codecs, EDID), and NUMA nodes.
 
 ## Related
 

@@ -602,6 +602,20 @@ def ram_above_4g(vm):
 
 
 def normal_suite(vm):
+def hardware_report_check(vm):
+    """174-KRN-0038: init writes the kernel's hardware report at boot; without a log volume to ram:hardware.txt."""
+    for _ in range(60):
+        listing = vm.command("ls ram:")
+        if "hardware.txt" in listing:
+            break
+        time.sleep(.5)
+    size = re.search(r"hardware\.txt\s+(\d+)", listing)
+    assert size and int(size[1]) > 4000, listing
+    head = vm.command("cat ram:hardware.txt", raw=True)
+    for line in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "CPUs started      %d of %d listed" % (vm.cpus, vm.cpus), "Features\n"):
+        require(head, line)
+
+
     # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
     assert "gpio" not in vm.services()
     if vm.arch == "aarch64":
@@ -612,6 +626,7 @@ def normal_suite(vm):
                          ANSI.sub("", vm.log).replace("\r", ""))
         assert tick and ("pit=off" not in (getattr(vm.args, "machine", None) or "")) == ("NOT COUNTING" not in tick[0]), vm.log[-3000:]
     baseline = heap_used(vm)
+    hardware_report_check(vm)
     require(vm.command("list"), "clock")
     require(vm.command("run clock &"), "PID=1 NAME=clock BACKGROUND")
     require(vm.command("run clock &"), "PID=2 NAME=clock BACKGROUND")

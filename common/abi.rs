@@ -370,6 +370,8 @@ pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel 
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL, _RESTART or _OBSERVE; b = PRIVILEGE_ESCROW: in escrow (not _RESTART)
 pub const PRIVILEGE_ESCROW: usize = 1;
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
+pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the hardware report's text, built now (174-KRN-0038)
+pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
