@@ -104,6 +104,19 @@ The gate is one of the following:
 - **GitHub CI is green** on the pushed commit.
 - **Or a full local run** when GitHub's hosted runners do not take the jobs. Run `scripts/ci_local.sh --ref <your-branch>`, which tests the branch merged with the current `main` in a temporary worktree. Every group must pass, and the commit or report must say that the gate was local.
 
+**A text-only commit needs no gate** (the maintainer's decision, 2026-10-09).
+
+- **Which commits.** Those that change only Markdown documents that no build, image or test reads:
+  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted) and `docs/`;
+  - the root's AGENTS.md, CONTRIBUTING.md, TRACKS.md, README.md, ROADMAP.md, ROADMAP_RU.md, SECURITY.md and CODE_OF_CONDUCT.md;
+  - the Constitution's and RFCs' texts.
+- **Why.** A test run says nothing about such files.
+- **How.** Such a commit goes to `main` as a fast-forward, as above, without waiting for CI or a local run. Its message says the gate was not needed.
+- **Everything else is code for this rule** and passes the gate:
+  - source, scripts, build and CI files, IDL, tests and their data, `.gitignore`;
+  - the files the build copies into images: THIRD_PARTY.md, the LICENSE files, `LICENSES/`, `hwdocs/`.
+- **A commit that mixes both** passes the gate.
+
 **Everyone else** opens a pull request from a fork or branch. The pull request:
 
 - states its issue and the Constitution clauses it touches;
@@ -142,7 +155,7 @@ The maintainer or the owning track reviews and merges it.
 
 ## 6. What an agent must not do
 
-- Push to `main` without a green gate, or push to another track's branch.
+- Push to `main` without a green gate, except a text-only commit (section 4), or push to another track's branch.
 - Build, test or run a gate on `fast-test`: it only receives merges of the agents' branches (section 4).
 - Skip, disable or weaken a test to get a green result, or push an empty commit to re-trigger CI.
 - Change the system-call ABI outside a kernel issue, or change a service interface without a new IDL version.
