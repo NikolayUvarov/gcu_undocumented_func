@@ -78,7 +78,9 @@ The camera came to the kernel session on 2026-10-09 (its owner line). Step 2 is 
 - **`usb_host`, EHCI: one isochronous IN stream a controller.**
   - **The ring.** A ring of up to 64 iTDs, one a frame. Frame list entry j names iTD j mod n, and that iTD then links to the interrupt chain.
   - **The buffers.** Each microframe's transaction has up to 3 × 1024 bytes (Mult). The region grew by 776 KiB to hold the ring: `EHCI_DMA_BYTES`.
-  - **Collecting.** The iTDs the controller is done with are collected in the order it ran them, then armed again no nearer than two frames ahead of it. A controller may hold an iTD up to a frame (its isochronous scheduling threshold).
+  - **Collecting.** Each look collects every iTD the controller finished, in the order of the frames they ran in. Each iTD remembers the frame it was armed for, counted past the frame list's wrap.
+  - **Arming.** Every free iTD at least two frames ahead of the controller is armed again. A controller may hold an iTD up to a frame (its isochronous scheduling threshold).
+  - **Its test.** The order (`usb_host/src/iso_ring.rs`) is host-tested against a model of the controller (`tests/iso_ring_host.rs`). A look at least every n − 2 frames loses no frame. Later looks lose frames but keep the order, never arm an iTD the controller may hold, and count the losses. A first version that walked the ring from one pointer stalled behind an unarmed iTD; the model found it.
   - **The queue.** Packets wait in a queue of 1 MiB. When it is full, new ones are dropped and counted.
   - **Polling.** While a stream runs, `usb_host` collects every tick, and again at each request.
   - **Not done.** Split isochronous (siTD) for a full-speed camera behind a hub, and isochronous on xHCI. `select` refuses both, with a log line.

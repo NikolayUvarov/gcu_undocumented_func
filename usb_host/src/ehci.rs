@@ -5,6 +5,7 @@
 // high-speed hub, and one isochronous IN stream of a high-speed device through a ring of iTDs (a camera, 158). The bus
 // (devices, hubs, interfaces) follows the xHCI one in main.rs.
 use alloc::vec::Vec;
+use crate::iso_ring::{Descriptors, Ring};
 use crate::xhci::{wait, wait_for};
 use crate::{speed_name, Iface, CLASS_HUB, MAX_INTERFACES, SERVED};
 use mind::dev::{Dma, Mmio};
@@ -46,12 +47,38 @@ pub enum Kind { Control, Bulk, Interrupt }
 // program's 64 KiB stack, where it is built (211-DRV-0018).
 struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, stride: usize, queue: Vec<u8>, lengths: [u16; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
 
-// The isochronous stream: frame list entry j names iTD j % frames, which every microframe `step` apart moves up to `slot`
-// bytes into its buffer. An iTD is armed again once collected, but never within two frames of the controller (it may
-// hold an iTD that long). The packets go to `queue`, a ring of two length bytes (bit 15: an error) and the data each.
-struct Iso {
-    address: u8, endpoint: u8, frames: usize, step: usize, slot: usize, area: usize, armed: u64, next: usize,
-    queue: Vec<u8>, head: usize, len: usize, pub stats: IsoStats,
+// The isochronous stream: its device and endpoint, the order of its ring (iso_ring.rs) and what the iTDs hold.
+struct Iso { address: u8, endpoint: u8, ring: Ring, packets: Packets }
+
+// Every microframe `step` apart an iTD moves up to `slot` bytes into its buffer of `area` bytes. The packets go to
+// `queue`, a ring of two length bytes (bit 15: an error) and the data each.
+struct Packets { step: usize, slot: usize, area: usize, queue: Vec<u8>, head: usize, len: usize, stats: IsoStats }
+
+// The ring's view of the iTDs in the DMA region.
+struct Itds<'a> { dma: &'a mut Dma, packets: &'a mut Packets }
+
+impl Descriptors for Itds<'_> {
+    fn active(&self, k: usize) -> bool { (0..8).any(|t| self.dma.read32(ITDS + k * ITD + 4 + t * 4) & ITD_ACTIVE != 0) }
+    fn collect(&mut self, k: usize) {
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let p = &mut *self.packets;
+        for n in 0..8 / p.step {
+            let word = self.dma.read32(ITDS + k * ITD + 4 + n * p.step * 4);
+            let (length, error) = (((word >> 16) & 0xFFF) as usize, word & ITD_ERRORS != 0);
+            if length == 0 && !error { continue; }
+            p.push(self.dma.bytes(ISO_DATA + k * p.area + n * p.slot, length.min(p.slot)), error);
+        }
+    }
+    fn arm(&mut self, k: usize) {
+        let (step, slot) = (self.packets.step, self.packets.slot);
+        for t in 0..8 {
+            let word = if t % step != 0 { 0 } else {
+                let offset = t / step * slot;
+                ITD_ACTIVE | (slot as u32) << 16 | ((offset / 4096) as u32) << 12 | (offset % 4096) as u32
+            };
+            self.dma.write32(ITDS + k * ITD + 4 + t * 4, word);
+        }
+    }
 }
 
 /// What a stream moved: packets and their bytes, those with errors, those the full queue dropped, frames armed too late.
@@ -71,7 +98,7 @@ fn ring_read(ring: &[u8], at: usize, out: &mut [u8]) {
     out[first..].copy_from_slice(&ring[..rest]);
 }
 
-impl Iso {
+impl Packets {
     // A packet into the queue, or counted as dropped when the queue has no room for it.
     fn push(&mut self, data: &[u8], error: bool) {
         let need = 2 + data.len();
@@ -408,8 +435,7 @@ impl Ehci {
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         for j in 0..1024 { let itd = self.physical(ITDS + j % frames * ITD); self.dma.write32(FRAMES + j * 4, itd); }
-        let next = (self.frame() + 2) % frames;
-        self.iso = Some(Iso { address, endpoint, frames, step, slot, area, armed: 0, next, queue, head: 0, len: 0, stats: IsoStats::default() });
+        self.iso = Some(Iso { address, endpoint, ring: Ring::new(frames, self.frame()), packets: Packets { step, slot, area, queue, head: 0, len: 0, stats: IsoStats::default() } });
         self.pump_iso();
         Ok(frames)
     }
@@ -420,7 +446,7 @@ impl Ehci {
         let chain = self.physical(qh_at(self.chain)) | TYPE_QH;
         for j in 0..1024 { self.dma.write32(FRAMES + j * 4, chain); }
         mind::time::sleep(2); // two frames: the controller has left the iTDs
-        Some((iso.address, iso.endpoint, iso.stats))
+        Some((iso.address, iso.endpoint, IsoStats { late: iso.ring.late, ..iso.packets.stats }))
     }
     /// The device and endpoint number of the stream.
     pub fn iso_of(&self) -> Option<(u8, u8)> { self.iso.as_ref().map(|i| (i.address, i.endpoint)) }
@@ -430,47 +456,21 @@ impl Ehci {
         let frame = self.frame();
         let Ehci { dma, iso, .. } = self;
         let Some(iso) = iso.as_mut() else { return };
-        for _ in 0..iso.frames {
-            let k = iso.next;
-            let at = ITDS + k * ITD;
-            let collected = iso.armed & 1 << k != 0;
-            if collected {
-                if (0..8).any(|t| dma.read32(at + 4 + t * 4) & ITD_ACTIVE != 0) { break; }
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-                for n in 0..8 / iso.step {
-                    let word = dma.read32(at + 4 + n * iso.step * 4);
-                    let (length, error) = (((word >> 16) & 0xFFF) as usize, word & ITD_ERRORS != 0);
-                    if length == 0 && !error { continue; }
-                    let data = dma.bytes(ISO_DATA + k * iso.area + n * iso.slot, length.min(iso.slot));
-                    iso.push(data, error);
-                }
-                iso.armed &= !(1 << k);
-            }
-            if (k + iso.frames - frame % iso.frames) % iso.frames < 2 { if collected { iso.stats.late += 1; } break; }
-            for t in 0..8 {
-                let word = if t % iso.step != 0 { 0 } else {
-                    let offset = t / iso.step * iso.slot;
-                    ITD_ACTIVE | (iso.slot as u32) << 16 | ((offset / 4096) as u32) << 12 | (offset % 4096) as u32
-                };
-                dma.write32(at + 4 + t * 4, word);
-            }
-            iso.armed |= 1 << k;
-            iso.next = (k + 1) % iso.frames;
-        }
+        iso.ring.pump(frame, &mut Itds { dma, packets: &mut iso.packets });
     }
 
     /// The queued packets into `out` (two length bytes and the packet each, whole packets only); the bytes written.
     pub fn take_iso(&mut self, out: &mut [u8]) -> Option<usize> {
         self.pump_iso();
-        let iso = self.iso.as_mut()?;
+        let p = &mut self.iso.as_mut()?.packets;
         let mut written = 0;
-        while iso.len >= 2 {
-            let head = u16::from_le_bytes([iso.queue[iso.head], iso.queue[(iso.head + 1) % ISO_QUEUE]]);
+        while p.len >= 2 {
+            let head = u16::from_le_bytes([p.queue[p.head], p.queue[(p.head + 1) % ISO_QUEUE]]);
             let need = 2 + (head & 0x7FFF) as usize;
             if written + need > out.len() { break; }
-            ring_read(&iso.queue, iso.head, &mut out[written..written + need]);
-            iso.head = (iso.head + need) % ISO_QUEUE;
-            iso.len -= need; written += need;
+            ring_read(&p.queue, p.head, &mut out[written..written + need]);
+            p.head = (p.head + need) % ISO_QUEUE;
+            p.len -= need; written += need;
         }
         Some(written)
     }

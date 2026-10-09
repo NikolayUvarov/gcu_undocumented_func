@@ -7,6 +7,7 @@ extern crate alloc;
 // class its badge names and moves data through the buffer it lends. Ports are scanned every SCAN_MS, so devices may
 // come and go. Events are polled (no interrupt line); while an isochronous stream runs, every STREAM_MS.
 mod ehci;
+mod iso_ring;
 mod xhci;
 
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_MEM, ERR_TIMEOUT};
