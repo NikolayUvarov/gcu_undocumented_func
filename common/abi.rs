@@ -261,7 +261,8 @@ pub const SLOT_SOCKET: usize = 17;
 // names for it (REQUEST_NETWORK, issue 102); in the shell, its client of the broker.
 pub const SLOT_NETWORK: usize = 18;
 pub const SLOT_NETPOLICY: usize = 19;
-// The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls.
+// The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls; lent in a program's same slot for
+// REQUEST_TLS (351-KRN-0034), where `tls` runs the session over the program's own flow.
 pub const SLOT_TLS: usize = 20;
 // The shell's clients of the window broker (idl/window.wit, issue 157): a program's (lent for REQUEST_WINDOW) and the
 // manager's, with mind::window::BADGE_MANAGER (lent for REQUEST_WINDOW_MANAGER). Both go to the program's SLOT_WINDOW.

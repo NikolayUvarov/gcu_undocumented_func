@@ -1,0 +1,33 @@
+# 351-KRN-0034 — A TLS client for programs: `REQUEST_TLS` — done (the kernel's part)
+
+**Type:** kernel (libmind, loader) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.11, MC-11.6
+
+The network track's request "A TLS client for programs (`REQUEST_TLS`)" in `issues/requests-KRN.md` (2026-10-08), for [351-NET-0002](../issues/351-NET-0002-https-for-programs.md): HTTPS for `download` and the updater.
+
+## Problem
+
+Only the shell holds a client of the TLS service (`SLOT_TLS`). A program had no request flag to ask for one, so `download` refuses `https://`. Lending the client is safe as far as the network goes. `tls` runs a session over a flow the client lends it (`attach`), so the program reaches only what its own flow grant allows.
+
+## Plan
+
+- `REQUEST_TLS` in `libmind::process`: the launcher's TLS client in the program's `SLOT_TLS` (20), as `REQUEST_GPIO` does with `SLOT_GPIO`.
+- The loader accepts a client lent for `SLOT_TLS` in a launch session.
+- The shell's part, lending its client only with a flow grant, is the tools track's (`issues/requests-APP.md`, "The shell lends its TLS client for `REQUEST_TLS`"). init's grant to `updater` is [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+
+## Acceptance criteria
+
+A program built with `REQUEST_TLS | REQUEST_NETWORK` finds an endpoint in `SLOT_TLS` and completes a TLS session over its own grant; one without the request finds none.
+
+## Resolution
+
+The kernel's part done on 2026-10-09:
+
+- `REQUEST_TLS` (131072) in `libmind::process`;
+- `SLOT_TLS` in the loader's list of slots a launcher may fill;
+- the slot's comment in `common/abi.rs` and `docs/api` say so.
+
+**Not tested here.** No launcher lends the client yet, so nothing reaches a program. The acceptance above is checked end to end once the shell's part lands (requests-APP), in 351-NET-0002's QEMU test of `download https://…`.
+
+## Related
+
+[351-NET-0002](../issues/351-NET-0002-https-for-programs.md), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md), issue 103 (the TLS service).
