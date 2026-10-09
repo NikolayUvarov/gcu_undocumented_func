@@ -26,7 +26,6 @@ ARCHES = {
                 "image": "dist/mind-core-usb-aarch64.img",
                 "boot": "UEFI AArch64, Secure Boot disabled: QEMU virt with AAVMF (./03_run_qemu_aarch64.sh --image), boards with UEFI firmware (issue 205)."},
 }
-APPLICATIONS = tuple(sorted(p.name for p in (ROOT / "usb_root").glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
 # Licences travel with the image: tts.elf, hear.elf and voice.elf embed third-party dictionaries, the text programs the MIND Mono
 # font (THIRD_PARTY.md).
 LICENSES = ("LICENSES/LICENSE-MIT", "LICENSES/LICENSE-APACHE", "LICENSES/THIRD_PARTY.md", *sorted(f"LICENSES/{p.name}" for p in (ROOT / "LICENSES").glob("*.txt")))
@@ -56,13 +55,19 @@ def listed(source):
     return {line.split()[1] for line in manifest.read_text(errors="replace").splitlines() if line.startswith("file ") and len(line.split()) > 1}
 
 
+def applications(source):
+    """The applications in `source`: every *.elf but the kernel and the boot services, listed when the image is made, after
+    the build (175-PRT-0007: a list taken at import missed every program of a clean tree's first build)."""
+    return tuple(sorted(p.name for p in Path(source).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
+
+
 def files(arch, source=None):
     """The files of the image for `arch`: the bootloader, the kernel, its boot services, the applications, licences, voice."""
     spec = ARCHES[arch]
-    names = listed(source or ROOT / spec["root"])
+    source = Path(source or ROOT / spec["root"])
+    names = listed(source)
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
-    apps = APPLICATIONS if arch == "x86_64" else tuple(sorted(p.name for p in (ROOT / spec["root"]).glob("*.elf") if p.name != "kernel.elf" and p.name not in BOOT_FILES))
-    return (spec["efi"], "kernel.elf", *boot, *apps, *LICENSES, *VOICE, *SIGNED)
+    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *SIGNED)
 
 
 def find_qemu_img(requested):

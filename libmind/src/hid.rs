@@ -203,12 +203,19 @@ const SCROLL_STEP: i32 = 160;
 const AXIS_LOCK: i32 = 60;
 const TAP_MS: u64 = 250;
 const TAP_TRAVEL: i32 = 200;
+const DOUBLE_TAP_MS: u64 = 300; // from a tap's end to the next touch, for the drag lock
 
 /// What a trackpad's touches mean (211-DRV-0018): one finger moves the pointer; pressing the pad is the left button,
 /// with two fingers on it the right one; a quick tap of two fingers is a right click; three fingers scroll, vertically
-/// or horizontally by the way they first move, in the content's direction (macOS's natural scrolling).
+/// or horizontally by the way they first move, in the content's direction (macOS's natural scrolling). A touch soon
+/// after a one-finger tap holds the left button down, whether that touch moves or taps, until a later tap or a press
+/// of the pad (the drag lock): one finger drags a window by its title, lifted and put down again as often as needed.
 #[derive(Default)]
-pub struct Trackpad { fingers: usize, last: Option<(i32, i32)>, carry: (i32, i32), scroll: (i32, i32), axis: u8, held: u8, touch: Option<(u64, usize, i32, bool)> }
+pub struct Trackpad {
+    fingers: usize, last: Option<(i32, i32)>, carry: (i32, i32), scroll: (i32, i32), axis: u8, held: u8, touch: Option<(u64, usize, i32, bool)>,
+    // The end of the last one-finger tap; the drag lock, and whether the current touch set it; the button last sent.
+    tapped: Option<u64>, locked: bool, locking: bool, sent: u8,
+}
 
 impl Trackpad {
     pub fn new() -> Self { Self::default() }
@@ -232,22 +239,34 @@ impl Trackpad {
         // A touch, for taps: when it began, the most fingers, how far they went, whether the pad was pressed.
         let pressed = packet[TRACKPAD_BUTTON] & 1 != 0;
         match (&mut self.touch, count) {
-            (None, n) if n > 0 => self.touch = Some((now, n, 0, pressed)),
+            (None, n) if n > 0 => {
+                self.touch = Some((now, n, 0, pressed));
+                // One finger soon after a one-finger tap: the left button down, and it stays (the drag lock).
+                if n == 1 && !self.locked && self.tapped.is_some_and(|t| now.saturating_sub(t) <= DOUBLE_TAP_MS) { (self.locked, self.locking) = (true, true); }
+                self.tapped = None;
+            }
             (Some(t), n) if n > 0 => { t.1 = t.1.max(n); t.2 += delta.0.abs() + delta.1.abs(); t.3 |= pressed; }
             (Some(t), _) => {
                 let (start, most, travel, was_pressed) = *t;
                 self.touch = None;
-                if most == 2 && !was_pressed && now.saturating_sub(start) <= TAP_MS && travel <= TAP_TRAVEL && self.held == 0 {
+                let tap = !was_pressed && now.saturating_sub(start) <= TAP_MS && travel <= TAP_TRAVEL && self.held == 0;
+                if self.locking { self.locking = false; } // the touch that set the lock keeps it
+                else if self.locked { if tap { self.locked = false; } } // a later tap lets it go
+                else if tap && most == 2 {
                     out(pointer_event(POINTER_RIGHT, 0, 0, 0));
                     out(pointer_event(0, 0, 0, 0));
-                }
+                } else if tap && most == 1 { self.tapped = Some(now); }
             }
             _ => {}
         }
         // The button: left, or right with two fingers or more on the pad when it went down; it stays so until it is up.
+        // Pressing the pad ends a drag lock: the press holds the button from then on.
+        if pressed { (self.locked, self.locking) = (false, false); }
         let held = if pressed { if self.held != 0 { self.held } else if count >= 2 { POINTER_RIGHT } else { POINTER_LEFT } } else { 0 };
-        let changed = held != self.held;
         self.held = held;
+        let held = if self.locked { POINTER_LEFT } else { held };
+        let changed = held != self.sent;
+        self.sent = held;
         if count >= 3 {
             self.scroll = (self.scroll.0 + delta.0, self.scroll.1 + delta.1);
             if self.axis == 0 && self.scroll.0.abs().max(self.scroll.1.abs()) >= AXIS_LOCK { self.axis = if self.scroll.1.abs() >= self.scroll.0.abs() { 1 } else { 2 }; }

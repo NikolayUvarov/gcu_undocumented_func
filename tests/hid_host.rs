@@ -223,3 +223,56 @@ fn short_or_empty_packets_do_nothing() {
     assert!(out.is_empty());
     assert!(fingers(&packet(false, &[(1, 2), (3, 4)])) && !fingers(&[0u8; 29]));
 }
+
+// A one-finger tap, then a touch: the left button held across touches until a later tap (the drag lock).
+fn tap(pad: &mut Trackpad, at: u64) -> Vec<(u8, i32, i32, i32, i32)> {
+    let mut out = feed(pad, false, &[(500, 500)], at);
+    out.extend(feed(pad, false, &[], at + 80));
+    out
+}
+
+#[test]
+fn a_tap_then_a_touch_holds_the_left_button_until_a_tap() {
+    let mut pad = Trackpad::new();
+    assert!(tap(&mut pad, 0).is_empty()); // one tap alone does nothing
+    // The next touch, 200 ms later, presses the left button at once and drags with it.
+    assert_eq!(feed(&mut pad, false, &[(0, 0)], 280), vec![(POINTER_LEFT, 0, 0, 0, 0)]);
+    assert!(feed(&mut pad, false, &[(80, 0)], 288).iter().all(|e| e.0 == POINTER_LEFT && e.1 > 0));
+    // Lifted, the button stays down; a finger put down again goes on dragging.
+    assert!(feed(&mut pad, false, &[], 300).is_empty());
+    feed(&mut pad, false, &[(2000, 2000)], 1000);
+    assert!(feed(&mut pad, false, &[(2000, 1900)], 1008).iter().all(|e| e.0 == POINTER_LEFT && e.2 > 0));
+    assert!(feed(&mut pad, false, &[], 1300).is_empty());
+    // A tap lets it go.
+    assert_eq!(tap(&mut pad, 2000), vec![(0, 0, 0, 0, 0)]);
+    feed(&mut pad, false, &[(0, 0)], 2100);
+    assert!(feed(&mut pad, false, &[(80, 0)], 2108).iter().all(|e| e.0 == 0));
+}
+
+#[test]
+fn a_double_tap_keeps_the_lock_and_a_press_ends_it() {
+    let mut pad = Trackpad::new();
+    tap(&mut pad, 0);
+    // Two taps: the button goes down at the second and stays down after it.
+    assert_eq!(tap(&mut pad, 200), vec![(POINTER_LEFT, 0, 0, 0, 0)]);
+    feed(&mut pad, false, &[(0, 0)], 1000);
+    assert!(feed(&mut pad, false, &[(0, 80)], 1008).iter().all(|e| e.0 == POINTER_LEFT));
+    // A press of the pad takes the button over; it is up when the pad is, and the lock is gone.
+    assert!(feed(&mut pad, true, &[(0, 80)], 1016).iter().all(|e| e.0 == POINTER_LEFT));
+    assert_eq!(feed(&mut pad, false, &[(0, 80)], 1024), vec![(0, 0, 0, 0, 0)]);
+    assert!(feed(&mut pad, false, &[(0, 160)], 1032).iter().all(|e| e.0 == 0));
+    assert!(feed(&mut pad, false, &[], 1040).is_empty());
+}
+
+#[test]
+fn a_touch_long_after_a_tap_or_with_two_fingers_does_not_lock() {
+    let mut pad = Trackpad::new();
+    tap(&mut pad, 0);
+    feed(&mut pad, false, &[(0, 0)], 500); // 420 ms after the tap
+    assert!(feed(&mut pad, false, &[(80, 0)], 508).iter().all(|e| e.0 == 0));
+    feed(&mut pad, false, &[], 600);
+    tap(&mut pad, 1000);
+    // Two fingers after a tap: a two-finger tap, the right click, not a lock.
+    feed(&mut pad, false, &[(0, 0), (900, 0)], 1150);
+    assert_eq!(feed(&mut pad, false, &[], 1200), vec![(POINTER_RIGHT, 0, 0, 0, 0), (0, 0, 0, 0, 0)]);
+}
