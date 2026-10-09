@@ -220,3 +220,40 @@ The `smp` suite with `--cpu-model max` still sees `FPU=XSAVE+AVX` on every CPU. 
 ### Acceptance criteria
 
 A host test of `wm`'s routing passes a horizontal step to the window under the pointer, and `view` scrolls a wide image sideways by it. On the MacBook Pro a three-finger swipe left or right moves a wide image in `view`.
+
+## Saving does not destroy an existing `<name>.tmp` (audit A07, main task 175)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, routing the 2026-10-09 audit ([175](175-audit-2026-10-09.md)) at the maintainer's decision. **APP may start it now.**
+
+### Problem
+
+Audit finding A07 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)), confirmed, P2.
+- `edit` saves through `File::create` (`MODE_TRUNCATE`).
+- `fm`'s editor calls `create(&temporary, true)`, mapped to `MODE_TRUNCATE` (`fm/src/main.rs`, 82–84).
+- So saving `x` destroys an unrelated `x.tmp`, and two editors saving one file collide. `MODE_NEW` exists (`libmind/src/fs.rs`, line 18).
+
+### Plan and acceptance (from the audit)
+
+- The staging file is created exclusively (`MODE_NEW`), with another name on a collision, and the save tracks the one it owns.
+- **Tests:** an existing staging name, concurrent saves, and cleanup after a failure, without changing another file.
+- `issues-audit/repro/fm_repro.py`'s A07 part becomes the regression test.
+
+## `fm` keeps a move's source until the destination is on its medium (audit A08, main task 175)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, routing the 2026-10-09 audit ([175](175-audit-2026-10-09.md)) at the maintainer's decision. **APP may start it now; P1.**
+
+### Problem
+
+Audit finding A08 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)), confirmed.
+- **The order.** Removals are planned after the copies (`fm/src/fm.rs`, 559–562), and `finish()` flushes the sources before the target (599).
+- **The lost error.** `Disk::flush` returns `()` (line 63), and `fm/src/main.rs:94` drops the error of `root.flush()`.
+- **The result.** In a move between two durable volumes (`data/` to a USB stick), the source's removal reaches its medium before the destination's data. A later I/O error or power loss loses the file, and `fm` reports it moved.
+
+### Plan and acceptance (from the audit)
+
+- Flushing returns its error. A source is removed only after its destination flushed successfully. When persistence fails the source stays and `fm` shows the failure.
+- **Tests:**
+  - destination write-back and flush errors;
+  - multi-file moves, retry and cancellation;
+  - save and copy completion propagate flush errors.
+- `issues-audit/repro/fm_repro.py`'s A08 part becomes the regression test.
