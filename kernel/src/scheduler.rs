@@ -218,6 +218,8 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
     unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    #[cfg(feature = "bar-move-test")]
+    unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
 }
 
@@ -607,6 +609,52 @@ impl Scheduler {
         }
     }
 
+    // Another kind of device with memory registers in the pages of `bar` of device `a`.
+    fn page_sharer(&self, a: usize, bar: pci::Bar) -> Option<usize> {
+        let (start, end, class) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096), self.devices[a].class);
+        self.devices.iter().enumerate().position(|(i, d)| i != a && d.class != class && d.bars.iter().any(|x| !x.io && x.size != 0 && x.base < end && x.base + x.size > start))
+    }
+
+    // Test-only (211-KRN-0021): the RTL8139's 256-byte register BAR is packed into the page of the SD host controller's,
+    // as Apple's firmware packs EHCI next to AHCI; granted, it must move to a page of its own and answer there.
+    #[cfg(feature = "bar-move-test")]
+    fn bar_move_test(&mut self) {
+        let say = |text: core::fmt::Arguments| { let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, text); };
+        let (Some(nic), Some(sd)) = (self.devices.iter().position(|d| d.id == 0x8139_10EC), self.devices.iter().position(|d| d.class == 0x08_05_01)) else {
+            return say(format_args!("MIND CORE KERNEL: PCI TEST: NO RTL8139 AND SD HOST CONTROLLER\n"));
+        };
+        let packed = self.devices[sd].bars[0].base + 0x800;
+        if !unsafe { pci::move_bar(&mut self.devices[nic], 1, packed) } { return say(format_args!("MIND CORE KERNEL: PCI TEST: THE BAR WAS NOT PACKED\n")); }
+        say(format_args!("MIND CORE KERNEL: PCI TEST: BAR 1 OF {:06X} PACKED AT {:X}, IN THE PAGE OF {:06X}\n", self.devices[nic].location(), packed, self.devices[sd].location()));
+        match self.platform_cap(PLATFORM_DEVICE_BAR, nic, 1) {
+            Ok(Capability::Mmio(base, _)) => {
+                let mac: [u8; 6] = core::array::from_fn(|i| unsafe { core::ptr::read_volatile((base + i) as *const u8) });
+                say(format_args!("MIND CORE KERNEL: PCI TEST: GRANTED AT {:X}, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} READ THERE\n", base, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
+            }
+            Ok(_) => say(format_args!("MIND CORE KERNEL: PCI TEST: NOT A REGISTER CAPABILITY\n")),
+            Err(code) => say(format_args!("MIND CORE KERNEL: PCI TEST: REFUSED ({:X})\n", code)),
+        }
+    }
+
+    // A free 4 KiB page for a BAR moved off a shared one (211-KRN-0021): within the span the firmware gave bus 0's
+    // devices (decoded to PCI), below the fixed ranges at 0xFEC0_0000, clear of every BAR, bridge window, the ECAM and
+    // every range of the firmware's memory map.
+    fn free_page(&self) -> Option<u64> {
+        let below = |x: &pci::Bar| !x.io && x.size != 0 && x.base != 0 && x.base + x.size <= 1 << 32;
+        let bus0 = || self.devices.iter().filter(|d| d.location() >> 8 == 0 && d.class >> 8 != 0x0604).flat_map(|d| d.bars).filter(below);
+        let (low, high) = (bus0().map(|x| x.base).min()? & !0xFFF, bus0().map(|x| x.base + x.size).max()?.min(0xFEC0_0000));
+        let mut page = low;
+        while page + 4096 <= high {
+            let end = page + 4096;
+            let taken = self.devices.iter().flat_map(|d| d.bars.into_iter().filter(|x| !x.io && x.size != 0).map(|x| (x.base, x.base + x.size)).chain(d.windows))
+                .chain(crate::pcicfg::ecam())
+                .chain((0..self.boot.memory_map_len).map(|i| unsafe { *self.boot.memory_map.add(i) }).map(|r| (r.start as u64, r.start as u64 + r.pages as u64 * 4096)))
+                .filter(|&(from, to)| to > from && from < end && to > page).map(|(_, to)| to).max();
+            match taken { None => return Some(page), Some(to) => page = to.next_multiple_of(4096) }
+        }
+        None
+    }
+
     // The PCI function with a BAR covering physical (or port) address `base`.
     fn device_at(&self, base: u64) -> Option<&pci::Device> { self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)) }
 
@@ -625,11 +673,22 @@ impl Scheduler {
                 Ok(Capability::Mmio(base, bytes))
             }
             PLATFORM_DEVICE_BAR => {
-                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
+                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let mut bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
                 if bar.io { unsafe { pci::enable(&device); } return Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)); }
-                // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI, 211-KRN-0021):
-                // other kinds of device there go to no other driver once this one is granted, nor this one after theirs.
+                // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI next to AHCI,
+                // 211-KRN-0021): such a BAR moves to a free page first. If none is free, other kinds of device there go
+                // to no other driver once this one is granted, nor this one after theirs.
+                if let Some(other) = self.page_sharer(a, bar).filter(|_| !device.granted && bar.size < 4096 && bar.base + bar.size <= 1 << 32) {
+                    let other = self.devices[other].location();
+                    if let Some(page) = self.free_page() {
+                        let from = bar.base;
+                        if unsafe { pci::move_bar(&mut self.devices[a], b, page) } {
+                            bar.base = page;
+                            let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} MOVED FROM {:X} TO {:X}: ITS PAGE HELD REGISTERS OF {:06X}\n", b, device.location(), from, page, other));
+                        }
+                    }
+                }
                 let (start, end) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096));
                 let mut sharers = self.devices.iter().enumerate().filter(|&(i, d)| i != a && d.class != device.class
                     && d.bars.iter().any(|b| !b.io && b.size != 0 && b.base < end && b.base + b.size > start));

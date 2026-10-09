@@ -31,6 +31,13 @@ pub unsafe fn init(rsdp: u64) {
         let address = if entry == 8 { u64_at(list, at) } else { u32_at(list, at) as u64 };
         let Some(table) = table(address) else { continue };
         if &table[..4] == b"APIC" { processors(table); continue; }
+        // Allocation entries of 16 bytes from offset 44: base, segment, first bus, last bus.
+        if &table[..4] == b"MCFG" {
+            if let Some(entry) = (44..table.len().saturating_sub(15)).step_by(16).find(|&e| u16::from_le_bytes([table[e + 8], table[e + 9]]) == 0) {
+                crate::pcicfg::reserve_ecam(u64_at(table, entry), table[entry + 10], table[entry + 11]);
+            }
+            continue;
+        }
         // Flags bit 10: RESET_REG_SUP; the generic address at 116, the value at 128 (FADT revision 2 and later).
         if &table[..4] != b"FACP" { continue; }
         fadt = true;

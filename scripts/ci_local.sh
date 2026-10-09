@@ -47,7 +47,7 @@ X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
  --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
  --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
- --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel"
+ --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel /tmp/mind-bar-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
 # Group name | command; a failed "build" step skips the rest of its part.
@@ -111,6 +111,7 @@ x86_fixtures() {
     (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
     (cd kernel && cargo build --release --features trial-test --target-dir /tmp/mind-trial-target)
     (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
+    (cd kernel && cargo build --release --features bar-move-test --target-dir /tmp/mind-bar-target)
 }
 tap_bench() {
     ip link show mindtap0 >/dev/null 2>&1 || {

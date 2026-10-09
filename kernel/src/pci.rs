@@ -6,7 +6,7 @@ use crate::pcicfg::{read, write};
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool, pub windows: [(u64, u64); 2] }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -14,12 +14,14 @@ impl Device {
 }
 
 // BAR size is determined by writing all ones with decoding disabled; the command register is restored afterwards.
+// A bridge (header type 1) has two BARs: what follows them is its bus numbers and windows.
 unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     let mut result = [Bar::default(); 6];
+    let count = match (read(bus, device, function, 0x0C) >> 16) & 0x7F { 0 => 6, 1 => 2, _ => 0 };
     let command = read(bus, device, function, 0x04);
     write(bus, device, function, 0x04, command & !0x3);
     let mut index = 0;
-    while index < 6 {
+    while index < count {
         let offset = 0x10 + index as u8 * 4;
         let original = read(bus, device, function, offset);
         write(bus, device, function, offset, 0xFFFF_FFFF);
@@ -31,7 +33,7 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
         } else if mask != 0 {
             let wide = (original >> 1) & 3 == 2;
             let (mut base, mut size_mask) = ((original & 0xFFFF_FFF0) as u64, (mask & 0xFFFF_FFF0) as u64 | 0xFFFF_FFFF_0000_0000);
-            if wide && index < 5 {
+            if wide && index + 1 < count {
                 let high = read(bus, device, function, offset + 4);
                 write(bus, device, function, offset + 4, 0xFFFF_FFFF);
                 let high_mask = read(bus, device, function, offset + 4);
@@ -45,6 +47,19 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     }
     write(bus, device, function, 0x04, command);
     result
+}
+
+// A bridge's memory windows (base, end): non-prefetchable and prefetchable; (0, 0) for one it does not forward.
+unsafe fn windows(bus: u8, device: u8, function: u8) -> [(u64, u64); 2] {
+    if (read(bus, device, function, 0x0C) >> 16) & 0x7F != 1 { return [(0, 0); 2]; }
+    let memory = read(bus, device, function, 0x20);
+    let (base, limit) = (((memory & 0xFFF0) as u64) << 16, ((memory >> 16 & 0xFFF0) as u64) << 16 | 0xF_FFFF);
+    let prefetch = read(bus, device, function, 0x24);
+    let wide = prefetch & 0xF == 1;
+    let high = |offset| if wide { (read(bus, device, function, offset) as u64) << 32 } else { 0 };
+    let (pbase, plimit) = (((prefetch & 0xFFF0) as u64) << 16 | high(0x28), ((prefetch >> 16 & 0xFFF0) as u64) << 16 | 0xF_FFFF | high(0x2C));
+    let window = |b: u64, l: u64| if l > b { (b, l + 1) } else { (0, 0) };
+    [window(base, limit), window(pbase, plimit)]
 }
 
 // Intel 7, 8 and 9 series chipsets (from 2012, Intel Macs among them) give their USB ports to the EHCI controllers
@@ -94,11 +109,26 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 let bars = bars(bus, device, function);
                 if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
-                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false });
+                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false, windows: windows(bus, device, function) });
             }
         }
     }
     devices
+}
+
+// Moves memory BAR `index` to `base` (below 4 GiB) with decoding off; false if the device did not take it.
+pub unsafe fn move_bar(device: &mut Device, index: usize, base: u64) -> bool {
+    let (bus, dev, function, offset) = (device.bus, device.device, device.function, 0x10 + index as u8 * 4);
+    let command = read(bus, dev, function, 0x04);
+    write(bus, dev, function, 0x04, command & !0x2);
+    let original = read(bus, dev, function, offset);
+    write(bus, dev, function, offset, (base as u32 & 0xFFFF_FFF0) | (original & 0xF));
+    if (original >> 1) & 3 == 2 && index < 5 { write(bus, dev, function, offset + 4, (base >> 32) as u32); }
+    let taken = read(bus, dev, function, offset) & 0xFFFF_FFF0 == base as u32 & 0xFFFF_FFF0;
+    if !taken { write(bus, dev, function, offset, original); }
+    write(bus, dev, function, 0x04, command);
+    if taken { device.bars[index].base = base; }
+    taken
 }
 
 // Stops a device before its driver is restarted: no decoding, no bus mastering (no DMA).

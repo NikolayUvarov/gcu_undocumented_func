@@ -5345,6 +5345,29 @@ def devicetree_suite(args, disk):
           f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
 
 
+def bar_move_check(args, disk):
+    """211-KRN-0021, with a kernel that packs the RTL8139's 256-byte register BAR into the SD host controller's page, as
+    Apple's firmware packs EHCI next to AHCI: granted, the BAR moves to a free page of its own, and the card's MAC
+    address reads there."""
+    with tempfile.TemporaryDirectory(prefix="mind-bar-") as temp:
+        volume = Path(temp) / "volume"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.bar_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58"])
+        try:
+            out = vm.expect("READ THERE", timeout=60)
+            packed = re.search(r"PCI TEST: BAR 1 OF (\w+) PACKED AT ([0-9A-F]+), IN THE PAGE OF (\w+)", out)
+            moved = re.search(r"PCI: BAR 1 OF (\w+) MOVED FROM ([0-9A-F]+) TO ([0-9A-F]+): ITS PAGE HELD REGISTERS OF (\w+)", out)
+            granted = re.search(r"PCI TEST: GRANTED AT ([0-9A-F]+), MAC ([0-9A-F:]+) READ THERE", out)
+            assert packed and moved and granted, out[-3000:]
+            assert moved[2] == packed[2] and moved[4] == packed[3] and int(moved[3], 16) % 4096 == 0 and int(moved[3], 16) >> 12 != int(packed[2], 16) >> 12, out[-3000:]
+            assert granted[1] == moved[3] and granted[2] == "52:54:00:12:34:58", out[-3000:]
+        finally:
+            vm.close()
+    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there", flush=True)
+
+
 def trial_check(args, disk):
     """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
     confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
@@ -5555,6 +5578,8 @@ def boot_suite(args, disk):
         print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
     if args.trial_kernel:
         trial_check(args, disk)
+    if args.bar_kernel:
+        bar_move_check(args, disk)
     store_disk_check(args, disk)
     efivar_check(args, disk)
 
@@ -5575,10 +5600,12 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
+    parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
+    parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
     parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
@@ -5594,13 +5621,14 @@ def main():
         args.qemu, args.cpus = args.qemu or "qemu-system-aarch64", args.cpus or 4
         fixture = ROOT / IMAGE / "fixture-busy_app.elf"
         args.busy_elf = args.busy_elf or (str(fixture) if fixture.exists() else None)
+        fixture = ROOT / IMAGE / "fixture-updater.elf"
+        args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
         # A test-only kernel (211-PRT-0002: x2APIC as firmware leaves it) in a copy of the image directory.
         copy = f"{IMAGE}-kernel"
-    parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
         shutil.rmtree(ROOT / copy, ignore_errors=True)
         shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
         shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
@@ -5612,6 +5640,8 @@ def main():
         suites.append("heap")
     if args.block_elf:
         suites.append("block")
+    if args.updater_elf:
+        suites.append("updater")
     if args.arch == "aarch64":
         suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
@@ -5620,9 +5650,10 @@ def main():
         if suite == "block":
             block_suite(args, args.block_elf)
             continue
+        if suite == "updater":
+            updater_suite(args, args.updater_elf)
+            continue
         if suite == "vfs":
-        fixture = ROOT / IMAGE / "fixture-updater.elf"
-        args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
             vfs_suite(args)
             continue
         if suite == "edit":
@@ -5640,8 +5671,6 @@ def main():
             if suite == "services":
                 # 12 KiB for cat: three times the console's queue (000-KRN-0030).
                 (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
-    if args.updater_elf:
-        suites.append("updater")
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
@@ -5650,9 +5679,6 @@ def main():
                 speech, starts = speech_wav()
                 (disk / "speech.wav").write_bytes(speech)
                 (disk / "commands.wav").write_bytes(speech_wav(COMMANDS)[0])
-        if suite == "updater":
-            updater_suite(args, args.updater_elf)
-            continue
                 (disk / "voice.wav").write_bytes(speech_wav(DIALOGUE)[0])
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")  # read aloud by voice control
