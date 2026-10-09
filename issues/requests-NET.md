@@ -95,3 +95,28 @@ The `tls` suite: a program with the lent client gets `denied` for `client-certif
 ### Acceptance criteria
 
 In QEMU, while `download` fetches from the test server, the list shows its TCP connection as established, with the server's address and port and the badge of `download`'s grant; after it ends, the socket is gone or closed.
+
+## The aarch64 boot-slot check finds a dirty volume since the device key is stored at boot (351-NET-0005)
+
+**Recorded by:** the tools track (APP), 2026-10-09, while gating its branch locally.
+
+### Problem
+
+`tests/aarch64_smoke.py` fails at `boot_slots_check.fsck` (351-UPD-0006) on `origin/main` (ae80444) run on this session's machine (QEMU 8.2, 4 CPUs). It passed on GitHub's runners for the tools branch merged with the same main (run 37909196366), so it depends on timing. Its four boot checks pass, then:
+
+```
+Reclaimed 2 unused clusters (4096 bytes).
+Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.
+```
+
+On aarch64 the processor has RNDR, so at every boot of a fresh image `keystore` makes the device key and stores it in `system/keystore/`. The check closes the machine soon after `MIND CORE KERNEL: INIT STARTED`, in the middle of that write. vfs_server has marked the volume dirty and allocated clusters it has not linked yet. On x86 the default processor has no RDRAND, nothing is written, and the same check passes.
+
+On a vvfat boot disk, the same write once made QEMU itself stop: `block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed` (the aarch64 general boot, same run).
+
+### Plan (a proposal; the owning tracks decide)
+
+The check could wait for `[INIT] READY` and for keystore's line before closing the machine, or boot without RNDR. Alternatively, keystore's first write could happen where a test that kills the machine early does not meet it.
+
+### Acceptance criteria
+
+`python3 tests/aarch64_smoke.py` passes on main.
