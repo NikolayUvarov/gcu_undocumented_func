@@ -24,6 +24,10 @@ pub const ENTRY_ARCHIVE: u8 = 16;
 /// Badge of the VFS client that may write on `ram` and in the boot disk's `data` directory (init gives it to the
 /// shell, Appendix B.6); unbadged clients only read.
 pub const BADGE_USER: u16 = 1;
+/// Badges of the services with a private directory in the boot disk's `system/` (351-NET-0005): only the client with
+/// the directory's badge may open, read or write `system/keystore` and `system/netpolicy`; nobody else may open them.
+pub const BADGE_KEYSTORE: u16 = 2;
+pub const BADGE_NETPOLICY: u16 = 3;
 
 /// Why a file operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -291,8 +291,12 @@ impl Init {
             }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
-            // The key service makes the device key itself (RDRAND) and needs only the date for its certificate.
-            "keystore" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "keystore")?, ALL); self.lend(&mut grants, 2, "rtc")?; }
+            // The key service makes the device key itself (RDRAND), needs the date for its certificate, and keeps the key
+            // in its private directory of the boot disk, which only this client opens (351-NET-0005, 351-KRN-0040).
+            "keystore" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "keystore")?, ALL); self.lend(&mut grants, 2, "rtc")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_KEYSTORE)?, CLIENT);
+            }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
