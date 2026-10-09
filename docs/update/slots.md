@@ -1,6 +1,6 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 0.2 (2026-10-08): the trial in the running system (351-KRN-0014) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 0.3 (2026-10-09): the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
 The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater that stages a slot and writes the confirmed record is not yet (see the end of this page).
 
@@ -60,6 +60,17 @@ Writing a record is the updater's job (351-UPD-0007). Until it exists, `scripts/
 - **Confirming:** the same slot and fallback, confirmed. Command: `boot_slots.py confirm IMAGE`. On the device, `init` confirms a healthy start to the kernel (351-KRN-0014); writing this record from the running system is the updater's (351-UPD-0007, 0008).
 - `boot_slots.py show VOLUME|IMAGE` prints both records and which one counts.
 
+## The update zone in the running system (351-UPD-0008)
+
+`vfs_server` gives the updater's badge (`BADGE_UPDATE` in `libmind/src/fs.rs`) one zone on a volume booted from a slot, and nothing more:
+- **the slot that did not boot** (`MIND/B` when A runs, `MIND/A` when B runs): files and directories inside it may be made, written, truncated, renamed within it and removed;
+- **the two boot records** `MIND/BOOT0` and `MIND/BOOT1`: opened for writing only as they are (never made, emptied or removed), and written only whole: 512 bytes at offset 0 of a 512-byte record. The write changes the record's one sector in place, leaves its directory entry as it was, and is flushed before the call returns;
+- everything else is read-only to it: the running slot, `EFI/`, the root's files, `data/`; private directories in `system/` stay hidden.
+
+A system booted from the volume's root has no update zone. `vfs_server` logs which it is: `[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE` or `[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT`. Other badges, the shell's included, see the slots read-only as before.
+
+No client holds that badge yet: `init` gives it to the `updater` service (351-KRN-0022), which is not on `main` ([requests-KRN.md](../../issues/requests-KRN.md)).
+
 ## Tested
 
 The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each uses a raw disk image with both slots and the build's bootloader, in QEMU (`tests/boot_slots_check.py`).
@@ -68,17 +79,19 @@ The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each
 - Slot B with one byte of a service changed is not loaded. A boots and B is left with no tries.
 - A newer record torn by a cut write is ignored for the older one.
 - `fsck.fat` finds the file system consistent after the bootloader's writes.
+- `vfs_server` names slot A as its update zone when B booted, and slot B when A did; on a root volume it has none.
 - Host tests (`tests/boot_slots_host.rs`) cover:
   - the encoding;
   - that every single flipped bit is refused;
   - the choice between two records.
+- Host tests (`tests/vfs_zone_host.rs`) cover the update zone: what the updater's badge and every other badge may change below the boot root, and that a record write changes exactly one sector of the volume.
 
 The suites with a root volume show that a volume without records boots as before.
 
 ## Not provided yet
 
 - **The confirmed record, written by the running system.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The confirmation does not yet reach the disk: the updater writes the record (351-UPD-0007, 0008), and in the tests the host does.
-- **The updater** that downloads a release into the other slot and writes the records (351-UPD-0007, 0008).
+- **The updater** that downloads a release into the other slot and writes the records (351-UPD-0007). The zone it will write is built (above); a client with its badge filling a slot and writing a record has not run on the platform yet.
 - **Applications in the slots.** They stay at the root, shared, so a fallback runs the newer applications on the older kernel. Moving them needs the loader to know the booted slot (with 351-KRN-0014).
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.
 - **Images built with slots.** That comes with the updater.

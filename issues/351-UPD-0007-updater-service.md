@@ -30,6 +30,19 @@ Something on the device has to turn a published release into a staged, verified 
   - the programs and docs that name `kernel.elf` at the root (`files`, the disk-writing guides) follow.
 - **The slot's manifest** is the release's own. The bootloader checks the slot's kernel and services against it by name ([slots.md](../docs/update/slots.md)), so the updater writes the release's `MANIFEST` and `MANIFEST.SIG` into the slot as published and never signs on the device.
 
+## Decomposition (the storage session for the UPD track, 2026-10-09)
+
+| Task | Track | What | State |
+|---|---|---|---|
+| [351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) | `UPD` | `mind::release`: the channel and the manifest read in their one encoding, and encoded again | done |
+| [351-NET-0011](351-NET-0011-parse-release-metadata.md) | `NET` | `parse` reads channels and manifests for the updater (`idl/parse.wit` 1.1) | open |
+| [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | `UPD` | The update zone in `vfs_server` | built; the badge's grant waits for `init` |
+| [351-KRN-0022](351-KRN-0022-updater-grants.md) | `KRN` | `updater` as a boot service with its grants | done on the kernel branch, not yet on `main` |
+| this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | open |
+| images with slots (below) | `UPD` | `make_usb_image.py` puts the build in slot A | open |
+
+How the updater uses the parser: it verifies the signature over the raw bytes itself (the release key for the channel, the boot key for a manifest), asks `parse` for the fields, and accepts them only if `mind::release` encodes them again to exactly the signed bytes. It never parses network bytes.
+
 ## Acceptance criteria
 
 In QEMU against the test server of 351-UPD-0005:

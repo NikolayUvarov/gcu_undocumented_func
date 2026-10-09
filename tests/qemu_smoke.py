@@ -37,6 +37,7 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+import release as release_tool  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
 from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
@@ -4622,6 +4623,11 @@ def download_check(args, disk):
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
+    # A release channel as release.py publishes it, and one with a space where its one encoding has none (351-NET-0011).
+    body = release_tool.channel_bytes("stable", 7, 5, "2026-11-08T00:00:00Z", {"x86_64": "ab" * 32, "aarch64": "0c" * 32})
+    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    (disk / "data" / "stable").write_bytes(channel)
+    (disk / "data" / "spaced").write_bytes(channel.replace(b'"version":7', b'"version": 7'))
     # TLS takes random bytes from RDRAND only.
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
@@ -4666,6 +4672,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
+    release_metadata_check(vm)
 
 
 def _spki_pin(certificate):
@@ -4736,6 +4743,24 @@ def parser_check(vm, url):
     out = vm.command(f"download ram:again.bin {url}/small.bin")
     require(out, "DOWNLOAD: DONE 200000 BYTES")
     print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+
+
+def release_metadata_check(vm):
+    """351-NET-0011, 351-APP-0019: the parser service reads a release channel and the boot volume's own manifest for the
+    shell's `release`, which takes the answer only if it makes the file's bytes; a channel in another form is refused
+    there and logged."""
+    out = vm.command("release data/stable")
+    signed = (ROOT / vm.disk / "data" / "stable").read_bytes().index(b"\n") + 1
+    for line in ("CHANNEL stable: VERSION 7, MINIMUM 5, EXPIRES 2026-11-08T00:00:00Z", "aarch64 MANIFEST 0c0c0c0c0c0c0c0c...",
+                 "x86_64 MANIFEST abababababababab...", f"SIGNED: THE FIRST {signed} BYTES; THE ANSWER MAKES THE FILE"):
+        require(out, line)
+    text = (ROOT / vm.disk / "MANIFEST").read_text()
+    files = [line.split(" ")[1] for line in text.splitlines() if line.startswith("file ")]
+    require(vm.command("release MANIFEST"), f"MANIFEST: 5 HEADER LINES, {len(files)} FILES ({sum('/' not in f for f in files)} AT THE ROOT); THE ANSWER MAKES THE TEXT")
+    require(vm.command("release data/spaced"), "RELEASE: MALFORMED")
+    assert re.search(r"\[PARSE\] REFUSED A CHANNEL FOR PID \d+: MALFORMED \(\d+ BYTES\)", vm.command("dmesg -s parse")), vm.command("dmesg -s parse")
+    print(f"PASS: release metadata: the parser service reads a channel (2 architectures) and the boot manifest ({len(files)} files, over "
+          f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
 def net_suite(args, disk):
@@ -6172,6 +6197,8 @@ def boot_suite(args, disk):
             vfs = vm.command("dmesg -s vfs_server", raw=True)
             require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
             require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            # Booted from the volume's root, not a slot: nothing for an updater to fill (351-UPD-0008).
+            require(vfs, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")
             require(vm.command("ls"), "kernel.elf")
         finally:
             vm.close()
@@ -6203,7 +6230,12 @@ def boot_suite(args, disk):
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
         try:
-            return vm.expect(until, timeout=60)
+            if not until.startswith("[VFS]"):
+                return vm.expect(until, timeout=60)
+            # The shell holds the serial line, so vfs_server's lines are read with dmesg once it is up.
+            output = vm.expect("MIND> ", timeout=90)
+            time.sleep(1); vm.collect(); vm.output = ""
+            return output + vm.command("dmesg -s vfs_server", raw=True)
         finally:
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:

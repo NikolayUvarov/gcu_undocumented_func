@@ -118,6 +118,7 @@ def main():
     require(output, "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
     require(output, "[VFS] MOUNTED FAT16 FROM VIRTIO AT LBA 63")
     require(output, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+    require(output, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")  # 351-UPD-0008
     print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first; "
           "vfs_server mounts that volume from the second VirtIO disk", flush=True)
 

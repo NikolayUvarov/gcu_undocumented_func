@@ -1,0 +1,26 @@
+# 351-KRN-0044 — The update badge `BADGE_UPDATE` in `mind::fs` — done
+
+**Type:** kernel (libmind constant) · **Owner:** `KRN` track · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.2, MC-12.4
+
+Done for [351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md) by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09): a constant in `libmind`.
+
+## Problem
+
+`vfs_server`'s update zone needs a badge of its own, as `keystore` and `netpolicy` have theirs (351-KRN-0040, 108-KRN-0041).
+
+## Plan and resolution
+
+- `libmind/src/fs.rs`: `BADGE_UPDATE = 4`, after `BADGE_NETPOLICY`. It is a new value, so no existing badge changes meaning and the ABI version stays (MC-12.4).
+- Which client gets it is `init`'s: the `updater`'s VFS client, recorded in [requests-KRN.md](../issues/requests-KRN.md) because the `updater`'s arm in `init` is 351-KRN-0022's, on the kernel branch.
+
+## Acceptance criteria
+
+The constant is in `mind::fs`; `vfs_server` gives the zone only to it (`tests/vfs_zone_host.rs` checks the number against `libmind`).
+
+## Resolution
+
+Done in the same change as the zone (351-UPD-0008).
+
+## Related
+
+[351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
