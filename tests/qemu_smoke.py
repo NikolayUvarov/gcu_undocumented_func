@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
@@ -35,6 +36,9 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
+from fbank_reference import signal as fbank_signal  # noqa: E402
+FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
@@ -1234,7 +1238,31 @@ def tools_suite(vm):
     require(vm.command("view nothing.txt"), "PID=")
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+    fbank_check(vm)
     monitors_check(vm)
+
+
+def fbank_check(vm):
+    """250: dictate computes the dictation models' features in the system (built with SSE2) as kaldi-native-fbank does
+    on the host (tests/fbank_reference.txt)."""
+    if vm.arch != "x86_64":
+        # aarch64 programs may not use FP/SIMD yet (CPACR_EL1 traps it at EL0): requested from the kernel track.
+        print("SKIP: dictate is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
+        return
+    reference = [list(map(float, line.split())) for line in (ROOT / "tests/fbank_reference.txt").read_text().splitlines() if not line.startswith("#")]
+    vm.send("dictate --features fbank.wav\n")
+    out = vm.expect("MIND> ", timeout=60, after="dictate --features fbank.wav\n")
+    head = re.search(r"FBANK SAMPLES=(\d+) FRAMES=(\d+) IN (\d+) US", out)
+    assert head and int(head[1]) == len(FBANK_SIGNAL) and int(head[2]) == len(reference), out[-2000:]
+    rows = dict(re.findall(r"^F(\d+) ([-\d. ]+)$", out.replace("\r", ""), re.M))
+    worst = 0.0
+    for frame, want in enumerate(reference):
+        got = list(map(float, rows[str(frame)].split()))
+        assert len(got) == 80, (frame, len(got))
+        worst = max(worst, max(abs(a - b) for a, b in zip(got, want)))
+    assert worst < 2e-3, worst
+    print(f"PASS: dictate's features in the system equal kaldi-native-fbank's ({head[2]} frames, largest difference {worst:.1e}, "
+          f"{int(head[3]) / 1000:.1f} ms)", flush=True)
 
 
 def table_row(screen, pattern):
@@ -5822,6 +5850,10 @@ def main():
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite == "tools":
+                # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's.
+                with wave.open(str(disk / "fbank.wav"), "wb") as out:
+                    out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
+                    out.writeframes(struct.pack(f"<{len(FBANK_SIGNAL)}h", *FBANK_SIGNAL))
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
                 note = elf.index(b"MINDREQ1") + 8
