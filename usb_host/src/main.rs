@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 // Ring 3 USB host controller driver (issue 164): the xHCI controller through its MMIO capability and a DMA region. It
 // enumerates the devices on the root ports and behind USB 2 hubs, configures the endpoints of the interfaces it has
 // class drivers for (HID, mass storage), and serves idl/usb.wit: a class driver claims an interface of the one class

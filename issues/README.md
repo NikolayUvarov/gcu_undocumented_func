@@ -47,6 +47,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [173-KRN-0036](173-KRN-0036-safe-start.md) | A safe start: a key at the bootloader, a flag in `BootInfo`, the configuration ignored | `KRN`, with `PRT` | P2 | 173-KRN-0035 | track A |
 | [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
 | [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) | The image writer for an internal SATA or NVMe disk, behind an explicit option | `PRT` | P2 | — | track H |
+| [211-KRN-0044](211-KRN-0044-build-named-in-the-boot-log.md) | The boot log names the branch and commit built: `[INIT] BUILD: BRANCH …, COMMIT …` (made; the Mac's run left) | `KRN` | P1 | — | track A |
 | [211-DRV-0018](211-DRV-0018-macbook-trackpad-gestures.md) | The MacBook Pro's trackpad in its multitouch mode: a right click with two fingers, scrolling with three (`usb.wit` 1.1 `reports-up-to`; made and host-tested, the Mac's run left) | `DRV` (open) | P1 | — | track A |
 | [211-DRV-0017](211-DRV-0017-usb-input-delayed-by-hub-polling.md) | USB input a second late on the MacBook Pro: EHCI hub ports were polled by control transfers that each slept a tick (fixed, the Mac's run left) | `DRV` (open) | P0 | — | track A |
 | [211-DRV-0004](211-DRV-0004-ehci.md) | An EHCI driver for an Intel Mac's internal keyboard and trackpad (proposed) | `DRV` (open) | P2 | — | track A |

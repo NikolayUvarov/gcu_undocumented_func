@@ -3,6 +3,7 @@
 // and bulk transfers through queue heads on the asynchronous schedule, interrupt IN endpoints through rings of
 // transfer descriptors on the periodic schedule, split transactions for full- and low-speed devices behind a
 // high-speed hub. The bus (devices, hubs, interfaces) follows the xHCI one in main.rs.
+use alloc::vec::Vec;
 use crate::xhci::{wait, wait_for};
 use crate::{speed_name, Iface, CLASS_HUB, MAX_INTERFACES, SERVED};
 use mind::dev::{Dma, Mmio};
@@ -34,7 +35,9 @@ const SWEEP_MS: u64 = 5_000; // every hub port is looked at this often; between,
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Control, Bulk, Interrupt }
 
-struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, stride: usize, queue: [[u8; LONG]; QUEUE], lengths: [u16; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
+// The queue holds QUEUE reports of `stride` bytes, on the heap: long ones in the controller's state overflowed the
+// program's 64 KiB stack, where it is built (211-DRV-0018).
+struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, stride: usize, queue: Vec<u8>, lengths: [u16; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
 
 pub struct Ehci {
     mmio: Mmio, dma: Dma, op: usize, pub ports: usize, high: u32,
@@ -273,7 +276,7 @@ impl Ehci {
         let mut tds = [0usize; RING];
         for k in 0..RING { match self.td_alloc() { Some(td) => tds[k] = td, None => { for &td in &tds[..k] { self.td_free(td); } return false } } }
         for k in 0..RING { self.write_td(tds[k], Some(tds[(k + 1) % RING]), ACTIVE | PID_IN | CERR | length << 16, buffer + k * stride); }
-        self.interrupts[slot] = Some(Interrupt { qh, tds, next: 0, length, buffer, stride, queue: [[0; LONG]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
+        self.interrupts[slot] = Some(Interrupt { qh, tds, next: 0, length, buffer, stride, queue: alloc::vec![0; QUEUE * stride], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
         let at = qh_at(qh);
         self.dma.write32(at + 20, T); self.dma.write32(at + 24, 0);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -306,7 +309,7 @@ impl Ehci {
                     if !e.reported { e.reported = true; mind::println!("[USB] EHCI QUEUE HEAD {}: FIRST REPORT ({} BYTES)", e.qh, got); }
                     let at = (e.head + e.count) % QUEUE;
                     if e.count == QUEUE { e.head = (e.head + 1) % QUEUE; } else { e.count += 1; }
-                    e.queue[at] = report; e.lengths[at] = got as u16;
+                    e.queue[at * e.stride..at * e.stride + got].copy_from_slice(&report[..got]); e.lengths[at] = got as u16;
                     let next = e.tds[(e.next + 1) % RING]; e.next = (e.next + 1) % RING; next };
                 self.write_td(td, Some(next), ACTIVE | PID_IN | CERR | length << 16, buffer);
             }
@@ -317,7 +320,7 @@ impl Ehci {
     pub fn take_reports(&mut self, index: usize, mut each: impl FnMut(&[u8])) -> Result<usize, ()> {
         let Some(e) = self.interrupts[index].as_mut() else { return Err(()) };
         let count = e.count;
-        for n in 0..count { let at = (e.head + n) % QUEUE; each(&e.queue[at][..e.lengths[at] as usize]); }
+        for n in 0..count { let at = (e.head + n) % QUEUE; each(&e.queue[at * e.stride..at * e.stride + e.lengths[at] as usize]); }
         e.head = (e.head + count) % QUEUE; e.count = 0;
         if e.failed && count == 0 { return Err(()); }
         Ok(count)

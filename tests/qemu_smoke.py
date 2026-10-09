@@ -784,6 +784,10 @@ def normal_suite(vm):
         applications_until_memory_ends(vm, others=len(holders))
         for pid in holders:
             vm.command(f"kill {pid}")
+    # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
+    log = vm.command("dmesg -s init", raw=True)
+    built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
+    assert built and built[1] != "UNKNOWN", log[-1500:]
 
 
 def keys_suite(vm):

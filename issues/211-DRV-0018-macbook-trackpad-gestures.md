@@ -53,6 +53,14 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
   - a press is a left click, a press with two fingers or a two-finger tap a right click;
   - three fingers up and down scroll text in `wm`'s windows.
 
+## Progress
+
+**2026-10-09: the first build stopped every USB device on the MacBook Pro.** No keyboard, mouse or USB drive worked, and the log volume got no `acpi/` folder: the log held two lines, from 1969 s.
+
+- **The cause.** Each interrupt endpoint's report queue was made for 512-byte reports. That grew the EHCI controller's state to about 66 KiB, and it is built on `usb_host`'s stack, which is 64 KiB. `usb_host` overflowed it when it set up an EHCI controller.
+- **Why the tests missed it.** QEMU's suites have no EHCI controller, and the EHCI check (a keyboard on `usb-ehci`) was not run again before the push.
+- **The fix.** A queue is allocated on the heap at the size its endpoint polls with: 64 bytes a report, 512 only for the two long endpoints. `usb_host` now uses libmind's heap. The EHCI check runs before every push of `usb_host`.
+
 ## Related
 
 [211-DRV-0017](211-DRV-0017-usb-input-delayed-by-hub-polling.md), [211-DRV-0016](../issues-done/211-DRV-0016-hid-interfaces-not-ours-claimed-once.done), `libmind/src/hid.rs`, `usb_hid/src/main.rs`, `usb_host/src/ehci.rs`.

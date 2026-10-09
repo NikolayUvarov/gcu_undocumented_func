@@ -664,6 +664,8 @@ fn main(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
     let order = boot_order();
+    // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
+    mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);
