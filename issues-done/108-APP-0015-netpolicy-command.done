@@ -1,0 +1,16 @@
+# 108-APP-0015 — The shell's `netpolicy` command, which asks the user first — done
+
+**Type:** tool (shell command) · **Owner:** `APP` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [108](108-editable-network-policy.done) · **Constitution:** MC-11.6, MC-11.4
+
+Done for the network track's main task 108 by the storage session, in the tools track's area with the maintainer's permission (2026-10-09). Numbered from 0015 so as not to meet the tools session's own numbers.
+
+## Problem
+
+The policy broker changes the policy only for a client that holds it, and only the shell does. The user must agree to each change, and a program must not be able to agree for them.
+
+## Plan and resolution
+
+- `netpolicy` lists the policy's lines (`netpolicy.wit` `lines`, 16 at a time).
+- `netpolicy add <line>` and `netpolicy remove <line>` first ask `ADD|REMOVE THE NETWORK POLICY LINE "…"? (Y/N)`, through the shell's `ask`: a key on the keyboard or the serial line, with no answer after a minute counting as no. Only after a yes do they call `add` or `remove`, and they print `NETPOLICY: ADDED|REMOVED n LINE(S)`, `NETPOLICY: NOT CHANGED`, or the broker's error.
+- The command is in `help` and the completion list.
+- Tested in the `net` suite (108) on x86 and aarch64.

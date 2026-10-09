@@ -291,5 +291,6 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [351-KRN-0040](../issues-done/351-KRN-0040-keystore-private-directory.done) | `init` gives `keystore` a VFS client with its own badge | done (2026-10-09) |
 | [108](../issues-done/108-editable-network-policy.done) | The network policy changed while the system runs (track D, "editable policy"): kept in the broker's private directory, a change only after the user's yes; `netpolicy.wit` 1.1 | done (2026-10-09) |
 | [108-KRN-0041](../issues-done/108-KRN-0041-netpolicy-private-directory.done) | `init` gives `netpolicy` a VFS client with its own badge | done (2026-10-09) |
+| [108-APP-0015](../issues-done/108-APP-0015-netpolicy-command.done) | The shell's `netpolicy [add|remove <line>]`, which asks the user first | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

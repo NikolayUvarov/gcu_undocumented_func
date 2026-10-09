@@ -4140,6 +4140,35 @@ def _msix_only(vm):
     assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
 
 
+def policy_answer(vm, command, answer):
+    """A `netpolicy add|remove` command, answered at its (Y/N) question; what it printed."""
+    vm.send(command + "\n")
+    vm.expect("(Y/N)")
+    vm.send(answer)
+    return vm.expect("MIND> ")
+
+
+def policy_edit_check(vm, web_port):
+    """108: the network policy changed while the system runs, only after the user agrees; the change is kept in the
+    broker's private directory, which the shell cannot open, and the next grant follows it."""
+    line = f"rogue 10.0.2.2 tcp {web_port}"
+    require(vm.command("netpolicy"), f"named www.mind.test tcp {web_port}")
+    require(policy_answer(vm, f"netpolicy add {line}", "n"), "NETPOLICY: NOT CHANGED")
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), "NETWORK FOR rogue: NoPolicy")
+    require(policy_answer(vm, f"netpolicy add {line}", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+    require(vm.command("netpolicy"), line)
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), f"NETCHECK tcp:10.0.2.2:{web_port} OK")
+    require(vm.command("cat system/netpolicy/netpolicy.txt"), "ERROR: CAT: DENIED")
+    require(policy_answer(vm, "netpolicy add rogue nowhere", "y"), "NETPOLICY: Invalid")
+    require(policy_answer(vm, f"netpolicy remove {line}", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), "NETWORK FOR rogue: NoPolicy")
+    log = vm.command("dmesg -s netpolicy")
+    for expected in (f"POLICY CHANGED BY PID", f"ADDED {line}", f"REMOVED {line} (1 LINES)", "CHANGE REFUSED FOR PID", "NOT A POLICY LINE: rogue nowhere"):
+        require(log, expected)
+    print("PASS: the network policy changed while the system runs: refused without the user's yes, a line added and the next grant following it, "
+          "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -4264,6 +4293,7 @@ def net_suite(args, disk):
         log = vm.command("dmesg -s netpolicy")
         for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
             require(log, line)
+        policy_edit_check(vm, web_port)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -4527,7 +4557,8 @@ def device_key_check(args, cpu):
         part = f"{image}@@{start * 512}"
 
         def boot():
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu])
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
+                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
             try:
                 log = vm.service_logs("keystore", "PUBLIC KEY")
                 name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
@@ -4549,10 +4580,15 @@ def device_key_check(args, cpu):
             require(vm.command("cat system/keystore/device.key"), "ERROR: CAT: DENIED")
             require(vm.command("ls system/keystore"), "DENIED")
             require(vm.command("write system/keystore/device.key x"), "ERROR: WRITE: DENIED")
+            # 108: a change of the network policy is kept on the disk too.
+            require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
         finally:
             vm.close()
         vm, log, second = boot()
-        vm.close()
+        try:
+            require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
+        finally:
+            vm.close()
         require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
         assert second == first, (first, second)
         damaged = Path(temp) / "device.key"
@@ -4564,7 +4600,7 @@ def device_key_check(args, cpu):
         assert third != first, (first, third)
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
-          "the shell can neither read nor write it; the public key logged in the OpenSSH form", flush=True)
+          "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
