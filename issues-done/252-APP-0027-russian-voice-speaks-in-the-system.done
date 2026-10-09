@@ -22,7 +22,7 @@ The system had neither. Nothing spoke with the voice.
   - vosk-tts's rules (`vosk_tts/g2p.py`, Apache-2.0), ported;
   - `ids()`, which makes the ids as `Synth.g2p_noembed` does. Characters the voice lacks are left out, where vosk-tts fails on them.
 - **`mind::voice::synthesis`:** a `Voice` (network and dictionary) says a sentence with the voice's settings, and `sentences()` splits a text.
-- **`mind::models::read`:** the shared way to read a model file. The file is read into 8-byte words and hashed, and on `models:` it is used only with the SHA-256 that `MANIFEST.json` lists (MC-4.2). `dictate` now uses it too.
+- **`mind::model_file::read`:** the shared way to read a model file. The file is read into 8-byte words and hashed, and on `models:` it is used only with the SHA-256 that `MANIFEST.json` lists (MC-4.2). `dictate` now uses it too.
 - **`mind::voice::Resampler::between`:** any rate to any rate, here 22.05 kHz to the gateway's 48 kHz.
 - **`speak [--speaker N] [--wav FILE] [--model FILE] [--dictionary FILE] [--ids] (text... | --file FILE)`:**
   - It reads the voice and the dictionary from `models:tts-ru-vosk-0.7/` (put there with `models.py disk --add`) and says the text a sentence at a time, through the audio gateway or into a WAV.
@@ -52,7 +52,7 @@ The system had neither. Nothing spoke with the voice.
   - These are emulation times, not hardware's (MC-12.1).
 - **Code:**
   - [`libmind/src/voice/russian.rs`](../libmind/src/voice/russian.rs), [`synthesis.rs`](../libmind/src/voice/synthesis.rs), [`front.rs`](../libmind/src/voice/front.rs);
-  - [`libmind/src/models.rs`](../libmind/src/models.rs), [`libmind/src/nn/gemm.rs`](../libmind/src/nn/gemm.rs);
+  - [`libmind/src/model_file.rs`](../libmind/src/model_file.rs), [`libmind/src/nn/gemm.rs`](../libmind/src/nn/gemm.rs);
   - [`speak/`](../speak/src/main.rs), [`dictate/src/main.rs`](../dictate/src/main.rs);
   - [`scripts/voice_tts/dictionary.py`](../scripts/voice_tts/dictionary.py) and [`vosk_ids.py`](../scripts/voice_tts/vosk_ids.py);
   - [`tests/russian_host.rs`](../tests/russian_host.rs);

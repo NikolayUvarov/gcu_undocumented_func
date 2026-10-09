@@ -36,7 +36,7 @@ fn main(_info: &'static BootInfo) {
     let samples = match read_wav(wav) { Ok(s) => s, Err(error) => { mind::println!("dictate: {}: {:?}", wav, error); return } };
     if features { print_features(&samples); return; }
     let start = mind::time::monotonic_ns();
-    let file = match mind::models::read(model) { Ok(f) => f, Err(error) => { mind::println!("dictate: {}; not used", error); return } };
+    let file = match mind::model_file::read(model) { Ok(f) => f, Err(error) => { mind::println!("dictate: {}; not used", error); return } };
     let read = mind::time::monotonic_ns();
     if model.starts_with("models:") { mind::println!("DICTATE: SHA256 MATCHES MANIFEST.JSON"); }
     let bytes = file.len();
