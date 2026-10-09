@@ -650,7 +650,7 @@ A program states what it needs with `mind::request!(REQUEST_CONSOLE | REQUEST_SY
 
 ### Runtime checks
 
-After building, run the host tests for real ELF images, independent `.bss`/relocations, malformed ELF rejection, private mappings and dzen-clock logic:
+After building, `scripts/host_tests.sh` runs every host test as CI does, and stops at the first compile or test that fails. One at a time, the host tests for real ELF images, independent `.bss`/relocations, malformed ELF rejection, private mappings and dzen-clock logic:
 
 ```bash
 rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests

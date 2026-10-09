@@ -134,5 +134,5 @@ Each fix turns its audit probe's assertion around into a regression test.
 - A03: [175-KRN-0048](../issues/175-KRN-0048-fat-case-rename-keeps-the-file.md).
 - A04: [175-KRN-0049](../issues/175-KRN-0049-fat-clean-only-after-a-good-flush.md); its profile row is narrowed in the same commit.
 - A05: a request in [requests-STO.md](../issues/requests-STO.md).
-- A06: [175-KRN-0046](../issues/175-KRN-0046-ci-fails-on-every-build-failure.md).
+- A06: [175-KRN-0046](../issues-done/175-KRN-0046-ci-fails-on-every-build-failure.done), done.
 - A07, A08: requests in [requests-APP.md](../issues/requests-APP.md), which `APP` may start at once.
