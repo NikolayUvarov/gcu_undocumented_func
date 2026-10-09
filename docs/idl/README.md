@@ -88,14 +88,14 @@ A change that alters the meaning or layout of an existing function increments th
 
 | File | Service | Version |
 |---|---|---|
-| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times) | 1.1.0 |
+| [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times) | 1.2.0 |
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`; 1.1: the microphone has one owner at a time, others get `busy`) | 1.1.0 |
 | [`idl/voice.wit`](../../idl/voice.wit) | the shell, for the `voice` program it starts (voice control: `next` reports what was heard and is answered with the next order — at once, or at push-to-talk: `Call::defer`) | 1.0.0 |
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt; 1.1 adds transmit checksum offload: `offloads`, `send-partial`; 1.2 a frame ring shared with the stack: `attach` takes a memory capability, `kick`) | 1.2.0 |
 | [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge; 2.1 adds `interfaces`, one per card; 2.2 `offload`, operator only; 2.3 lets the policy badge `resolve` the policy's host names, 351-NET-0003) | 2.3.0 |
 | [`idl/netpolicy.wit`](../../idl/netpolicy.wit) | `netpolicy` (a grant is handed over by a word call, `take`, which carries the capability; 1.1 adds `lines`, `add` and `remove`, the policy changed while the system runs, 108) | 1.1.0 |
-| [`idl/parse.wit`](../../idl/parse.wit) | `parse` (bounded bytes from outside in, typed records out: `http-head`; since 1.1 `channel` and `manifest`, a release channel and a boot manifest a page of 8 files at a time (351-NET-0011); stateless, a refusal logged with the client's PID; 109-NET-0008) | 1.1.0 |
+| [`idl/parse.wit`](../../idl/parse.wit) | `parse` (bounded bytes from outside in, typed records out: `http-head`; since 1.1 `channel` and `manifest`, a release channel and a boot manifest a page of 8 files at a time (351-NET-0011); since 1.2 `model`, a model of a model disk's `MANIFEST.json` with its files a page of 8 at a time (251-STO-0014); stateless, a refusal logged with the client's PID; 109-NET-0008) | 1.1.0 |
 | [`idl/tls.wit`](../../idl/tls.wit) | `tls` (a client lends its flow with a word call, `attach`, that carries the capability as a parameter; the handshake runs inside `connect`; 1.1 adds `connect-pinned`, a server known by the SHA-256 of its public key, 351-NET-0002) | 1.1.0 |
 | [`idl/window.wit`](../../idl/window.wit) | `windows` (word calls `surface`, `waker` and `client` return capabilities: the program's and the manager's leases come from separate roots) | 1.0.0 |
 | [`idl/tpm.wit`](../../idl/tpm.wit) | `tpm` (no raw commands: `seal` and `unseal` for the seal badge, `info` for anyone; 351-DRV-0015) | 1.0.0 |

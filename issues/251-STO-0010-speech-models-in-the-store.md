@@ -28,7 +28,7 @@ What stands in the way today, read from the code:
 | Task | What | State |
 |---|---|---|
 | [251-STO-0013](251-STO-0013-an-index-that-grows-with-the-medium.md) | An index that grows with the medium: a hash table with open addressing in place of the sorted array (O(1) insert and lookup), entries of 56 bytes, and its size chosen by the service from the medium at mount; a store of more blocks than it holds is still refused whole | built, host-tested |
-| 251-STO-0014 | Importing a model disk: each file of `models:/MANIFEST.json` streamed into the store with its SHA-256 checked as it is read; each model an object of its files and its manifest entry, named `models/<id>` and pinned | after 0013 |
+| [251-STO-0014](251-STO-0014-importing-a-model-disk.md) | Importing a model disk: each file of `models:/MANIFEST.json` streamed into the store with its SHA-256 checked as it is read; each model an object of its files and its manifest entry, named `models/<id>` (the name retains it) | built |
 | 251-STO-0015 | A model read back by name: its files to a file system, or copied once into a memory object a recognizer maps (decided with 0014's measurements) | after 0014 |
 | `KRN` request | `init` gives `blockstore` a memory quota that fits the index of its disk (today the default 16 MiB) | with 0013 |
 

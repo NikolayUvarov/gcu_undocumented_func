@@ -3488,10 +3488,21 @@ def vfs_suite(args):
 def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
-    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks."""
+    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
-    (temp / "models-tree").mkdir()
-    (temp / "models-tree" / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
+    tree = temp / "models-tree"
+    files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
+    entries = []
+    for model_id, model_files in files.items():
+        for path, data in model_files.items():
+            (tree / model_id / path).parent.mkdir(parents=True, exist_ok=True)
+            (tree / model_id / path).write_bytes(data)
+        entries.append({"id": model_id, "role": "asr", "licence": "MIT", "terms": "Тест: для проверки.",
+                        "files": [{"path": p, "size": len(d), "sha256": hashlib.sha256(d if model_id != "tts-bad" else b"other").hexdigest()} for p, d in model_files.items()]})
+    (tree / "MANIFEST.json").write_text(json.dumps({"format": 1, "models": entries}, ensure_ascii=False, indent=1), encoding="utf-8")
     subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(models), str(temp / "models-tree")], check=True, capture_output=True)
     with store.open("wb") as f:
         f.truncate(8 << 20)  # the store formats it at start: about 10 s on aarch64 (polled VirtIO under TCG) for 8 MiB
@@ -3511,6 +3522,32 @@ def disks_check(args, boot, temp):
                 break
             time.sleep(2)
         assert re.search(r"SECTORS=\d+/16384", vm.command("blocks stat", raw=True)), vm.log[-2000:]
+        # The models into the store: the parser service reads MANIFEST.json, each file is checked as it is read.
+        vm.send("blocks models import\n")
+        out = vm.expect("MIND> ", timeout=240, after="blocks models import\n")
+        encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
+        require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
+        require(out, "AS models/asr-test VERSION 1")
+        require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
+        require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
+
+        def get_back(path, data):
+            vm.send(f"blocks models get asr-test {path} ram:got.bin\n")
+            require(vm.expect("MIND> ", timeout=120, after=f"blocks models get asr-test {path} ram:got.bin\n"),
+                    f"GOT {path} OF models/asr-test: {len(data)} BYTES, SHA-256 {hashlib.sha256(data).hexdigest()}")
+            require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
+        get_back("am/encoder.int8.onnx", encoder)
+        get_back("tokens.txt", tokens)
+        # A restarted store finds the model again on its disk.
+        pid = vm.services()["blockstore"]
+        require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
+        for _ in range(60):
+            if vm.services().get("blockstore", pid) != pid and "BLOCKS=" in vm.command("blocks stat", raw=True):
+                break
+            time.sleep(2)
+        get_back("tokens.txt", tokens)
+        print(f"PASS: models in the block store: a model disk's model imported as one object named models/asr-test, its files read back "
+              f"by name with their SHA-256 (also after the store restarted), a model whose file differs from the manifest not named", flush=True)
     finally:
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-disks-{args.cpus}cpu.log").write_text(vm.log)

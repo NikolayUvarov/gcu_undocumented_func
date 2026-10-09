@@ -2,9 +2,10 @@
 #![no_main]
 // Parser service (109-NET-0008, MC-11.11, Appendix B.6's session parser): bounded bytes from outside in, typed messages
 // out (idl/parse.wit), so the program that holds the network and the files does not parse them itself: HTTP response
-// heads, and release channels and boot manifests for the updater (351-NET-0011). Holds its own endpoint and the system
-// log, nothing else: no files, no network, no spawn, no devices. Each request is parsed on its own and nothing of it is
-// kept; a refusal is logged with the client's PID.
+// heads, release channels and boot manifests for the updater (351-NET-0011), and a model disk's manifest for the importer
+// into the block store (251-STO-0014). Holds its own endpoint and the system log, nothing else: no files, no network, no
+// spawn, no devices. Each request is parsed on its own and nothing of it is kept; a refusal is logged with the client's
+// PID.
 use mind::abi::BootInfo;
 use mind::http;
 use mind::idl::parse::{self, Error};
@@ -13,12 +14,12 @@ use mind::ipc::Endpoint;
 use mind::release;
 
 const RECEIVED: usize = 9;
-// A request of up to 32 KiB (a manifest): kept out of the stack.
+// A request of up to 60 000 bytes (a model manifest): kept out of the stack.
 static mut SCRATCH: [u8; parse::REQUEST_MAX] = [0; parse::REQUEST_MAX];
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::println!("[PARSE] READY: HTTP RESPONSE HEADS, RELEASE CHANNELS, BOOT MANIFESTS");
+    mind::println!("[PARSE] READY: HTTP RESPONSE HEADS, RELEASE CHANNELS, BOOT MANIFESTS, MODEL MANIFESTS");
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
@@ -45,6 +46,13 @@ fn main(_info: &'static BootInfo) {
                     Error::Malformed
                 });
                 parse::reply_manifest(call, typed.as_ref().map_err(|e| *e))
+            }
+            Ok((parse::Request::Model { text, index, start }, call)) => {
+                let typed = mind::parse::model_record(text, index, start).map_err(|_| {
+                    mind::println!("[PARSE] REFUSED A MODEL MANIFEST FOR PID {}: MALFORMED OR NO MODEL {} ({} BYTES)", request.sender, index, text.len());
+                    Error::Malformed
+                });
+                parse::reply_model(call, typed.as_ref().map_err(|e| *e))
             }
         };
     }
