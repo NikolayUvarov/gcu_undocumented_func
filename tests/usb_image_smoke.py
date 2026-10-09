@@ -58,7 +58,7 @@ def debug_mode(vm, name):
     assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
     assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
     require(saved, "DEBUG MODE ON (log:debug.txt)")
-    require(vm.command("rm log:debug.txt"), "RM")
+    require(vm.command("rm log:debug.txt"), "OK")
 
 
 def unplugged(vm, booted, name):
