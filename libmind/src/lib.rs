@@ -65,6 +65,8 @@ pub mod script;
 pub mod pattern;
 #[cfg(feature = "alloc")]
 pub mod voice;
+#[cfg(feature = "alloc")]
+pub mod nn;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;

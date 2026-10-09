@@ -224,6 +224,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [000-APP-0018](../issues-done/000-APP-0018-cpu-budgets-in-top.done) | `top` shows the CPU budget `budget` sets: a BUDGET column (ms per period, `*` while spent) and a line in a task's details | done (2026-10-09) |
 | [300-APP-0019](../issues-done/300-APP-0019-block-store-panel-in-fm.done) | `fm` shows the block store as `store:`: names as files, `.pins`, objects read with every block checked, a copy there published, F6 a commit, F8 unpublishes (a list of names requested from STO) | done (2026-10-09) |
 | [250-APP-0020](../issues-done/250-APP-0020-dictation-features.done) | The dictation models' features: Kaldi's 80-band fbank in `mind::voice::fbank`, equal to kaldi-native-fbank's on the host and in the system; voice engines build for `targets/x86_64-mind-float.json` (SSE2); `dictate --features` | done (2026-10-09) |
+| [250-APP-0021](../issues-done/250-APP-0021-network-interpreter.done) | `mind::nn`: the ONNX graphs as a `MINDNN01` file (convert.py) and a `no_std` interpreter of their 45 operators; on 10 FLEURS clips 192 of 193 words are onnxruntime's | done (2026-10-09) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

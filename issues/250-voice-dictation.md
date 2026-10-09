@@ -141,6 +141,7 @@ Tasks are numbered `250-APP-MMMM` as they start.
 ## Progress
 
 - **Step 2, the features: done** in [250-APP-0020](../issues-done/250-APP-0020-dictation-features.done). `mind::voice::fbank` gives kaldi-native-fbank's features to within 2·10⁻⁴ on the host and in the system (x86).
+- **Steps 1 and 3, first part: done** in [250-APP-0021](../issues-done/250-APP-0021-network-interpreter.done). `convert.py` writes the model as a `MINDNN01` file, and `mind::nn` interprets its graphs. On ten FLEURS clips, greedy search gives onnxruntime's text but for one word in 193, at 0.59 of real time on one core without SIMD. Next come fast products, the run in the system and WER on all 272 sentences.
 - **How the engines compute (2026-10-09).** Programs build for soft-float targets.
   - On x86, `x86_64-unknown-none` refuses SSE in a program's code: the `x86_softfloat_sse` lint is to become a hard error, so `#[target_feature]` is no way out. The engines therefore build for `targets/x86_64-mind-float.json`: SSE2 and the hard-float ABI, with core and alloc built from source (`rust-src`, now in `rust-toolchain.toml`). AVX2 and FMA come through `#[target_feature]` after a CPUID check, and the kernel saves their state ([153](../issues-done/153-xsave-avx-state.done)).
   - On aarch64, FP/SIMD is disabled at EL0. A request to the kernel track is in [requests-KRN.md](requests-KRN.md); until it is done, the engines run on x86 only.

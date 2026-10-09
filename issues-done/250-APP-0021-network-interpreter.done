@@ -1,0 +1,60 @@
+# 250-APP-0021 — The network file and its interpreter: the Russian model's text agrees with onnxruntime's — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [250](../issues/250-voice-dictation.md) (steps 1 and 3, first part) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+The Vosk 0.54 Zipformer2 transducer is published as three ONNX graphs with int8 weights: the encoder, the decoder and the joiner. The encoder alone has 9133 nodes of 37 operator types, with 290 dynamically quantized int8 products and six `If` branches. The system has no protobuf and no ONNX runtime.
+
+## Plan
+
+- **`scripts/voice_dictate/convert.py`** turns the three graphs into one file, `MINDNN01`:
+  - one table of tensors (the weights' bytes 64-byte aligned, read in place);
+  - the nodes with their attributes;
+  - each `If` branch as a graph of its own;
+  - per node, the values that can be freed after it;
+  - the BPE tokens;
+  - an FNV-1a checksum.
+
+  Constant nodes become weights.
+- **`mind::nn`:** a `no_std` interpreter of the 45 operators the three graphs use, with ONNX opset 13 semantics.
+  - Broadcasting; shape arithmetic in i64.
+  - `MatMulInteger` in exact i32, with both zero points.
+  - `DynamicQuantizeLinear` rounding half to even.
+  - Conv in one or two dimensions with groups.
+  - `If` runs the branch its condition chooses.
+
+  Values are freed after their last use.
+- **The comparison** (`scripts/voice_dictate/reference.py`): kaldi-native-fbank's features, onnxruntime's encoder output on them, and greedy search over onnxruntime's decoder and joiner. The host test does the same greedy search over ours.
+- **For finding where two runtimes part** (`scripts/voice_dictate/dump.py` and `Model::run_watched`): every value onnxruntime makes, compared by name.
+
+## Acceptance criteria
+
+- **Operators** (`tests/nn_host.rs`, which runs in CI): broadcasting, shapes, slices with negative steps, gathers, scatter, reductions, softmax, batched `MatMul`, `MatMulInteger` with zero points, ONNX's own `DynamicQuantizeLinear` example, and a depthwise convolution — each against values worked out by hand.
+- **With the model** (`MIND_DICTATE_MODEL` and `MIND_DICTATE_REFERENCE` set, by hand): on FLEURS clips the text is onnxruntime's, but for at most 2 % of the words, and the encoder output's mean difference stays below 10 % of its mean magnitude.
+
+## Resolution
+
+- **Code:**
+  - [`libmind/src/nn/mod.rs`](../libmind/src/nn/mod.rs): the file, values and the runner;
+  - [`libmind/src/nn/ops.rs`](../libmind/src/nn/ops.rs): the operators;
+  - [`scripts/voice_dictate/convert.py`](../scripts/voice_dictate/convert.py), [`reference.py`](../scripts/voice_dictate/reference.py) and [`dump.py`](../scripts/voice_dictate/dump.py).
+- **Measured on this host** (x86, one thread, scalar code), with the model from the cache of 251 (`asr-ru-vosk-0.54`, 71 MB converted):
+  - **Ten FLEURS Russian test clips, 115 s of speech:**
+    - 192 of 193 words are onnxruntime's. One proper name came out «кханделвал» where onnxruntime has «ханделвал».
+    - The encoder output's mean difference is about 4–5 % of its mean magnitude.
+    - It took 67.8 s, 0.59 of real time.
+  - **The first clip's values, one by one:**
+    - The first departure is `Exp`: onnxruntime's differs from ours by about 1·10⁻⁵ relative.
+    - 4 of 111 872 bytes then quantize to the other side, and the difference grows from there.
+    - So it is the noise of dynamic int8 quantization, not a different computation.
+- **Not done here:**
+  - fast products (AVX2, and VNNI where the CPU has it): the acceptance of 250 wants an 8 s utterance in under 1 s;
+  - the run in the system;
+  - WER on all 272 sentences (step 4);
+  - `dictate` recognizing speech;
+  - the model on the boot disk.
+
+## Related
+
+[250](../issues/250-voice-dictation.md), [250-APP-0020](250-APP-0020-dictation-features.done), [251](../issues/251-model-cache-and-model-disk.md).
