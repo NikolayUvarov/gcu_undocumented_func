@@ -28,22 +28,23 @@ const OUT_TAG: u32 = 1; const IN_TAG: u32 = 2;
 // Widget types (audio widget capabilities, bits 23:20).
 const OUTPUT: u8 = 0; const INPUT: u8 = 1; const MIXER: u8 = 2; const PIN: u8 = 4;
 const WIDGETS: usize = 96; const CONNECTIONS: usize = 16;
+const SUMMARY: usize = 160; // the codec's line in the log
 
 #[derive(Clone, Copy, Default)]
 struct Widget { nid: u8, kind: u8, caps: u32, pin_caps: u32, config: u32, connections: [u8; CONNECTIONS], count: u8 }
 
 pub struct Hda {
-    regs: Mmio, ring: Mapping, physical: u64, codec: u32, rirb_read: usize, corb_entries: usize, rirb_entries: usize,
+    regs: Mmio, ring: Mapping, physical: u64, codec: u32, afg: u8, rirb_read: usize, corb_entries: usize, rirb_entries: usize,
     out_sd: usize, in_sd: usize,
     // Playback: the next buffer to fill, the buffers queued and not yet played, the last position seen.
     head: usize, queued: usize, played: usize, started: bool,
     // Capture: the next buffer to read, buffers ready, the last position seen; whether it overflowed.
     capture: bool, tail: usize, ready: usize, captured: usize, lost: bool,
-    pub interrupts: usize, pub has_input: bool, pub summary: [u8; 160], pub summary_len: usize,
+    pub interrupts: usize, pub has_input: bool, pub summary: [u8; SUMMARY], pub summary_len: usize,
 }
 
-fn put(summary: &mut [u8; 160], len: &mut usize, args: core::fmt::Arguments) {
-    let mut text = mind::util::FixedBuf::<160>::new();
+fn put(summary: &mut [u8; SUMMARY], len: &mut usize, args: core::fmt::Arguments) {
+    let mut text = mind::util::FixedBuf::<SUMMARY>::new();
     let _ = core::fmt::Write::write_fmt(&mut text, args);
     for &b in text.as_bytes() { if *len < summary.len() { summary[*len] = b; *len += 1; } }
 }
@@ -67,15 +68,15 @@ impl Hda {
         let codecs = regs.read16(STATESTS);
         if codecs == 0 { mind::println!("[AUDIO] HDA: NO CODEC"); return None; }
         mind::println!("[AUDIO] HDA: VERSION {}.{}, {} INPUT AND {} OUTPUT STREAMS, CODECS {:#06b}, 64-BIT {}", regs.read8(0x03), regs.read8(0x02), inputs, outputs, codecs, gcap & 1);
-        let mut hda = Self { regs, ring, physical, codec: codecs.trailing_zeros(), rirb_read: 0, corb_entries: 256, rirb_entries: 256,
+        let mut hda = Self { regs, ring, physical, codec: codecs.trailing_zeros(), afg: 1, rirb_read: 0, corb_entries: 256, rirb_entries: 256,
             out_sd: 0x80 + inputs * 0x20, in_sd: 0x80, head: 0, queued: 0, played: 0, started: false,
-            capture: false, tail: 0, ready: 0, captured: 0, lost: false, interrupts: 0, has_input: inputs > 0, summary: [0; 160], summary_len: 0 };
+            capture: false, tail: 0, ready: 0, captured: 0, lost: false, interrupts: 0, has_input: inputs > 0, summary: [0; SUMMARY], summary_len: 0 };
         hda.ring.as_mut_slice()[CAPTURE_AT..DMA_BYTES].fill(0);
         hda.ring.as_mut_slice()[..CAPTURE_AT].fill(0);
         hda.start_corb();
         let Some(vendor) = hda.parameter(0, 0) else { mind::println!("[AUDIO] HDA: THE CODEC DOES NOT ANSWER (CORBRP {} RIRBWP {})", hda.regs.read16(CORBRP), hda.regs.read16(RIRBWP)); return None };
         let revision = hda.parameter(0, 2).unwrap_or(0);
-        let (mut summary, mut len) = ([0u8; 160], 0);
+        let (mut summary, mut len) = ([0u8; SUMMARY], 0);
         put(&mut summary, &mut len, format_args!("CODEC {} {:04X}:{:04X} REVISION {:08X}", hda.codec, vendor >> 16, vendor & 0xFFFF, revision));
         let found = hda.configure(&mut summary, &mut len);
         hda.summary = summary; hda.summary_len = len;
@@ -147,6 +148,7 @@ impl Hda {
         let (first, count) = ((groups >> 16) & 0xFF, groups & 0xFF);
         let Some(afg) = (first..first + count).map(|n| n as u8).find(|&n| self.parameter(n, 5).is_some_and(|t| t & 0xFF == 1)) else { return 0 };
         let _ = self.verb(afg, 0x705, 0); // the function group at D0
+        self.afg = afg;
         let nodes = self.parameter(afg, 4).unwrap_or(0);
         let (first, count) = ((nodes >> 16) & 0xFF, (nodes & 0xFF).min(WIDGETS as u32));
         let mut n = 0;
@@ -206,8 +208,24 @@ impl Hda {
         if w.count > 1 && w.kind != MIXER { let _ = self.verb(w.nid, 0x701, index as u32); }
     }
 
+    // Apple's Cirrus codecs (CS4206, CS4207) power the speaker and headphone amplifiers by GPIOs of the function group:
+    // GPIO3 the speakers, GPIO1 (MacBook Pro 10,1) or GPIO2 the headphones (facts of Linux's patch_cirrus).
+    fn apple_amplifiers(&mut self, headphone: bool) {
+        let vendor = self.parameter(0, 0).unwrap_or(0);
+        let ssid = self.verb(self.afg, 0xF20, 0).unwrap_or(0); // the subsystem ID: the machine
+        if vendor >> 16 != 0x1013 || ssid >> 16 != 0x106B { return; }
+        let gpios = self.parameter(self.afg, 0x11).unwrap_or(0) & 0xFF;
+        let (speakers, headphones) = (0x08, if ssid == 0x106B_2800 { 0x02 } else { 0x04 });
+        let data = if headphone { headphones } else { speakers };
+        let _ = self.verb(self.afg, 0x716, speakers | headphones); // mask
+        let _ = self.verb(self.afg, 0x717, speakers | headphones); // direction: outputs
+        let _ = self.verb(self.afg, 0x715, data);
+        let read = self.verb(self.afg, 0xF15, 0).unwrap_or(0xFF);
+        mind::println!("[AUDIO] HDA: APPLE {:08X}, CIRRUS AMPLIFIERS: GPIO {:#04X} OF {} SET, READ {:#04X}", ssid, data, gpios, read);
+    }
+
     // Chooses and sets up the output and input paths; false without an output.
-    fn configure(&mut self, summary: &mut [u8; 160], len: &mut usize) -> bool {
+    fn configure(&mut self, summary: &mut [u8; SUMMARY], len: &mut usize) -> bool {
         let mut list = [Widget::default(); WIDGETS];
         let n = self.widgets(&mut list);
         let list = &list[..n];
@@ -232,6 +250,7 @@ impl Hda {
         let _ = self.verb(pin.nid, 0x707, 0x40 | if headphone { 0x80 } else { 0 });
         if pin.pin_caps & (1 << 16) != 0 { let _ = self.verb(pin.nid, 0x70C, 2); } // EAPD: the external amplifier on
         put(summary, len, format_args!("; OUT PIN {:#X} ({}) <- DAC {:#X}", pin.nid, ["LINE", "SPEAKER", "HEADPHONE"].get(device(&pin) as usize).unwrap_or(&"?"), dac));
+        self.apple_amplifiers(headphone);
         // Input: an internal microphone, else a microphone jack, else line in; an ADC reaching it.
         let inputs = [(0xA, true), (0xA, false), (8, false)];
         let mut input = None;

@@ -83,7 +83,7 @@ class VM:
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
         storage = (["-drive", f"{source},if=none,id=usbdisk",
-                    "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
+                    "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]

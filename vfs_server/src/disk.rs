@@ -9,14 +9,37 @@ use mind::mem::Pages;
 
 const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
+const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
+const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
 
-pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool }
+// `silent_until`: until when the drive is not asked, after it did not answer.
+pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64 }
 
 impl Disk {
     pub fn new(device: Device) -> Option<Self> {
-        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false })
+        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0 })
     }
     pub fn kind(&self) -> usize { self.device.kind() }
+
+    // A drive that did not answer is not asked again for QUIET_MS: requests fail at once instead of each waiting for the
+    // drive's own timeout (an unplugged USB disk, 211-KRN-0050). Cached sectors are still read.
+    fn quiet(&self) -> bool { self.silent_until != 0 && (mind::time::uptime_ms() as u64) < self.silent_until }
+    // Runs one request to the drive and notes whether it answered.
+    fn ask<T>(&mut self, request: impl FnOnce(&mut Device) -> Option<T>) -> Option<T> {
+        if self.quiet() { return None; }
+        let start = mind::time::uptime_ms() as u64;
+        let result = request(&mut self.device);
+        let now = mind::time::uptime_ms() as u64;
+        match (&result, self.silent_until != 0) {
+            (Some(_), true) => { self.silent_until = 0; mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN", crate::device_name(self.device.kind())); }
+            (None, was) if now.saturating_sub(start) >= SLOW_MS => {
+                if !was { mind::println!("[VFS] THE {} DRIVE DOES NOT ANSWER: REQUESTS FAIL AT ONCE, IT IS ASKED AGAIN EVERY {} S", crate::device_name(self.device.kind()), QUIET_MS / 1000); }
+                self.silent_until = now + QUIET_MS;
+            }
+            _ => {}
+        }
+        result
+    }
 
     fn line(&self, index: usize) -> &[u8] { &self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR] }
 
@@ -28,7 +51,10 @@ impl Disk {
     }
 
     fn write_line(&mut self, index: usize) -> bool {
-        let done = self.device.write(self.tags[index] as u64, &self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR]) == Ok(1);
+        let lba = self.tags[index] as u64;
+        let mut line = [0u8; SECTOR];
+        line.copy_from_slice(self.line(index));
+        let done = self.ask(|device| (device.write(lba, &line) == Ok(1)).then_some(())).is_some();
         if done { self.dirty[index] = false; } else { self.failed = true; }
         done
     }
@@ -41,10 +67,12 @@ impl Sectors for Disk {
         let mut count = READ_AHEAD.min((self.device.sectors().saturating_sub(lba as u64)) as usize);
         if let Some(cached) = (1..count).find(|&i| self.tags.contains(&(lba + i as u32))) { count = cached; }
         if count == 0 { return false; }
-        let Ok(data) = self.device.read(lba as u64, count) else { return false };
         let mut sectors = [[0u8; SECTOR]; READ_AHEAD];
-        let got = data.len() / SECTOR;
-        for (i, sector) in data.chunks_exact(SECTOR).enumerate() { sectors[i].copy_from_slice(sector); }
+        let read = |device: &mut Device| device.read(lba as u64, count).ok().map(|data| {
+            for (i, sector) in data.chunks_exact(SECTOR).take(READ_AHEAD).enumerate() { sectors[i].copy_from_slice(sector); }
+            (data.len() / SECTOR).min(READ_AHEAD)
+        });
+        let Some(got) = self.ask(read) else { return false };
         if got == 0 { return false; }
         out.copy_from_slice(&sectors[0]);
         for (i, sector) in sectors[..got].iter().enumerate() {
@@ -76,11 +104,12 @@ impl Sectors for Disk {
             while end < dirty.len() && self.tags[dirty[end]] == self.tags[dirty[end - 1]] + 1 { end += 1; }
             run.clear();
             for &index in &dirty[at..end] { run.extend_from_slice(self.line(index)); }
-            if self.device.write(self.tags[dirty[at]] as u64, &run) != Ok(end - at) { self.failed = true; return false; }
+            let lba = self.tags[dirty[at]] as u64;
+            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { self.failed = true; return false; }
             for &index in &dirty[at..end] { self.dirty[index] = false; }
             at = end;
         }
-        !core::mem::take(&mut self.failed) && self.device.flush().is_ok()
+        !core::mem::take(&mut self.failed) && self.ask(|device| device.flush().ok()).is_some()
     }
 
     fn discard(&mut self) { self.tags = [u32::MAX; LINES]; self.dirty = [false; LINES]; self.failed = false; }

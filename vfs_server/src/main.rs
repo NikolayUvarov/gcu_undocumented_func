@@ -81,9 +81,11 @@ impl Server {
         let now_ms = mind::time::uptime_ms() as u64;
         let Some((index, journal)) = self.journal.as_mut() else { return };
         if now_ms < journal.due { return; }
-        journal.due = now_ms + journal::SAVE_MS;
         let index = *index;
-        if let Some(node) = journal.save(&mut self.volumes[index].volume, Endpoint(SLOT_LOG), now()) { self.refresh(index, node); }
+        let saved = journal.save(&mut self.volumes[index].volume, Endpoint(SLOT_LOG), now());
+        // A drive that is gone is not asked every SAVE_MS: requests would wait behind each try (211-KRN-0050).
+        journal.due = now_ms + if journal.failing { journal::RETRY_MS } else { journal::SAVE_MS };
+        if let Some(node) = saved { self.refresh(index, node); }
     }
 
     fn get(&self, id: u32, sender: u64, badge: u16) -> Result<&Handle, Error> {
@@ -531,7 +533,7 @@ fn main(info: &'static BootInfo) {
     loop {
         // The system log is saved between requests, at least every journal::SAVE_MS.
         let request = match server.journal.as_ref() {
-            Some((_, journal)) => Endpoint::SERVICE.recv_timeout(RECEIVED, journal.due.saturating_sub(mind::time::uptime_ms() as u64).clamp(1, journal::SAVE_MS) as u32),
+            Some((_, journal)) => Endpoint::SERVICE.recv_timeout(RECEIVED, journal.due.saturating_sub(mind::time::uptime_ms() as u64).clamp(1, journal::RETRY_MS) as u32),
             None => Endpoint::SERVICE.recv(RECEIVED),
         };
         server.save_journal();

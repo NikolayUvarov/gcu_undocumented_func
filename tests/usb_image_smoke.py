@@ -44,6 +44,36 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
 
+def unplugged(vm, booted):
+    # 211-KRN-0050: with the boot disk unplugged, a program on it is refused soon, with the reason, and the shell answers;
+    # plugged in again, programs start again. memmap was not run before, so none of it is in vfs_server's cache.
+    vm.hmp("device_del usbstick")
+    for _ in range(50):
+        if "DISCONNECTED" in vm.command("dmesg -s usb_host", raw=True):
+            break
+        time.sleep(.2)
+    started = time.monotonic()
+    vm.send("run memmap\n")
+    vm.expect("CANNOT READ THE PROGRAM", timeout=60)
+    took = time.monotonic() - started
+    assert took < 15, f"the refusal took {took:.1f} s"
+    vm.expect("MIND> ")
+    require(vm.command("ps"), "shell")
+    require(vm.command("dmesg -s vfs_server", raw=True), "DRIVE DOES NOT ANSWER")
+    print(f"unplugged: run memmap refused in {took:.1f} s")
+    vm.hmp(f"drive_add 0 if=none,id=usbdisk2,format=raw,file={booted}")
+    vm.hmp("device_add usb-storage,drive=usbdisk2,id=usbstick")
+    for _ in range(40):  # vfs_server asks the drive again after its quiet time
+        time.sleep(2)
+        if "NAME=memmap" in vm.command("run memmap &"):
+            break
+    else:
+        raise AssertionError("memmap does not start after the disk is plugged in again")
+    require(vm.command("dmesg -s vfs_server", raw=True), "DRIVE ANSWERS AGAIN")
+    require(vm.command("sync"), "OK")
+    time.sleep(3)  # the journal's save after the replug, flushed
+
+
 def run(args, booted):
     vm = VM(args, qemu_path(booted, args.qemu), usb=True, snapshot=False)
     try:
@@ -104,6 +134,7 @@ def run(args, booted):
         require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
         require(vm.command("sync"), "OK")
         time.sleep(3)  # the journal's last save, flushed
+        unplugged(vm, booted)
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-image{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
