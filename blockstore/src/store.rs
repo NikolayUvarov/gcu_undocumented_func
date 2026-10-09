@@ -423,7 +423,13 @@ impl<'a, D: Device> Store<'a, D> {
                 if let Some((cid, len)) = parse_header(sector).filter(|&(_, len)| here + record_sectors(len) as u64 <= sectors) {
                     let n = record_sectors(len) as u64;
                     let keep = if sweep {
-                        self.position(&cid.to_bytes()).is_ok_and(|i| self.index[i].lba == here && self.retained(i))
+                        match self.position(&cid.to_bytes()) {
+                            Ok(i) if self.index[i].lba == here && self.retained(i) => true,
+                            // The indexed copy leaves the index before its sectors are erased, so a failure later in
+                            // the sweep never leaves an erased block acknowledged (audit A05, 175-STO-0012).
+                            Ok(i) if self.index[i].lba == here => { self.remove(i); false }
+                            _ => false,
+                        }
                     } else {
                         if self.verify(here, &cid, len)? && !self.contains(&cid) {
                             if self.count == self.index.len() { return Err(Error::Full); }
@@ -525,7 +531,7 @@ impl<'a, D: Device> Store<'a, D> {
         }
         if let Some(start) = run { self.hole(start, sectors - start); }
         if sweep {
-            // What the sweep freed leaves the index.
+            // An entry the sweep did not meet and does not retain leaves the index too (its record was not found).
             let mut k = 0;
             for i in 0..self.count {
                 if self.retained(i) { self.index[k] = self.index[i]; k += 1; } else { self.bytes -= self.index[i].len as u64; }

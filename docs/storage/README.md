@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.6 (2026-10-08) · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.7 (2026-10-09): a cut sweep leaves no erased block indexed · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -205,6 +205,8 @@ A collection:
   3. zeros over the marker, flushed.
 
   A mount that finds a marker finishes the free. A stop in the middle never leaves a false report of damage.
+
+  A block leaves the index before its record is freed (175-STO-0012, audit A05). So a sweep cut by a read, write or flush failure leaves the running store with no erased block indexed: a later put of the same bytes writes them again rather than acknowledging what is gone. Evidence: `tests/blockstore_host.rs` fails each read and each write of a collection in turn and puts every block again (host only: nothing makes the RAM disk fail in the middle of a collection on the platform).
 - **Room.** The freed sectors are blank, and later records go into them.
 
 **Pin record (layout 2).** One sector: `MIND-PIN`, layout version (u16), zero, the id (u32), the owner (u16), zero, the root's CID (36 bytes), and the SHA-256 of these 56 bytes. When mounting, every valid pin record is a pin; a pin's id is never given again while its record exists, and ids go on from the highest found.

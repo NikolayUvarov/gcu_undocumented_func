@@ -2,7 +2,7 @@
 
 **Type:** tool (shell command) · **Owner:** `APP` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.5, MC-11.11
 
-Done for [351-NET-0011](../issues/351-NET-0011-parse-release-metadata.md) by the storage session, in the tools track's area with the maintainer's permission (2026-10-09): a shell command.
+Done for [351-NET-0011](351-NET-0011-parse-release-metadata.done) by the storage session, in the tools track's area with the maintainer's permission (2026-10-09): a shell command.
 
 ## Problem
 
@@ -24,8 +24,8 @@ On QEMU, `release` shows a channel and the boot volume's own manifest as read by
 
 ## Resolution
 
-Done: `release_metadata_check` in the `net` suite passes on x86 (4 CPUs); the run on aarch64 is 351-NET-0011's.
+Done: `release_metadata_check` in the `net` suite passes on x86 and aarch64.
 
 ## Related
 
-[351-NET-0011](../issues/351-NET-0011-parse-release-metadata.md), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done).
+[351-NET-0011](351-NET-0011-parse-release-metadata.done), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done).

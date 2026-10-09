@@ -1,6 +1,6 @@
 # Airlock: the authority map of the adapters
 
-**Version:** 0.3 (2026-10-09): release metadata through the parser · **Track:** `NET`, tasks [109-NET-0007](../../issues-done/109-NET-0007-airlock-authority-map.done), [0008](../../issues-done/109-NET-0008-parser-service.done) and [0009](../../issues-done/109-NET-0009-download-through-the-parser.done) of main task [109](../../issues-done/109-session-parsers.done), [351-NET-0011](../../issues/351-NET-0011-parse-release-metadata.md) · **Constitution:** MC-11.3, 11.4, 11.5, 11.6, 11.9, 11.11, Appendix B.6
+**Version:** 0.3 (2026-10-09): release metadata through the parser · **Track:** `NET`, tasks [109-NET-0007](../../issues-done/109-NET-0007-airlock-authority-map.done), [0008](../../issues-done/109-NET-0008-parser-service.done) and [0009](../../issues-done/109-NET-0009-download-through-the-parser.done) of main task [109](../../issues-done/109-session-parsers.done), [351-NET-0011](../../issues-done/351-NET-0011-parse-release-metadata.done) · **Constitution:** MC-11.3, 11.4, 11.5, 11.6, 11.9, 11.11, Appendix B.6
 
 MC-11.11 asks that every adapter of external input have an authority map of its stages: transport, cryptographic operations, parsing, policy and application effect. It also asks that a domain parsing untrusted input hold none of the following:
 - universal granting of authorities;
