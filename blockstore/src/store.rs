@@ -125,11 +125,28 @@ pub struct Usage { pub retained: u64, pub quota: u64, pub names: u32, pub pins: 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Collected { pub blocks: u32, pub names: u32, pub sectors: u64, pub free: u64 }
 
-/// An index entry: the CID's binary form (their order is the CIDs' order), where its record starts, when its lease
-/// began, and whether the last collection found a name that retains it.
+/// A slot of the index, a hash table with open addressing (251-STO-0013): when the block's lease began, where its
+/// record starts (a sector below 2^32), its length, whether the slot is used and whether the last collection found the
+/// block retained, and the CID's binary form. 56 bytes; all zeros is an empty slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Entry { key: [u8; cid::BYTES], lba: u64, len: u32, lease: u64, live: bool }
-impl Entry { pub const EMPTY: Entry = Entry { key: [0; cid::BYTES], lba: 0, len: 0, lease: 0, live: false }; }
+pub struct Entry { lease: u64, lba: u32, len: u16, flags: u8, key: [u8; cid::BYTES] }
+impl Entry {
+    pub const EMPTY: Entry = Entry { lease: 0, lba: 0, len: 0, flags: 0, key: [0; cid::BYTES] };
+    fn used(&self) -> bool { self.flags & USED != 0 }
+    fn live(&self) -> bool { self.flags & LIVE != 0 }
+}
+const USED: u8 = 1;
+const LIVE: u8 = 2;
+
+/// Index slots for a medium of `sectors`: room for a block per 8 sectors (records of 4 KiB on average) and at least
+/// 4096 blocks, at most 2^20 slots. The service gives the store as many as its memory allows, down to the least.
+pub fn slots_for(sectors: u64) -> usize { ((sectors / 8).max(4096) * 8 / 7).min(1 << 20) as usize }
+
+// The slot a key starts its search at: its digest's first bytes are uniform, the codec tells raw and node apart.
+fn home(key: &[u8; cid::BYTES], slots: usize) -> usize {
+    let h = u64::from_le_bytes(key[4..12].try_into().unwrap()) ^ (key[1] as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h % slots as u64) as usize
+}
 
 /// A run of blank sectors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -372,6 +389,8 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn mount(mut dev: D, index: &'a mut [Entry], heads: &'a mut [Head], pins: &'a mut [Pin], holes: &'a mut [Extent],
                  buffer: &'a mut [u8; BUFFER], scratch: &'a mut [u8; dag::CHUNK], now: u64) -> Result<Self, Error> {
         if dev.sectors() < 2 { return Err(Error::Full); }
+        // An index entry names a record by a sector below 2^32 (2 TiB of 512-byte sectors).
+        if dev.sectors() > 1 << 32 { return Err(Error::TooLarge); }
         if !dev.read(0, &mut buffer[..SECTOR]) { return Err(Error::Device); }
         if buffer[..SECTOR].iter().all(|&b| b == 0) {
             // Only a wholly blank medium is formatted: some file systems leave their first sectors zero.
@@ -384,6 +403,8 @@ impl<'a, D: Device> Store<'a, D> {
             return Err(Error::Layout);
         }
         let quota = dev.sectors() * SECTOR as u64 / 4 * 3;
+        // Every slot starts empty: what a slice held before is not this medium's.
+        index.fill(Entry::EMPTY);
         let mut store = Store {
             dev, index, count: 0, heads, names: 0, pins, pinned: 0, next_pin: 1, quota, holes, runs: 0, buffer,
             scratch: Some(scratch), now, end: 1, bytes: 0, corrupt: 0, damaged: 0,
@@ -400,7 +421,7 @@ impl<'a, D: Device> Store<'a, D> {
     /// than a lease, and a restart must not shorten the time a writer has.
     pub fn renew(&mut self, now: u64) {
         self.now = now;
-        for e in self.index[..self.count].iter_mut() { e.lease = now; }
+        for e in self.index.iter_mut().filter(|e| e.used()) { e.lease = now; }
     }
 
     // Reads the medium in windows of RECORD_SECTORS and finds the runs of blank sectors. Mounting (`sweep` false)
@@ -424,15 +445,15 @@ impl<'a, D: Device> Store<'a, D> {
                     let n = record_sectors(len) as u64;
                     let keep = if sweep {
                         match self.position(&cid.to_bytes()) {
-                            Ok(i) if self.index[i].lba == here && self.retained(i) => true,
+                            Ok(i) if self.index[i].lba as u64 == here && self.retained(i) => true,
                             // The indexed copy leaves the index before its sectors are erased, so a failure later in
                             // the sweep never leaves an erased block acknowledged (audit A05, 175-STO-0012).
-                            Ok(i) if self.index[i].lba == here => { self.remove(i); false }
+                            Ok(i) if self.index[i].lba as u64 == here => { self.remove(i); false }
                             _ => false,
                         }
                     } else {
                         if self.verify(here, &cid, len)? && !self.contains(&cid) {
-                            if self.count == self.index.len() { return Err(Error::Full); }
+                            if self.count == self.limit() { return Err(Error::Full); }
                             self.insert(cid.to_bytes(), here, len);
                         }
                         true
@@ -531,12 +552,12 @@ impl<'a, D: Device> Store<'a, D> {
         }
         if let Some(start) = run { self.hole(start, sectors - start); }
         if sweep {
-            // An entry the sweep did not meet and does not retain leaves the index too (its record was not found).
-            let mut k = 0;
-            for i in 0..self.count {
-                if self.retained(i) { self.index[k] = self.index[i]; k += 1; } else { self.bytes -= self.index[i].len as u64; }
+            // An entry the sweep did not meet and does not retain leaves the index too (its record was not found). A
+            // removal shifts later entries back, so the same slot is looked at again.
+            let mut i = 0;
+            while i < self.index.len() {
+                if self.index[i].used() && !self.retained(i) { self.remove(i); } else { i += 1; }
             }
-            self.count = k;
         }
         freed.free = self.holes[..self.runs].iter().map(|h| h.len).sum();
         Ok(freed)
@@ -628,23 +649,48 @@ impl<'a, D: Device> Store<'a, D> {
         Ok(whole)
     }
 
-    fn position(&self, key: &[u8; cid::BYTES]) -> Result<usize, usize> { self.index[..self.count].binary_search_by(|e| e.key.cmp(key)) }
+    // The slot holding `key`, or the empty slot where it would go (the number of slots when none is empty).
+    fn position(&self, key: &[u8; cid::BYTES]) -> Result<usize, usize> {
+        let n = self.index.len();
+        if n == 0 { return Err(0); }
+        let mut at = home(key, n);
+        for _ in 0..n {
+            let e = &self.index[at];
+            if !e.used() { return Err(at); }
+            if e.key == *key { return Ok(at); }
+            at = if at + 1 == n { 0 } else { at + 1 };
+        }
+        Err(n)
+    }
+    // The most blocks the index takes: every slot of a small one, seven eighths of a large one, so a search for a block
+    // that is not there ends soon.
+    fn limit(&self) -> usize { let n = self.index.len(); if n > 64 { n - n / 8 } else { n } }
     fn contains(&self, cid: &Cid) -> bool { self.position(&cid.to_bytes()).is_ok() }
     // Whether a collection keeps the block: a name retains it, or its lease runs.
-    fn retained(&self, i: usize) -> bool { self.index[i].live || self.now < self.index[i].lease.saturating_add(LEASE_NS) }
+    fn retained(&self, i: usize) -> bool { self.index[i].live() || self.now < self.index[i].lease.saturating_add(LEASE_NS) }
 
+    // Callers check first that the key is not there and that the index has room (`limit`).
     fn insert(&mut self, key: [u8; cid::BYTES], lba: u64, len: usize) {
         let at = self.position(&key).unwrap_err();
-        self.index.copy_within(at..self.count, at + 1);
-        self.index[at] = Entry { key, lba, len: len as u32, lease: self.now, live: false };
+        self.index[at] = Entry { lease: self.now, lba: lba as u32, len: len as u16, flags: USED, key };
         self.count += 1;
         self.bytes += len as u64;
     }
 
+    // Empties a slot and moves back the entries after it that would no longer be found (deletion without tombstones).
     fn remove(&mut self, at: usize) {
         self.bytes -= self.index[at].len as u64;
-        self.index.copy_within(at + 1..self.count, at);
         self.count -= 1;
+        let n = self.index.len();
+        let (mut hole, mut next) = (at, (at + 1) % n);
+        while next != at && self.index[next].used() {
+            let home = home(&self.index[next].key, n);
+            // The entry stays if its home lies cyclically after the hole, up to where it is.
+            let stays = if hole < next { hole < home && home <= next } else { hole < home || home <= next };
+            if !stays { self.index[hole] = self.index[next]; hole = next; }
+            next = (next + 1) % n;
+        }
+        self.index[hole] = Entry::EMPTY;
     }
 
     pub fn has(&self, cid: &Cid) -> bool { self.contains(cid) }
@@ -868,9 +914,9 @@ impl<'a, D: Device> Store<'a, D> {
     /// node read and checked; if one lacks a block or holds a corrupt node, nothing is freed.
     pub fn collect(&mut self) -> Result<Collected, Error> {
         if !self.dev.writable() { return Err(Error::ReadOnly); }
-        for e in self.index[..self.count].iter_mut() { e.live = false; }
+        for e in self.index.iter_mut() { e.flags &= !LIVE; }
         let mark = |s: &mut Self, cid: &Cid| match s.position(&cid.to_bytes()) {
-            Ok(k) => { s.index[k].live = true; Ok(()) }
+            Ok(k) => { s.index[k].flags |= LIVE; Ok(()) }
             Err(_) => Err(dag::Error::NotFound),
         };
         for i in 0..self.names {
@@ -893,8 +939,8 @@ impl<'a, D: Device> Store<'a, D> {
         if let Ok(i) = self.position(&cid.to_bytes()) { self.index[i].lease = self.now; return Ok(cid); }
         if !self.dev.writable() { return Err(Error::ReadOnly); }
         let n = record_sectors(data.len()) as u64;
-        if self.count == self.index.len() { self.collect()?; }
-        if self.count == self.index.len() { return Err(Error::Full); }
+        if self.count == self.limit() { self.collect()?; }
+        if self.count == self.limit() { return Err(Error::Full); }
         let lba = self.room(n)?;
         let record = &mut self.buffer[..n as usize * SECTOR];
         record.fill(0);
@@ -915,7 +961,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> {
         let at = self.position(&cid.to_bytes()).map_err(|_| Error::NotFound)?;
         let Entry { lba, len, .. } = self.index[at];
-        let len = len as usize;
+        let (lba, len) = (lba as u64, len as usize);
         if out.len() < len { return Err(Error::TooLarge); }
         if !self.verify(lba, cid, len)? { self.remove(at); return Err(Error::Corrupt); }
         out[..len].copy_from_slice(&self.buffer[HEADER..HEADER + len]);
@@ -925,7 +971,7 @@ impl<'a, D: Device> Store<'a, D> {
     pub fn stats(&self) -> Stats {
         Stats {
             blocks: self.count as u32, bytes: self.bytes, used: self.end, sectors: self.dev.sectors(),
-            corrupt: self.corrupt, damaged: self.damaged, capacity: self.index.len() as u32, names: self.names as u32,
+            corrupt: self.corrupt, damaged: self.damaged, capacity: self.limit() as u32, names: self.names as u32,
             free: self.holes[..self.runs].iter().map(|h| h.len).sum(), pins: self.pinned as u32,
         }
     }
