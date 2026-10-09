@@ -2438,6 +2438,8 @@ def blockstore_check(vm):
     and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
     require(vm.service_logs("blockstore", ready), ready)
+    # The index is sized from the medium (251-STO-0013): the least, 4681 slots for 4096 blocks, on 8 MiB.
+    require(vm.service_logs("blockstore", "[BLOCKSTORE] INDEX"), "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     real = vm.services()
     assert "ramdisk#1" in real, real
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
