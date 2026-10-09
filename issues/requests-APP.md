@@ -159,3 +159,22 @@ Once the kernel track adds `REQUEST_TLS` (`issues/requests-KRN.md`, "A TLS clien
 ### Acceptance criteria
 
 `download data/x.bin https://…` runs a TLS session over `download`'s own grant; a script that does not declare `tls` runs it without one.
+
+## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for main task [173](173-boot-services-configuration.md) at the maintainer's request.
+
+### Problem
+
+The maintainer wants a tool to turn boot services on and off and to order them when needed. init will read `data/services.txt` ([173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md)) and report the plan through `init.wit` `boot-plan`. Nothing lets the user change the file but editing it by hand.
+
+### Plan (a proposal; the tools track decides)
+
+- `svc boot`: the plan from init (order, enabled, essential, off and why) and how the last boot went.
+- `svc enable <service>`, `svc disable <service>`, `svc after <service> <other>` edit `data/services.txt` through the shell's file client and say that the change applies at the next boot; `svc reset` removes the file.
+- What init would refuse is refused here first: essential services, unknown names, an order against a dependency.
+- The help screen and `docs/tools` (EN, RU) describe it.
+
+### Acceptance criteria
+
+The `tools` suite runs `svc disable tts`, reboots, and finds `tts` off in `svc boot`. `svc disable logd` is refused.

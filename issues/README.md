@@ -38,6 +38,9 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [210-APL-0008](210-APL-0008-usb-on-type-c-ports.md) | USB on the Type-C ports: DWC3 as an xHCI for `usb_host`, the ATC PHY, PMGR power | `APL` (open) | P3 | 210-APL-0003, 0007; a Mac with M1 | track H |
 | [210-APL-0013](210-APL-0013-own-stage-two-instead-of-u-boot.md) | Our own second stage after m1n1, without U-Boot | porting, `APL` (open) | P3 | 210-APL-0001, a Mac | track H |
 | [210-APL-0014](210-APL-0014-own-first-stage-instead-of-m1n1.md) | Our own first stage started by iBoot (`kmutil`), without m1n1 | porting, `APL` (open) | P3 | 210-APL-0013, a Mac | track H |
+| [173](173-boot-services-configuration.md) | Which boot services start and in what order: `data/services.txt` read by init, a safe start, `svc boot/enable/disable/after` (plan) | main task, `KRN` with `APP` | P2 | — | track A |
+| [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md) | init reads and applies the service configuration; `boot-plan` in `init.wit` | `KRN` | P2 | — | track A |
+| [173-KRN-0036](173-KRN-0036-safe-start.md) | A safe start: a key at the bootloader, a flag in `BootInfo`, the configuration ignored | `KRN`, with `PRT` | P2 | 173-KRN-0035 | track A |
 | [211](211-intel-pc-from-a-sata-ssd.md) | An Intel PC booted from a SATA SSD (the maintainer's Samsung 860 PRO): the first real x86 machine | main task, `PRT` | P1 | — | track H |
 | [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md) | The image writer for an internal SATA or NVMe disk, behind an explicit option | `PRT` | P2 | — | track H |
 | [211-DRV-0004](211-DRV-0004-ehci.md) | An EHCI driver for an Intel Mac's internal keyboard and trackpad (proposed) | `DRV` (open) | P2 | — | track A |
@@ -82,7 +85,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (full screen and a list of windows in `wm`; clocks asking the RTC service 10 times a second; `update` in the shell for 351; a Wi-Fi setup program for 550; `log:` in the shell's help and in `fm`; `efivar` in the tools guide; the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (full screen and a list of windows in `wm`; clocks asking the RTC service 10 times a second; `update` in the shell for 351; a Wi-Fi setup program for 550; `log:` in the shell's help and in `fm`; `efivar` in the tools guide; the shell lending its TLS client; `svc` for the boot services, for 173); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
 
 
 ## Finished tasks (`issues-done/`)
