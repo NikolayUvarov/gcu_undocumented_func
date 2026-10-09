@@ -4,13 +4,17 @@
 //! `mind::input` reads the keys the manager queues in the surface, and `mind::time::sleep` waits on the window's wake
 //! endpoint, so a key ends it early as it does on a screen. A window the manager closes ends the program. A pixel
 //! window has room for the screen's pixels and takes the size of its frame as a text window does (`pixels_resized`,
-//! issue u009).
-use crate::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_WINDOW, SYSCALL_WAIT, ERR_TIMEOUT};
+//! issue u009). A program in a window that ends with a nonzero status leaves its last lines on view until a key
+//! (`ended`, 211-APP-0039).
+use crate::abi::{event_key, event_pressed, pointer_absolute_fields, BootInfo, CAP_KIND_ENDPOINT, ERR_TIMEOUT, KEY_POINTER, SLOT_WINDOW, SYSCALL_WAIT};
 use crate::idl::window as api;
 use crate::ipc::Endpoint;
-use crate::mem::Mapping;
+use crate::mem::{Mapping, Pages};
+use crate::tui::ended::{self, Tail};
+use crate::tui::{Cell, Grid, DARK};
 use crate::window::{Kind, Surface, MAX_PIXELS, STATE_CLOSE};
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 // Capabilities arrive in a fixed slot; 21 is the shell's broker client and no application uses it.
@@ -25,6 +29,16 @@ static PIXELS: AtomicUsize = AtomicUsize::new(0); // 1: a pixel window, publishe
 static RESIZE: AtomicU32 = AtomicU32::new(0); // width | height << 16 the manager asked for, not yet taken
 static ROOM: AtomicU32 = AtomicU32::new(0); // width | height << 16 a pixel window has memory for
 static mut INFO: core::mem::MaybeUninit<BootInfo> = core::mem::MaybeUninit::uninit();
+// What a program started with a broker client printed last, for `ended`; whether it was started so (0: not looked).
+const KEPT: usize = 2048;
+static PRINTED: Tail<KEPT> = Tail::new();
+static STARTED_IN_WINDOW: AtomicU8 = AtomicU8::new(0);
+// The program's name from its `about!` text; the window it opens when it ends with no window yet has this much room.
+static NAME: AtomicUsize = AtomicUsize::new(0);
+static NAME_LEN: AtomicUsize = AtomicUsize::new(0);
+const ENDED_ROOM: (usize, usize) = (160, 64);
+// While `ended` waits, a closed window ends the wait, not the program.
+static ENDING: AtomicBool = AtomicBool::new(false);
 
 /// The launcher lent a broker client and no window is open yet.
 pub fn requested() -> bool { !active() && crate::dev::cap_info(SLOT_WINDOW).0 == CAP_KIND_ENDPOINT }
@@ -109,7 +123,7 @@ pub fn pixels_resized() -> Option<BootInfo> {
 
 // What the manager asked for since the last look: a closed window ends the program, a new size is kept for `resize`.
 fn look(surface: &Surface) {
-    if surface.state() == STATE_CLOSE { crate::println!("[WINDOW] CLOSED"); crate::process::exit(); }
+    if surface.state() == STATE_CLOSE && !ENDING.load(Ordering::Acquire) { crate::println!("[WINDOW] CLOSED"); crate::process::exit(); }
     if let Some((width, height)) = surface.wanted() { RESIZE.store((width.min(0xFFFF) | height.min(0xFFFF) << 16) as u32, Ordering::Release); }
 }
 
@@ -144,7 +158,7 @@ pub fn wait(ms: usize) -> usize {
     loop {
         look(&surface);
         let elapsed = crate::time::uptime_ms() - start;
-        if surface.queued() > 0 || resize_pending() || elapsed >= ms { return elapsed; }
+        if surface.queued() > 0 || resize_pending() || elapsed >= ms || surface.state() == STATE_CLOSE { return elapsed; }
         let slice = (ms - elapsed).min(SLICE_MS).max(1);
         if waker == 0 { crate::sys::call(SYSCALL_WAIT, slice, 0); continue; }
         match Endpoint(waker).recv_timeout(RECEIVE, slice as u32) {
@@ -153,4 +167,82 @@ pub fn wait(ms: usize) -> usize {
             Err(_) => { crate::sys::call(SYSCALL_WAIT, slice, 0); }
         }
     }
+}
+
+/// Keeps what the program prints (`process::log`) when it was started with a broker client, for `ended`.
+pub(crate) fn keep(bytes: &[u8]) {
+    let started = match STARTED_IN_WINDOW.load(Ordering::Relaxed) {
+        0 => { let yes = active() || requested(); STARTED_IN_WINDOW.store(if yes { 1 } else { 2 }, Ordering::Relaxed); yes }
+        known => known == 1,
+    };
+    if started { PRINTED.push(bytes); }
+}
+
+/// The program's name, the first word of its `about!` text (the title of the window `ended` opens).
+pub fn name(about: &'static str) {
+    let name = about.split([' ', '\n']).next().unwrap_or("");
+    NAME_LEN.store(name.len(), Ordering::Relaxed);
+    NAME.store(name.as_ptr() as usize, Ordering::Release);
+}
+
+fn program_name() -> &'static str {
+    let at = NAME.load(Ordering::Acquire);
+    if at == 0 { return ""; }
+    let bytes = unsafe { core::slice::from_raw_parts(at as *const u8, NAME_LEN.load(Ordering::Relaxed)) };
+    core::str::from_utf8(bytes).unwrap_or("")
+}
+
+/// A program in a window that ends with a nonzero `status` (211-APP-0039) leaves its window on view until a key, a
+/// click or the window's close: the last lines it printed and `ENDED (STATUS n): PRESS A KEY`, in its own text or
+/// pixel window, or in a text window opened for them when it had none. `process::exit_with` calls it.
+pub(crate) fn ended(status: u32) {
+    if !active() {
+        if !requested() { return; }
+        let mut title = crate::util::FixedBuf::<64>::new();
+        let _ = write!(title, "{}{}ended", program_name(), if program_name().is_empty() { "" } else { " " });
+        if open(Kind::Text, ENDED_ROOM, (80, 25), title.as_str()).is_none() { return; }
+    }
+    let Some(surface) = surface() else { return };
+    ENDING.store(true, Ordering::Release);
+    while surface.event().is_some() {} // what was queued before the end is not an answer
+    let mut kept = [0u8; KEPT];
+    let len = PRINTED.copy(&mut kept);
+    let printed = &kept[..len];
+    show(&surface, printed, status);
+    crate::println!("[WINDOW] ENDED (STATUS {}): WAITING FOR A KEY", status);
+    loop {
+        wait(60_000);
+        if surface.state() == STATE_CLOSE { return; }
+        if let Some((width, height)) = resize() {
+            if surface.set_size(width, height) { show(&surface, printed, status); }
+        }
+        let mut answered = false;
+        while let Some(word) = surface.event() {
+            answered |= if event_key(word) == KEY_POINTER { pointer_absolute_fields(word).is_some_and(|(buttons, ..)| buttons != 0) }
+                        else { event_pressed(word) && !crate::keys::is_modifier(event_key(word)) };
+        }
+        if answered { return; }
+    }
+}
+
+// Draws `ended`'s lines into the window: cells in a text window, glyphs in a pixel window.
+fn show(surface: &Surface, printed: &[u8], status: u32) {
+    let pixels = PIXELS.load(Ordering::Acquire) == 1;
+    let (width, height) = surface.size();
+    let (cols, rows) = if pixels { (width / 8, height / 16) } else { (width, height) };
+    if cols == 0 || rows == 0 { return; }
+    let Some(mut pages) = Pages::new(cols * rows * core::mem::size_of::<Cell>()) else { return };
+    let cells = unsafe { core::slice::from_raw_parts_mut(pages.as_mut_slice().as_mut_ptr() as *mut Cell, cols * rows) };
+    let mut grid = Grid::new(cells, cols, rows);
+    ended::draw(&mut grid, printed, status, &DARK);
+    let screen = unsafe { crate::gfx::Screen::at(surface.content().cast::<u32>(), width, height, width) };
+    if pixels { screen.clear(DARK.panel.bg); }
+    for y in 0..rows {
+        for x in 0..cols {
+            let cell = grid.get(x, y);
+            if pixels { screen.glyph16(x * 8, y * 16, cell.ch, cell.style.fg, Some(cell.style.bg)); } else { surface.set_cell(x, y, cell.ch, cell.style.fg, cell.style.bg); }
+        }
+    }
+    surface.set_cursor(None);
+    surface.changed(None);
 }

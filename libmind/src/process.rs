@@ -4,7 +4,13 @@ use crate::sys::{call, check, syscall, Result};
 pub fn exit() -> ! { exit_with(0) }
 
 /// Ends the program with `code` (0: success; issue 166): its launcher reads it with `control::exit_status`.
+/// In a window, a nonzero code leaves the program's last lines on view until a key (211-APP-0039).
 pub fn exit_with(code: u32) -> ! {
+    if code & 0xFF_FFFF != 0 { crate::windowed::ended(code & 0xFF_FFFF); }
+    end(code)
+}
+
+fn end(code: u32) -> ! {
     call(SYSCALL_EXIT, code as usize & 0xFF_FFFF, 0);
     loop { core::hint::spin_loop(); }
 }
@@ -33,6 +39,7 @@ pub fn log(bytes: &[u8]) {
     }
     crate::log::capture(bytes);
     crate::output::send(bytes);
+    crate::windowed::keep(bytes);
 }
 
 /// Exit code of a program that does not match the kernel's ABI.
@@ -43,7 +50,7 @@ pub fn check_abi(info: &BootInfo) {
     let mut line = crate::line::Line::new(log);
     let _ = core::fmt::Write::write_fmt(&mut line, format_args!("ABI MISMATCH: PROGRAM {} KERNEL {}\n", ABI_VERSION, info.abi_version));
     drop(line);
-    exit_with(ABI_MISMATCH_EXIT);
+    end(ABI_MISMATCH_EXIT); // nothing more: the system calls may not mean what this program thinks
 }
 
 /// One line for `println!`: formatted, then written whole with its newline (issue 209).
@@ -192,6 +199,7 @@ pub const fn about_note<const N: usize>(text: &str) -> [u8; N] {
 macro_rules! about {
     ($text:expr) => {{
         const MIND_ABOUT_TEXT: &str = $text;
+        $crate::windowed::name(MIND_ABOUT_TEXT);
         #[used]
         #[link_section = ".mind_about"]
         static MIND_ABOUT: [u8; MIND_ABOUT_TEXT.len()] = $crate::process::about_note::<{ MIND_ABOUT_TEXT.len() }>(MIND_ABOUT_TEXT);
