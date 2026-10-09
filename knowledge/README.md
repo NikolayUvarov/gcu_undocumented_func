@@ -10,6 +10,7 @@ Improvement tasks live separately in `issues/`.
 | [03-flat-binary-layout-analysis.md](03-flat-binary-layout-analysis.md) | Analysis of the ELF and flat binaries: `_start` offset, GOT, `.bss` |
 | [04-handoff-vs-code-matrix.md](04-handoff-vs-code-matrix.md) | Comparison of the handoff document with the code, links to issues |
 | [05-observations-and-risks.md](05-observations-and-risks.md) | Other observations and risks not covered by issues, or covered only partially |
+| [06-apple-security-lessons.md](06-apple-security-lessons.md) | Apple's platform security mechanisms, their equivalents on Intel, AMD and ARM, what MIND Core has, and what it could take (proposals, in priority order) |
 
 Maintenance rules:
 - A fact is recorded only after it has been verified (a command plus its output, or a reference to a line of code).
