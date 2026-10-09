@@ -55,7 +55,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350](350-signed-boot-images.md) | Signed boot images and a launch record (track C, first step): manifest, signing, verification in the bootloader and the reproducible-build check done; the launch record readable in the system remains (`350-UPD-0004`) | main task, `UPD` | P2 | — | track C |
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
-| [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` | P1 | 0008, 351-NET-0002 (351-KRN-0014 done) | track C |
+| [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back | `UPD` | P1 | 0008 (351-KRN-0014, 351-NET-0002 done) | track C |
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only | `UPD` | P1 | — (351-KRN-0014 done) | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` | P2 | 351-UPD-0007 | track C |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD`, with `PRT` | P3 | 351-KRN-0022 (351-KRN-0027 done) | track C |
@@ -64,7 +64,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [251-STO-0010](251-STO-0010-speech-models-in-the-store.md) | Speech models in the block store: a model disk imported as named, pinned objects, read back by name | `STO` | P3 | requests-KRN (a durable disk for the store) | track B |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable disk for the store ([requests-KRN.md](requests-KRN.md)); 351-UPD-0007 | track B, C |
 | [109-NET-0010](109-NET-0010-a-parser-per-session.md) | A parser process per session, started with no client and ended with its session (B.6) | `NET` | P3 | a kernel and loader change (a spawn with no standard clients) | track D |
-| [351-NET-0002](351-NET-0002-https-for-programs.md) | HTTPS for programs (`download` over a `tls` session of its own grant) and trust for the update server (a pinned key or shipped roots) | `NET` | P1 | requests-APP (the shell lends its TLS client; 351-KRN-0034 done) | track D |
 | [351-NET-0004](351-NET-0004-ssh-client.md) | An SSH client: curve25519, ssh-ed25519, a pinned host key, SFTP reads | `NET` | P3 | — | track D |
 | [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) | The device key sealed by a TPM instead of stored unencrypted | `NET` | P2 | 351-DRV-0015 | track D |
 | [351-DRV-0015](351-DRV-0015-tpm-driver.md) | A TPM 2.0 driver: seal and unseal for `keystore`, an NV counter for the updater | `DRV` (open) | P2 | — | track A |
@@ -329,6 +328,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [109-APP-0016](../issues-done/109-APP-0016-shell-lends-the-parser.done) | The shell lends its `parse` client for `REQUEST_PARSE`; the script word `parse` (for NET) | done (2026-10-09) |
 | [109-NET-0009](../issues-done/109-NET-0009-download-through-the-parser.done) | `download` parses nothing itself: response heads through `parse`, refused without it | done (2026-10-09) |
 | [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, with a flow grant only; the script word `tls` (for NET) | done (2026-10-09) |
+| [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) | HTTPS for programs: `download` over a `tls` session on its own grant; a server trusted by its pinned key (`tls.wit` 1.1 `connect-pinned`) or the roots | done (2026-10-09) |
 | [109](../issues-done/109-session-parsers.done) | Session parsers with minimal authority (Airlock, track D): the authority map, the parser service, `download` through it | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

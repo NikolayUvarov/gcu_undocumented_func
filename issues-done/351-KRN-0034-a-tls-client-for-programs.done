@@ -2,7 +2,7 @@
 
 **Type:** kernel (libmind, loader) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.11, MC-11.6
 
-The network track's request "A TLS client for programs (`REQUEST_TLS`)" in `issues/requests-KRN.md` (2026-10-08), for [351-NET-0002](../issues/351-NET-0002-https-for-programs.md): HTTPS for `download` and the updater.
+The network track's request "A TLS client for programs (`REQUEST_TLS`)" in `issues/requests-KRN.md` (2026-10-08), for [351-NET-0002](351-NET-0002-https-for-programs.done): HTTPS for `download` and the updater.
 
 ## Problem
 
@@ -30,4 +30,4 @@ The kernel's part done on 2026-10-09:
 
 ## Related
 
-[351-NET-0002](../issues/351-NET-0002-https-for-programs.md), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md), issue 103 (the TLS service).
+[351-NET-0002](351-NET-0002-https-for-programs.done), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md), issue 103 (the TLS service).

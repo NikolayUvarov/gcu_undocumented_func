@@ -4255,10 +4255,12 @@ def policy_edit_check(vm, web_port):
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
-    and resumed by the next run; what the grant, the server and the file's directory refuse. On x86 the boot disk is on
-    AHCI: the IDE driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request
-    and walks the file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
+    and resumed by the next run; what the grant, the server and the file's directory refuse. The same over HTTPS
+    (351-NET-0002), the server trusted by its pinned key or by the roots. On x86 the boot disk is on AHCI: the IDE
+    driver's port I/O, emulated, takes minutes for 30 MiB. vfs_server writes a sector per block request and walks the
+    file's chain on every write, which emulated aarch64 takes over 10 minutes for 30 MiB: 8 MiB there."""
     files = Path(tempfile.mkdtemp(prefix="mind-download-"))
+    certificates = Path(tempfile.mkdtemp(prefix="mind-download-tls-"))
     size, cut = (30 << 20, 10 << 20) if args.arch == "x86_64" else (8 << 20, 3 << 20)
     big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
@@ -4266,17 +4268,30 @@ def download_check(args, disk):
     # The release server, the first response for each file cut short, and a malformed head for /bad.bin (test hooks).
     release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000}, raw={"/bad.bin": BAD_HEAD})
     port = release.server_address[1]
+    # The same files over HTTPS: the test CA's server (in tlsroots.pem), and one from a CA nobody trusts.
+    _certificates(certificates)
+    shutil.copyfile(certificates / "ca.pem", disk / "tlsroots.pem")
+    secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
+    rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
+    tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
-    (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
-    # A script that lends download everything it asks for but the parser service (109-NET-0009).
+    (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port)))
+    # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
+    # TLS takes random bytes from RDRAND only.
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
+        https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
     finally:
         vm.close()
-        release.shutdown()
+        for server in (release, secure, rogue):
+            server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
+        shutil.rmtree(certificates, ignore_errors=True)
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
 
 
@@ -4304,11 +4319,49 @@ def download_runs(vm, release, port, big, small, cut):
     assert release.requests[-1] == ("/small.bin", "bytes=50000-"), release.requests
     require(run(f"download data/x.bin {url}/missing.bin", "DOWNLOAD: HTTP: Status(404)"), "DOWNLOAD: HTTP: Status(404)")
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
-    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: HTTPS"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT")
+    require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
-    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
+    print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
+
+
+def _spki_pin(certificate):
+    """The SHA-256 of a certificate's SubjectPublicKeyInfo (DER), in hex: what `download --pin` takes."""
+    key = subprocess.run(["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"], check=True, capture_output=True).stdout
+    der = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "der"], input=key, check=True, capture_output=True).stdout
+    return hashlib.sha256(der).hexdigest()
+
+
+def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
+    """351-NET-0002: download over a TLS session of the TLS service on its own flow grant, the server trusted by its
+    pinned key alone or by the roots in tlsroots.pem; a wrong pin and an untrusted server refused; without the TLS
+    client (a script that does not declare tls) https is refused."""
+    url, size = f"https://10.0.2.2:{port}", len(big)
+
+    def run(command, until, timeout=8):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=until)
+    digest = hashlib.sha256(big).hexdigest()
+    out = run(f"download data/tls.bin {url}/big.bin --pin {pins['server']} --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=1200)
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+        require(out, line)
+    assert secure.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], secure.requests
+    log = vm.command("dmesg -s tls")
+    require(log, "10.0.2.2 VERIFIED BY ITS PINNED KEY, SUITE")
+    small_digest = hashlib.sha256(small).hexdigest()
+    require(run(f"download ram:roots.bin {url}/small.bin --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    print(f"PASS: download over HTTPS: {size >> 20} MiB through a TLS session on its own grant, cut at {cut >> 20} MiB and resumed with Range, the server verified by its pinned key; another file verified by the roots", flush=True)
+    rogue = f"https://10.0.2.2:{rogue_port}"
+    require(run(f"download ram:x.bin {url}/small.bin --pin {'0' * 64}", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
+    require(run(f"download ram:x.bin {rogue}/small.bin", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
+    # A pinned key is trusted whoever signed its certificate.
+    require(run(f"download ram:rogue.bin {rogue}/small.bin --pin {pins['rogue']} --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
+    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// URLS")
+    log = vm.command("dmesg -s tls")
+    require(log, "10.0.2.2 REFUSED: NOT THE PINNED KEY"); require(log, "10.0.2.2 REFUSED: CERTIFICATE UnknownIssuer")
+    require(vm.command("msh notls.msh"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")
+    print("PASS: download over HTTPS: a wrong pin and a server from an untrusted CA refused; a pinned key trusted whoever signed it; without the TLS client (a script without tls) https refused", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
