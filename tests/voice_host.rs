@@ -440,3 +440,28 @@ fn recognition_of_8_seconds_takes_under_a_second() {
     println!("8 s recognized in {:?} ({} frames)", took, heard.decoded.frames);
     if !cfg!(debug_assertions) { assert!(took.as_secs_f64() < 1.0, "{:?}", took); }
 }
+
+// 252-APP-0041: tts upsamples 16 -> 48 kHz with mind::voice's filter, kept as a table: the same coefficients and the
+// same samples; a 6 kHz tone keeps its level and its image at 10 kHz is gone (linear interpolation: -4 dB, -20 dB).
+#[test]
+fn tts_upsamples_with_the_voice_filter() {
+    let mut resampler = Resampler::between(16_000, 48_000, 1);
+    assert_eq!(resampler.coefficients(), &dsp::UPSAMPLE[..]);
+    let input: Vec<i16> = (0..4000).map(|i| ((i * 7919 % 20011) as i32 - 10005) as i16).chain(tone(16_000, 1, 1234.0, 20000.0, 50)).collect();
+    let mut expected = Vec::new();
+    resampler.process(&input, &mut expected);
+    let mut upsampler = dsp::Upsampler::new();
+    let got: Vec<i16> = input.iter().flat_map(|&s| upsampler.run(s)).collect();
+    assert_eq!(got, expected);
+    let mut upsampler = dsp::Upsampler::new();
+    let six: Vec<i16> = tone(16_000, 1, 6000.0, 16000.0, 200).iter().flat_map(|&s| upsampler.run(s)).collect();
+    let steady = &six[48 * 20..];
+    let level = |hz: f64| {
+        let (mut re, mut im) = (0.0, 0.0);
+        for (n, &s) in steady.iter().enumerate() { let w = 2.0 * std::f64::consts::PI * hz * n as f64 / 48_000.0; re += s as f64 * w.cos(); im += s as f64 * w.sin(); }
+        2.0 * (re * re + im * im).sqrt() / steady.len() as f64
+    };
+    let (tone_level, image) = (level(6000.0), level(10_000.0));
+    assert!((tone_level / 16000.0 - 1.0).abs() < 0.02, "6 kHz at {:.0} of 16000", tone_level);
+    assert!(20.0 * (image / tone_level).log10() < -70.0, "the 10 kHz image at {:.1} dB", 20.0 * (image / tone_level).log10());
+}
