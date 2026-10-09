@@ -86,7 +86,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (FP/SIMD for programs on aarch64, for 250 and 252); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550; a TLS client without the device certificate, for 351); [requests-STO.md](requests-STO.md) (a list of the published names, for `fm`'s `store:` panel).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (FP/SIMD for programs on aarch64, for 250 and 252; the devicetree check racing init on CI runners); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550; a TLS client without the device certificate, for 351); [requests-STO.md](requests-STO.md) (a list of the published names, for `fm`'s `store:` panel).
 
 
 ## Finished tasks (`issues-done/`)

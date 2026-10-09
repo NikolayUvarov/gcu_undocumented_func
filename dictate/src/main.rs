@@ -5,7 +5,7 @@
 // (made 16 kHz mono) with the time each step took. A model on models: is used only if its SHA-256 is the one
 // MANIFEST.json lists for it (MC-4.2). `dictate --features file.wav` prints Kaldi's log-mel filter bank,
 // one line per frame, so the voice suite compares it with kaldi-native-fbank's. The text is only printed (MC-11.5).
-// Built for x86_64 with SSE2 (targets/x86_64-mind-float.json); AVX2 where the processor has it.
+// Built for x86_64 with SSE2 (targets/x86_64-mind-float.json), AVX2 where the processor has it; in soft float on aarch64.
 extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt::Write;

@@ -3,7 +3,7 @@
 // speak: Russian text said by a neural voice (252): Vosk TTS 0.7 from the model disk, a sentence at a time, played
 // through the audio gateway (resampled to 48 kHz) or written to a WAV. The voice and its dictionary are used only if
 // their SHA-256 are the ones the model disk's MANIFEST.json lists (MC-4.2). `--ids` prints the phoneme ids only.
-// Built for x86_64 with SSE2 (targets/x86_64-mind-float.json); AVX2 where the processor has it.
+// Built for x86_64 with SSE2 (targets/x86_64-mind-float.json), AVX2 where the processor has it; in soft float on aarch64.
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;

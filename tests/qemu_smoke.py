@@ -277,7 +277,8 @@ class VM:
     def screenshot(self):
         path = ROOT / (self.disk + ".ppm")
         try:
-            self.hmp(f"screendump {path.relative_to(ROOT).as_posix()}")
+            # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
+            self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
             data = path.read_bytes()
             # Retain a viewable artifact outside the build tree.
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
@@ -1246,12 +1247,8 @@ def tools_suite(vm):
 
 
 def fbank_check(vm):
-    """250: dictate computes the dictation models' features in the system (built with SSE2) as kaldi-native-fbank does
-    on the host (tests/fbank_reference.txt)."""
-    if vm.arch != "x86_64":
-        # aarch64 programs may not use FP/SIMD yet (CPACR_EL1 traps it at EL0): requested from the kernel track.
-        print("SKIP: dictate is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
-        return
+    """250: dictate computes the dictation models' features in the system (built with SSE2 on x86, in soft float on
+    aarch64, where programs may not use FP/SIMD yet) as kaldi-native-fbank does on the host (tests/fbank_reference.txt)."""
     reference = [list(map(float, line.split())) for line in (ROOT / "tests/fbank_reference.txt").read_text().splitlines() if not line.startswith("#")]
     vm.send("dictate --features fbank.wav\n")
     out = vm.expect("MIND> ", timeout=60, after="dictate --features fbank.wav\n")
@@ -1276,9 +1273,6 @@ def dictate_check(vm):
     """250: dictate runs the whole chain in the system (a network file read and checked, features, encoder, greedy
     search) and gives the host's text, with tests/dictate_toy.bin (scripts/voice_dictate/toy.py) in place of the 71 MB
     model; and refuses a damaged file."""
-    if vm.arch != "x86_64":
-        print("SKIP: dictate is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
-        return
     def run(command):
         vm.send(command + "\n")
         return vm.expect("MIND> ", timeout=60, after=command + "\n")
@@ -1309,9 +1303,6 @@ def speak_dictionary():
 def speak_check(vm):
     """252: speak's Russian front end in the system (dictionary, rules, punctuation) gives the host's ids, and a
     damaged dictionary is refused."""
-    if vm.arch != "x86_64":
-        print("SKIP: speak is built for x86_64 only until programs may use FP/SIMD on aarch64", flush=True)
-        return
     want = speak_dictionary()[2]
     def run(command):
         vm.send(command + "\n")

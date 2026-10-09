@@ -22,8 +22,27 @@ On aarch64 the kernel leaves FP/SIMD disabled at EL0 (`CPACR_EL1` = 0, `kernel/s
 - `STAT_CPUS` or `cpus` reports it, as `FPU=XSAVE+AVX` does on x86.
 - Tests: the `smp` and `busy` suites on aarch64 with two tasks on one CPU keeping distinct V registers, as the busy fixture does with `ymm0` on x86.
 
-The tools track then builds the voice engines for `aarch64-unknown-none` (hard float, a tier-2 target with its own core) and runs `dictate`'s check in the aarch64 tools suite. That check is skipped there until then.
+The tools track then builds the voice engines for `aarch64-unknown-none` (hard float, a tier-2 target with its own core). Until then they build in soft float there: correct, and their checks pass in the aarch64 tools suite, but far too slow for a real model.
 
 ### Acceptance criteria
 
 On aarch64 in QEMU, two tasks on one CPU keep their V registers across switches, and `dictate --features` gives kaldi-native-fbank's features.
+
+## The devicetree check races init on CI runners (210-KRN-0029)
+
+**Recorded by:** the tools track (APP), 2026-10-09.
+
+### Problem
+
+The `devicetree` suite catches `MIND CORE KERNEL: DEVICE TREE AT …` on the screen. The machine runs in 10 ms steps until the line shows, but the kernel writes it only to its early console (`PanicSerial`), and init's services soon write over it.
+
+- On GitHub's runners the line was gone between two steps in 2 of 5 runs of the tools branch: runs 37891849301 and 37892537807, job "aarch64 (programs, shell and four CPUs)", `kernel` None after 500 steps.
+- Here it passed 3 of 3 times.
+
+### Plan (a proposal; the kernel track decides)
+
+The kernel also keeps the line where a test can read it after boot (its log ring, which `dmesg` shows), and the check reads it there.
+
+### Acceptance criteria
+
+The check no longer depends on how much guest work a 10 ms step covers.

@@ -147,7 +147,7 @@ Tasks are numbered `250-APP-MMMM` as they start.
 - **Steps 1 and 7 on x86, the run in the system: done** in [250-APP-0025](../issues-done/250-APP-0025-dictate-in-the-system.done). `dictate file.wav` reads the model from the model disk, checks its SHA-256 against `MANIFEST.json` and prints the text: an 8.3 s clip gives the host's text under QEMU. CI runs the whole chain with a 9.6 KB toy transducer. Left: aarch64 (FP/SIMD at EL0), the model as a shared memory object (step 5), push-to-talk into `edit` and `fm` (step 6).
 - **How the engines compute (2026-10-09).** Programs build for soft-float targets.
   - On x86, `x86_64-unknown-none` refuses SSE in a program's code: the `x86_softfloat_sse` lint is to become a hard error, so `#[target_feature]` is no way out. The engines therefore build for `targets/x86_64-mind-float.json`: SSE2 and the hard-float ABI, with core and alloc built from source (`rust-src`, now in `rust-toolchain.toml`). AVX2 and FMA come through `#[target_feature]` after a CPUID check, and the kernel saves their state ([153](../issues-done/153-xsave-avx-state.done)).
-  - On aarch64, FP/SIMD is disabled at EL0. A request to the kernel track is in [requests-KRN.md](requests-KRN.md); until it is done, the engines run on x86 only.
+  - On aarch64, FP/SIMD is disabled at EL0. A request to the kernel track is in [requests-KRN.md](requests-KRN.md). Until it is done, `dictate` and `speak` build there in soft float: the tools suite's features, toy transducer and phoneme-id checks give the host's results on aarch64 (2026-10-09, by hand; CI runs the tools suite on x86 only), but a real model would be far too slow.
 
 ## Acceptance criteria
 
