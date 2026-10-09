@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`) and Russian speech on the MacBook Pro (252-APP-0041). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`) Russian speech on the MacBook Pro (252-APP-0041) and `date set` (211-APP-0042). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -62,23 +62,6 @@ The `smp` suite with `--cpu-model max` still sees `FPU=XSAVE+AVX` on every CPU. 
 ### Acceptance criteria
 
 A host test of `wm`'s routing passes a horizontal step to the window under the pointer, and `view` scrolls a wide image sideways by it. On the MacBook Pro a three-finger swipe left or right moves a wide image in `view`.
-
-## `date set` in the shell (211-KRN-0051)
-
-**Recorded by:** the kernel track (KRN), 2026-10-09, for [211-KRN-0051](211-KRN-0051-setting-the-clock.md), at the maintainer's request: a way to set the time.
-
-### Problem
-
-`date` prints the RTC's time. Nothing sets it, and the MacBook Pro's clock reads 2022-01-01. `rtc.wit` 1.2 adds `set` for a client with the setting badge, which init gives the shell (211-KRN-0051).
-
-### Plan (a proposal; the tools track decides)
-
-- `date set YYYY-MM-DD HH:MM[:SS]` calls `rtc::set` through the shell's setting client and prints the new time. It says the clock keeps no time zone.
-- The help and `docs/tools` (EN, RU) describe it.
-
-### Acceptance criteria
-
-The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
 
 ## Note: the shell's text for `loader.wit` 1.7 `unreadable` (211-KRN-0050)
 

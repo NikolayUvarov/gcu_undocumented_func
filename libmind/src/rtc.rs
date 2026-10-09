@@ -39,6 +39,23 @@ pub fn unix_time() -> Option<u64> {
     Some(days * 86400 + seconds_since_midnight()? as u64)
 }
 
+/// The clock's setting from `YYYY-MM-DD HH:MM[:SS]` (`date set`, 211-APP-0042): days since 2000-01-01 and seconds
+/// since midnight; None unless the date is real and in 2000..=2099 (what `rtc.wit` 1.2 `set` takes) and the time too.
+pub fn parse_setting(text: &str) -> Option<(u32, u32)> {
+    let mut words = text.split_whitespace();
+    let (date, time) = (words.next()?, words.next()?);
+    if words.next().is_some() { return None; }
+    let number = |part: &str, digits: usize| (part.len() == digits && part.bytes().all(|b| b.is_ascii_digit())).then(|| part.parse::<u32>().ok()).flatten();
+    let mut d = date.split('-');
+    let (year, month, day) = (number(d.next()?, 4)?, number(d.next()?, 2)?, number(d.next()?, 2)?);
+    if d.next().is_some() || year > 2099 { return None; }
+    let mut t = time.split(':');
+    let (hour, minute) = (number(t.next()?, 2)?, number(t.next()?, 2)?);
+    let second = match t.next() { Some(part) => number(part, 2)?, None => 0 };
+    if t.next().is_some() || hour > 23 || minute > 59 || second > 59 { return None; }
+    Some((days_from_civil(year, month, day)?, hour * 3600 + minute * 60 + second))
+}
+
 /// Days since 2000-01-01 for a valid date in 2000..=9999.
 pub fn days_from_civil(year: u32, month: u32, day: u32) -> Option<u32> {
     let leap = |y: u32| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
