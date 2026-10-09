@@ -64,8 +64,8 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | 351-UPD-0007 (the store's disk: 300-KRN-0025, done) | track B, C |
 | [109-NET-0010](109-NET-0010-a-parser-per-session.md) | A parser process per session, started with no client and ended with its session (B.6) | `NET` | P3 | a kernel and loader change (a spawn with no standard clients) | track D |
 | [351-NET-0004](351-NET-0004-ssh-client.md) | An SSH client: curve25519, ssh-ed25519, a pinned host key, SFTP reads | `NET` | P3 | — | track D |
-| [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) | The device key sealed by a TPM instead of stored unencrypted | `NET` | P2 | 351-DRV-0015 | track D |
-| [351-DRV-0015](351-DRV-0015-tpm-driver.md) | A TPM 2.0 driver: seal and unseal for `keystore`, an NV counter for the updater | `DRV` (open) | P2 | — | track A |
+| [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) | The device key sealed by a TPM instead of stored unencrypted: built in `keystore`, checked with a sketch of the kernel's half | `NET` | P2 | 351-DRV-0015 (requests-KRN: the TPM's registers) | track D |
+| [351-DRV-0015](351-DRV-0015-tpm-driver.md) | A TPM 2.0 driver: the `tpm` service (CRB, FIFO), seal and unseal for `keystore` built and host-tested; the NV counter with 351-UPD-0011 | `DRV` (open) | P2 | [requests-KRN.md](requests-KRN.md) (the TPM's registers, `PLATFORM_TPM`) | track A |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0007 (351-KRN-0014 done) | Assurance |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers | `ASR` (open) | P2 | 351-UPD-0005 | Assurance |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
@@ -326,12 +326,12 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [109-KRN-0042](../issues-done/109-KRN-0042-parser-service-at-boot.done) | `init` starts `parse`; `SLOT_PARSE` 28, `REQUEST_PARSE`, the loader accepts the slot (for NET) | done (2026-10-09) |
 | [109-APP-0016](../issues-done/109-APP-0016-shell-lends-the-parser.done) | The shell lends its `parse` client for `REQUEST_PARSE`; the script word `parse` (for NET) | done (2026-10-09) |
 | [109-NET-0009](../issues-done/109-NET-0009-download-through-the-parser.done) | `download` parses nothing itself: response heads through `parse`, refused without it | done (2026-10-09) |
+| [109](../issues-done/109-session-parsers.done) | Session parsers with minimal authority (Airlock, track D): the authority map, the parser service, `download` through it | done (2026-10-09) |
 | [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, with a flow grant only; the script word `tls` (for NET) | done (2026-10-09) |
 | [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) | HTTPS for programs: `download` over a `tls` session on its own grant; a server trusted by its pinned key (`tls.wit` 1.1 `connect-pinned`) or the roots | done (2026-10-09) |
-| [300-STO-0004](../issues-done/300-STO-0004-rights-by-badge.done) | Rights to the block store by badge; a client that may only read refused `put` and `publish` on the platform | done (2026-10-09) |
-| [300](../issues-done/300-checksummed-block-store.done) | A checksummed block store with content addresses (track B, first step) | done (2026-10-09) |
 | [351-KRN-0043](../issues-done/351-KRN-0043-tpm-service-at-boot.done) | `init` starts the TPM service; `PLATFORM_TPM`, `SLOT_TPM`; `keystore`'s seal client (for DRV and NET; the kernel's lookup is a request) | done (2026-10-09) |
 | [351-APP-0018](../issues-done/351-APP-0018-shell-tpm-command.done) | The shell's `tpm` command: the TPM, and a refused seal as a check (for DRV) | done (2026-10-09) |
-| [109](../issues-done/109-session-parsers.done) | Session parsers with minimal authority (Airlock, track D): the authority map, the parser service, `download` through it | done (2026-10-09) |
+| [300-STO-0004](../issues-done/300-STO-0004-rights-by-badge.done) | Rights to the block store by badge; a client that may only read refused `put` and `publish` on the platform | done (2026-10-09) |
+| [300](../issues-done/300-checksummed-block-store.done) | A checksummed block store with content addresses (track B, first step) | done (2026-10-09) |
 
 Issues 052–071 implement the [system tools plan](../docs/tools/README.md); they were numbered 032–051 on the tools branch and renumbered by [051](../issues-done/051-merge-main-into-tools.done) (each record says "Formerly tools-branch NNN."). Issues 040–043 and 045–050 were the plan's open specs on `main`; the tools records replaced them. Issues 001–011 were opened after the review of 2026-09-17 (handoff ↔ code, see [knowledge/04](../knowledge/04-handoff-vs-code-matrix.md)).

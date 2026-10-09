@@ -4724,6 +4724,7 @@ def tls_suite(args, disk):
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
     device_key_check(args, with_entropy)
+    tpm_check(args, with_entropy)
 
 
 def device_key_check(args, cpu):
@@ -4756,6 +4757,7 @@ def device_key_check(args, cpu):
         vm, log, first = boot()
         try:
             require(log, "[KEYSTORE] DEVICE KEY MADE AND STORED IN system/keystore/device.key (ON DISK, NOT SEALED)")
+            require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
             # The shell's client lists system/ but opens nothing below it, and writes nothing there.
             require(vm.command("ls system"), "keystore")
             require(vm.command("cat system/keystore/device.key"), "ERROR: CAT: DENIED")
@@ -4782,6 +4784,89 @@ def device_key_check(args, cpu):
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
+
+
+def tpm_check(args, cpu):
+    """351-DRV-0015, 351-KRN-0043, 351-NET-0006: a TPM 2.0 (swtpm; a CRB on x86, the FIFO of tpm-tis-device on aarch64)
+    driven by the TPM service, which init gives its registers from the firmware's tables. On one raw image: a boot without
+    a TPM keeps the device key unencrypted (the interim); a boot with TPM A seals that key and removes the plain file; A
+    again unseals the same key; another TPM, B, does not open the blob, and a new key is made and sealed. The shell's
+    client, without the seal badge, is refused a seal."""
+    if not raw_tools() or not shutil.which("swtpm"):
+        print("SKIP: the TPM check needs swtpm, mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-tpm-", dir=ROOT / IMAGE) as temp:
+        temp = Path(temp)
+        image, start, fs_sectors = raw_fat_image(temp)
+        part = f"{image}@@{start * 512}"
+        device = "tpm-tis-device" if args.arch == "aarch64" else "tpm-crb"
+
+        def boot(tpm=None):
+            # A swtpm for each boot, on the state directory of TPM `tpm`.
+            swtpm, extra = None, []
+            if tpm:
+                (temp / tpm).mkdir(exist_ok=True)
+                socket_path = temp / f"{tpm}.sock"
+                swtpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={temp / tpm}", "--ctrl", f"type=unixio,path={socket_path}", "--flags", "startup-clear"],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for _ in range(50):
+                    if socket_path.exists():
+                        break
+                    time.sleep(.1)
+                extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
+            vm.swtpm = swtpm
+            log = vm.service_logs("keystore", "PUBLIC KEY")
+            name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
+            assert name, log
+            return vm, log, name[1]
+
+        def close(vm):
+            vm.close()
+            if vm.swtpm:
+                vm.swtpm.kill(); vm.swtpm.wait()
+
+        def stored(name):
+            return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
+        vm, log, plain = boot()
+        try:
+            require(log, "[KEYSTORE] NO TPM: THE DEVICE KEY IS KEPT ON DISK, NOT SEALED")
+            require(vm.service_logs("tpm", "[TPM] NO TPM"), "[TPM] NO TPM")
+            require(vm.command("tpm"), "TPM: NONE")
+        finally:
+            close(vm)
+        assert stored("device.key") and not stored("device.sealed")
+        vm, log, sealed = boot("a")
+        try:
+            interface = "FIFO" if args.arch == "aarch64" else "CRB"
+            ready = vm.service_logs("tpm", "[TPM] ")
+            # The kernel's half (PLATFORM_TPM from the firmware's tables) is a request to the kernel track: until it
+            # lands the TPM service finds none, and only the path without a TPM above is checked.
+            if "[TPM] NO TPM" in ready:
+                print("SKIP: sealing by the TPM: the kernel does not hand out the TPM's registers yet (issues/requests-KRN.md); the key service without a TPM checked", flush=True)
+                return
+            require(ready, f"[TPM] READY: TPM 2.0 BY IBM, {interface} INTERFACE")
+            require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
+            require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")
+            require(vm.command("tpm seal not mine"), "TPM: Rights")
+            log = vm.command("dmesg -s tpm")
+            assert re.search(r"\[TPM\] SEALED 32 BYTES FOR PID \d+", log) and re.search(r"\[TPM\] REFUSED SEAL FOR PID \d+ \(BADGE 0\)", log), log
+        finally:
+            close(vm)
+        assert sealed == plain, (plain, sealed)
+        assert stored("device.sealed") and not stored("device.key")
+        vm, log, again = boot("a")
+        close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.sealed (SEALED BY THE TPM)")
+        assert again == plain, (plain, again)
+        # The disk without its TPM: another TPM does not open the blob.
+        vm, log, other = boot("b")
+        close(vm)
+        require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE SEALED ONE DOES NOT OPEN ON THIS TPM AND SEALED BY THE TPM IN system/keystore/device.sealed")
+        assert other != plain, (plain, other)
+        fsck_volume(image, start, fs_sectors)
+    print(f"PASS: TPM 2.0 ({device}, swtpm) driven by the TPM service: the unencrypted device key (MIND {plain}) sealed and its file removed, "
+          "unsealed again by the same TPM, not opened by another (a new key made and sealed); the shell's client refused a seal", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):
