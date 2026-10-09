@@ -2,6 +2,7 @@
 //! (`widgets`). `Grid` is plain memory and builds on the host for tests; `Terminal` puts it on the program's screen
 //! and redraws only cells that changed.
 pub mod digits;
+pub mod ended;
 pub mod syntax;
 pub mod viewer;
 pub mod widgets;

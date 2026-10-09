@@ -10,6 +10,10 @@ impl Screen {
     pub fn new(info: &BootInfo) -> Option<Self> {
         (!info.fb_ptr.is_null()).then_some(Self { fb: info.fb_ptr, width: info.width, height: info.height, stride: info.stride })
     }
+    /// Pixels at `fb`, `stride` apart from row to row (a pixel window's surface).
+    /// # Safety
+    /// `fb` must map `stride * height` writable pixels for as long as the screen is used.
+    pub unsafe fn at(fb: *mut u32, width: usize, height: usize, stride: usize) -> Self { Self { fb, width, height, stride } }
     pub fn pixel(&self, x: usize, y: usize, color: u32) {
         if x < self.width && y < self.height { unsafe { core::ptr::write_volatile(self.fb.add(y * self.stride + x), color) } }
     }

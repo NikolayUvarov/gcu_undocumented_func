@@ -5558,7 +5558,13 @@ def wm_suite(vm):
     vm.send_bytes(b"cd docs\r")
     wait(lines=8)
     vm.background(wm_pid)
-    fm_log = vm.command(f"logs {started['fm']}")
+    # wm has passed the keys on; fm may still be changing the directory (its log is drained at each read).
+    fm_log = ""
+    for _ in range(20):
+        fm_log += vm.command(f"logs {started['fm']}")
+        if "LEFT=/docs FULL" in fm_log:
+            break
+        time.sleep(.25)
     require(fm_log, "CMD=cd docs")
     require(fm_log, "LEFT=/docs FULL")
     assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
@@ -5701,6 +5707,32 @@ def wm_suite(vm):
     until(f"GONE {caps}")
     while caps in state()[2]:
         wait()  # the state line after the window went
+    # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera, to which wm lends
+    # no camera, says so in a window of its own with its status, until a key.
+    keys("alt-r", "c", "a", "m", "e", "r", "a", "ret", text="STARTED camera")
+    camera_pid = re.findall(r"\[WM\] STARTED camera PID (\d+)", "".join(seen))[-1]
+    while not any(m[1] == camera_pid for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    ended = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == camera_pid)
+    for _ in range(20):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("camera: no camera was granted") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
+    time.sleep(1)  # it stays
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("camera: no camera was granted") in row for row in screen), screen
+    assert any(canon("ENDED (STATUS 1): PRESS A KEY") in row for row in screen), screen
+    assert any(canon("camera ended") in row for row in screen), "the window's title"
+    assert ended in state()[2] and state()[1] == ended, state()
+    keys("spc")
+    until(f"GONE {ended}")
+    while ended in state()[2]:
+        wait()
     full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
@@ -5742,6 +5774,7 @@ def wm_suite(vm):
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
           "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; record -w records the clock's window "
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
+          "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
