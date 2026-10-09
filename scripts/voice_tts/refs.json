@@ -1,0 +1,14 @@
+{
+ "ru": {
+  "wav": "data/ru/10582851702303651044.wav",
+  "text": "Если вы хотите находиться рядом со сценой, вам нужно приехать заранее, чтобы найти место для кемпинга вблизи от музыки.",
+  "source": "FLEURS test, CC BY 4.0",
+  "gender": "FEMALE"
+ },
+ "en": {
+  "wav": "data/en/11374239868879585530.wav",
+  "text": "The hot chocolate is up to Belgian standards. Fruit juices are pricey but excellent.",
+  "source": "FLEURS test, CC BY 4.0",
+  "gender": "FEMALE"
+ }
+}

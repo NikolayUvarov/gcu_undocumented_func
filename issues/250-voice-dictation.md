@@ -1,6 +1,6 @@
 # 250 — Voice V3: dictation with a Zipformer model, Russian first
 
-**Type:** main task, tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — ([150](../issues-done/150-user-memory-beyond-the-arena.done) and [153](../issues-done/153-xsave-avx-state.done) are done); the English model waits for a person's decision ([issues-human](../issues-human/README.md), section 6) · **Roadmap:** track G, voice V3 ([plan](../docs/voice/README.md)) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2
+**Type:** main task, tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — ([150](../issues-done/150-user-memory-beyond-the-arena.done) and [153](../issues-done/153-xsave-avx-state.done) are done) · **Roadmap:** track G, voice V3 ([plan](../docs/voice/README.md)) · **Constitution:** MC-8.1, MC-11.5, MC-11.11, MC-12.1, MC-12.2
 
 ## Problem
 
@@ -78,8 +78,28 @@ WER and CER are word and character error rates. "Time" is decoding time per seco
 - **Left out:**
   - the Kaldi models: their TDNN acoustic model and WFST decoder are the most code to port, and they are slow;
   - Kroko: its licence is unclear;
-  - GigaAM v3: 220–240M parameters, beyond the budget;
+  - GigaAM v3 from the compact variant: 220–240M parameters, beyond its budget. It was measured later as the quality variant (below);
   - T-one: Russian only, telephone sound at 8 kHz, and less accurate here than Vosk 0.54. It remains the simplest to decode, with CTC over 34 letters.
+
+### Two variants (2026-10-08)
+
+The maintainer asked for two variants of each model, one optimized for size and one for accuracy, without models that do badly. Any free licence is allowed; terms that limit use are recorded with each model ([issues-human](../issues-human/README.md), section 6). The models are kept in the model cache of [251](251-model-cache-and-model-disk.md).
+
+GigaAM v3 (Salute Developers, MIT), measured the same way on the 272 Russian sentences:
+
+| Model | Kind | Size (int8) | WER % | CER % | Time | Weights licence |
+|---|---|---|---|---|---|---|
+| **GigaAM v3 RNNT** | Conformer transducer, Russian | 229 MB | **3.02** | 0.82 | ≈0.122 | MIT |
+| GigaAM v3 CTC | Conformer CTC, Russian | 225 MB | 3.31 | 0.87 | ≈0.117 | MIT |
+
+≈: timed during the accuracy run, not alone.
+
+| Language | `compact` | `quality` |
+|---|---|---|
+| Russian | `vosk-model-ru` 0.54: 5.20 %, 73 MB | GigaAM v3 RNNT: 3.02 %, 229 MB |
+| English | Zipformer GigaSpeech, int8: 11.98 %, 74 MB | Parakeet TDT 0.6B v3: 8.04 %, 671 MB (also 7.08 % in Russian) |
+
+The compact models share one engine (step 3 of the decision below). The quality models are a Conformer and a FastConformer transducer, which need a second engine after the first.
 
 ### What each family takes to port
 
@@ -95,16 +115,15 @@ WER and CER are word and character error rates. "Time" is decoding time per seco
 1. **One engine:** a Zipformer2 transducer over the whole utterance with greedy search. It lives in `mind::voice`, which the host tests and the system share as in V1. Weights are int8 with per-channel scales, and matrix products are in integers (AVX2 on x86, NEON on aarch64).
 2. **Russian first:** alphacep `vosk-model-ru` 0.54 (Apache-2.0). It has 65.0M parameters, about 66 MB of int8 weights, which fits the plan's 40–80 MB.
 3. **English with the same engine:** the k2-fsa Zipformer GigaSpeech 2023-12-12 (weights under Apache-2.0).
-   - It waits for a person's decision: GigaSpeech's audio is licensed for non-commercial research and education only, and whether that reaches the trained weights is a legal question ([issues-human](../issues-human/README.md), section 6).
-   - If the answer is no, the alternatives each need a second engine:
-     - Parakeet 110M (CC BY 4.0, a FastConformer CTC, about 110 MB in int8);
-     - Whisper base (MIT, 9 times slower).
-4. **Later, text that appears while one speaks:** the streaming Vosk models (small: 23M parameters, 10.6 %; 65M: 9.5 %). They need chunked attention with caches on top of the same layers.
+   - GigaSpeech's audio is licensed for non-commercial research and education only. The maintainer decided on 2026-10-08 that any free model may ship, and the terms travel with the model ([issues-human](../issues-human/README.md), section 6).
+   - Parakeet 110M (CC BY 4.0) and Whisper base (MIT) stay alternatives; each needs a second engine.
+4. **Then the quality variant:** a Conformer transducer for GigaAM v3 (Russian) and Parakeet TDT 0.6B v3 (English), from the model disk of 251.
+5. **Later, text that appears while one speaks:** the streaming Vosk models (small: 23M parameters, 10.6 %; 65M: 9.5 %). They need chunked attention with caches on top of the same layers.
 
 ## Plan
 
 1. **Model files.** A host converter turns the published fp32 ONNX into `voice/dictate-ru.bin`: a header, the BPE pieces, int8 weights with per-channel scales and a checksum.
-   - The 66 MB file is not committed. A script fetches the pinned revision, checks its SHA-256 and converts it.
+   - The 66 MB file is not committed. The model cache of 251 (`scripts/models.py`) fetches the pinned revision and checks its SHA-256; the converter reads it from there.
    - THIRD_PARTY.md records the source and the licence.
    - The image builder puts the file on the boot disk.
 2. **Features.** 80 log-mel bands as Kaldi's fbank computes them: 25 ms Povey window, 10 ms shift, 20 Hz to 7.6 kHz. They are checked against sherpa-onnx's features on the host.
@@ -115,9 +134,9 @@ WER and CER are word and character error rates. "Time" is decoding time per seco
    - Recognized text is data: nothing in it is run (MC-11.5).
    - The recognizer holds the audio, the model and its line to the program it serves, and no other authority (MC-8.1, MC-11.11).
 7. **QEMU suite.** A clip on the boot disk gives the expected text on x86 and aarch64.
-8. **English.** After the decision, the same steps for the English model.
+8. **English.** The same steps for the English model.
 
-Tasks are numbered `250-APP-MMMM` as they start; the tools track's next counter is 0009.
+Tasks are numbered `250-APP-MMMM` as they start; the tools track's next counter is 0010.
 
 ## Acceptance criteria
 
@@ -125,8 +144,8 @@ Tasks are numbered `250-APP-MMMM` as they start; the tools track's next counter 
 - With our int8 weights, WER on the 272 Russian FLEURS sentences is within 0.5 points of the 5.20 % measured here.
 - On the host build, an utterance of 8 s is recognized in under 1 s on one core (x86 with AVX2).
 - Nothing uses the network: audio does not leave the machine.
-- Each model's source, revision, hash and licence are in THIRD_PARTY.md. The English model ships only after the decision in issues-human.
+- Each model's source, revision, hash, licence and terms are in `models/manifest.toml`, and THIRD_PARTY.md points to it.
 
 ## Related
 
-[docs/voice](../docs/voice/README.md) (V3), [078](../issues-done/078-voice-command-recognizer.done), [079](../issues-done/079-voice-control-in-the-shell.done), [150](../issues-done/150-user-memory-beyond-the-arena.done), [153](../issues-done/153-xsave-avx-state.done), [scripts/voice_v3](../scripts/voice_v3/README.md).
+[docs/voice](../docs/voice/README.md) (V3), [251](251-model-cache-and-model-disk.md), [078](../issues-done/078-voice-command-recognizer.done), [079](../issues-done/079-voice-control-in-the-shell.done), [150](../issues-done/150-user-memory-beyond-the-arena.done), [153](../issues-done/153-xsave-avx-state.done), [scripts/voice_v3](../scripts/voice_v3/README.md).

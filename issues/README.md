@@ -20,7 +20,10 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open | kernel + services | P2 | — | tracks A, G |
-| [250](250-voice-dictation.md) | Voice V3, dictation: a Zipformer2 transducer, Russian first with `vosk-model-ru` 0.54 (5.2 % WER on FLEURS, 65M parameters); English after a licensing decision; models compared by measurement | main task, `APP` | P2 | — (English: [issues-human](../issues-human/README.md) 6) | track G |
+| [250](250-voice-dictation.md) | Voice V3, dictation: a Zipformer2 transducer, Russian first with `vosk-model-ru` 0.54 (5.2 % WER on FLEURS, 65M parameters), then English; a quality variant with GigaAM v3 (3.0 %) and Parakeet; models compared by measurement | main task, `APP` | P2 | — | track G |
+| [251](251-model-cache-and-model-disk.md) | Speech models: a cache on the host with a manifest of SHA-256 (done in 251-APP-0009), a FAT32 model disk mounted as `models:`, the block store later | main task, `APP` | P2 | — (block store: [requests-STO.md](requests-STO.md)) | tracks G, B |
+| [252](252-neural-speech-synthesis.md) | Neural speech synthesis: voices compared by intelligibility, naturalness and speed; eight chosen by ear (female and male, Russian and English, compact and quality) and in the model cache; the engines next | main task, `APP` | P2 | — | track G |
+| [251-APP-0010](251-APP-0010-models-volume.md) | `models:` in the system: `vfs_server` mounts a volume labelled MIND MODELS read-only; `df`, `fsck`, a new `sha256`; `MIND_MODELS_DISK` in `03_run_qemu.sh` | `APP` | P2 | — | track G |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
@@ -69,7 +72,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0011](600-APL-0011-first-run-on-a-mac.md) | The first run on an Apple Silicon Mac under HVF, by hand: RNDR, device accesses, ITS, CPUs, memory; recorded in the guide and the profile | `APL` (open) | P2 | a person with an Apple Silicon Mac | track H |
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights; a durable disk for the block store; the launch record readable in the system; UEFI variables for the updater; a TLS client for programs); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second; `update` in the shell for 351; the shell lending its TLS client).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (kernel structures outside the 64 MiB arena; the busy suite's share check and a busy host; a block store client with fewer rights; a durable disk for the block store; the launch record readable in the system; UEFI variables for the updater; a TLS client for programs; a model disk for `vfs_server`, for 251); [requests-APP.md](requests-APP.md) (clocks asking the RTC service 10 times a second; `update` in the shell for 351; the shell lending its TLS client); [requests-STO.md](requests-STO.md) (speech models in the block store, for 251).
 
 
 ## Finished tasks (`issues-done/`)
@@ -199,6 +202,8 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [171-APP-0008](../issues-done/171-APP-0008-memory-check-every-cpu-count.done) | `applications_until_memory_ends` with every CPU count: the groups "16 CPUs" fill memory too (78 clocks on x86, 171 on aarch64) | done (2026-10-08) |
 | [158-APP-0005](../issues-done/158-APP-0005-camera-mark-on-ci.done) | The camera mark was missing on CI: `video_gw` could sleep a minute (fixed in 158-DRV-0001); the check reports a stall with `ps` and `stat` | done (2026-10-07) |
 | [158-DRV-0001](../issues-done/158-DRV-0001-video-gw-frame-wait.done) | `video_gw`: a frame wait read the clock twice and could sleep 60 s (done by `APP` for 158-APP-0005, open track) | done (2026-10-07) |
+| [251-APP-0009](../issues-done/251-APP-0009-model-cache-on-the-host.done) | The model cache on the host: `models/manifest.toml`, `scripts/models.py` (fetch, verify, pack, disk), `scripts/fat32.py` | done (2026-10-08) |
+| [252-APP-0011](../issues-done/252-APP-0011-chosen-voices-in-the-cache.done) | The eight voices the maintainer chose in the model cache (Vosk TTS 0.7 and 0.9, ESpeech with its vocoder, stress models and reference, Piper lessac and ryan, Kokoro bf_emma); `models.py`: variant lists, voices, needs, tar archives, `pin` by directory | done (2026-10-08) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |

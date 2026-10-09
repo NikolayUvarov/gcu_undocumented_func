@@ -416,3 +416,54 @@ fn stamps() {
     assert!(fat::valid_name("Отчёт.txt") && !fat::valid_name("a/b") && !fat::valid_name("trailing.") && !fat::valid_name(".."));
     assert!(fat::same_name("ДОКУМЕНТЫ", "документы"));
 }
+
+// A disk image file read in place (a model disk is hundreds of megabytes).
+struct ImageFile(std::fs::File);
+impl Sectors for ImageFile {
+    fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool { std::os::unix::fs::FileExt::read_exact_at(&self.0, out, lba as u64 * SECTOR as u64).is_ok() }
+    fn write(&mut self, _lba: u32, _data: &[u8; SECTOR]) -> bool { false }
+    fn flush(&mut self) -> bool { true }
+    fn sectors(&self) -> u64 { self.0.metadata().map_or(0, |m| m.len() / SECTOR as u64) }
+    fn writable(&self) -> bool { false }
+}
+
+#[test]
+fn reads_a_model_disk_made_by_fat32_py() {
+    // scripts/fat32.py writes the model disks of 251: our reader finds the partition and the label, reads every file
+    // back byte for byte (nested, Cyrillic, spanning many clusters, a directory of many clusters), and finds no fault.
+    if !Command::new("python3").arg("--version").output().is_ok_and(|o| o.status.success()) { eprintln!("SKIP: python3 is needed"); return; }
+    let dir = temp("modeldisk");
+    let tree = dir.join("tree");
+    let mut files: Vec<(String, Vec<u8>)> = vec![
+        ("MANIFEST.json".into(), b"{\"models\": []}\n".to_vec()),
+        ("asr-ru-test/am-onnx/encoder.int8.onnx".into(), content(7, 5 << 20 | 123)),
+        ("tts-ru-test/голос ирины.bin".into(), content(8, 9000)),
+        ("tts-ru-test/empty.txt".into(), Vec::new()),
+    ];
+    files.extend((0..150).map(|i| (format!("many/a fairly long file name {:03}.txt", i), content(i, i as usize * 37))));
+    for (path, data) in &files {
+        let at = tree.join(path);
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::write(at, data).unwrap();
+    }
+    let image = dir.join("models.img");
+    let script = Path::new("scripts/fat32.py"); // tests run from the repository root
+    let out = Command::new("python3").arg(&script).arg(&image).arg(&tree).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let mut v = Volume::mount(ImageFile(std::fs::File::open(&image).unwrap())).ok().unwrap();
+    assert_eq!((v.label(), v.bits(), v.start()), ("MIND MODELS".into(), 32, 2048));
+    let root = v.root();
+    for (path, data) in &files {
+        let node = v.lookup(&root, path).unwrap_or_else(|e| panic!("{}: {:?}", path, e));
+        assert_eq!(node.size as usize, data.len(), "{}", path);
+        let mut back = vec![0u8; data.len()];
+        let mut at = 0;
+        while at < back.len() { at += v.read(&node, at as u32, &mut back[at..]).unwrap(); }
+        assert!(back == *data, "{} differs", path);
+    }
+    let many = v.lookup(&root, "many").unwrap();
+    assert_eq!(v.list(&many).unwrap().len(), 150);
+    let report = v.check().unwrap();
+    assert!(report.clean() && report.lost == 0, "{:?}", report);
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -1,0 +1,57 @@
+# 252-APP-0011 — The eight chosen voices in the model cache — done
+
+**Type:** tools (host) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [252](../issues/252-neural-speech-synthesis.md) · **Roadmap:** track G · **Constitution:** MC-4.2, MC-12.1
+
+## Problem
+
+On 2026-10-08 the maintainer chose eight voices by ear (252): a female and a male voice for each language and variant. They must be in the model cache of 251 like the recognition models, pinned and checked.
+
+Some of them do not fit the manifest as it was:
+- one model serves two variants (Piper `ryan`);
+- a model holds several voices (Vosk TTS);
+- a voice cannot speak without other models (ESpeech: a vocoder, stress models and a reference recording);
+- that recording sits inside a tar archive of 433 MB.
+
+## Plan
+
+- **The manifest:**
+  - `variant` may be a list;
+  - `voices` names the chosen voices of a model (speaker, gender, language, variant);
+  - `needs` lists the models a model cannot work without, and a selection takes them along.
+- **Archive sources:** zip or tar, each hashed once per run.
+- **`pin`:** a path ending in `/` takes every file below it. Each directory is listed separately, because a large repository's whole tree comes in pages.
+- **Nine entries** for the eight voices, each with its licence, terms and what was measured.
+
+## Acceptance criteria
+
+- `models.py list` shows the voices, and `fetch --role tts` followed by `verify --role tts` matches every file.
+- A model disk of the compact voices mounts in MIND Core as `models:`, and `sha256` of a file there matches the manifest.
+
+## Resolution
+
+- **[`models/manifest.toml`](../models/manifest.toml):** nine entries, 5.3 GB.
+  - Russian `compact`: `tts-ru-vosk-0.7`, speakers 0 (female) and 3 (male).
+  - Russian `quality`: `tts-ru-vosk-0.9`, speaker 4 (male).
+  - Russian `quality`: `tts-ru-espeech-rl-v2`, female. It needs:
+    - `tts-vocoder-vocos-mel-24khz`;
+    - `tts-ru-ruaccent-turbo3.1`;
+    - `tts-ru-voice-fleurs-1825`, the FLEURS reference recording (CC BY 4.0), taken from the FLEURS test archive at a pinned revision.
+  - English `compact`: `tts-en-piper-lessac-high` (female).
+  - English `compact` and `quality`: `tts-en-piper-ryan-high` (male).
+  - English `quality`: `tts-en-kokoro-82m-v1.0`, voice `bf_emma` (female).
+  - Piper comes from `rhasspy/piper-voices` (the model and its JSON).
+  - Kokoro comes from sherpa-onnx's export: the model, the voice table, the tokens and the English lexicons.
+  - espeak-ng's data (GPL-3.0) is left out, and the terms say so.
+- **[`scripts/models.py`](../scripts/models.py):** `variant` lists, `voices`, `needs`, tar archives, archives hashed once a run, and `pin` by directory.
+- **Checked on this host:**
+  - `fetch --role tts` and `verify --role tts`: every file of the nine entries matched its SHA-256.
+    - ESpeech's 2.7 GB weights and Kokoro's files came from the comparison's downloads.
+    - Every other file came from its source in the manifest.
+  - `pack` and `disk` of the compact voices: 482 MB and 484 MB.
+  - That disk on a VirtIO disk in QEMU (x86): `models:` mounted, and `df` showed it as 470,784 KB.
+  - A second disk holding Vosk TTS 0.7's `config.json` and 16 MiB of random bytes: `sha256` in the system gave the manifest's hash and the host's.
+  - The system read `models:` at about 0.2 MB/s: 16 MiB took 82 s under QEMU without KVM, which this host lacks. So a 121 MB model did not finish within 15 minutes. Faster reading of large models is step 4 of 251.
+
+## Related
+
+[252](../issues/252-neural-speech-synthesis.md), [251](../issues/251-model-cache-and-model-disk.md), [251-APP-0009](251-APP-0009-model-cache-on-the-host.done), [251-APP-0010](../issues/251-APP-0010-models-volume.md).

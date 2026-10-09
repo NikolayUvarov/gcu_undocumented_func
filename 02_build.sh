@@ -116,6 +116,7 @@ USER_CRATES=(
     "disk:df:df.elf"
     "disk:fsck:fsck.elf"
     "disk:format:format.elf"
+    "disk:sha256:sha256.elf"
     "search:find:find.elf"
     "search:grep:grep.elf"
     "dmesg:dmesg:dmesg.elf"

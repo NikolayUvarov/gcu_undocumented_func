@@ -2,8 +2,8 @@
 /// to a directory handle and cannot leave it (`..` is refused). A handle belongs to the client that opened it (PID and
 /// endpoint badge) and never allows more than the handle it was opened from (MC-3.4). What a client may write comes
 /// from the badge of its endpoint capability: none for applications, `ram` and the boot disk's `data` directory for
-/// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files are never writable. Major version 2: directory
-/// handles change the meaning of `open` and `list` of 1.0.
+/// the shell (`mind::fs::BADGE_USER`, Appendix B.6); boot files and the model disk `models` are never writable. Major
+/// version 2: directory handles change the meaning of `open` and `list` of 1.0.
 package mind:vfs@2.3.0;
 
 interface vfs {
@@ -14,7 +14,7 @@ interface vfs {
     /// `mind::fs::ENTRY_*` bits.
     record entry { name: string<255>, size: u32, modified: u32, attributes: u8, directory: bool }
 
-    /// A mounted volume: its name (empty for the boot disk, `ram`), FAT label and type, size and free space.
+    /// A mounted volume: its name (empty for the boot disk, `ram`, `models`), FAT label and type, size and free space.
     record volume { name: string<16>, label: string<11>, fat-bits: u8, bytes: u64, free: u64, cluster: u32, writable: bool }
 
     /// What a check of a volume found (nothing is changed): `used` clusters are reached from the directory tree, `lost`
