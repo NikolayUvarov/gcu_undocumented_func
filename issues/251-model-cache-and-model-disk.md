@@ -37,7 +37,7 @@ The same day, the maintainer also decided that any free licence is allowed. Term
 ## Plan
 
 1. **The models of 252** (done in 252-APP-0011): the eight voices the maintainer chose, with the models they need. The manifest now also takes `variant` lists, `voices` and `needs`, and tar archives.
-2. **`models:` in the system** (`vfs_server`).
+2. **`models:` in the system** (`vfs_server`; done on x86 in [251-APP-0010](../issues-done/251-APP-0010-models-volume.done)).
    - After the boot volume, `vfs_server` mounts the first other FAT volume labelled `MIND MODELS` as `models:`, read-only whatever the device allows.
    - It logs `[VFS] MOUNTED MODELS: <n> MB` and reads `MANIFEST.json`.
    - On x86 nothing else is needed: the boot disk is on `ata`, and a model disk on `virtio_blk` already reaches `vfs_server`.

@@ -25,4 +25,4 @@ The maintainer wants them kept in MIND's own block store as well, so that a mode
 
 ## Related
 
-[251](251-model-cache-and-model-disk.md), [251-APP-0010](251-APP-0010-models-volume.md), [303](../issues-done/303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
+[251](251-model-cache-and-model-disk.md), [251-APP-0010](../issues-done/251-APP-0010-models-volume.done), [303](../issues-done/303-retention-and-collection.done), [docs/storage](../docs/storage/README.md).
