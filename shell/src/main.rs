@@ -368,9 +368,9 @@ impl Shell {
         // `--help` only prints the program's text (mind::about!): nothing to ask the user for (211-APP-0013).
         let help = args.trim() == "--help";
         let firmware_granted = granted("firmware") && !help;
-        // The camera only when the user agrees, asked every time (MC-11.4, issue 158); a script must have declared it.
-        let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera") && !help
-            && msh::ask(self, &alloc::format!("{} ASKS FOR THE CAMERA. ALLOW?", name.to_ascii_uppercase()));
+        // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
+        // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
+        let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera") && !help;
         // The firmware's variables (the boot order) only when the user agrees, asked every time (351-KRN-0027).
         let firmware = requests & mind::process::REQUEST_FIRMWARE != 0 && mind::dev::cap_info(SLOT_FIRMWARE).0 != 0 && firmware_granted
             && msh::ask(self, &alloc::format!("{} ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?", name.to_ascii_uppercase()));

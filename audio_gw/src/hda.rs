@@ -224,6 +224,22 @@ impl Hda {
         mind::println!("[AUDIO] HDA: APPLE {:08X}, CIRRUS AMPLIFIERS: GPIO {:#04X} OF {} SET, READ {:#04X}", ssid, data, gpios, read);
     }
 
+    // Cirrus's CS4206/4207 take a digital microphone on pins 0xE (DMIC1) and 0x12 (DMIC2), switched on by bits 3 and 4
+    // of coefficient 4 of the vendor widget 0x11 (facts of Linux's patch_cirrus): the MacBook Pro's internal microphone.
+    fn cirrus_digital_microphone(&mut self, pin: u8) {
+        let vendor = self.parameter(0, 0).unwrap_or(0);
+        if !matches!(vendor, 0x1013_4206 | 0x1013_4207) || !matches!(pin, 0x0E | 0x12) { return; }
+        let _ = self.verb(0x11, 0x703, 1); // the vendor widget's processing on
+        let _ = self.verb(0x11, 0x5, 4); // coefficient index 4
+        let before = self.verb(0x11, 0xC00, 0).unwrap_or(0) & 0xFFFF;
+        let coefficient = before | if pin == 0x0E { 1 << 3 } else { 1 << 4 };
+        let _ = self.verb(0x11, 0x5, 4);
+        let _ = self.verb(0x11, 0x4, coefficient);
+        let _ = self.verb(0x11, 0x5, 4);
+        let after = self.verb(0x11, 0xC00, 0).unwrap_or(0) & 0xFFFF;
+        mind::println!("[AUDIO] HDA: CIRRUS DIGITAL MICROPHONE ON PIN {:#X}: COEFFICIENT 4 {:#06X} -> {:#06X}", pin, before, after);
+    }
+
     // Chooses and sets up the output and input paths; false without an output.
     fn configure(&mut self, summary: &mut [u8; SUMMARY], len: &mut usize) -> bool {
         let mut list = [Widget::default(); WIDGETS];
@@ -271,6 +287,7 @@ impl Hda {
                 // A microphone gets its bias voltage (80 % where the pin offers it).
                 let vref = if device(&pin) == 0xA && pin.pin_caps & (1 << 12) != 0 { 4 } else { 0 };
                 let _ = self.verb(pin.nid, 0x707, 0x20 | vref);
+                self.cirrus_digital_microphone(pin.nid);
                 put(summary, len, format_args!("; IN PIN {:#X} ({}) -> ADC {:#X}", pin.nid, if device(&pin) == 0xA { "MICROPHONE" } else { "LINE" }, adc));
             }
             _ => { self.has_input = false; put(summary, len, format_args!("; NO INPUT PATH")); }
