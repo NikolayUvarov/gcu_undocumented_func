@@ -283,10 +283,12 @@ impl Init {
                 self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; self.lend(&mut grants, SLOT_DEV1, "virtio_net#1")?; // one client per card
             }
             // The broker mints flow grants from an unbadged stack client (which itself may open nothing), registers them
-            // through the stack's policy client and reads netpolicy.txt through a VFS client.
+            // through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge opens its
+            // private directory for the policy as changed (108, 108-KRN-0041).
             "netpolicy" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netpolicy")?, ALL);
-                self.lend(&mut grants, 2, "netstack")?; self.lend(&mut grants, 3, "vfs_server")?;
+                self.lend(&mut grants, 2, "netstack")?;
+                grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_NETPOLICY)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "netstack", mind::network::BADGE_POLICY)?, CLIENT);
             }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
