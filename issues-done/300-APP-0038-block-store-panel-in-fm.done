@@ -1,6 +1,8 @@
-# 300-APP-0019 — The block store as a panel of `fm`: the volume `store:` — done
+# 300-APP-0038 — The block store as a panel of `fm`: the volume `store:` — done
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-4.3, MC-4.7
+
+_Numbered 300-APP-0019 in the tools branch's commits until the storage session's 351-APP-0019 (2026-10-09); renumbered at the merge into fast-test._
 
 ## Problem
 

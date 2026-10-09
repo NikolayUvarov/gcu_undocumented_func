@@ -1007,7 +1007,7 @@ fn the_mouse_in_menus_and_the_editor() {
 
 fn names(panel: &Panel) -> Vec<String> { panel.items.iter().map(|e| e.name.clone()).collect() }
 
-// The block store in memory (300-APP-0019): blocks by CID, names with their versions, the owner's pins; `listing`:
+// The block store in memory (300-APP-0038): blocks by CID, names with their versions, the owner's pins; `listing`:
 // whether it can list its names (blockstore.wit 1.3 cannot).
 #[derive(Default)]
 struct StoreInner { blocks: std::collections::HashMap<cid::Cid, Vec<u8>>, names: std::collections::BTreeMap<String, (u64, cid::Cid)>, pins: Vec<cid::Cid>, listing: bool, commits: usize }
@@ -1084,7 +1084,7 @@ impl FakeStore {
 
 #[test]
 fn the_block_store_panel() {
-    // 300-APP-0019: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
+    // 300-APP-0038: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
     // checked, F6 renames in one commit, F8 unpublishes; names fm has not seen show once the store can list them.
     let fake = FakeStore::default();
     fake.add("models/vosk.txt", b"vosk model");

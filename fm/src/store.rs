@@ -1,4 +1,4 @@
-//! The block store as a volume of fm, `store:` (300-APP-0019). Published names are files, and a `/` in a name makes
+//! The block store as a volume of fm, `store:` (300-APP-0038). Published names are files, and a `/` in a name makes
 //! directories; the objects the caller's owner pinned are in `.pins`, by CID. An object's bytes are read through
 //! mind::dag, every block checked against its CID. A file copied to `store:` is stored as an object and published
 //! under its path; a deleted name is unpublished; a rename moves both names at once. The store is a `Store`: the
