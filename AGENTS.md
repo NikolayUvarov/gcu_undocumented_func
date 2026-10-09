@@ -70,6 +70,13 @@ The registry of tracks — current owners, branches, statuses and starting tasks
    - code that exists only for superseded hardware is marked `LEGACY:` and listed in [docs/legacy.md](docs/legacy.md);
    - generated IDL files are committed;
    - third-party code is recorded in [THIRD_PARTY.md](THIRD_PARTY.md).
+   - **proprietary files** (firmware, microcode or data whose terms forbid redistribution) never enter the repository or a disk image (the maintainer's decision, 2026-10-09):
+     - a script fetches them on the maintainer's machine from a named source into `proprietary/` in the working tree, the separate store for all such components, and checks them by SHA-256. `.gitignore` excludes that directory, and nothing in it is ever committed;
+     - after the image is written, the script copies them onto the disk, under `data/firmware/` on the boot volume;
+     - a driver reads them from there and says so in the log when they are missing;
+     - [THIRD_PARTY.md](THIRD_PARTY.md) names the script and the source, not the files.
+
+     A disk that holds them is for the maintainer's own use.
 4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups. `scripts/ci_local.sh` runs every CI group on your machine.
 5. **Update the evidence.** If the change alters a statement in `docs/profile` (a guarantee, the TCB or evidence), update that statement in the same commit. Update the README and `docs/api` when behaviour or interfaces change.
 6. **Commit.** One task per commit where possible. The message says what changed and why, and cites the issue. An agent's commits carry a trailer naming the tool and, if there is one, a link to the session (for example `Co-Authored-By:` and a session URL). The person directing the agent is the author of record and accepts the [licence of contributions](CONTRIBUTING.md#licence-of-contributions).
@@ -97,6 +104,19 @@ The gate is one of the following:
 - **GitHub CI is green** on the pushed commit.
 - **Or a full local run** when GitHub's hosted runners do not take the jobs. Run `scripts/ci_local.sh --ref <your-branch>`, which tests the branch merged with the current `main` in a temporary worktree. Every group must pass, and the commit or report must say that the gate was local.
 
+**A text-only commit needs no gate** (the maintainer's decision, 2026-10-09).
+
+- **Which commits.** Those that change only Markdown documents that no build, image or test reads:
+  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted) and `docs/`;
+  - the root's AGENTS.md, CONTRIBUTING.md, TRACKS.md, README.md, ROADMAP.md, ROADMAP_RU.md, SECURITY.md and CODE_OF_CONDUCT.md;
+  - the Constitution's and RFCs' texts.
+- **Why.** A test run says nothing about such files.
+- **How.** Such a commit goes to `main` as a fast-forward, as above, without waiting for CI or a local run. Its message says the gate was not needed.
+- **Everything else is code for this rule** and passes the gate:
+  - source, scripts, build and CI files, IDL, tests and their data, `.gitignore`;
+  - the files the build copies into images: THIRD_PARTY.md, the LICENSE files, `LICENSES/`, `hwdocs/`.
+- **A commit that mixes both** passes the gate.
+
 **Everyone else** opens a pull request from a fork or branch. The pull request:
 
 - states its issue and the Constitution clauses it touches;
@@ -104,9 +124,10 @@ The gate is one of the following:
 
 The maintainer or the owning track reviews and merges it.
 
-**`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. The maintainer builds it and tries a fix on a real machine at once, without waiting for the tests.
+**`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. Only the maintainer builds it, to try a fix on a real machine at once, without waiting for the tests.
 
-- An agent of the maintainer pushes a commit there as soon as it builds, before running its tests: it merges its branch into `fast-test`, or fast-forwards it. Never force-push it.
+- **An agent never builds, tests or gates `fast-test`** (a strict rule): no build, no test suite, no `scripts/ci_local.sh` on it or on a worktree of it. Builds, tests and gates run only on the agent's own branch.
+- **The order:** an agent of the maintainer commits on its own branch and makes sure it builds there; then merges its branch into `fast-test` (or fast-forwards it), resolves any conflict in the merge, and pushes the merge as it is; only then runs the tests and the gate, on its own branch. Never force-push `fast-test`.
 - When `main` moves, it is merged into `fast-test`.
 - Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the gate.
 - A build from `fast-test` is not evidence of anything (section 1) until its commits pass the gate.
@@ -134,12 +155,14 @@ The maintainer or the owning track reviews and merges it.
 
 ## 6. What an agent must not do
 
-- Push to `main` without a green gate, or push to another track's branch.
+- Push to `main` without a green gate, except a text-only commit (section 4), or push to another track's branch.
+- Build, test or run a gate on `fast-test`: it only receives merges of the agents' branches (section 4).
 - Skip, disable or weaken a test to get a green result, or push an empty commit to re-trigger CI.
 - Change the system-call ABI outside a kernel issue, or change a service interface without a new IDL version.
 - Claim a guarantee, profile entry or acceptance criterion that it has not tested on the stated configuration.
 - Edit the Constitution, the RFCs or the roadmap in one language only, or without a new version.
 - Add third-party code or data without its source and licence, or commit secrets, keys or credentials.
+- Put a proprietary file into the repository or into a disk image. It is copied onto the written disk instead (section 3).
 - Post vulnerability details in public. Report them as described in [SECURITY.md](SECURITY.md).
 
 ## 7. A brief to give your agent
@@ -151,7 +174,8 @@ You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <n
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
-Never push to other branches; reach main only through the gate in AGENTS.md section 4.
+Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
+Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.
 Before pushing: run the tests the change touches (scripts/ci_local.sh for the full set) and update docs/profile if a stated guarantee changed.
