@@ -173,7 +173,7 @@ fn main(_info: &'static BootInfo) {
             Ok(Err(error)) => { mind::println!("DOWNLOAD: CONNECT: {:?}", error); mind::time::sleep(1000); continue; }
             Err(_) => fail(format_args!("NO NETWORK GRANT")),
         };
-        let result = http::get(&mut tcp, &url, offset, &mut output);
+        let result = http::get(&mut tcp, &url, offset, &mut output, &mut http::Local);
         drop(tcp);
         if output.flush().is_err() || output.failed { fail(format_args!("CANNOT WRITE {}", path)); }
         match result {
