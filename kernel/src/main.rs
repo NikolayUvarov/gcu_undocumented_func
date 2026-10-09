@@ -38,6 +38,8 @@ mod frames;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
 mod input;
+mod klog;
+mod report;
 mod memory;
 mod paging;
 mod pci;
@@ -81,7 +83,7 @@ pub unsafe extern "C" fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) 
 // Boot line and kernel diagnostics go to COM1, and to the screen until a task takes it (211-KRN-0013); the command
 // shell is a ring 3 service started by init.
 fn serial_only(text: &str) { for byte in text.bytes() { unsafe { if byte == b'\n' { serial_write_byte(b'\r'); } serial_write_byte(byte); } } }
-fn serial_print(text: &str) { serial_only(text); screen::print(text); }
+fn serial_print(text: &str) { serial_only(text); screen::print(text); klog::keep(text); }
 
 #[no_mangle]
 #[link_section = ".text._start"]

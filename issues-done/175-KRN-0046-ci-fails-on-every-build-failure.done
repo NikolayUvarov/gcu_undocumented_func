@@ -1,0 +1,42 @@
+# 175-KRN-0046 — CI and the local gate fail on every build failure — done
+
+**Type:** kernel (CI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) · **Constitution:** MC-12.2, MC-12.9
+
+## Problem
+
+Audit finding A06 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)):
+- **GitHub CI.** GitHub's `run:` steps use `bash -e`, which does not apply to the left side of `&&`. A host test that does not compile is skipped, and the step passes if its last command does.
+- **The local gate.** `x86_fixtures` in `scripts/ci_local.sh` builds eight kernel variants without `|| return 1`. A failed build is masked, and stale `/tmp/mind-*-target` builds can be tested.
+
+The gate decides what reaches `main` (AGENTS.md section 4).
+
+## Plan
+
+- Every compile and build in the CI host step and in `ci_local.sh` fails its step: `set -e`-safe forms, or `|| exit 1` / `|| return 1` on each.
+- The kernel variants are built into fresh target directories, or checked to be newer than the sources.
+- A host test makes each position fail in turn. Each run must return nonzero and prevent a PASS.
+
+## Acceptance criteria
+
+- A deliberately broken host test, or fixture build, fails both the GitHub step and the local gate.
+- A test binary that fails still fails them, as now.
+
+## Resolution
+
+Done on 2026-10-09 by the kernel track.
+
+- **One list, run the same way twice.**
+  - `scripts/host_tests.sh` runs every host test under `set -euo pipefail`, one command a line. `scripts/x86_fixtures.sh` builds the x86 test programs and kernel variants the same way.
+  - CI's "Host tests" and "Test programs" steps run them, and so do `ci_local.sh`'s "host tests" and "build (x86 test programs)" groups. The two copies of each list are gone, so they can no longer drift.
+- **The regression test, `tests/gate_test.py`.**
+  - It runs each of the four entries as CI and `ci_local.sh` run them, with stand-ins for `rustc`, `cargo` and `python3` that count their calls.
+  - Each call is made to fail in turn: 89 in the host tests, 13 in the test programs. A compile, a build, a test binary and a Python test are all covered, and every such run ends nonzero.
+  - It writes only in a temporary directory (`MIND_TEST_OUT`), and runs among the host tests.
+- **Stale kernel variants.**
+  - A failed build now stops the run. In `ci_local.sh` a failed "build" group also skips the rest of its part, so a stale variant in `/tmp/mind-*-target` is never tested after a failed build.
+  - Cargo rebuilds a variant whose sources changed, so the target directories are kept rather than made fresh each run.
+- `CONTRIBUTING.md` and the README point at `scripts/host_tests.sh`.
+
+## Related
+
+[011](../issues-done/011-reproducible-toolchain.done), [AGENTS.md](../AGENTS.md) section 4.

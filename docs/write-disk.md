@@ -158,7 +158,8 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - how the disk was attached: internal SATA port, or USB adapter;
 - **the files of the `MIND LOG` partition.** Attach the disk to any computer and copy `BOOTNNNN.LOG` from it:
   - each file is one boot's system log, written every 2 seconds, so it reaches the last seconds before a hang;
-  - the kernel's own boot lines (`MIND CORE KERNEL: …`) are not in it yet; a photo shows them;
+  - `HWNNNN.TXT` beside it is the same boot's hardware report (174-KRN-0038): the CPU, the firmware's memory map and ACPI tables, every PCI function, and the kernel's own lines (`MIND CORE KERNEL: …`), those the screen lost included;
+  - the folder `ACPI` holds the firmware's ACPI tables as files (`DSDT.bin`, `FACP.bin`, …);
 - a photo of the screen where it stopped, or the output of `cpus`, `svc`, `stat devices` and `physmap` if the shell came up;
 - the serial output, if you had a COM1 cable.
 

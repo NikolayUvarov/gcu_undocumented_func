@@ -2,6 +2,11 @@
 set -o pipefail
 
 BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The branch and commit built, for init's first line in the boot log (211-KRN-0044); "+CHANGES" when files differ.
+MIND_BUILD_BRANCH="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+MIND_BUILD_COMMIT="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+[[ -n "$(git -C "$BUILD_SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && MIND_BUILD_COMMIT+="+CHANGES"
+export MIND_BUILD_BRANCH MIND_BUILD_COMMIT
 # ARCH=aarch64 builds the aarch64 image instead (aarch64_root/, issue 204); arguments go to scripts/build_aarch64.sh.
 case "${ARCH:-x86_64}" in
     x86_64) ;;

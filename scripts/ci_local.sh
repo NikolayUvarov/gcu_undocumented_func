@@ -45,25 +45,25 @@ want() { [[ ",$ONLY," == *",$1,"* ]]; }
 OVMF=/usr/share/ovmf/OVMF.fd
 X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
- --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
+ --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
  --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
- --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel"
+ --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel /tmp/mind-bar-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
 # Group name | command; a failed "build" step skips the rest of its part.
 HOST_GROUPS=(
     "build (x86)|./02_build.sh"
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only)"
-    "host tests|host_tests"
+    "host tests|scripts/host_tests.sh"
     "models (TLC)|scripts/model_check.sh"
 )
 X86_GROUPS=(
-    "build (x86 test programs)|x86_fixtures"
+    "build (x86 test programs)|scripts/x86_fixtures.sh"
     "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
-    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen"
+    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
-    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb"
-    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults"
+    "x86: keys, shell, tools|$X86 --suites keys,shell,tools,windows,wm,tablet,usb,ehci"
+    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs"
@@ -72,6 +72,8 @@ X86_GROUPS=(
     "x86: AVX state, one CPU|$X86 --cpu-model max --cpus 1 --suites busy,smp"
     "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
     "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
+    "x86: padded vector area|$X86 --cpu-model max --kernel /tmp/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
+    "x86: protection probes|$X86 --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
@@ -81,36 +83,13 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb,devicetree,efivar"
-    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls"
+    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,updater"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
 )
 
-host_tests() {
-    local t
-    rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
-    rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax; do
-        rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
-    done
-    rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1
-    python3 tests/idl_test.py && python3 tests/font_test.py && python3 tests/test_usb_writer.py && python3 tests/manifest_test.py && python3 tests/release_test.py
-}
-x86_fixtures() {
-    local f
-    for f in busy_app isolation_app heap_app block_app; do
-        rustc --edition=2021 --target x86_64-unknown-none --crate-type bin -C opt-level=3 -C panic=abort \
-            -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
-            "tests/$f.rs" -o "/tmp/mind-core-$f.elf" || return 1
-    done
-    (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
-    (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
-    (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
-    (cd kernel && cargo build --release --features trial-test --target-dir /tmp/mind-trial-target)
-    (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
-}
 tap_bench() {
     ip link show mindtap0 >/dev/null 2>&1 || {
         sudo ip tuntap add dev mindtap0 mode tap user "$(id -un)" && sudo ip addr add 10.0.2.2/24 dev mindtap0 &&

@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:usb";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -76,6 +76,18 @@ pub fn reports(endpoint: Endpoint, handle: u32, address: u8) -> Result<u16> {
     Ok(wire::field(&reply, 0, 16, 16) as u16)
 }
 
+/// 1.1 (211-DRV-0018): as `reports`, for an endpoint whose reports span several packets and end with a short one
+/// (a MacBook trackpad's finger data), up to `longest` bytes each (at most 512; 64 on xHCI for now). Each is written
+/// as two length bytes, low first, and the report. The first call starts polling with that length; a later one with
+/// another length is refused (invalid).
+pub fn reports_up_to(endpoint: Endpoint, handle: u32, address: u8, longest: u16) -> Result<u16> {
+    let words = [7 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48, ((longest) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_error(&reply)?;
+    let _ = wire::check_reply(&reply, [0xffff0000, 0x0], false)?;
+    Ok(wire::field(&reply, 0, 16, 16) as u16)
+}
+
 /// A request to the `usb` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -85,6 +97,7 @@ pub enum Request {
     Control { handle: u32, request_type: u8, request: u8, value: u16, index: u16, length: u16 },
     Bulk { handle: u32, address: u8, offset: u32, length: u32 },
     Reports { handle: u32, address: u8 },
+    ReportsUpTo { handle: u32, address: u8, longest: u16 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -118,6 +131,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Reports { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8 }, Call::words(request, cap)))
         }
+        7 => {
+            wire::body(request, cap, [0xffffffffff0000, 0xffff], CAP_KIND_NONE, false)?;
+            Ok((Request::ReportsUpTo { handle: wire::field(&words, 0, 16, 32) as u32, address: wire::field(&words, 0, 48, 8) as u8, longest: wire::field(&words, 1, 0, 16) as u16 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -143,6 +160,10 @@ pub fn reply_bulk(call: Call, value: Result<u32>) -> Result<()> {
     wire::finish(call, [((value) as usize) << 16, 0])
 }
 pub fn reply_reports(call: Call, value: Result<u16>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
+    wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_reports_up_to(call: Call, value: Result<u16>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_error(call, error) };
     wire::finish(call, [((value) as usize) << 16, 0])
 }

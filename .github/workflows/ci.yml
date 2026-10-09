@@ -24,23 +24,11 @@ jobs:
         run: cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only
       - name: Clean tree after the build
         run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
-      - name: FAT tools for the FAT host test
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dosfstools mtools
+      - name: FAT tools and qemu-img for the host tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dosfstools mtools qemu-utils
+      # One script with ci_local.sh, failing on any compile or test (175-KRN-0046).
       - name: Host tests
-        run: |
-          rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || exit 1
-          rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || exit 1
-          # Any test that fails fails the step, not only the last one in the loop.
-          for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax; do
-            rustc --edition=2021 --test "tests/${test}_host.rs" -o "/tmp/$test-tests" && "/tmp/$test-tests" || exit 1
-          done
-          # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
-          rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || exit 1
-          python3 tests/idl_test.py
-          python3 tests/font_test.py
-          python3 tests/manifest_test.py
-          python3 tests/release_test.py
-          python3 tests/test_usb_writer.py
+        run: scripts/host_tests.sh
 
   # TLA+ models of revoke and MOVE checked by TLC (issue 167, docs/assurance).
   models:
@@ -64,13 +52,13 @@ jobs:
             args: --suites netbench
             tap: true
           - name: services, storage, audio
-            args: --suites services,ahci,audio,tts,listen
+            args: --suites services,ahci,audio,tts,listen,hda
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
-            args: --suites keys,shell,tools,windows,wm,tablet,usb
+            args: --suites keys,shell,tools,windows,wm,tablet,usb,ehci
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults
+            args: --suites vfs,edit,disk,block,store,storefaults,updater
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -92,6 +80,12 @@ jobs:
           # The local APIC in x2APIC mode, as firmware leaves it on many PCs (211-PRT-0002).
           - name: x2APIC
             args: --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation
+          # The vector area padded to AMX's size, for the frames QEMU cannot emulate (174-KRN-0037).
+          - name: padded vector area
+            args: --cpu-model max --kernel /tmp/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation
+          # The kernel reads and jumps into a program's page once: SMAP and SMEP must stop it (000-KRN-0039).
+          - name: protection probes
+            args: --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})
@@ -104,17 +98,7 @@ jobs:
       - name: Build
         run: ./02_build.sh
       - name: Test programs
-        run: |
-          for fixture in busy_app isolation_app heap_app block_app; do
-            rustc --edition=2021 --target x86_64-unknown-none --crate-type bin -C opt-level=3 -C panic=abort \
-              -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
-              "tests/$fixture.rs" -o "/tmp/mind-core-$fixture.elf"
-          done
-          (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
-          (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
-          (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
-          (cd kernel && cargo build --release --features trial-test --target-dir /tmp/mind-trial-target)
-          (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
+        run: scripts/x86_fixtures.sh
       - name: Tap interface for the benchmark (host 10.0.2.2/24; a card on it offers checksum offload)
         if: ${{ matrix.tap }}
         run: |
@@ -126,9 +110,9 @@ jobs:
         run: |
           python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd \
             --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
-            --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
+            --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
             --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
-            --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
+            --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel /tmp/mind-bar-target/x86_64-unknown-none/release/kernel ${{ matrix.args }}
       - name: Benchmark over the tap interface (checksum offload off and on)
         if: ${{ matrix.tap }}
         run: python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware /usr/share/ovmf/OVMF.fd --suites netbench --tap mindtap0 --bench-runs 2
@@ -168,7 +152,7 @@ jobs:
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,smp,busy,usb,devicetree,efivar
           - group: files, network and TLS
-            suites: vfs,store,storefaults,net,tls
+            suites: vfs,store,storefaults,net,tls,updater
           - group: RAM, ACPI and PCI above 4 GiB
             suites: normal,net
             machine: virt,gic-version=3,highmem=on
