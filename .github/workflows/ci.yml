@@ -24,8 +24,8 @@ jobs:
         run: cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only
       - name: Clean tree after the build
         run: test -z "$(git status --porcelain)" || { git status --short; exit 1; }
-      - name: FAT tools for the FAT host test
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dosfstools mtools
+      - name: FAT tools and qemu-img for the host tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends dosfstools mtools qemu-utils
       # One script with ci_local.sh, failing on any compile or test (175-KRN-0046).
       - name: Host tests
         run: scripts/host_tests.sh

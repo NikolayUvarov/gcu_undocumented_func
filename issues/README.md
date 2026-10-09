@@ -20,7 +20,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [175](175-audit-2026-10-09.md) | The 2026-10-09 audit's eight findings, fixed in their tracks (main task; routing: `vfs_server` joins `KRN`) | `KRN` | P1 | — | S0 |
-| [175-PRT-0007](175-PRT-0007-image-lists-programs-after-the-build.md) | The USB image lists the programs after the build (audit A01) | `PRT` | P1 | — | track H |
 | [175-KRN-0047](175-KRN-0047-fat-failed-growth-gives-clusters-back.md) | A FAT write that fails for space gives its new clusters back (audit A02) | `KRN` | P1 | — | S0 |
 | [175-KRN-0048](175-KRN-0048-fat-case-rename-keeps-the-file.md) | A case-only rename that fails keeps the file (audit A03) | `KRN` | P2 | — | S0 |
 | [175-KRN-0049](175-KRN-0049-fat-clean-only-after-a-good-flush.md) | A FAT volume reads clean only after a flush that succeeded (audit A04; the profile row narrowed) | `KRN` | P2 | — | S0 |
@@ -301,6 +300,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [211-KRN-0021](../issues-done/211-KRN-0021-registers-inside-a-page.done) | Device registers that start inside a page: a BAR sharing its page with another kind of device moves to a page of its own (the MacBook Pro's AHCI and EHCI) | done (2026-10-09) |
 | [211-DRV-0016](../issues-done/211-DRV-0016-hid-interfaces-not-ours-claimed-once.done) | `usb_hid` claims an interface it does not serve once, not without end (the MacBook Pro's keyboard interface 1) | done (2026-10-09) |
 | [175-KRN-0046](../issues-done/175-KRN-0046-ci-fails-on-every-build-failure.done) | CI and the local gate fail on every build failure: one host-test script and one fixture script for both, each call failing in turn in `tests/gate_test.py` (audit A06) | done (2026-10-09) |
+| [175-PRT-0007](../issues-done/175-PRT-0007-image-lists-programs-after-the-build.done) | The USB image lists the programs after the build: one call on a clean tree packs every program it built, checked by `tests/usb_image_test.py` (audit A01) | done (2026-10-09) |
 | [000-KRN-0030](../issues-done/000-KRN-0030-console-back-pressure.done) | A console program's output is not lost to a slow reader: `LOG` takes what fits while the console is read, `mind::process::log` sends the rest again (found by the local gate) | done (2026-10-08) |
 | [210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done) | The device tree's address in `BootInfo` (ABI 4): the bootloader passes it from the configuration table, the kernel checks its header; `devicetree` suite on `virt,acpi=off` (for 210-APL-0002) | done (2026-10-08) |
 | [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done) | UEFI variables from the running system on x86: `FIRMWARE_VARIABLE` with the firmware privilege, lent by the shell with the user's consent; `efivar`; `BootNext` boots another entry once (requested by UPD); aarch64 and `dbx` split into 351-KRN-0028 | done (2026-10-08) |

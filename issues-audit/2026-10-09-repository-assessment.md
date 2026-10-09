@@ -129,7 +129,7 @@ Each fix turns its audit probe's assertion around into a regression test.
 
 **Decided by the kernel track (2026-10-09), main task [175](../issues/175-audit-2026-10-09.md):**
 - `vfs_server` joins `KRN`.
-- A01: [175-PRT-0007](../issues/175-PRT-0007-image-lists-programs-after-the-build.md).
+- A01: [175-PRT-0007](../issues-done/175-PRT-0007-image-lists-programs-after-the-build.done), done.
 - A02: [175-KRN-0047](../issues/175-KRN-0047-fat-failed-growth-gives-clusters-back.md).
 - A03: [175-KRN-0048](../issues/175-KRN-0048-fat-case-rename-keeps-the-file.md).
 - A04: [175-KRN-0049](../issues/175-KRN-0049-fat-clean-only-after-a-good-flush.md); its profile row is narrowed in the same commit.
