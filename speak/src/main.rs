@@ -48,7 +48,7 @@ fn main(_info: &'static BootInfo) {
         match read_text(path) { Ok(text) => o.text = text, Err(e) => { mind::println!("speak: {}: {:?}", path, e); return } }
     }
     let start = mind::time::monotonic_ns();
-    let dictionary_file = match mind::models::read(o.dictionary) { Ok(f) => f, Err(e) => { mind::println!("speak: {}; not used", e); return } };
+    let dictionary_file = match mind::model_file::read(o.dictionary) { Ok(f) => f, Err(e) => { mind::println!("speak: {}; not used", e); return } };
     let dictionary = match Dictionary::parse(dictionary_file.bytes(), true) { Ok(d) => d, Err(e) => { mind::println!("speak: {}: {}", o.dictionary, e); return } };
     if o.ids {
         let ids = dictionary.ids(&o.text);
@@ -57,7 +57,7 @@ fn main(_info: &'static BootInfo) {
         mind::println!("IDS: {}", line);
         return;
     }
-    let model_file = match mind::models::read(o.model) { Ok(f) => f, Err(e) => { mind::println!("speak: {}; not used", e); return } };
+    let model_file = match mind::model_file::read(o.model) { Ok(f) => f, Err(e) => { mind::println!("speak: {}; not used", e); return } };
     let voice = match Model::parse(model_file.bytes(), true).and_then(|m| Voice::new(m, dictionary)) { Ok(v) => v, Err(e) => { mind::println!("speak: {}: {:?}", o.model, e); return } };
     let ready = mind::time::monotonic_ns();
     mind::println!("SPEAK: VOICE {} BYTES, DICTIONARY {} WORDS, READY IN {} MS; SIMD {}", model_file.len(), voice.dictionary().words(), (ready - start) / 1_000_000, if nn::gemm::simd(None) { "AVX2" } else { "NONE" });

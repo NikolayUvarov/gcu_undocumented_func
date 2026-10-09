@@ -71,7 +71,7 @@ pub mod voice;
 #[cfg(feature = "alloc")]
 pub mod nn;
 #[cfg(feature = "alloc")]
-pub mod models;
+pub mod model_file;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;
