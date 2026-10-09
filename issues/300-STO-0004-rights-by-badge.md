@@ -1,6 +1,6 @@
 # 300-STO-0004 — Rights to the block store by badge: storing apart from reading
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** [requests-KRN.md](requests-KRN.md) (a client with fewer rights than the shell's; the badged clients came with [300-KRN-0001](../issues-done/300-KRN-0001-blockstore-at-boot.done)) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress · **Blocked by:** — ([300-KRN-0024](../issues-done/300-KRN-0024-read-only-blockstore-client.done): a program that asks only to read, `REQUEST_BLOCKSTORE_READ`, holds a client badged get alone; done) · **Roadmap:** track B · **Constitution:** MC-4.7, MC-4.11, MC-3.3, Appendix B.6
 
 Part of main task [300](300-checksummed-block-store.md).
 

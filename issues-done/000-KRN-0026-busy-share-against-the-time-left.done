@@ -1,0 +1,31 @@
+# 000-KRN-0026 — The busy suite's share check, against the time other tasks leave — done
+
+**Type:** test · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Constitution:** MC-5.1–5.5, MC-12.2
+
+## Problem
+
+From the request "The busy suite's share check on one CPU depends on the host" (`requests-KRN.md`).
+
+`busy_suite` checked that, with no budget, the busy loop gets more than 0.6 of the host's wall clock over 3 s. On busy hosts it measured 0.52–0.65, and full local runs failed, while the code did not change the share.
+
+The proposed fix, the guest's busy plus idle time instead of the wall clock, would not help on its own. Under TCG the guest's TSC follows the host's clock, so busy plus idle is the wall clock again. The share varies because a slow host makes the other tasks, the compositor's screen copy first, take more of that time.
+
+## Plan
+
+Check what the share was meant to show: without a budget, nothing throttles the loop. Over the same 3 s, the loop's run time is measured against the time the other tasks leave its CPU: the CPU's busy plus idle time (`stat cpus`) less the run time of the other tasks on that CPU (`stat tasks`). The budgeted case keeps its wall-clock bounds (0.12–0.35).
+
+## Acceptance criteria
+
+The check keeps its meaning and does not fail when the host is busy.
+
+## Resolution
+
+- **`tests/qemu_smoke.py`, `busy_suite`:** the new measure must exceed 0.9. The PASS line reports it and the wall-clock share.
+- **Measured here:**
+  - x86 with `--cpu-model max --cpus 1`, three runs while the local gate's aarch64 part ran beside them: 1.00, 1.01, 1.00, against 0.82 of the wall clock;
+  - with 4 CPUs and on aarch64: 1.00.
+- **Stricter than the old check.** A loop throttled by any amount falls below 0.9, whatever the other tasks take.
+
+## Related
+
+Issue 171, 000-KRN-0010.

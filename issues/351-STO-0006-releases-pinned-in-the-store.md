@@ -1,6 +1,6 @@
 # 351-STO-0006 — Releases as objects in the block store, the running and last-known-good ones pinned
 
-**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** a durable medium for the block store ([requests-KRN.md](requests-KRN.md): a disk of its own for `blockstore`, from `init` and `DRV`); [351-UPD-0007](351-UPD-0007-updater-service.md) (the updater) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
+**Type:** service (storage) · **Owner:** `STO` track · **Priority:** P3 · **Status:** open · **Blocked by:** — the durable medium is done ([300-KRN-0025](../issues-done/300-KRN-0025-a-disk-for-the-block-store.done): a blank or store VirtIO disk is the store's own); [351-UPD-0007](351-UPD-0007-updater-service.md) (the updater) · **Main task:** [351](351-self-update.md) · **Roadmap:** track B; track C · **Constitution:** MC-9.3, MC-4.5, MC-4.11
 
 Numbered by the storage track from the kernel track's request in `requests-STO.md` (recorded 2026-10-08 for main task 351, phase 4, at the maintainer's request).
 

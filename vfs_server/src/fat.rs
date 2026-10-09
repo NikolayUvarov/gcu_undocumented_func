@@ -156,13 +156,12 @@ pub struct Volume<S: Sectors> {
 impl<S: Sectors> Volume<S> {
     /// Mounts the FAT volume of an MBR partition or of the whole disk; gives the disk back if there is none.
     pub fn mount(mut disk: S) -> core::result::Result<Self, S> {
-        let mut first = [0u8; SECTOR];
-        if !disk.read(0, &mut first) || first[510] != 0x55 || first[511] != 0xAA { return Err(disk); }
-        let bare = matches!(first[0], 0xEB | 0xE9) && u16_at(&first, 11) == 512;
-        let start = if bare { Some(0) } else {
-            (0..4).map(|i| 446 + i * 16).find(|&e| matches!(first[e + 4], 0x01 | 0x04 | 0x06 | 0x0B | 0x0C | 0x0E | 0xEF)).map(|e| u32_at(&first, e + 8))
-        };
-        let Some(start) = start else { return Err(disk) };
+        let Some(start) = fat_starts(&mut disk).into_iter().flatten().next() else { return Err(disk) };
+        Self::mount_at(disk, start)
+    }
+
+    /// Mounts the FAT volume that starts at sector `start`.
+    pub fn mount_at(mut disk: S, start: u32) -> core::result::Result<Self, S> {
         let mut boot = [0u8; SECTOR];
         if !disk.read(start, &mut boot) || u16_at(&boot, 11) != 512 { return Err(disk); }
         let spc = boot[13] as u32; let reserved = u16_at(&boot, 14); let fats = boot[16] as u32; let root_entries = u16_at(&boot, 17);
@@ -816,6 +815,17 @@ impl<S: Sectors> Volume<S> {
         if report.lost > 0 { report.problem("", "clusters in use that no file reaches"); }
         Ok(report)
     }
+}
+
+/// Where FAT volumes start: those of the MBR partitions with a FAT type, in table order, or the whole disk's.
+pub fn fat_starts<S: Sectors>(disk: &mut S) -> [Option<u32>; 4] {
+    let mut first = [0u8; SECTOR];
+    if !disk.read(0, &mut first) || first[510] != 0x55 || first[511] != 0xAA { return [None; 4]; }
+    if matches!(first[0], 0xEB | 0xE9) && u16_at(&first, 11) == 512 { return [Some(0), None, None, None]; }
+    let mut starts = [None; 4];
+    let entries = (0..4).map(|i| 446 + i * 16).filter(|&e| matches!(first[e + 4], 0x01 | 0x04 | 0x06 | 0x0B | 0x0C | 0x0E | 0xEF));
+    for (slot, e) in starts.iter_mut().zip(entries) { *slot = Some(u32_at(&first, e + 8)); }
+    starts
 }
 
 /// Formats a disk as one FAT16 volume (FAT12 when it is too small for FAT16) without a partition table.

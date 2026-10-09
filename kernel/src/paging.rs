@@ -1,6 +1,6 @@
 // Task address spaces (four-level page tables, 4 KiB pages): the walk is the same on every architecture; the
 // descriptor format and the switch are in arch/*/mmu.rs (issue 201).
-use crate::memory::Region;
+use crate::memory::{Frames, Region};
 use crate::mmu;
 pub use crate::mmu::{activate, init, kernel_root, uncached};
 
@@ -13,11 +13,11 @@ pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
 pub const USER_END: usize = USER_IMAGE + 0x4000_0000; // 928 MiB heap window: private quota + frame/IPC mappings (issue 150)
-const TABLES: usize = 640; // the whole heap window mapped (each table one page of the arena)
+const TABLES: usize = 640; // the whole heap window mapped (each table one page of the frame pool, 171-KRN-0032)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 
 pub struct Space {
-    tables: alloc::vec::Vec<Region>,
+    tables: alloc::vec::Vec<Region, Frames>,
 }
 
 #[cfg(test)]
@@ -97,7 +97,7 @@ mod tests {
 impl Space {
     pub fn new() -> Result<Self, &'static str> {
         let mut space = Self {
-            tables: alloc::vec::Vec::new(),
+            tables: alloc::vec::Vec::new_in(Frames),
         };
         let root = space.table()?;
         unsafe {
@@ -109,13 +109,13 @@ impl Space {
         if self.tables.len() == TABLES {
             return Err("PAGE TABLE LIMIT");
         }
-        let table = Region::new(PAGE, PAGE)?;
+        let table = Region::task(PAGE, PAGE)?;
         let pointer = table.ptr() as usize;
         self.tables.try_reserve(1).map_err(|_| "OUT OF MEMORY")?;
         self.tables.push(table);
         Ok(pointer)
     }
-    /// Page tables owned by this space (each one page of the kernel arena).
+    /// Page tables owned by this space (each one page of the frame pool, charged to the task's payers).
     pub fn table_count(&self) -> usize { self.tables.len() }
     pub fn root(&self) -> usize {
         self.tables[0].ptr() as usize
@@ -257,7 +257,7 @@ impl Space {
             }
         }
         self.flush();
-        // The list keeps the capacity growth would give its length, so arena use depends only on the tables held.
+        // The list keeps the capacity growth would give its length, so its memory depends only on the tables held.
         let capacity = self.tables.len().next_power_of_two().max(4);
         if self.tables.capacity() > capacity { self.tables.shrink_to(capacity); }
         // retired drops here, after invalidating paging-structure caches too.

@@ -1,6 +1,6 @@
-# 211-KRN-0012 — The boot volume: loaded from the bootloader's own device and named in `BootInfo`
+# 211-KRN-0012 — The boot volume: loaded from the bootloader's own device and named in `BootInfo` — done
 
-**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-9.1, MC-11.1
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-9.1, MC-11.1
 
 ## Problem
 
@@ -41,6 +41,23 @@ With two FAT disks attached, the system reads its kernel and its programs from t
   - A GPT disk (protective MBR, type `0xEE`), such as a Mac's internal disk, is skipped. This follows from the code and has not been tried on a Mac.
 - **Left:** the identity in `BootInfo` (ABI 4), the kernel's check of the bootloader's version, and the mount by identity.
 
+## Resolution
+
+Done on 2026-10-08, with ABI 4 shared with [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.done).
+
+- **The bootloader** (`bootloader/src/main.rs`, `boot_volume`) reads the hard drive node of its own image's device path. It writes the partition into `BootInfo.boot_volume`: MBR disk signature or GPT partition GUID, number, start, size. It also prints `BOOT: VOLUME …` on the serial line.
+- **`ABI_VERSION` 4** (`common/abi.rs`). New fields follow `abi_version`, and the fields up to it keep their places, so each side finds the other's version. The kernel stops before init when the bootloader's version differs, with `KERNEL STOPPED: THE BOOTLOADER IS OF ABI n, THIS KERNEL OF ABI m` on COM1 and the screen.
+- **`vfs_server`** mounts as the boot volume only the FAT volume that:
+  - sits on that partition (an MBR disk's signature and the start; a GPT partition's start);
+  - holds the manifest whose SHA-256 the bootloader passed (`boot_slot.manifest`).
+
+  Otherwise it logs `THE BOOT VOLUME (…) IS ON NO BLOCK DEVICE: NONE MOUNTED` and mounts nothing in its place.
+- **Tests** (`boot` suite, x86):
+  - a decoy FAT disk on IDE (`ata`, the first block driver) ahead of the boot disk on AHCI: `vfs_server` mounts the AHCI volume and `ls` lists its files;
+  - a kernel built with `loader-abi-test` stops with the message.
+- **On aarch64** (`tests/aarch64_smoke.py`), the decoy is the first VirtIO disk, the only one `virtio_blk` drives: `vfs_server` mounts no volume and says so. Since then `virtio_blk#1` drives the second disk and the boot volume is mounted there: [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
+- `docs/api`, the profile and its evidence say what is now provided.
+
 ## Related
 
-[211](211-intel-pc-from-a-sata-ssd.md), [211-DRV-0002](211-DRV-0002-ahci-every-port.md), [351](351-self-update.md), issue 006.
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-DRV-0002](../issues/211-DRV-0002-ahci-every-port.md), [351](../issues/351-self-update.md), issue 006.

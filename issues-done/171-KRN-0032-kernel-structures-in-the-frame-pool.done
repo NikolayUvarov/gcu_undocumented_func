@@ -1,0 +1,52 @@
+# 171-KRN-0032 — Each task's kernel structures in the frame pool, charged to its payers — done
+
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-09; the 6 GiB run in [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done)) · **Blocked by:** — · **Main task:** [171](171-limits-from-the-hardware.done) · **Constitution:** MC-1.7, MC-3.13, MC-5.1
+
+The tools track's request "Kernel structures outside the 64 MiB arena" in `issues/requests-KRN.md` (2026-10-06), from the limit 171's resolution named.
+
+## Problem
+
+The kernel's 64 MiB arena held each task's record and pages and none of it was charged to a quota:
+
+- the record itself, about 25 KiB inline in the task table's chunks;
+- its context, info, mailbox and exit pages;
+- its page tables;
+- its capability table.
+
+On a machine with gigabytes of RAM the arena, not the RAM, bounded how many tasks run. Any spawner could fill it for everyone.
+
+## Plan
+
+- Take each task's structure and pages, its page tables and its capability table from the frame pool, as images, stacks and screens are, and charge them to the spawner's memory quota.
+- Leave in the arena only what is global and small: the task and endpoint tables' slots, DMA regions.
+- `StatTask.kernel_bytes` and `kernel-objects.md` follow.
+
+## Acceptance criteria
+
+- Spawning until memory runs out stops at the frame pool, not at the arena, in a machine of 512 MiB and of 6 GiB (QEMU).
+- A spawner's memory quota bounds the kernel memory its children take.
+
+## Resolution
+
+Done on 2026-10-09 for 512 MiB, on x86 and aarch64. The 6 GiB run is [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done).
+
+- **`memory::Frames`**: an `Allocator` over the frame pool. It falls back to the arena before the pool is ready and on the host; `frames::owns` tells them apart on free. `Box::try_new_in` needs `allocator_ext` (the pinned nightly; `allocator_api` is stable there).
+- **The task record** is a `Box<Task, Frames>`; the task table keeps an 8-byte pointer a slot. The capability table, generations and nodes are `Vec<_, Frames>`. The context, info/mailbox and exit pages are `Region::task`. So are the page tables, whose list is a `Vec<Region, Frames>`.
+- **Charging.**
+  - `kernel_bytes(task)` is the record, the pages, the tables and the capability table's capacity.
+  - At `SPAWN` it is charged with the image, stack and screen to the spawner and every payer above it, after the last fallible step, so a spawn over quota fails with `ERR_LIMIT`.
+  - What the page tables and the capability table grow or shrink by is settled at the task's next system call (`settle_kernel`). It goes to the same payers, past a quota if need be: the payer's next allocation is then refused. That overrun is bounded by 640 page tables and 4096 capability slots a task.
+  - At exit it all leaves the payers' accounts with the rest of the task.
+- **`room`**: a capability table that must grow and cannot (frame pool full) refuses the capability with `ERR_NO_SLOT`. Before, `insert(...).unwrap()` would have stopped the kernel.
+- **Tests:**
+  - `normal` suite, 512 MiB:
+    - clocks start until the frame pool runs out: under 48 MiB left (the 32 MiB recovery reserve and one clock);
+    - each clock took under 4 KiB of arena: 17 bytes measured on x86 (77 clocks), 16 on aarch64 (166 clocks).
+  - `services` suite: loader's memory grows by exactly the started program's image, stack, screen, heap and kernel structures.
+  - `memory` suite: the same sum leaves the account at exit.
+  - `heap`, `isolation`, `busy`, `smp` and `runtime.rs` pass.
+- `docs/profile` (kernel objects, the MC-1.7 row, evidence) and the `StatTask` comment say so.
+
+## Related
+
+[171](171-limits-from-the-hardware.done), [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.done), [168](168-task-memory-charged-to-spawner.done).

@@ -1,6 +1,6 @@
 # 211-DRV-0002 — `ahci`: every port with a disk and every controller
 
-**Type:** driver · **Owner:** `DRV` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (which disk is the boot disk) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1
+**Type:** driver · **Owner:** `DRV` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (which disk is the boot disk) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1
 
 Numbered by the kernel session at the maintainer's request (2026-10-08); the `DRV` track is open.
 
@@ -21,4 +21,4 @@ With two SATA disks, the system boots from and writes to the disk it booted from
 
 ## Related
 
-[211](211-intel-pc-from-a-sata-ssd.md), [211-KRN-0012](211-KRN-0012-boot-volume-identity.md).
+[211](211-intel-pc-from-a-sata-ssd.md), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done).

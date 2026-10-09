@@ -23,7 +23,14 @@ impl Exit {
 /// Writes bytes to the process log (and, line by line, to the system log if the process holds a client: `mind::log`;
 /// and to the program that started it if it lent an endpoint for that: `mind::output`).
 pub fn log(bytes: &[u8]) {
-    for chunk in bytes.chunks(4096) { call(SYSCALL_LOG, chunk.as_ptr() as usize, chunk.len()); }
+    // A console whose reader keeps up takes what fits (000-KRN-0030): the rest goes again once it has read.
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let taken = call(SYSCALL_LOG, rest.as_ptr() as usize, rest.len().min(4096));
+        if taken > rest.len() { break; }
+        rest = &rest[taken..];
+        if !rest.is_empty() && taken < 4096 { call(SYSCALL_WAIT, 2, 0); }
+    }
     crate::log::capture(bytes);
     crate::output::send(bytes);
 }
@@ -150,6 +157,9 @@ pub const REQUEST_GPIO: u32 = 2048; // the pin controller service's client with 
 pub const REQUEST_LINE: u32 = 4096; // with `--line` among its arguments, a console program (no screen): `clock --line`, issue u016
 pub const REQUEST_CAMERA: u32 = 8192; // the video gateway's client in SLOT_CAMERA, lent once the user agreed (issue 158)
 pub const REQUEST_BLOCKSTORE: u32 = 16384; // the shell's block store client in SLOT_BLOCKSTORE (300-KRN-0001)
+pub const REQUEST_BLOCKSTORE_READ: u32 = 32768; // a block store client that may only get, in SLOT_BLOCKSTORE (300-KRN-0024)
+pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in SLOT_FIRMWARE, lent once the user agreed (351-KRN-0027)
+pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

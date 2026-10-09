@@ -1,0 +1,41 @@
+# 300-KRN-0025 — A disk of the block store's own — done
+
+**Type:** kernel (init) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [300](../issues/300-checksummed-block-store.md) · **Constitution:** MC-6.8, Appendix B.6
+
+## Problem
+
+From the storage track's request ("A durable disk for the block store", for [351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md)).
+
+`init` started `blockstore` over `ramdisk#1`, so nothing the store held outlived a reset. No disk was set aside for it, and `vfs_server` got a write client of every running block driver. The store must not share a medium with a file system (Appendix B.6).
+
+## Plan
+
+- **A second instance**, `virtio_blk#1`, for the second VirtIO disk. `virtio_blk` instance *n* drives the *n*-th VirtIO block device in PCI order, as `virtio_net` does. That part is [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).
+- **The store's disk.** `init` reads sector 0 of each VirtIO disk through a client of its own before it grants any disk. One that is blank or starts with the store's superblock (`MIND-STO`) is the store's:
+  - `blockstore` gets its write client instead of `ramdisk#1`;
+  - `vfs_server` does not get it.
+
+  Without such a disk, as before.
+
+## Acceptance criteria
+
+- With the extra disk, the store uses it, and what it holds survives a reboot of the VM. Without it, the RAM disk as today.
+- `vfs_server` holds no client of the store's disk.
+
+## Resolution
+
+- **`common/abi.rs`:** `SERVICE_INSTANCES` adds `virtio_blk#1`, in ABI 4, which had not reached `main` yet.
+- **`init`:**
+  - the `virtio_blk` arm picks the instance's disk in PCI order;
+  - `store_disk` classifies the disks once and logs `[INIT] THE BLOCK STORE'S DISK: <driver> (BLANK | THE STORE'S)`;
+  - the `blockstore` and `vfs_server` grants follow it.
+- **Test** (`boot` suite, x86, `store_disk_check`), with a blank 32 MiB VirtIO disk:
+  - init names it, and `vfs_server`'s log has no VirtIO volume;
+  - `blocks pattern 5000` is put;
+  - after `reboot`, init names the disk as the store's, and `blocks stat` shows the object on 65536 sectors;
+  - `blocks check … pattern` reads it back equal.
+- **Left to the storage track:** its own suite over a durable disk (351-STO-0006).
+
+## Related
+
+[351-STO-0006](../issues/351-STO-0006-releases-pinned-in-the-store.md), [300-KRN-0001](300-KRN-0001-blockstore-at-boot.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).

@@ -5,6 +5,10 @@ use crate::sys::{check, syscall, Result};
 /// Mints a capability over a platform resource into a new slot (`PLATFORM_*` kinds in the ABI).
 pub fn cap(kind: usize, a: usize, b: usize) -> Result<usize> { check(syscall(SYSCALL_PLATFORM_CAP, kind, a, [b, 0, 0, 0]).result) }
 
+/// The boot is good (platform privilege, ABI 4): on a trial boot the kernel no longer restarts the machine at the
+/// deadline. Whether the boot was on trial (351-KRN-0014).
+pub fn confirm_boot() -> Result<bool> { check(syscall(SYSCALL_BOOT_CONFIRM, 0, 0, [0; 4]).result).map(|trial| trial != 0) }
+
 /// Keeps `bytes` of the frame pool for the system band: applications' allocations stop above it (MC-6.5, issue 169).
 pub fn reserve_memory(bytes: usize) -> Result<()> { check(syscall(SYSCALL_MEMORY_RESERVE, bytes, 0, [0; 4]).result).map(|_| ()) }
 

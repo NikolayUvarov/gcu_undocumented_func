@@ -126,22 +126,27 @@ USER_CRATES=(
     "pins:pins:pins.elf"
     "pins:pinmap:pinmap.elf"
     "camera:camera:camera.elf"
+    "efivar:efivar:efivar.elf"
 )
 
-echo ">>> [1/3] Building the kernel and apps (ELF)..."
-for entry in "${USER_CRATES[@]}"; do
-    crate_dir=${entry%%:*}
-    STEP="cargo build --release in $crate_dir"
-    cd "$BUILD_SCRIPT_DIR/$crate_dir"
-    cargo build --release
-done
+# The kernel, every service and program, and the UEFI bootloader build in parallel, a log each (000-KRN-0020).
+source "$BUILD_SCRIPT_DIR/scripts/build_jobs.sh"
+JOBS=$(build_jobs)
+JOB_LOGS="$LOG_DIR/build"
+echo ">>> [1/2] Building the kernel, the services, the programs and the UEFI bootloader, $JOBS at a time (logs: $JOB_LOGS/)..."
+STEP="the cargo builds (the failed ones are named above; logs: $JOB_LOGS/)"
+declare -A SEEN=()
+{
+    printf 'bootloader\t%s\t%s\n' "$BUILD_SCRIPT_DIR/bootloader" "cargo build --release --target x86_64-unknown-uefi"
+    for entry in "${USER_CRATES[@]}"; do
+        crate_dir=${entry%%:*}
+        [ -n "${SEEN[$crate_dir]:-}" ] && continue
+        SEEN[$crate_dir]=1
+        printf '%s\t%s\t%s\n' "$crate_dir" "$BUILD_SCRIPT_DIR/$crate_dir" "cargo build --release"
+    done
+} | run_jobs "$JOB_LOGS" "$JOBS"
 
-echo ">>> [2/3] Building the UEFI bootloader..."
-STEP="cargo build --release --target x86_64-unknown-uefi in bootloader"
-cd "$BUILD_SCRIPT_DIR/bootloader"
-cargo build --release --target x86_64-unknown-uefi
-
-echo ">>> [3/3] Staging EFI/ELF files..."
+echo ">>> [2/2] Staging EFI/ELF files..."
 STEP="staging artifacts"
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/EFI/BOOT"
 

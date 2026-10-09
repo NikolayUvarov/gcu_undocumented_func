@@ -143,14 +143,19 @@ impl Launcher {
     }
 
     fn grant(&mut self, owner: u64, id: u32, slot: u8) -> Result<(), loader::Error> {
-        let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         // The fixed slots a launcher may fill: an endpoint for the program's INIT slot (a ping/pong pair), its file
         // client, its window broker client, where its output goes (issue 162), sysinfo, lifecycle control, the system log,
         // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
-        // surface of one window (issue u014), the pin controller's client (issue 207) or the video gateway's (issue 158).
+        // surface of one window (issue u014), the pin controller's client (issue 207), the video gateway's (issue 158) or the
+        // TLS service's (351-KRN-0034).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
-        // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
+        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        self.keep(owner, id, slot)
+    }
+
+    // The capability arrived in the receive slot; keep a copy in a slot of our own until the program starts.
+    fn keep(&mut self, owner: u64, id: u32, slot: u8) -> Result<(), loader::Error> {
+        let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
         let session = self.sessions[index].as_mut().unwrap();
         if let Some(existing) = session.grants[..session.count].iter_mut().find(|g| g.0 == slot) { let _ = ipc::drop_cap(existing.1); existing.1 = handle; return Ok(()); }
@@ -166,6 +171,9 @@ impl Launcher {
         if mind::dev::cap_info(RECEIVED_CAP).1 & CAP_WRITE as usize != 0 { return Err(loader::Error::Rights); }
         self.grant(owner, id, slot)
     }
+
+    // The firmware variable privilege (1.6): only in SLOT_FIRMWARE; the IDL has checked its kind (351-KRN-0027).
+    fn grant_firmware(&mut self, owner: u64, id: u32) -> Result<(), loader::Error> { self.keep(owner, id, SLOT_FIRMWARE as u8) }
 
     // `front`: in front for the owner (commit-in-front); refused while the owner is not in front, the session kept.
     fn commit(&mut self, owner: u64, id: u32, front: bool) -> Result<u64, loader::Error> {
@@ -227,6 +235,7 @@ fn main(_info: &'static BootInfo) {
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
             Ok((loader::Request::GrantMemory { session, slot, .. }, call)) => loader::reply_grant_memory(call, launcher.grant_memory(owner, session, slot)),
+            Ok((loader::Request::GrantFirmware { session, .. }, call)) => loader::reply_grant_firmware(call, launcher.grant_firmware(owner, session)),
             Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session, false)),
             Ok((loader::Request::CommitInFront { session }, call)) => loader::reply_commit_in_front(call, launcher.commit(owner, session, true)),
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),

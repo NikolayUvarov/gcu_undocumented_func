@@ -1,5 +1,5 @@
 use alloc::alloc::{alloc_zeroed, dealloc};
-use core::alloc::Layout;
+use core::alloc::{AllocError, Allocator, Layout};
 use core::ptr::NonNull;
 
 // Owned kernel RAM. Allocations also serve process-memory syscalls; the global
@@ -43,5 +43,22 @@ impl Drop for Region {
         unsafe {
             if self.frames { crate::frames::free(self.ptr, self.layout) } else { dealloc(self.ptr(), self.layout) }
         }
+    }
+}
+
+/// Each task's kernel structures (the task, its capability table, its page tables' list): from the frame pool and charged
+/// to quotas (171-KRN-0032); from the arena before the pool is ready, and on the host.
+#[derive(Clone, Copy, Default)]
+pub struct Frames;
+
+unsafe impl Allocator for Frames {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        let layout = Layout::from_size_align(layout.size().max(1), layout.align()).map_err(|_| AllocError)?;
+        let pointer = if crate::frames::ready() { crate::frames::allocate(layout) } else { NonNull::new(unsafe { alloc_zeroed(layout) }) };
+        pointer.map(|p| NonNull::slice_from_raw_parts(p, layout.size())).ok_or(AllocError)
+    }
+    unsafe fn deallocate(&self, pointer: NonNull<u8>, layout: Layout) {
+        let layout = Layout::from_size_align_unchecked(layout.size().max(1), layout.align());
+        if crate::frames::owns(pointer.as_ptr()) { crate::frames::free(pointer, layout) } else { dealloc(pointer.as_ptr(), layout) }
     }
 }

@@ -46,7 +46,8 @@ OVMF=/usr/share/ovmf/OVMF.fd
 X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
  --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
  --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf \
- --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel"
+ --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
+ --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
 # Group name | command; a failed "build" step skips the rest of its part.
@@ -72,14 +73,14 @@ X86_GROUPS=(
     "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
     "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
-    "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py"
+    "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
 )
 [[ $TAP == 1 ]] && X86_GROUPS+=("x86: network benchmark (tap)|tap_bench")
 A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
-    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb"
+    "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,smp,busy,usb,devicetree,efivar"
     "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
@@ -106,6 +107,8 @@ x86_fixtures() {
     done
     (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
     (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
+    (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
+    (cd kernel && cargo build --release --features trial-test --target-dir /tmp/mind-trial-target)
     (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
 }
 tap_bench() {

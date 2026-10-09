@@ -1,0 +1,40 @@
+# 350-KRN-0023 — The launch record in `BootInfo` and in the system log — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [350](../issues/350-signed-boot-images.md) · **Constitution:** MC-9.1, MC-9.5
+
+## Problem
+
+From the update track's request ("The launch record, readable in the system", for [350-UPD-0004](../issues/350-UPD-0004-launch-record.md)).
+
+The bootloader prints a launch record on the serial line:
+
+- the manifest's SHA-256;
+- the signing key's identity;
+- whether it is the public test key;
+- the images it checked.
+
+Nothing in the running system could read it, and many machines have no serial line.
+
+## Plan
+
+- **`BootInfo`** carries the record, in ABI 4, which [211-KRN-0012](211-KRN-0012-boot-volume-identity.done) and [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.done) introduced and which had not reached `main` yet:
+  - the manifest's digest, already in `boot_slot.manifest`;
+  - `launch`: the key, the test-key flag, the image count.
+- **Every task** reads it in its `BootInfo`, as the kernel copies the boot fields.
+- **`init`** publishes it as a line of the system log. It is evidence only: nothing grants or refuses on it.
+
+## Acceptance criteria
+
+A program reads the record of the volume it booted from, and it matches the serial line's, on x86 and aarch64.
+
+## Resolution
+
+- **`common/abi.rs`:** `LaunchRecord { key, test_key, images }`, the field `BootInfo.launch`.
+- **The bootloader** fills it from the manifest it verified (`load_set`).
+- **`init`** logs `[INIT] LAUNCH: MANIFEST <16 hex> KEY <key> [(THE TEST KEY)] VERIFIED, <n> IMAGES CHECKED; <slot>[ ON TRIAL]`. The part after `MANIFEST` is the serial line's, and the line reaches the boot log on the log partition (211-KRN-0019).
+- **Tests:** the `boot` suite (x86) and `tests/aarch64_smoke.py` find init's line equal to the bootloader's `BOOT: MANIFEST …` line. Run here on both: 30 images on x86, 26 on aarch64.
+- **Left to the update track** (350-UPD-0004): a tool that shows the record.
+
+## Related
+
+[350-UPD-0004](../issues/350-UPD-0004-launch-record.md), [docs/update](../docs/update/README.md).

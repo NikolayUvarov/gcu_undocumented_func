@@ -1,13 +1,13 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.2 (2026-10-08) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.3 (2026-10-08): the log partition · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the log partition) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
 ## 1. What you need
 
 - **A Linux machine** with Python 3, util-linux (`lsblk`, `findmnt`, `blockdev`) and `sudo`, plus the project's toolchain (`./01_prepare_env.sh`) and `qemu-img` (comes with QEMU) to build the image.
-- **A disk whose contents may be lost**, of 512 MiB or more. Any of these:
+- **A disk whose contents may be lost**, of 1 GiB or more (the image is 568 MiB). Any of these:
   - a USB stick;
   - an SSD in a USB-SATA adapter or enclosure (for example a Samsung 860 PRO);
   - an SATA or NVMe disk inside the Linux machine, with `--internal` (section 4). It must not be the disk Linux runs from: the writer refuses that one in every case.
@@ -19,7 +19,12 @@
 ./04_make_usb_image.sh --force
 ```
 
-It builds everything and writes `dist/mind-core-usb.img` (about 504 MiB): an MBR with one FAT16 EFI system partition labelled `MIND CORE`. It holds `EFI/BOOT/BOOTX64.EFI`, the kernel, the services and the programs. The script checks every file it packed and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
+It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has two partitions:
+
+- **`MIND CORE`**, the boot volume: FAT16, marked as the EFI system partition. It holds `EFI/BOOT/BOOTX64.EFI`, the kernel, the services and the programs.
+- **`MIND LOG`**, the log volume: 64 MiB of FAT16 with an ordinary type, which Windows, macOS and Linux mount by themselves. MIND Core writes the system log of each boot there as `BOOTNNNN.LOG` (section 9).
+
+The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
@@ -88,7 +93,6 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - boot mode **UEFI**; CSM or "Legacy" **off**;
 - **Secure Boot off**: the bootloader is not signed yet (issue [350](../issues/350-signed-boot-images.md));
 - SATA mode **AHCI**, not RAID, Intel RST or VMD;
-- **x2APIC off**, if the firmware offers the switch (section 8).
 
 **The disk:**
 
@@ -105,7 +109,7 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
 - **The internal disk.** It keeps its own EFI partition:
-  - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md));
+  - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
   - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
 - **No COM1.** Two things show what happened instead:
   - the bootloader's progress and errors, in text ([211-KRN-0015](../issues-done/211-KRN-0015-boot-errors-on-a-mac-screen.done), [211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done));
@@ -125,6 +129,7 @@ write data/hello first boot
 sync
 reboot
 cat data/hello             # after the reboot: the file survived
+ls log:                    # the log partition: a BOOTNNNN.LOG for each boot
 ```
 
 ## 8. If it stops
@@ -132,15 +137,17 @@ cat data/hello             # after the reboot: the file survived
 | What you see | Likely cause | What to do |
 |---|---|---|
 | `BOOT ERROR: display: …` | The firmware gives no linear framebuffer (GOP) | Another video output, or the integrated graphics; report it |
-| `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Write the disk again (section 5) |
-| The shell runs, but `ls` shows another disk's files | `vfs_server` mounted the first FAT volume with an MBR partition table, which may be on another disk ([211-KRN-0012](../issues/211-KRN-0012-boot-volume-identity.md)) | Disconnect the other disks and sticks |
-| Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). `x2APIC is not supported yet` is the first suspect ([211-PRT-0002](../issues/211-PRT-0002-x2apic.md)) | Photograph the screen. For x2APIC, turn it off in the firmware if it has the switch |
+| `BOOT ERROR: kernel.elf: …`, `BOOT ERROR: <name>.elf: …` or `BOOT ERROR: boot volume: …` | A file on the disk the bootloader started from is missing or damaged, or the firmware shows no file system on it. The bootloader reads only its own disk ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done)) | Write the disk again (section 5) |
+| The shell runs, but programs do not start or `ls` is empty; `logs` of `vfs_server` (its PID from `ps`) says `THE BOOT VOLUME (…) IS ON NO BLOCK DEVICE` | `vfs_server` mounts only the volume the bootloader was read from, and no driver shows that disk (for example a controller MIND Core has no driver for) ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done)) | Attach the disk to another port or bus (USB on a rear port, the first SATA port) |
+| Grey `MIND CORE KERNEL: …` lines, then white text on dark red: `KERNEL PANIC`, `KERNEL EXCEPTION` or `INIT EXITED` | The kernel stopped, and the red text says why ([211-KRN-0013](../issues-done/211-KRN-0013-fatal-messages-on-the-screen.done)). | Photograph the screen |
 | The firmware's picture (a Mac's spinner) stays, and no `MIND CORE BOOT:` line appears | The firmware did not start the bootloader, or its console did not switch to text | Report it, with the boot menu entry you chose |
 | `MIND CORE BOOT:` lines end at `STARTED; READING …` | The bootloader stopped while the firmware read the files from the disk | Another USB port or adapter; report it with a photo |
 | `MIND CORE BOOT:` lines end at `… EXITING BOOT SERVICES`, and nothing from the kernel follows | The kernel stopped before it took the screen, or the GOP the bootloader chose (`USING GOP`) is not the screen's; the `GOP` lines list every one the firmware has ([211-KRN-0016](../issues-done/211-KRN-0016-the-screens-gop-and-boot-progress.done)) | Photograph the lines. A serial cable on COM1, if the board has one, shows the reason |
 | The shell runs, but `ls` is empty or `[INIT] ahci NOT STARTED` | SATA is in RAID/RST/VMD mode, or the disk is not on the first SATA port ([211-DRV-0002](../issues/211-DRV-0002-ahci-every-port.md)) | AHCI mode; the first port |
-| `MIND CORE KERNEL: NO TICK FROM THE PIT`, or everything waits forever (programs that sleep, time not moving) | No timer interrupt reaches the kernel. The line `MIND CORE KERNEL: TICK: …` says where the tick comes from: the LAPIC timer, or the PIT where the firmware lists no ACPI PM timer ([211-PRT-0003](../issues/211-PRT-0003-tick-without-the-pit.md)) | Photograph the lines and report it |
+| `MIND CORE KERNEL: NO TICK FROM THE PIT`, or everything waits forever (programs that sleep, time not moving) | No timer interrupt reaches the kernel. The line `MIND CORE KERNEL: TICK: …` says where the tick comes from: the LAPIC timer, or the PIT where the firmware lists no ACPI PM timer ([211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done)) | Photograph the lines and report it |
 | The keyboard does nothing | Only PS/2 and USB keyboards on the first USB 3 (xHCI) controller work; on Intel 7–9 series chipsets the kernel first moves the USB ports there from EHCI | Another USB port (rear, on the chipset) or a PS/2 keyboard |
+
+While real machines are diagnosed, two screens stay for 5 seconds on a machine without a hypervisor, so they can be photographed: the bootloader's `MIND CORE BOOT:` lines (`A PAUSE OF 5 S FOR A PHOTO OF THESE LINES`), and the kernel's grey lines before the compositor takes the screen. QEMU does not pause.
 
 ## 9. What to send back
 
@@ -149,6 +156,9 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - the PC's board or model, the CPU, and the firmware version;
 - the firmware settings you used (section 6);
 - how the disk was attached: internal SATA port, or USB adapter;
+- **the files of the `MIND LOG` partition.** Attach the disk to any computer and copy `BOOTNNNN.LOG` from it:
+  - each file is one boot's system log, written every 2 seconds, so it reaches the last seconds before a hang;
+  - the kernel's own boot lines (`MIND CORE KERNEL: …`) are not in it yet; a photo shows them;
 - a photo of the screen where it stopped, or the output of `cpus`, `svc`, `stat devices` and `physmap` if the shell came up;
 - the serial output, if you had a COM1 cable.
 

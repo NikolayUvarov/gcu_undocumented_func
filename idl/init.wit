@@ -2,7 +2,7 @@
 /// services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
 /// SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
 /// the shell cannot be stopped.
-package mind:init@1.1.0;
+package mind:init@1.2.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -16,8 +16,9 @@ interface init {
     /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
     /// (already running), not-found (no such service or no device), rights (cannot be started after boot).
     run: func(name: string<16>) -> result<u64, error-code>;
-    /// The boot services and their further instances in boot order (1.1; up to 32 since issue 205).
-    list: func() -> result<list<service, 32>, error>;
+    /// The boot services and their further instances in boot order (1.1; up to 32 since issue 205, 64 since 1.2: a
+    /// third VirtIO disk made 33, 251-KRN-0031).
+    list: func() -> result<list<service, 64>, error>;
     /// Stops a running service; init does not restart it until it is started again, and its clients' calls fail with
     /// ERR_PEER meanwhile (1.1).
     stop: func(name: string<16>) -> result<_, error>;

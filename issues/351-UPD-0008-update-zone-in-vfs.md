@@ -1,6 +1,6 @@
 # 351-UPD-0008 — An update zone in `vfs_server`
 
-**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open · **Blocked by:** [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md), its first part: the booted slot in `BootInfo` (0014's confirmation needs this task in turn), without which `vfs_server` cannot tell the inactive slot from the running one (the records name the slot chosen, not the one that verified and booted), and the grant that gives `updater` the zone; [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
+**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open · **Blocked by:** [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), its first part: the booted slot in `BootInfo` (0014's confirmation needs this task in turn), without which `vfs_server` cannot tell the inactive slot from the running one (the records name the slot chosen, not the one that verified and booted), and the grant that gives `updater` the zone; [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 

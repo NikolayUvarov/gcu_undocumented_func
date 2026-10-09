@@ -6,7 +6,7 @@ use crate::pcicfg::{read, write};
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8 }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -55,7 +55,27 @@ const INTEL_SWITCHABLE_XHCI: [u32; 5] = [0x1E31_8086, 0x8C31_8086, 0x9C31_8086, 
 unsafe fn route_to_xhci(bus: u8, device: u8, function: u8) {
     write(bus, device, function, 0xD8, read(bus, device, function, 0xDC));
     write(bus, device, function, 0xD0, read(bus, device, function, 0xD4));
-    crate::serial_print("MIND CORE KERNEL: PCI: INTEL XHCI: USB PORTS ROUTED FROM EHCI TO XHCI\n");
+    // The ports the firmware lets move (its masks) and those that moved: a port left on EHCI is not seen (211-PRT-0004).
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!(
+        "MIND CORE KERNEL: PCI: INTEL XHCI: USB PORTS ROUTED FROM EHCI TO XHCI (USB 2 {:X} OF MASK {:X}, USB 3 {:X} OF MASK {:X})\n",
+        read(bus, device, function, 0xD0), read(bus, device, function, 0xD4), read(bus, device, function, 0xD8), read(bus, device, function, 0xDC)));
+}
+
+// EHCI (211-DRV-0004): firmware with legacy USB support owns the controller through the USBLEGSUP semaphore, in
+// configuration space at HCCPARAMS.EECP; the system takes it before a driver runs, as drivers cannot write there.
+unsafe fn ehci_handoff(bus: u8, device: u8, function: u8, bar: Bar) {
+    if bar.io || bar.base == 0 || bar.base >= 1 << 32 { return; }
+    let command = read(bus, device, function, 0x04);
+    write(bus, device, function, 0x04, command | 0x2); // memory decoding, for HCCPARAMS
+    let hcc = core::ptr::read_volatile((bar.base + 8) as *const u32);
+    write(bus, device, function, 0x04, command);
+    let eecp = (hcc >> 8) as u8 & 0xFC;
+    if eecp < 0x40 || read(bus, device, function, eecp) & 0xFF != 1 { return; }
+    write(bus, device, function, eecp, read(bus, device, function, eecp) | 1 << 24); // OS owned
+    let released = (0..50_000_000).any(|_| { core::hint::spin_loop(); read(bus, device, function, eecp) & 1 << 16 == 0 });
+    write(bus, device, function, eecp + 4, 0); // no SMIs from the controller
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: EHCI {:02X}:{:02X}.{}: {}\n", bus, device, function,
+        if released { "TAKEN FROM THE FIRMWARE" } else { "THE FIRMWARE DID NOT LET GO" }));
 }
 
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
@@ -72,7 +92,9 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 let id = read(bus, device, function, 0); // vendor | device << 16
                 let irq = crate::pcicfg::line(bus, device, function);
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
-                devices.push(Device { class, id, bars: bars(bus, device, function), irq, bus, device, function });
+                let bars = bars(bus, device, function);
+                if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
+                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false });
             }
         }
     }

@@ -36,6 +36,7 @@ use mind::sys::Error;
 const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
+const BOOT_LOG_LINES: usize = 24;
 const COMMANDS: [&str; 48] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "nslookup", "physmap", "ping", "pmap", "ps", "quotas", "reboot", "rm", "run", "screenshot", "stat", "stop", "sync", "time", "tls", "voice", "write"];
 const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
@@ -77,6 +78,8 @@ struct Shell {
     serial: Option<Uart>, // the serial line, for notes that are not a console's
     msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
     script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
+    log_next: Option<u64>, // the next system log record shown above the prompt, until the first key (211-PRT-0004)
+    beat: (u64, u64), // until then: the line of the `UP n S` heartbeat above the prompt, and the second it shows
 }
 
 fn pid_arg(args: &[u8]) -> Option<u64> {
@@ -216,6 +219,32 @@ impl Shell {
 
     fn report(&mut self, error: &str) { let _ = writeln!(self.term, "ERROR: {}", error); }
     // The prompt and whatever was typed so far (output may have interrupted the line).
+    // The system log on the screen only, not the serial line (211-PRT-0004): the last BOOT_LOG_LINES records of the boot,
+    // then each new record above the prompt until the first key, for a machine whose keyboard does not work yet. The
+    // scrollback keeps the banner; the whole log is on the log partition (211-KRN-0019).
+    fn show_log(&mut self, before_prompt: bool) {
+        let Some(mut next) = self.log_next else { return };
+        let mut text = alloc::string::String::new();
+        let mut lines = alloc::collections::VecDeque::new();
+        while let Ok(count) = mind::log::read(next, |entry| { next = entry.seq + 1; lines.push_back(alloc::string::String::from(entry.text.as_str())); if lines.len() > BOOT_LOG_LINES { lines.pop_front(); } }) {
+            if count == 0 { break; }
+        }
+        for line in &lines { text.push_str(line); text.push('\n'); }
+        self.log_next = Some(next);
+        if before_prompt { self.term.put_str(&text); return; }
+        // A heartbeat: the seconds since boot, so a still screen tells a stopped system from one waiting for keys.
+        let second = mind::time::uptime_ms() as u64 / 1000;
+        if text.is_empty() && second == self.beat.1 { return; }
+        self.term.truncate(Position { line: self.beat.0, col: 0 });
+        self.term.put_str(&text);
+        self.beat = (self.term.position().line, second);
+        let mut line = mind::util::FixedBuf::<32>::new();
+        let _ = writeln!(line, "UP {} S", second);
+        self.term.put_str(core::str::from_utf8(line.as_bytes()).unwrap_or(""));
+        self.term.put_str("MIND> ");
+        self.prompt_at = self.term.position();
+    }
+
     fn prompt(&mut self) {
         if self.script.is_some() { return; } // a script's commands do not prompt
         let _ = write!(self.term, "MIND> ");
@@ -322,13 +351,19 @@ impl Shell {
         let gpio = requests & mind::process::REQUEST_GPIO != 0 && mind::dev::cap_info(SLOT_GPIO).0 != 0 && granted("gpio");
         // The block store client (300-KRN-0001), where the store runs.
         let blockstore = requests & mind::process::REQUEST_BLOCKSTORE != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE).0 != 0 && granted("blockstore");
+        // A program that asks only to read gets the client with the get badge alone, in the same slot (300-KRN-0024).
+        let blockstore_read = !blockstore && requests & mind::process::REQUEST_BLOCKSTORE_READ != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE_READ).0 != 0 && granted("blockstore");
         let (needs, authority, window_manager, display) = (loader::Needs { sysinfo: needs.sysinfo && granted("sysinfo"), file: needs.file && (granted("file") || granted("files")),
             lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
         let network_wanted = requests & mind::process::REQUEST_NETWORK != 0 && granted("network");
+        let firmware_granted = granted("firmware");
         // The camera only when the user agrees, asked every time (MC-11.4, issue 158); a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera")
             && msh::ask(self, &alloc::format!("{} ASKS FOR THE CAMERA. ALLOW?", name.to_ascii_uppercase()));
+        // The firmware's variables (the boot order) only when the user agrees, asked every time (351-KRN-0027).
+        let firmware = requests & mind::process::REQUEST_FIRMWARE != 0 && mind::dev::cap_info(SLOT_FIRMWARE).0 != 0 && firmware_granted
+            && msh::ask(self, &alloc::format!("{} ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?", name.to_ascii_uppercase()));
         let session = loader::begin(Endpoint::LOADER, name, args)?.map_err(failed)?;
         // A program that asks for a file gets a client confined to the file's directory (`ram:` without a file),
         // writable where the user may write; one that asks for the user's files gets the shell's own client.
@@ -340,10 +375,12 @@ impl Shell {
             let made = mind::fs::Dir::root(volume).and_then(|root| root.dir(parent, false)).and_then(|dir| dir.scope(true, SCOPE_RECEIVE));
             if let Err(error) = made { let _ = loader::abort(Endpoint::LOADER, session); return Err(Error::from(error)); }
         }
-        let lend = |slot: usize, cap: usize| loader::grant(Endpoint::LOADER, session, slot as u8, cap).map(|r| r.map_err(failed));
+        // The firmware privilege goes by its own method (loader 1.6); endpoints by `grant`.
+        let lend = |slot: usize, cap: usize| if slot == SLOT_FIRMWARE { loader::grant_firmware(Endpoint::LOADER, session, cap) } else { loader::grant(Endpoint::LOADER, session, slot as u8, cap) }.map(|r| r.map_err(failed));
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
-                      (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE)];
+                      (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE),
+                      (blockstore_read, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ), (firmware, SLOT_FIRMWARE, SLOT_FIRMWARE)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
@@ -742,7 +779,7 @@ fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), script: None })
+                            msh: Interpreter::default(), script: None, log_next: None, beat: (0, u64::MAX) })
 }
 
 mind::entry!(main);
@@ -756,6 +793,9 @@ fn main(info: &'static BootInfo) {
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
+    // The boot's log after the banner, which stays the first line of the scrollback.
+    shell.log_next = Some(0); shell.show_log(true);
+    shell.beat.0 = shell.term.position().line;
     shell.prompt();
     let mut vt = Vt::new();
     let mut events = Events::new();
@@ -774,18 +814,20 @@ fn main(info: &'static BootInfo) {
         // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout), for
         // the first console.
         shell.activate(0);
+        shell.show_log(false);
         let now = mind::time::uptime_ms() as u64;
         while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
         }
         vt.poll(now, &mut |event| events.push(event));
-        for &event in events.as_slice() { shell.uart(event); }
+        for &event in events.as_slice() { shell.log_next = None; shell.uart(event); }
         events.clear();
         // PS/2 keys arrive in the shell's queue while it has the focus, for the console shown.
         // While a program has the focus only the keys the shell listens for come here (F12: push-to-talk, issue 154;
         // Ctrl+Alt+F1…F4: the consoles, issue 155).
         shell.activate(shell.shown);
         while let Some(key) = mind::input::read_key() {
+            shell.log_next = None;
             match key.code() {
                 Code::F(n @ 1..=4) if key.ctrl() && key.alt() => shell.show(n as usize - 1),
                 _ if shell.focused.is_none() => shell.key(key),

@@ -1,6 +1,6 @@
 # 351-UPD-0007 — The `updater` service
 
-**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md), HTTPS downloads from `NET` ([351-NET-0002](351-NET-0002-https-for-programs.md); the download with resume itself is [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
+**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), HTTPS downloads from `NET` ([351-NET-0002](351-NET-0002-https-for-programs.md); the download with resume itself is [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 

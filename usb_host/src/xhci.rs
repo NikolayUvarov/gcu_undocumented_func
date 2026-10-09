@@ -18,7 +18,7 @@ pub const DMA_BYTES: usize = POOL + POOL_PAGES * PAGE;
 
 pub const TYPE_NORMAL: u32 = 1; const TYPE_SETUP: u32 = 2; const TYPE_DATA: u32 = 3; const TYPE_STATUS: u32 = 4; const TYPE_LINK: u32 = 6;
 const TYPE_ENABLE_SLOT: u32 = 9; const TYPE_DISABLE_SLOT: u32 = 10; const TYPE_ADDRESS: u32 = 11; const TYPE_CONFIGURE: u32 = 12;
-const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_SET_DEQUEUE: u32 = 16;
+const TYPE_EVALUATE: u32 = 13; const TYPE_RESET_ENDPOINT: u32 = 14; const TYPE_STOP_ENDPOINT: u32 = 15; const TYPE_SET_DEQUEUE: u32 = 16;
 const EVENT_TRANSFER: u32 = 32; const EVENT_COMMAND: u32 = 33;
 pub const IOC: u32 = 1 << 5; const IDT: u32 = 1 << 6; pub const ISP: u32 = 1 << 2;
 pub const SUCCESS: u32 = 1; pub const STALL: u32 = 6; pub const SHORT_PACKET: u32 = 13;
@@ -37,18 +37,22 @@ struct Done { slot: u8, dci: u8, code: u32, residue: u32 }
 
 const QUEUE: usize = 8;
 /// An interrupt IN endpoint being polled and the reports it gave since they were last taken.
-pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool }
+pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool }
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
 pub struct Xhci {
     mmio: Mmio, pub dma: Dma, op: usize, runtime: usize, doorbells: usize, context: usize, ports: usize, pub slots: usize,
     command: Ring, event: Ring, free: u64, completion: Option<(u32, u32)>, done: [Option<Done>; MAX_DONE], interrupts: [Option<Interrupt>; MAX_INTERRUPTS],
+    pub last: u32, // completion code of the last command or transfer (0: no answer), for reports
 }
 
 /// Busy-poll, then sleep: QEMU completes commands at once, transfers asynchronously; about 30 s in all.
-pub fn wait(mut done: impl FnMut() -> bool) -> bool {
-    for attempt in 0..4_000 { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
+pub fn wait(done: impl FnMut() -> bool) -> bool { wait_for(4_000, done) }
+
+// Polls `done`: a thousand times at once, then every 10 ms; `attempts` 1500 is about 5 s, 4000 about 30 s.
+pub(crate) fn wait_for(attempts: usize, mut done: impl FnMut() -> bool) -> bool {
+    for attempt in 0..attempts { if done() { return true; } if attempt > 1_000 { mind::time::sleep(10); } else { core::hint::spin_loop(); } }
     false
 }
 
@@ -80,7 +84,7 @@ impl Xhci {
         mmio.write64(op + 0x30, dma.physical(DCBAA));
         let mut xhci = Self { mmio, dma, op, runtime, doorbells, context, ports: (hcs1 >> 24) as usize, slots,
             command: Ring { page: COMMAND_RING, trbs: RING_TRBS, index: 0, cycle: 1 }, event: Ring { page: EVENT_RING, trbs: RING_TRBS, index: 0, cycle: 1 },
-            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS] };
+            free: u64::MAX, completion: None, done: [None; MAX_DONE], interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
         xhci.link(xhci.command);
         xhci.mmio.write64(op + 0x18, xhci.dma.physical(COMMAND_RING) | 1);
         let event = xhci.dma.physical(EVENT_RING); xhci.dma.write64(ERST, event); xhci.dma.write32(ERST + 8, RING_TRBS as u32);
@@ -170,21 +174,25 @@ impl Xhci {
         self.doorbell(0, 0);
         let mut result = None;
         wait(|| { self.pump(); result = self.completion.take(); result.is_some() });
+        self.last = result.map_or(0, |r| r.0);
         let (code, slot) = result?;
         (code == SUCCESS).then_some(slot)
     }
 
     /// TRBs on `ring` of endpoint `dci`, then its completion: Ok(residue), or Err(completion code; 0: no answer).
-    pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> {
+    pub fn transfer(&mut self, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> { self.transfer_for(4_000, slot, dci, ring, trbs) }
+
+    fn transfer_for(&mut self, attempts: usize, slot: u8, dci: u8, ring: &mut Ring, trbs: &[(u64, u32, u32)]) -> Result<u32, u32> {
         self.done.iter_mut().filter(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).for_each(|d| *d = None); // stale ones
         for &(parameter, status, control) in trbs { Self::enqueue(&mut self.dma, ring, parameter, status, control); }
         self.doorbell(slot, dci as u32);
         let mut result = None;
-        wait(|| {
+        wait_for(attempts, || {
             self.pump();
             if let Some(entry) = self.done.iter_mut().find(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)) { result = entry.take(); }
             result.is_some()
         });
+        self.last = result.map_or(0, |d| d.code);
         match result { Some(d) if matches!(d.code, SUCCESS | SHORT_PACKET) => Ok(d.residue), Some(d) => Err(d.code), None => Err(0) }
     }
 
@@ -196,8 +204,12 @@ impl Xhci {
         let data = self.dma.physical(SMALL);
         let setup_trb = (setup, 8, TYPE_SETUP << 10 | IDT | transfer_type << 16);
         let status_trb = (0, 0, TYPE_STATUS << 10 | IOC | ((!input || length == 0) as u32) << 16);
-        let residue = if length == 0 { self.transfer(slot, 1, ring, &[setup_trb, status_trb])? }
-                      else { self.transfer(slot, 1, ring, &[setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16), status_trb])? };
+        // At most 5 s (USB 2.0 9.2.6.4). A device that stalls a request (SET_IDLE, often) halts endpoint 0 on the
+        // controller, and one that does not answer leaves it running: either way it is reset to after this transfer, or
+        // every later request would wait in vain (211-DRV-0003).
+        let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16), status_trb];
+        let result = if length == 0 { self.transfer_for(1_500, slot, 1, ring, &[setup_trb, status_trb]) } else { self.transfer_for(1_500, slot, 1, ring, &trbs) };
+        let residue = result.inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?;
         // The status stage completes the transfer; a short data stage reports its residue on the data TRB only when it
         // asks (ISP), so the length is taken as asked, less any residue reported.
         Ok((length as u32).saturating_sub(residue) as usize)
@@ -206,6 +218,7 @@ impl Xhci {
     // PORTSC of root port `port` (1-based).
     fn portsc(&self, port: usize) -> usize { self.op + 0x400 + 0x10 * (port - 1) }
     pub fn connected(&self, port: usize) -> bool { self.mmio.read32(self.portsc(port)) & 1 != 0 }
+    pub fn port_status(&self, port: usize) -> u32 { self.mmio.read32(self.portsc(port)) }
     /// Clears a root port's change bits; true if the connection changed.
     pub fn acknowledge(&self, port: usize) -> bool {
         let register = self.portsc(port); let value = self.mmio.read32(register);
@@ -258,8 +271,12 @@ impl Xhci {
     pub fn evaluate(&mut self, slot: u8) -> Option<()> { let input = self.dma.physical(INPUT); self.command(input, TYPE_EVALUATE << 10 | (slot as u32) << 24).map(drop) }
 
     /// After a stall: reset the endpoint and move its dequeue pointer past what it left on the ring.
-    pub fn recover(&mut self, slot: u8, dci: u8, ring: &Ring) {
-        let _ = self.command(0, TYPE_RESET_ENDPOINT << 10 | (dci as u32) << 16 | (slot as u32) << 24);
+    pub fn recover(&mut self, slot: u8, dci: u8, ring: &Ring) { self.restart(slot, dci, ring, true) }
+
+    /// Makes endpoint `dci` run again from `ring`'s next TRB: a halted one is reset, a running one stopped first.
+    pub fn restart(&mut self, slot: u8, dci: u8, ring: &Ring, halted: bool) {
+        let kind = if halted { TYPE_RESET_ENDPOINT } else { TYPE_STOP_ENDPOINT };
+        let _ = self.command(0, kind << 10 | (dci as u32) << 16 | (slot as u32) << 24);
         let dequeue = self.dma.physical(ring.page + ring.index * TRB) | ring.cycle as u64;
         let _ = self.command(dequeue, TYPE_SET_DEQUEUE << 10 | (dci as u32) << 16 | (slot as u32) << 24);
     }
@@ -268,7 +285,7 @@ impl Xhci {
     pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16) -> bool {
         let Some(index) = self.interrupts.iter().position(Option::is_none) else { return false };
         let length = (packet as u32).min(REPORT_BYTES as u32).max(1);
-        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false });
+        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
         for _ in 0..ARMED { self.queue_report(index); }
         self.doorbell(slot, dci as u32);
         true
@@ -290,7 +307,16 @@ impl Xhci {
     fn report(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(interrupt) = self.interrupts[index].as_mut() else { return };
         let code = status >> 24;
-        if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; return; }
+        // The first report and a failure are logged: a keyboard that sends nothing shows which (211-DRV-0003).
+        if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; mind::println!("[USB] SLOT {} ENDPOINT {}: INTERRUPT TRANSFER FAILED (COMPLETION {})", interrupt.slot, interrupt.dci, code); return; }
+        if !interrupt.reported {
+            interrupt.reported = true;
+            let at = (pointer.wrapping_sub(self.dma.physical(interrupt.ring.page)) / TRB as u64) as usize;
+            let (got, buffer) = (interrupt.length.saturating_sub(status & 0xFF_FFFF) as usize, interrupt.ring.page + REPORT_AREA + (at % REPORT_BUFFERS) * REPORT_BYTES);
+            let (slot, dci, bytes) = (interrupt.slot, interrupt.dci, self.dma.bytes(buffer, got.min(8)));
+            mind::println!("[USB] SLOT {} ENDPOINT {}: FIRST REPORT ({} BYTES: {:02X?})", slot, dci, got, bytes);
+        }
+        let Some(interrupt) = self.interrupts[index].as_mut() else { return };
         let at = (pointer.wrapping_sub(self.dma.physical(interrupt.ring.page)) / TRB as u64) as usize;
         let buffer = interrupt.ring.page + REPORT_AREA + (at % REPORT_BUFFERS) * REPORT_BYTES;
         let length = interrupt.length.saturating_sub(status & 0xFF_FFFF) as usize;

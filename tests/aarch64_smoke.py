@@ -95,6 +95,12 @@ def main():
     assert "KERNEL PANIC" not in output and "KERNEL EXCEPTION" not in output, output
     # A line goes out in one write (issue 209): no service's line lands inside init's.
     assert not re.search(r"^\[INIT\] STARTED \[", output, re.M), output
+    # 350-UPD-0004: the launch record in the system log is the bootloader's serial line.
+    serial = re.search(r"BOOT: MANIFEST (\S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED)", output)
+    assert serial, output[-3000:]
+    require(output, f"[INIT] LAUNCH: MANIFEST {serial[1]}; THE VOLUME'S ROOT")
+    # 210-KRN-0029: with ACPI the firmware hands over no device tree (the devicetree suite boots without ACPI).
+    assert "DEVICE TREE" not in output, output[-3000:]
     entropy = "[KEYSTORE] DEVICE KEY READY" in output
     print(f"PASS: aarch64 boot to [INIT] READY on the PL011 console; logd, loader, keystore ({'device key from RNDR' if entropy else 'no RNDR'}) and sysmon run", flush=True)
 
@@ -107,7 +113,13 @@ def main():
         file.write(f"\n=== decoy disk first\n{output}")
     require(output, "[INIT] READY")
     assert "BOOT ERROR" not in output, output[-3000:]
-    print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+    # Each VirtIO disk has its virtio_blk instance (211-DRV-0009): vfs_server gets both and mounts the boot volume,
+    # the second disk, holding the manifest the bootloader verified (211-KRN-0012).
+    require(output, "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
+    require(output, "[VFS] MOUNTED FAT16 FROM VIRTIO AT LBA 63")
+    require(output, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+    print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first; "
+          "vfs_server mounts that volume from the second VirtIO disk", flush=True)
 
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     slots = Path(tempfile.mkdtemp(prefix="mind-slots-"))

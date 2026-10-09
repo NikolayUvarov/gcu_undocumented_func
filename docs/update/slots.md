@@ -1,8 +1,8 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 0.2 (2026-10-08): the trial in the running system (351-KRN-0014) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
-The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The updater that stages a slot, and init's confirmation, are not yet (see the end of this page).
+The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater that stages a slot and writes the confirmed record is not yet (see the end of this page).
 
 ## The layout
 
@@ -57,7 +57,7 @@ Writing a record is the updater's job (351-UPD-0007). Until it exists, `scripts/
   - not confirmed.
 
   Command: `boot_slots.py stage IMAGE B --tries 3`.
-- **Confirming:** the same slot and fallback, confirmed. Command: `boot_slots.py confirm IMAGE`. On the device, `init` will do this after a healthy start (351-KRN-0014).
+- **Confirming:** the same slot and fallback, confirmed. Command: `boot_slots.py confirm IMAGE`. On the device, `init` confirms a healthy start to the kernel (351-KRN-0014); writing this record from the running system is the updater's (351-UPD-0007, 0008).
 - `boot_slots.py show VOLUME|IMAGE` prints both records and which one counts.
 
 ## Tested
@@ -77,7 +77,7 @@ The suites with a root volume show that a volume without records boots as before
 
 ## Not provided yet
 
-- **The trial flag in `BootInfo`, init's confirmation and the deadline** (351-KRN-0014). The running system does not know it is on trial. Here the host writes the confirmation. A trial slot that hangs after the kernel starts is not restarted: a person must reset the machine, and then its tries run out.
+- **The confirmed record, written by the running system.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The confirmation does not yet reach the disk: the updater writes the record (351-UPD-0007, 0008), and in the tests the host does.
 - **The updater** that downloads a release into the other slot and writes the records (351-UPD-0007, 0008).
 - **Applications in the slots.** They stay at the root, shared, so a fallback runs the newer applications on the older kernel. Moving them needs the loader to know the booted slot (with 351-KRN-0014).
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.

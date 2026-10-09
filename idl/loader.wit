@@ -1,7 +1,7 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits.
-package mind:loader@1.5.0;
+package mind:loader@1.6.0;
 
 interface loader {
     /// Why a launch session failed.
@@ -38,4 +38,7 @@ interface loader {
     /// `rights` when the caller is not in front: nothing starts and the session stays open for `commit`. A console
     /// program starts as with `commit` (issue 160, 1.5).
     commit-in-front: func(session: u32) -> result<u64, error>;
+    /// Gives the new program a copy of the firmware variable privilege `cap` in SLOT_FIRMWARE, where a launcher lends
+    /// it with the user's consent for REQUEST_FIRMWARE (351-KRN-0027, 1.6).
+    grant-firmware: func(session: u32, cap: borrow<firmware>) -> result<_, error>;
 }

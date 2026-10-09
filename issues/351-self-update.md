@@ -47,7 +47,7 @@ Nothing of it exists (survey of 2026-10-08):
 |---|---|---|
 | [350](350-signed-boot-images.md) | `UPD` | Manifest, signing tool, verification in the bootloader, launch record (planned there) |
 | [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) | `UPD`, with `PRT` and `KRN` for the bootloader | Slots A and B, the two boot records, the trial try and the fallback in the bootloader: done, tested in QEMU ([slots.md](../docs/update/slots.md)) |
-| [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.md) | `KRN` | The trial flag in `BootInfo`, the confirmation from `init`, a deadline that restarts an unconfirmed trial, the updater's grants |
+| [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done) | `KRN` | The trial flag in `BootInfo`, the confirmation from `init`, a deadline that restarts an unconfirmed trial, the updater's grants |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | `ASR` (open) | Power cut at every step of staging and activation in QEMU; the system always comes back on a slot that verifies |
 
 **Phase 2 — fetch over HTTPS and publish.**
@@ -88,4 +88,4 @@ Apple Silicon: the same slots work behind U-Boot's UEFI. A first stage started b
 
 ## Related
 
-[350](350-signed-boot-images.md), [211-KRN-0012](211-KRN-0012-boot-volume-identity.md) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.
+[350](350-signed-boot-images.md), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.

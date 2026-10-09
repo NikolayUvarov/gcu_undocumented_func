@@ -1,0 +1,47 @@
+# 211-PRT-0002 — The local APIC in x2APIC mode — done
+
+**Type:** porting (kernel, x86-64) · **Owner:** `PRT` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1
+
+## Problem
+
+The kernel drives the local APIC through its xAPIC registers in memory. If the firmware hands over the APIC in x2APIC mode (`IA32_APIC_BASE` bit 10), the kernel stops with `x2APIC is not supported yet` (`kernel/src/arch/x86_64/cpu.rs:78`). The message goes only to COM1. Many current Intel boards leave x2APIC on, so this may be the first thing the maintainer's PC hits.
+
+## Plan
+
+- Detect the mode at boot. In x2APIC mode, use the MSR interface:
+  - ID, EOI, the timer, and the ICR as one 64-bit write with a 32-bit destination;
+  - IPIs addressed by x2APIC ID, read from the MADT's x2APIC entries (type 9) as well as the xAPIC ones (type 0).
+- Keep xAPIC mode where the firmware leaves it, as QEMU does by default.
+- The 255-CPU limit of issue 171 rises where x2APIC is on. That stays a statement only if a run with more than 255 IDs exists; otherwise the profile keeps 255.
+- Tests:
+  - the suites in QEMU with `-cpu …,+x2apic` and the firmware switching to x2APIC (OVMF does when asked);
+  - one group in `scripts/ci_local.sh` and CI.
+
+## Acceptance criteria
+
+The kernel boots and runs the `normal`, `smp` and `busy` suites with the APIC in x2APIC mode in QEMU, and in xAPIC mode as before. The profile states which mode was tested where.
+
+## Related
+
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [171-KRN-0003](../issues-done/171-KRN-0003-every-cpu.done).
+
+## Resolution
+
+- **`kernel/src/arch/x86_64/cpu.rs`.** In x2APIC mode, as the firmware leaves `IA32_APIC_BASE`:
+  - the registers go through MSR 0x800 + offset / 16;
+  - the 32-bit ID;
+  - the ICR as one 64-bit write, without the delivery wait;
+  - no level de-assert INIT;
+  - each AP is enabled and then switched to x2APIC like the boot CPU (the architecture allows no step from disabled to x2APIC);
+  - the LAPIC timer of 211-PRT-0003 goes through the same registers.
+  xAPIC mode is unchanged.
+- **`acpi.rs`.** The MADT's Processor Local x2APIC entries (type 9) are read as well as the xAPIC ones.
+- **Test.**
+  - OVMF does not switch to x2APIC by itself. So a test-only kernel feature, `x2apic-test`, switches the boot CPU before the kernel reads the mode, as such firmware would.
+  - `tests/qemu_smoke.py --kernel` runs the suites with that kernel in a copy of the image directory.
+  - The group `x86: x2APIC` (CI and `scripts/ci_local.sh`) runs `normal`, `busy`, `smp` and `isolation` with `--cpu-model max`. It passed in the local gates' x86 parts on `eaaa109` and `0640699`.
+  - Every other group runs in xAPIC mode.
+- **Profile.** `docs/profile/README.md` names both modes.
+  - The 255-CPU limit stays: no run had more than 255 APIC IDs.
+  - The mode on the MacBook Pro of 211-PRT-0004 was not recorded; the kernel does not print it.
+

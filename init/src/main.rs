@@ -78,7 +78,7 @@ struct Plan { grants: Grants, flags: usize, quota: Quota }
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS] }
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>> }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -114,6 +114,35 @@ impl Init {
     // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
     // slot of its own for it (only badged clients are minted and kept).
     fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    // The block store's own disk (300-KRN-0025): a VirtIO disk that is blank or starts with the store's superblock;
+    // looked at once, through a client of init's own, before vfs_server or the store gets any disk.
+    fn store_disk(&mut self) -> Option<&'static str> {
+        if let Some(found) = self.store { return found; }
+        let mut found = None;
+        for name in ["virtio_blk", "virtio_blk#1", "virtio_blk#2"] {
+            if !self.running(service_index(name)) { continue; }
+            let Ok(keeper) = self.keeper(name) else { continue };
+            let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { continue };
+            let first = mind::block::Device::open(Endpoint(client)).ok().and_then(|mut disk| disk.read(0, 1).ok().map(|s| (s.iter().all(|&b| b == 0), s.starts_with(b"MIND-STO"))));
+            let _ = ipc::drop_cap(client);
+            if let Some((blank, store)) = first.filter(|&(blank, store)| blank || store) {
+                mind::println!("[INIT] THE BLOCK STORE'S DISK: {} ({})", name, if blank { "BLANK" } else if store { "THE STORE'S" } else { "?" });
+                found = Some(name);
+                break;
+            }
+        }
+        self.store = Some(found);
+        found
+    }
+    // Whether vfs_server serves the boot volume: its root opens through a client of init's own.
+    fn boot_volume_mounted(&mut self) -> bool {
+        let Ok(keeper) = self.keeper("vfs_server") else { return false };
+        let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { return false };
+        let endpoint = Endpoint(client);
+        let mounted = match mind::idl::vfs::root(endpoint, "") { Ok(Ok(handle)) => { let _ = mind::idl::vfs::close(endpoint, handle); true } _ => false };
+        let _ = ipc::drop_cap(client);
+        mounted
+    }
     fn badged(&mut self, minted: &mut Minted, name: &str, badge: u16) -> Result<usize> { let keeper = self.keeper(name)?; minted.badged(keeper, CLIENT, badge) }
     // The keyboard service the shell's keymap talks to: the PS/2 driver if the machine has the controller, else the USB
     // HID driver, else the VirtIO one.
@@ -200,6 +229,13 @@ impl Init {
                 let device = platform::find_device(0x0C_03_30, 0xFF_FF_FF, 0)?; self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL); grants.copy(SLOT_MEM, self.dma(index, XHCI_DMA_BYTES)?, 0);
+                // EHCI controllers (class 0C:03:20, 211-DRV-0004): an Intel Mac's internal keyboard and trackpad sit
+                // behind them; each its BAR0 and its own DMA region.
+                for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
+                    let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
+                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => { mind::println!("[INIT] EHCI {}: REGISTERS NOT GRANTED ({:?})", nth, e); continue } };
+                    grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
+                }
             }
             // USB class drivers: a client of usb_host whose badge names the one class it may claim.
             "usb_storage" | "usb_hid" => {
@@ -210,9 +246,14 @@ impl Init {
                 if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
             }
             "virtio_blk" => {
-                // The first VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001): its BAR with the
-                // modern structures and a DMA region; requests are polled, so no interrupt line.
-                let device = [0x1042_1AF4, 0x1001_1AF4].iter().find_map(|&id| platform::find_device_id(0, 0, id, 0).ok()).ok_or(Error::NotFound)?;
+                // The instance's VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001), in PCI order:
+                // instance n drives the n-th; its BAR with the modern structures and a DMA region; requests are polled.
+                let mut disks: [usize; 8] = [usize::MAX; 8]; let mut found = 0;
+                for id in [0x1042_1AF4, 0x1001_1AF4] {
+                    for nth in 0.. { match platform::find_device_id(0, 0, id, nth) { Ok(device) if found < disks.len() => { disks[found] = device; found += 1; } _ => break } }
+                }
+                disks[..found].sort_unstable();
+                let device = *disks[..found].get(instance).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 let probe = (0..6).find_map(|bar| platform::cap(PLATFORM_DEVICE_BAR, device, bar).ok());
                 let bar = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()).ok_or(Error::NotFound)?;
@@ -230,14 +271,17 @@ impl Init {
             // The block store over a RAM disk of its own: its only block client (block::serve has one buffer for all).
             "blockstore" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "blockstore")?, ALL);
-                if !self.running(service_index("ramdisk#1")) { return Err(Error::NotFound); }
-                grants.add(SLOT_DEV0, self.badged(&mut minted, "ramdisk#1", mind::block::BADGE_WRITE)?, CLIENT);
+                // Its own disk when there is one, else the RAM disk whose contents never outlive the boot (300-KRN-0025).
+                let disk = match self.store_disk() { Some(disk) => disk, None if self.running(service_index("ramdisk#1")) => "ramdisk#1", None => return Err(Error::NotFound) };
+                grants.add(SLOT_DEV0, self.badged(&mut minted, disk, mind::block::BADGE_WRITE)?, CLIENT);
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
                 let mut slot = SLOT_BLOCK_FIRST;
-                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "nvme"] {
+                let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
+                for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
+                    if Some(driver) == store { continue; }
                     if self.running(service_index(driver)) && slot < SLOT_BLOCK_FIRST + BLOCK_DEVICES { grants.add(slot, self.badged(&mut minted, driver, mind::block::BADGE_WRITE)?, CLIENT); slot += 1; }
                 }
                 if self.running(service_index("ramdisk")) { grants.add(SLOT_RAMDISK, self.badged(&mut minted, "ramdisk", mind::block::BADGE_WRITE)?, CLIENT); }
@@ -351,14 +395,21 @@ impl Init {
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
-                if self.running(service_index("blockstore")) { grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT); }
+                if self.running(service_index("blockstore")) {
+                    grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT);
+                    // One that may only get, for programs that only read (300-KRN-0024).
+                    grants.add(SLOT_BLOCKSTORE_READ, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET)?, CLIENT);
+                }
+                // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
+                grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
                 if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
                 if self.running(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; } // lent on with the user's consent
             }
             _ => return Err(Error::NotFound),
         }
-        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg).
-        if name == "shell" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
+        // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg), and
+        // vfs_server's, which saves it on the boot disk's log partition (211-KRN-0019).
+        if name == "shell" || name == "vfs_server" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader gets all of init's root quota but what the services need (issue 171: no
         // fixed count of applications; memory limits them); the shell serves voice control on one endpoint (issue 079).
@@ -369,6 +420,9 @@ impl Init {
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
+            // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
+            // MacBook Pro's Retina panel, 211-PRT-0004).
+            "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
             _ => Quota::default(),
         };
         let plan = Plan { grants, flags, quota };
@@ -503,13 +557,42 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
+// The pause for a photo of the boot screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
+const PHOTO_PAUSE_MS: usize = 5000;
+
+// No hypervisor bit in CPUID: a real machine, not QEMU, whose tests need no pause.
+fn bare_metal() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    #[allow(unused_unsafe)]
+    { PHOTO_PAUSE_MS > 0 && unsafe { core::arch::x86_64::__cpuid(1) }.ecx >> 31 == 0 }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS] };
+    let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
     // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
     // instances of an image follow its first one.
     let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
+    {
+        let (launch, slot) = (&info.launch, &info.boot_slot);
+        let mut manifest = mind::util::FixedBuf::<16>::new();
+        for byte in &slot.manifest[..8] { let _ = core::fmt::Write::write_fmt(&mut manifest, format_args!("{:02x}", byte)); }
+        let key = core::str::from_utf8(&launch.key).unwrap_or("?").trim_end_matches('\0');
+        let name = match slot.slot { BOOT_SLOT_A => "SLOT A", BOOT_SLOT_B => "SLOT B", _ => "THE VOLUME'S ROOT" };
+        mind::println!("[INIT] LAUNCH: MANIFEST {} KEY {}{} VERIFIED, {} IMAGES CHECKED; {}{}", core::str::from_utf8(manifest.as_bytes()).unwrap_or("?"), key,
+                       if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
+    }
+    let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
+        // On a real machine, time for a photo of the kernel's lines before the compositor takes the screen (211-PRT-0004).
+        if unit_name(index) == "compositor" && bare_metal() {
+            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", PHOTO_PAUSE_MS / 1000);
+            mind::time::sleep(PHOTO_PAUSE_MS);
+        }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.programs[unit_image(index).0].len == 0 { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
         match init.start(index) {
@@ -520,7 +603,7 @@ fn main(info: &'static BootInfo) {
             }
             Ok(_) => {}
             Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", unit_name(index)); }
-            Err(error) => mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error),
+            Err(error) => { healthy = false; mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error) }
         }
     }
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
@@ -531,6 +614,14 @@ fn main(info: &'static BootInfo) {
     }
     // No process control: init ends services and applications as their ancestor, the kernel's lifecycle rule (issue 170).
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
+    // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
+    // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
+    let mounted = init.boot_volume_mounted();
+    if healthy && mounted {
+        if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
+    } else if info.boot_slot.trial != 0 {
+        mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
+    }
     match platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_RESTART, 0) {
         Ok(_) => { let _ = ipc::drop_cap(SLOT_DEV0); mind::println!("[INIT] PLATFORM PRIVILEGE DROPPED"); }
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),

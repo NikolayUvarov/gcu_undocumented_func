@@ -34,7 +34,7 @@ pub unsafe fn init(info: &BootInfo) {
     crate::cpu::write_back(info.fb_ptr as usize, bytes);
 }
 
-/// A task was given the framebuffer (the compositor): the kernel writes there again only for a fatal stop.
+/// The compositor draws its first frame over the whole screen: the kernel writes there again only for a fatal stop.
 pub fn take() { TAKEN.store(true, Relaxed); }
 
 /// A boot line, while no task holds the screen.

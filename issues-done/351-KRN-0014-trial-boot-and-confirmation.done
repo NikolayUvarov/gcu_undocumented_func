@@ -1,0 +1,61 @@
+# 351-KRN-0014 — A trial boot: the flag, the confirmation, the deadline and the updater's grants — done
+
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-08) · **Blocked by:** [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done) (the records: done), [211-KRN-0012](211-KRN-0012-boot-volume-identity.done) (the `BootInfo` change it rides on) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.3, MC-3.11, MC-11.1
+
+## Problem
+
+A slot booted on trial must be confirmed, or else replaced at the next boot. Today:
+
+- the system cannot tell whether it runs on trial;
+- nothing marks a boot as good;
+- a hang never restarts the machine, because there is no watchdog (`docs/profile/threat-model.md`: driver hangs are not detected).
+
+## Plan
+
+- **`BootInfo`** carries the slot, the trial flag and the slot's manifest hash from the bootloader. It is part of the same ABI version as 211-KRN-0012's field. The launch record of 350-UPD-0004 reads them.
+- **Confirmation.**
+  - `init` confirms after `[INIT] READY` and its health check: every boot service started, and `vfs_server` mounted the boot volume.
+  - It asks `updater`, or `vfs_server`'s update zone if `updater` is not running, to write the confirmed record.
+- **A deadline.**
+  - On a trial boot the kernel restarts the machine if no confirmation came within a time the bootloader passes (default 120 s).
+  - The confirmation is a system call only `init` may make (platform privilege).
+  - A hang before `init` runs is covered too, because the kernel's own tick enforces the deadline.
+- **Grants.** New request flags let `init` give `updater` exactly its authorities:
+  - TLS;
+  - the update zone;
+  - a network grant;
+  - restart through `init`.
+
+  These are an ABI change in `common/abi.rs` and `libmind::process`, with the version bump of 211-KRN-0012.
+- **Tests:** the trial flag reaches `init`; a confirmed trial stays; a trial that never confirms restarts at the deadline in QEMU.
+
+## Acceptance criteria
+
+In QEMU:
+
+- an unconfirmed trial restarts by itself at the deadline, and the next boot falls back (with 351-UPD-0006);
+- a confirmed one does not restart;
+- only `init` can confirm.
+
+## Resolution
+
+Done on 2026-10-08, with ABI 4 shared with [211-KRN-0012](211-KRN-0012-boot-volume-identity.done), except the updater's grants, split into [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+
+- **`BootInfo.boot_slot`:** the slot (`BOOT_SLOT_ROOT`, `_A`, `_B`), the trial flag, the deadline (`TRIAL_DEADLINE_S`, 120 s) and the SHA-256 of the manifest the bootloader verified, from `load_slots` and `load_set` in the bootloader.
+- **The deadline** (`kernel/src/trial.rs`).
+  - On a trial boot the kernel logs `SLOT B ON TRIAL: A RESTART IN 120 S UNLESS INIT CONFIRMS IT`.
+  - Its boot CPU's tick checks the deadline and resets the machine through `acpi::reboot`, so a hang before or after init ends too.
+- **The confirmation.**
+  - `BOOT_CONFIRM` (60) needs the platform privilege. `libmind::platform::confirm_boot` calls it.
+  - init calls it before it drops that privilege, when every boot service with its hardware started and the boot volume's root opens through a `vfs_server` client of its own. It logs `[INIT] TRIAL BOOT CONFIRMED` or why not.
+  - Writing the confirmed record to the disk stays with the updater ([351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md)).
+- **Tests.**
+  - `boot` suite with `--trial-kernel`, a kernel built with `trial-test` whose deadline is at most 15 s:
+    - slot B on trial from IDE is confirmed and still up after 18 s;
+    - from USB on EHCI (no driver, so no boot volume) init logs `TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED`, the kernel restarts at 15 s, and the next boot loads slot A (`SLOT B NOT CONFIRMED, NO TRIES LEFT`).
+  - `isolation` case `k`: a program's `BOOT_CONFIRM` is refused.
+- `docs/update/slots.md` (EN, RU) and the profile say what is provided.
+
+## Related
+
+[351](../issues/351-self-update.md), [350](../issues/350-signed-boot-images.md).

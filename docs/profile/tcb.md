@@ -4,7 +4,7 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 
 | Guarantee | TCB |
 |---|---|
-| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices, bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`** (no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
+| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices and its runtime variable services after it (`GetVariable`, `SetVariable`: the kernel calls them in ring 0 for `FIRMWARE_VARIABLE`, 351-KRN-0027), bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`** (no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
 | Kernel integrity | Same as above. |
 | Capability confinement of applications | Kernel; `loader` (decides which client capabilities an application gets); `init` (decides what `loader` holds). |
 | Capability confinement of services | Kernel; `init`. |
@@ -14,6 +14,7 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 | Keyboard input reaches only the focused task | Kernel; `ps2_kbd`, `virtio_input`, `usb_hid` and `shell` (all hold the input privilege and can inject arbitrary input); `usb_host` (it hands `usb_hid` the keyboard's reports). |
 | Screen shows the focused task | Kernel; `compositor` (display privilege, framebuffer). |
 | A camera is seen only by a program the user agreed to, and the camera mark shows while a stream is open (issue 158) | Kernel; `init` (gives the video gateway's only client to the shell); `shell` (asks the user, lends the client); `video_gw` (one owner a camera, heartbeats the mark); `compositor` (draws the mark). No camera driver yet: only the synthetic source was tested. |
+| The firmware's boot settings (`BootNext`, `BootOrder`, `Boot####`) change only as the user intends (351-KRN-0027) | Kernel (`FIRMWARE_VARIABLE` needs the firmware privilege named in the call); `init` (gives the privilege to the shell only); `shell` (holds it; asks the user every time before it lends it); `loader` (keeps it only in the program's `SLOT_FIRMWARE`); the firmware's variable services. Tested in QEMU with OVMF only. |
 | A board's pins change only as the user intends (issues 207, u015, u017) | Kernel; `init` (gives the control-badged `gpio` client to the shell); `shell`, `wm`, `console` (pass it on to a program that asks for `REQUEST_GPIO`); `gpio` (the badge, the pins the board reserves). Not tested on a board yet: no QEMU machine has a pin controller (issue 206). |
 
 ## Notes

@@ -8,7 +8,7 @@ pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd"
 pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
-pub const SERVICE_INSTANCES: [&str; 2] = ["virtio_net#1", "ramdisk#1"]; // ramdisk#1: the block store's disk (300-KRN-0001)
+pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
 // The largest task or endpoint quota SPAWN can delegate (16 bits): the root quota init holds (issue 171).
 pub const QUOTA_MAX: usize = 0xFFFF;
 pub const NAME_MAX: usize = 16; // task name in ps and in spawn requests
@@ -33,10 +33,36 @@ const fn channel(value: u32, mask: u32) -> u32 {
     (scaled << shift) & mask
 }
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
-// ERR_BUSY (000-KRN-0010); the kernel writes it into every task's BootInfo and libmind refuses to run a program built
-// for another one.
-pub const ABI_VERSION: u32 = 3;
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32, }
+// ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
+// BOOT_CONFIRM ends a trial. The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
+// into every task's BootInfo, and libmind refuses to run a program built for another one. Fields up to abi_version
+// keep their places across versions, so each side finds the other's version where it expects it.
+pub const ABI_VERSION: u32 = 4;
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, }
+// BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
+// variable services in the identity map (no SetVirtualAddressMap) and gives tasks 0 (ABI 4, 351-KRN-0027).
+// BootInfo.device_tree: the flattened device tree in the firmware's configuration table (a board without ACPI: U-Boot on
+// a Mac, QEMU virt with acpi=off), 0 without one; the kernel checks its header and gives tasks 0 (ABI 4, 210-KRN-0029).
+// The partition the bootloader read the system from, from the firmware's device path of its own image (211-KRN-0012):
+// kind VOLUME_MBR (signature: the disk's 32-bit signature in its first 4 bytes) or VOLUME_GPT (signature: the
+// partition's GUID); VOLUME_UNKNOWN when the firmware names no partition. start and sectors in 512-byte sectors.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct BootVolume { pub kind: u32, pub partition: u32, pub start: u64, pub sectors: u64, pub signature: [u8; 16] }
+pub const VOLUME_UNKNOWN: u32 = 0;
+pub const VOLUME_MBR: u32 = 1;
+pub const VOLUME_GPT: u32 = 2;
+// Which copy of the system runs (351-KRN-0014): BOOT_SLOT_ROOT (a volume without boot records), BOOT_SLOT_A or _B; trial
+// nonzero for a slot booted on trial, which the kernel restarts after deadline_s seconds unless init confirms it
+// (BOOT_CONFIRM); manifest: the SHA-256 of the boot manifest the bootloader verified and loaded from.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct BootSlot { pub slot: u32, pub trial: u32, pub deadline_s: u32, pub manifest: [u8; 32] }
+pub const BOOT_SLOT_ROOT: u32 = 0;
+pub const BOOT_SLOT_A: u32 = 1;
+pub const BOOT_SLOT_B: u32 = 2;
+pub const TRIAL_DEADLINE_S: u32 = 120;
+// The launch record (350-UPD-0004, MC-9.5): the signing key's identity as the verified manifest names it (16 hex
+// digits), whether it is the public test key, and how many images were checked against it; with boot_slot.manifest,
+// what the serial line's BOOT: MANIFEST line says. Evidence only: nothing grants or refuses on it.
+#[derive(Clone, Copy, Default)] #[repr(C)] pub struct LaunchRecord { pub key: [u8; 16], pub test_key: u32, pub images: u32 }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
@@ -44,6 +70,8 @@ impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, ar
 
 pub const SYSCALL_RDTSC: usize = 1;
 pub const SYSCALL_READ_KEY: usize = 2;
+// LOG: arg1 = address, arg2 = length (at most 4096) -> bytes taken. A console its reader drained within the last second
+// (an application's from its start) takes only what fits; the caller sends the rest again (ABI 4, 000-KRN-0030).
 pub const SYSCALL_LOG: usize = 3;
 pub const SYSCALL_WAIT: usize = 5;
 pub const SYSCALL_UPTIME: usize = 6;
@@ -163,6 +191,9 @@ pub const CAP_KIND_OBSERVE: usize = 14; // read-only statistics: STAT, TASK_LIST
 // A privilege held in escrow (issue 170): its holder cannot use it, only grant it at a service spawn, where the child
 // gets the privilege itself; `rights` in STAT and CAP_INFO's arg2 name the privilege's kind.
 pub const CAP_KIND_ESCROW: usize = 15;
+// Reading and writing the firmware's variables (FIRMWARE_VARIABLE): BootNext, BootOrder, Boot####; init gives it to
+// the shell, which lends it once the user agrees, and later to the updater (ABI 4, 351-KRN-0027).
+pub const CAP_KIND_FIRMWARE: usize = 16;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -230,7 +261,8 @@ pub const SLOT_SOCKET: usize = 17;
 // names for it (REQUEST_NETWORK, issue 102); in the shell, its client of the broker.
 pub const SLOT_NETWORK: usize = 18;
 pub const SLOT_NETPOLICY: usize = 19;
-// The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls.
+// The shell's client of the TLS service (idl/tls.wit, issue 103): https, tls; lent in a program's same slot for
+// REQUEST_TLS (351-KRN-0034), where `tls` runs the session over the program's own flow.
 pub const SLOT_TLS: usize = 20;
 // The shell's clients of the window broker (idl/window.wit, issue 157): a program's (lent for REQUEST_WINDOW) and the
 // manager's, with mind::window::BADGE_MANAGER (lent for REQUEST_WINDOW_MANAGER). Both go to the program's SLOT_WINDOW.
@@ -251,8 +283,14 @@ pub const SLOT_CAMERA: usize = 24;
 // A client of the block store (idl/blockstore.wit, 300-KRN-0001): the shell's (get, put and publish), which it lends
 // for REQUEST_BLOCKSTORE to the program's same slot.
 pub const SLOT_BLOCKSTORE: usize = 25;
+// The shell's block store client with the get badge alone, which it lends for REQUEST_BLOCKSTORE_READ to the program's
+// SLOT_BLOCKSTORE: a program that only reads holds a client that cannot put or publish (ABI 4, 300-KRN-0024).
+pub const SLOT_BLOCKSTORE_READ: usize = 26;
+// The firmware variable privilege (CAP_KIND_FIRMWARE): the shell's, which it lends for REQUEST_FIRMWARE to the
+// program's same slot once the user agreed (ABI 4, 351-KRN-0027).
+pub const SLOT_FIRMWARE: usize = 27;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 26;
+pub const SLOT_DYNAMIC: usize = 28;
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
@@ -313,7 +351,7 @@ pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take
 // ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
 // (the loader) names the task it starts the program for.
 pub const SPAWN_FOREGROUND: usize = 4;
-pub const SPAWN_GRANTS_MAX: usize = 24;
+pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
 pub const ARGS_OFFSET: usize = 2048;
@@ -437,6 +475,21 @@ pub const SYSCALL_DEVICE_CONFIG: usize = 54;
 // machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
 // return when it works.
 pub const SYSCALL_REBOOT: usize = 55;
+// BOOT_CONFIRM (platform privilege: init, before it drops it): the boot is good. On a trial boot the kernel no longer
+// restarts the machine at the deadline; writing the confirmed boot record is the updater's (351-UPD-0007, 0008).
+// -> 1 if the boot was on trial, 0 if not (ABI 4, 351-KRN-0014).
+pub const SYSCALL_BOOT_CONFIRM: usize = 60;
+// FIRMWARE_VARIABLE (a CAP_KIND_FIRMWARE privilege in arg1; ABI 4, 351-KRN-0027): arg2 = FIRMWARE_GET or FIRMWARE_SET,
+// msg[0] = a buffer in the caller's memory, msg[1] = its length (at most FIRMWARE_BUFFER): the GUID (16 bytes), the
+// attributes (u32), the name's length in UTF-16 units without the terminator (u16), the data's length (u32), then
+// the name (UTF-16LE) and the data. GET writes the attributes, the data's length and the data back in place and
+// returns the length; ERR_NOT_FOUND for a variable not set, or a firmware without runtime variable services;
+// ERR_INVALID with the needed length in arg2 when the data does not fit; ERR_RIGHTS when the firmware refuses a write.
+pub const SYSCALL_FIRMWARE_VARIABLE: usize = 61;
+pub const FIRMWARE_GET: usize = 0;
+pub const FIRMWARE_SET: usize = 1;
+pub const FIRMWARE_BUFFER: usize = 65536; // room for a signed dbx update (351-KRN-0028)
+pub const FIRMWARE_HEADER: usize = 26;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
@@ -462,7 +515,7 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub image_bytes: u64, pub stack_bytes: u64, pub screen_bytes: u64,
     pub quota_tasks: u16, pub used_tasks: u16, pub quota_endpoints: u16, pub used_endpoints: u16, pub band: u8, pub throttled: u8, pub focus: u8, pub reserved: u8,
     pub budget_ns: u64, pub period_ns: u64,
-    pub kernel_bytes: u64, // context, mailbox, info and exit pages, page tables, the capability table
+    pub kernel_bytes: u64, // the task record, context, mailbox, info and exit pages, page tables, the capability table: in the frame pool, charged to its payers (171-KRN-0032)
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
 // `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).

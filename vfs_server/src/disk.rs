@@ -2,6 +2,8 @@
 // sector stays in the cache until it is evicted or the volume is flushed; a flush writes the changed sectors in LBA
 // order (runs of neighbours in one write) and then asks the drive to empty its own cache.
 use crate::fat::{Sectors, SECTOR};
+use alloc::rc::Rc;
+use core::cell::RefCell;
 use mind::block::Device;
 use mind::mem::Pages;
 
@@ -85,4 +87,22 @@ impl Sectors for Disk {
 
     fn sectors(&self) -> u64 { self.device.sectors() }
     fn writable(&self) -> bool { !self.device.read_only() }
+}
+
+/// A disk that several volumes share (the boot volume and the log volume, 211-KRN-0019): one cache, one driver client.
+#[derive(Clone)]
+pub struct Shared(Rc<RefCell<Disk>>);
+
+impl Shared {
+    pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
+    pub fn kind(&self) -> usize { self.0.borrow().kind() }
+}
+
+impl Sectors for Shared {
+    fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool { self.0.borrow_mut().read(lba, out) }
+    fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool { self.0.borrow_mut().write(lba, data) }
+    fn flush(&mut self) -> bool { self.0.borrow_mut().flush() }
+    fn discard(&mut self) { self.0.borrow_mut().discard() }
+    fn sectors(&self) -> u64 { self.0.borrow().sectors() }
+    fn writable(&self) -> bool { self.0.borrow().writable() }
 }

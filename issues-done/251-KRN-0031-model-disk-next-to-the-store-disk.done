@@ -1,0 +1,44 @@
+# 251-KRN-0031 — A model disk next to the store's disk, each to its own service — done
+
+**Type:** kernel (init) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-08) · **Blocked by:** — · **Main task:** [251](../issues/251-model-cache-and-model-disk.md) · **Constitution:** MC-4.1, Appendix B.6
+
+The tools track's request "A model disk for `vfs_server`, next to the store's disk" in `issues/requests-KRN.md` (for 251, step 3).
+
+## Problem
+
+Speech models come on a FAT32 disk labelled `MIND MODELS`, which `vfs_server` mounts read-only as `models:` (251-APP-0010). On aarch64 the boot disk is VirtIO already. So a model disk and the block store's disk ([300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done)) make three VirtIO disks, and `init` has to send each to its service. Only two VirtIO block instances existed, `virtio_blk` and `virtio_blk#1`.
+
+## Plan
+
+The request proposed routing by VirtIO serial (`MIND-MODELS`, `MIND-STORE`). Routing by what the disk holds already works without serials:
+
+- `init` gives the block store a disk that is blank or holds its superblock (300-KRN-0025);
+- `vfs_server` gets every other disk and mounts, after the boot volume, the volume labelled `MIND MODELS` as `models:` (251-APP-0010).
+
+What was missing is a third VirtIO instance, and room for it in `init`'s lists.
+
+## Acceptance criteria
+
+On aarch64 and on x86 (QEMU), a model disk and a store disk attached together each reach their own service, and the boot disk still mounts as before.
+
+## Resolution
+
+Done on 2026-10-08.
+
+- **`common/abi.rs`:** `SERVICE_INSTANCES` adds `virtio_blk#2`, the third VirtIO disk in PCI order (ABI 4, not on `main` yet). Instance n drives the n-th disk, as in 211-DRV-0009.
+- **`init`:**
+  - `store_disk` looks at all three VirtIO disks;
+  - `vfs_server` gets a write client of each one that is not the store's.
+- **`idl/init.wit` 1.2:** `list` returns up to 64 services. The new instance made 33, one more than the old bound of 32. With 33, `init` could not answer `list`, so `reboot` stopped no service ("INIT DID NOT ANSWER"); the `vfs` suite found it on aarch64.
+- **Tests:** `vfs` suite, `disks_check`. It attaches a FAT32 model disk (`scripts/fat32.py`) and a blank 8 MiB store disk next to the boot disk, then checks:
+  - `init` routes the blank disk to the block store;
+  - the block store reports `SECTORS=…/16384`;
+  - `vfs_server` mounts the boot volume as before and the model disk as `models:`;
+  - `df` lists `models:`.
+  - Passed on x86 (boot disk on ATA: `virtio_blk` models, `virtio_blk#1` store) and on aarch64 (three VirtIO disks: `virtio_blk` models, `virtio_blk#1` store, `virtio_blk#2` boot). The added disks come first in PCI order there.
+- **Observed:** on aarch64 under TCG the block store takes about 40 s to format a blank 32 MiB disk at start (about 4000 polled VirtIO requests), so the check uses 8 MiB. This is the store's and the driver's speed, not routing; the drivers and storage tracks may want it.
+- The profile's evidence and bootstrap rows say so.
+
+## Related
+
+[251](../issues/251-model-cache-and-model-disk.md), [251-APP-0010](251-APP-0010-models-volume.done), [300-KRN-0025](300-KRN-0025-a-disk-for-the-block-store.done), [211-DRV-0009](211-DRV-0009-virtio-blk-every-disk.done).

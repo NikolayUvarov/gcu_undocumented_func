@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![feature(allocator_ext)] // Box::try_new_in: a task in the frame pool, refused when the pool is full (171-KRN-0032)
 
 extern crate alloc;
 
@@ -32,6 +33,7 @@ mod arch;
 use arch::{acpi, clock, context, cpu, interrupts, mmu, pcicfg, platform, port};
 use arch::serial::{init_serial, serial_write_byte};
 mod elf;
+mod firmware;
 mod frames;
 #[path = "../../bootloader/src/elf_reloc.rs"]
 mod elf_reloc;
@@ -42,6 +44,7 @@ mod pci;
 mod scheduler;
 mod screen;
 mod task_state;
+mod trial;
 mod user_heap;
 
 #[no_mangle]
@@ -92,6 +95,15 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
+        // A bootloader of another ABI fills BootInfo another way; its version is where every version keeps it (211-KRN-0012).
+        let own = if cfg!(feature = "loader-abi-test") { abi::ABI_VERSION + 1 } else { abi::ABI_VERSION };
+        if info.abi_version != own {
+            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER IS OF ABI {}, THIS KERNEL OF ABI {}. WRITE BOTH FROM ONE BUILD.\n", info.abi_version, own));
+            cpu::halt_here();
+        }
+        trial::start(&info.boot_slot);
+        firmware::init(info.efi_runtime);
+        firmware::device_tree(info.device_tree);
         frames::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len));
         cpu::prepare(info).expect("CPU state");
         scheduler::init(info).expect("Scheduler init failed");

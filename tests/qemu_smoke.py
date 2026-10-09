@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
+import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
@@ -463,7 +464,7 @@ def gibibytes(memory):
     return int(number) / (1 if unit in "Gg" and unit else 1024)
 
 
-def applications_until_memory_ends(vm):
+def applications_until_memory_ends(vm, others=0):
     """Issue 171: no fixed count of applications. Clocks, each with its screen, start until the frame pool runs out, far
     past the 32 tasks the kernel's table used to hold; the refusal is clean and the system goes on. With more than 40
     tasks, uptime and top count every one (171-APP-0002). Once they end, the frame pool is back where it was, and the
@@ -487,7 +488,12 @@ def applications_until_memory_ends(vm):
         return False
     pids = clocks(1000)
     assert len(pids) > 32, len(pids)
-    assert len(task_rows(vm)) == len(pids), (len(task_rows(vm)), len(pids))
+    # 171-KRN-0032: the frame pool, not the kernel arena, ran out: what is left is under the recovery reserve and one
+    # more clock, and each clock took little arena (its task, tables and capabilities are in the frame pool).
+    at_peak, arena = frames_free(vm), heap_used(vm) - baseline
+    assert at_peak < (48 << 20), f"{at_peak >> 20} MiB of the frame pool left at the refusal"
+    assert arena < len(pids) * 4096, f"{arena} bytes of arena for {len(pids)} clocks"
+    assert len(task_rows(vm)) == len(pids) + others, (len(task_rows(vm)), len(pids), others)  # others: programs started before
     assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the system goes on after the refusal"
     peak = len(pids)
     # 45 stay for the monitors: a hundred and more clocks drawing every second leave an emulated machine little time.
@@ -517,7 +523,7 @@ def applications_until_memory_ends(vm):
             vm.command(f"kill {pid}")
         assert settled(retained), f"arena {heap_used(vm)} (was {retained} after the first round, {baseline} before), frame pool {frames_free(vm)} (was {frames})"
         kept = f" ({retained - baseline} bytes of arena kept from the peak, not raised by a second round)"
-    print(f"PASS: {peak} clocks at once until memory ran out, a clean refusal; uptime and top see all {rows} tasks; frame pool and arena back{kept}", flush=True)
+    print(f"PASS: {peak} clocks at once until the frame pool ran out ({at_peak >> 20} MiB left, {arena // peak} bytes of arena a clock), a clean refusal; uptime and top see all {rows} tasks; frame pool and arena back{kept}", flush=True)
 
 
 def monitors_every_cpu(vm):
@@ -757,6 +763,12 @@ def normal_suite(vm):
         applications_until_memory_ends(vm)
     if memory > 4:
         ram_above_4g(vm)
+        # 171-KRN-0033: a large machine runs out at its frame pool too, not at the arena. memtest holds all but about
+        # 400 MiB (40-odd programs), then clocks start until the pool ends, as on the default machine.
+        holders = hold_frames(vm, frames_free(vm), 400)
+        applications_until_memory_ends(vm, others=len(holders))
+        for pid in holders:
+            vm.command(f"kill {pid}")
 
 
 def keys_suite(vm):
@@ -995,8 +1007,9 @@ def shell_suite(vm):
     vm.collect()
     assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
     vm.output = ""
-    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back.
-    for _ in range(6):
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Three helps push it off
+    # every screen and keep it within the 400 lines kept, with the boot log's last lines below it (211-PRT-0004).
+    for _ in range(3):
         vm.command("help")
     assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
     for _ in range(12):
@@ -1771,16 +1784,29 @@ def busy_suite(vm):
     share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
     assert 0.12 < share < 0.35, share
     require(vm.command("budget 1 0 0"), "BUDGET PID=1 0 MS PER 0 MS")
-    # Over 3 s, as with the budget. On one CPU the compositor's copy of the screen takes its share too (about a fifth
-    # under TCG; the capture dot's code in its loop once made that a third, and the loop's 0.57).
-    start_run, start = run_ms(), time.monotonic()
+    # Without a budget the loop takes all the time its CPU has that other tasks leave, over 3 s: its run time against
+    # the CPU's busy plus idle time less the other tasks' run time there. The share of the host's wall clock is not
+    # checked: under TCG a slow or busy host makes the compositor's copy of the screen and the other tasks take more
+    # of it, and the loop's share of it ranged 0.52-0.73 (requests-KRN.md, 000-KRN-0026).
+    def sample():
+        tasks, cpus = vm.command("stat tasks", raw=True), vm.command("stat cpus", raw=True)
+        rows = {int(m[1]): (m[2], int(m[3]), int(m[4])) for m in re.finditer(r"^(\d+) PARENT=\d+ (\S+) WAIT=\S+ CPU=(\d+) RUN_MS=(\d+)", tasks, re.M)}
+        return rows, {int(m[1]): int(m[2]) + int(m[3]) for m in re.finditer(r"^CPU (\d+) APIC=\d+ ONLINE=1 BUSY_MS=(\d+) IDLE_MS=(\d+)", cpus, re.M)}
+    (tasks0, cpus0), start = sample(), time.monotonic()
     time.sleep(3)
-    share = (run_ms() - start_run) / ((time.monotonic() - start) * 1000)
-    assert share > 0.6, ("no budget: the loop takes most of its CPU", share)
+    tasks1, cpus1 = sample()
+    loop = next(pid for pid, row in tasks1.items() if row[0] == "app2")
+    cpu = tasks1[loop][1]
+    others = sum(row[2] - tasks0[pid][2] for pid, row in tasks1.items() if pid != loop and pid in tasks0 and row[1] == cpu == tasks0[pid][1])
+    left = (cpus1[cpu] - cpus0[cpu]) - others
+    share = (tasks1[loop][2] - tasks0[loop][2]) / left
+    wall = (tasks1[loop][2] - tasks0[loop][2]) / ((time.monotonic() - start) * 1000)
+    assert share > 0.9, ("no budget: the loop takes the time other tasks leave on its CPU", share, left, others, wall)
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period", flush=True)
+    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
+          f"without one the loop takes {share:.2f} of the time other tasks leave its CPU ({wall:.2f} of the wall clock)", flush=True)
 
 
 def avx_expected(vm, fixture=None):
@@ -1982,16 +2008,17 @@ def recovery_reserve(vm):
 
 
 def task_memory(vm, pid, raw=False):
-    # (image + stack + screen, memory used by the task and its descendants) from `stat <pid>`.
+    # (image + stack + screen + kernel structures, memory used by the task and its descendants) from `stat <pid>`.
     details = vm.command(f"stat {pid}", raw=raw)
-    sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) ", details)
+    sizes = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) .* KERNEL=(\d+) ", details)
     used = re.search(r"MEMORY=(\d+)/\d+", details)
     assert sizes and used, details
     return sum(map(int, sizes.groups())), int(used[1])
 
 
 def memory_charged_to_spawner(vm):
-    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit."""
+    """Issue 168: a program's image, stack and screen are charged to its spawner (loader) and leave its account at exit;
+    its kernel structures too (171-KRN-0032)."""
     loader = vm.services()["loader"]
     def loader_used():
         previous = None
@@ -2023,7 +2050,7 @@ def memory_charged_to_spawner(vm):
         time.sleep(.2)
     else:
         raise AssertionError(f"loader's account {loader_used()} did not return to {before}")
-    print(f"PASS: a program's image, stack and screen ({fixed} bytes) charged to loader and returned at exit", flush=True)
+    print(f"PASS: a program's image, stack, screen and kernel structures ({fixed} bytes) charged to loader and returned at exit", flush=True)
 
 
 def memory_beyond_the_arena(vm):
@@ -2905,7 +2932,20 @@ def services_suite(vm):
     assert "SERVICES" not in output, output
     require(vm.command("list zz*"), "PROGRAMS ON DISK MATCHING zz* (0).")
     require(vm.command("list -x"), "USAGE: LIST [-L] [MASK]")
+    loader = vm.services()["loader"]
+    def used(pid):
+        return int(re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=(\d+)/", vm.command(f"stat {pid}", raw=True))[1])
+    before = used(loader)
     require(vm.command("run hello &"), "PID=4 NAME=hello BACKGROUND")
+    # 171-KRN-0032: the loader pays for what it started, the program's kernel structures too (its task, pages, page
+    # tables and capability table, in the frame pool): its use grows by exactly that sum.
+    for _ in range(20):
+        parts = re.search(r"IMAGE=(\d+) STACK=(\d+) SCREEN=(\d+) HEAP=(\d+) .* RETAINED=(\d+) KERNEL=(\d+)", vm.command("stat 4"))
+        grown = used(loader) - before
+        if grown == sum(map(int, parts.groups())):
+            break
+        time.sleep(.2)
+    assert grown == sum(map(int, parts.groups())) and int(parts[6]) > 0, (grown, parts.groups())
     # The address space of a known program (hello is clock.elf) as STAT_VMAP reports it: the layout paging.rs sets up.
     pmap = vm.command("pmap 4")
     require(pmap, "0x0000008000000000 ")
@@ -2987,6 +3027,7 @@ def services_suite(vm):
     require(vm.command(f"logs {pid}"), " tasks")
     assert "FAULT PID=" not in vm.command("faults")
     dmesg_check(vm)
+    console_flow_check(vm)
     lifecycle_check(vm)
     # help <name>: the program's text read from its file, the shell's own lines, or a service; nothing is started.
     output = vm.command("help fm")
@@ -3072,6 +3113,14 @@ def lifecycle_check(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert not re.search(fr"^{clock} clock ", vm.command("ps", raw=True), re.M)
     require(vm.command("dmesg -s init"), f"[INIT] STOPPED rtc PID={pids['rtc'] - BASE}")
+
+
+def console_flow_check(vm):
+    """000-KRN-0030: a console program that prints far more than the console's 4 KiB before the shell reads it loses
+    nothing: the kernel takes what fits while the shell drains, and the program sends the rest again."""
+    output = vm.command("cat lines.txt", raw=True)
+    lines = re.findall(r"^LINE (\d{3}) [.]+$", output, re.M)
+    assert lines == [f"{n:03}" for n in range(300)], (len(lines), output[:400], output[-400:])
 
 
 def dmesg_check(vm):
@@ -3411,9 +3460,43 @@ def vfs_suite(args):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
         fsck_volume(image, start, fs_sectors)
+        disks_check(args, image, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
           f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
+
+
+def disks_check(args, boot, temp):
+    """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
+    disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
+    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks."""
+    models, store = temp / "models-disk.img", temp / "store-disk.img"
+    (temp / "models-tree").mkdir()
+    (temp / "models-tree" / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(models), str(temp / "models-tree")], check=True, capture_output=True)
+    with store.open("wb") as f:
+        f.truncate(8 << 20)  # the store formats it at start: about 10 s on aarch64 (polled VirtIO under TCG) for 8 MiB
+    extra = ["-drive", f"if=none,id=models,format=raw,readonly=on,file={models}", "-device", "virtio-blk-pci,drive=models",
+             "-drive", f"if=none,id=store,format=raw,file={store}", "-device", "virtio-blk-pci,drive=store"]
+    vm = VM(args, boot.relative_to(ROOT).as_posix(), raw=True, extra=extra)
+    try:
+        routed = re.search(r"\[INIT\] THE BLOCK STORE'S DISK: (virtio_blk(?:#\d)?) \(BLANK\)", vm.command("dmesg -s init", raw=True))
+        assert routed, vm.log[-3000:]
+        mounted = vm.command("dmesg -s vfs_server", raw=True)
+        require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
+        require(mounted, "[VFS] THE BOOT VOLUME:")
+        require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS:")
+        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.command("df"), re.M), vm.log[-2000:]
+        for _ in range(60):
+            if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
+                break
+            time.sleep(2)
+        assert re.search(r"SECTORS=\d+/16384", vm.command("blocks stat", raw=True)), vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-disks-{args.cpus}cpu.log").write_text(vm.log)
+    print(f"PASS: disks: the boot disk on {BOOT_DRIVE}, a model disk and a blank store disk on VirtIO: the store's goes to the "
+          f"block store ({routed[1]}), the model disk to vfs_server as models:, the boot volume as before", flush=True)
 
 
 def edit_check(vm):
@@ -4951,8 +5034,9 @@ def wm_suite(vm):
 
 
 def usb_suite(vm):
-    """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port, usb_hid
-    turns their reports into keys and pointer events; devices come and go at run time, and both drivers restart."""
+    """USB keyboards and pointers (issue 164): usb_host finds a keyboard behind a hub and a tablet on a root port (and a
+    mouse plugged in later), usb_hid turns their reports into keys and pointer events; devices come and go at run time,
+    and both drivers restart."""
     names = vm.services()
     assert "usb_host" in names and "usb_hid" in names and "ps2_kbd" not in names and "virtio_input" not in names, names
     hid = vm.service_logs("usb_hid", "TABLET")
@@ -5010,6 +5094,23 @@ def usb_suite(vm):
     # The cell where the pixel is depends on the screen's size: x86's is the 1280 x 800 the clicks assume.
     require(logged(vm, start, "BUTTONS=1"), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0" if vm.arch == "x86_64" else " BUTTONS=1 WHEEL=0")
     vm.send_bytes(b"\x1b"); time.sleep(.3); vm.send("\n"); time.sleep(.3); vm.collect(); vm.output = ""
+    # A boot mouse plugged in at run time (211-DRV-0003): its layout from the descriptor in the report protocol, its
+    # first reports logged, its movement to the focused program.
+    vm.qmp("device_add", driver="usb-mouse", bus="xhci.0", port="1.3", id="mouse")
+    require(vm.service_logs("usb_hid", "MOUSE"), "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    vm.send("run keys\n")
+    vm.expect("[KEYS] READY")
+    time.sleep(.3)
+    start = len(vm.log)
+    vm.hmp("mouse_move 20 10")
+    time.sleep(.5)
+    vm.collect()
+    moves = [tuple(map(int, m)) for m in re.findall(r"\[KEYS\] pointer buttons=0 dx=(-?\d+) dy=(-?\d+) wheel=0", vm.log[start:])]
+    vm.send_bytes(b"\x1b")
+    vm.expect("EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    assert sum(m[0] for m in moves) == 20 and sum(m[1] for m in moves) == 10, moves
+    require(vm.service_logs("usb_hid", "REPORT ["), "[USB_HID] 0627:0001 REPORT [00, ")
     # Unplugged and plugged in again, on another hub port: usb_hid lets it go and takes the new one.
     vm.qmp("device_del", id="kbd")
     require(vm.service_logs("usb_hid", "DEVICE GONE"), "[USB_HID] DEVICE GONE")
@@ -5023,7 +5124,7 @@ def usb_suite(vm):
         require(vm.service_logs("init", f"{driver} RESTARTED"), f"{driver} RESTARTED")
         require(vm.service_logs("usb_hid", "KEYBOARD"), "[USB_HID] 0627:0001 KEYBOARD")
         in_order(typed(["z"]), ["char=z U+007A"])
-    print("PASS: USB keyboard behind a hub and tablet: keys, layouts, repeat, a click, hot plug, driver restarts", flush=True)
+    print("PASS: USB keyboard behind a hub, tablet and mouse: keys, layouts, repeat, a click, movement, hot plug, driver restarts", flush=True)
 
 
 def tablet_suite(vm, wav):
@@ -5208,6 +5309,150 @@ def display_suite(args, disk):
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
 
 
+def store_disk_check(args, disk):
+    """300-KRN-0025: a blank VirtIO disk is the block store's own: the store formats it, vfs_server never gets it,
+    and an object put there is found after a reboot (the snapshot overlay outlives the guest's reboot)."""
+    with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
+        blank = Path(temp) / "store.img"
+        with blank.open("wb") as f:
+            f.truncate(32 << 20)
+        extra = ("-drive", f"format=raw,file={blank},if=none,id=store", "-device", "virtio-blk-pci,drive=store")
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, extra=extra)
+        try:
+            require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (BLANK)")
+            assert "FROM VIRTIO" not in vm.command("dmesg -s vfs_server", raw=True)
+            put = re.search(r"PUT (\S+) SIZE 5000", vm.command("blocks pattern 5000", raw=True))
+            assert put, vm.output
+            require(vm.command("blocks stat", raw=True), "SECTORS=")
+            vm.send("reboot\n")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            vm.expect("MIND>", timeout=60)
+            time.sleep(1); vm.collect(); vm.output = ""
+            require(vm.command("dmesg -s init", raw=True), "[INIT] THE BLOCK STORE'S DISK: virtio_blk (THE STORE'S)")
+            stat = vm.command("blocks stat", raw=True)
+            assert re.search(r"BLOCKS=[1-9]\d* .*SECTORS=\d+/65536", stat), stat
+            require(vm.command(f"blocks check {put[1]} pattern", raw=True), "CHECKED 5000 BYTES = PATTERN")
+        finally:
+            vm.close()
+    print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+
+
+def efivar_check(args, disk):
+    """351-KRN-0027 (x86, OVMF), 351-KRN-0028 (aarch64, AAVMF): efivar reads the firmware's boot variables through the
+    kernel's UEFI runtime services, only after the user allows it; BootNext set to the firmware's own shell boots that
+    shell once, and the boot after it is MIND Core again, with BootNext consumed by the firmware."""
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True)
+
+    def efivar(line, answer):
+        vm.send(line + "\n")
+        vm.expect("ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW? (Y/N)", timeout=20)
+        vm.send_bytes(answer)
+        return vm.expect("MIND> ", timeout=20)
+
+    try:
+        require(efivar("efivar", b"n"), "efivar: the firmware's variables were not granted")
+        listing = efivar("efivar", b"y")
+        current = re.search(r"BootCurrent: ([0-9A-F]{4})", listing)
+        shell = re.search(r"Boot([0-9A-F]{4}) EFI Internal Shell", listing)
+        assert current and shell and "BootNext: not set" in listing and "BootOrder:" in listing, listing
+        require(efivar(f"efivar bootnext {shell[1]}", b"y"), f"BootNext SET TO {shell[1]}")
+        vm.send("reboot\n")
+        vm.expect("Shell>", timeout=90)
+        vm.send_bytes(b"reset\r")
+        vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+        vm.expect("MIND>", timeout=60)
+        time.sleep(1); vm.collect(); vm.output = ""
+        listing = efivar("efivar", b"y")
+        assert f"BootCurrent: {current[1]}" in listing and "BootNext: not set" in listing, listing
+    finally:
+        vm.close()
+    print(f"PASS: efivar lists the boot entries after the user allows it (refused without); BootNext {shell[1]} boots the "
+          f"firmware's shell once, then Boot{current[1]} again with BootNext consumed", flush=True)
+
+
+def devicetree_suite(args, disk):
+    """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
+    bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
+    it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
+    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen."""
+    if args.arch != "aarch64":
+        print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
+        return
+    machine = (args.machine or "virt,gic-version=3,highmem=off") + ",acpi=off"
+    vm = VM(argparse.Namespace(**{**vars(args), "machine": machine}), disk.relative_to(ROOT).as_posix(), prompt=False)
+    try:
+        deadline = time.monotonic() + 90
+        while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
+            time.sleep(0.02)
+            vm.collect()
+        vm.hmp("stop")
+        assert loader, vm.log[-3000:]
+        kernel = None
+        for _ in range(500):
+            kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
+            if kernel:
+                break
+            vm.hmp("cont")
+            time.sleep(0.01)
+            vm.hmp("stop")
+        assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
+    finally:
+        vm.close()
+    print(f"PASS: devicetree: on virt without ACPI the bootloader passes the device tree at {loader[1]} ({loader[2]} bytes) "
+          f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
+
+
+def trial_check(args, disk):
+    """351-KRN-0014, with a kernel whose trial deadline is 15 s: slot B booted on trial from a disk MIND Core drives is
+    confirmed by init and stays up past the deadline; booted from one it has no driver for (USB on EHCI, which
+    usb_host does not take without xHCI), init finds no boot volume and does not confirm, the kernel restarts the
+    machine at the deadline, and the next boot falls back to slot A."""
+    with tempfile.TemporaryDirectory(prefix="mind-trial-") as temp:
+        temp = Path(temp)
+        volume = temp / "volume"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.trial_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        image = boot_slots.Image.create(temp / "trial.img", boot_slots.layout(volume, temp / "slots", both=True))
+        shutil.rmtree(volume)
+        shutil.rmtree(temp / "slots")
+        boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+        vm = VM(args, str(image.path), raw=True, prompt=False)
+        try:
+            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=90)
+            for line in ("BOOT: SLOT B LOADED ON TRIAL", "MIND CORE KERNEL: SLOT B ON TRIAL: A RESTART IN 15 S UNLESS INIT CONFIRMS IT"):
+                require(out, line)
+            # init's lines go to the system log, not COM1; logs 1 is the shell's own command (init is PID 1).
+            require(vm.command("logs 1", raw=True), "[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED")
+            time.sleep(18)
+            vm.collect()
+            assert vm.process.poll() is None and "RESTARTING" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+        boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+        with tempfile.TemporaryDirectory(prefix="smoke-empty-", dir=ROOT / IMAGE) as empty:
+            ehci = ("-drive", f"format=raw,file={image.path},if=none,id=trial", "-device", "usb-ehci,id=ehci",
+                    "-device", "usb-storage,bus=ehci.0,drive=trial,bootindex=0")
+            vm = VM(args, Path(empty).relative_to(ROOT).as_posix(), reboot=True, extra=ehci)
+            try:
+                require(ANSI.sub("", vm.log), "BOOT: SLOT B LOADED ON TRIAL")
+                # init's verdict may come after the shell's prompt; `logs` drains, so the readings add up.
+                verdict = ""
+                for _ in range(60):
+                    verdict += vm.command("logs 1", raw=True)
+                    if "[INIT] TRIAL BOOT" in verdict:
+                        break
+                    time.sleep(.25)
+                require(verdict, "[INIT] TRIAL BOOT NOT CONFIRMED: NO BOOT VOLUME MOUNTED")
+                vm.expect("MIND CORE KERNEL: THE TRIAL BOOT WAS NOT CONFIRMED IN 15 S: RESTARTING", timeout=60)
+                out = vm.expect("BOOT: SLOT A LOADED", timeout=90)
+                require(out, "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
+            finally:
+                vm.close()
+    print("PASS: a trial boot that init confirms stays up past its deadline; one it cannot confirm (no boot volume) "
+          "restarts at the deadline, and the next boot falls back to slot A", flush=True)
+
+
 def boot_suite(args, disk):
     # The bootloader names a broken or missing boot file instead of hanging silently.
     kernel = (disk / "kernel.elf").read_bytes()
@@ -5253,11 +5498,30 @@ def boot_suite(args, disk):
           "signature each stop the bootloader before anything is loaded", flush=True)
     # 211-KRN-0012: the firmware lists another disk's EFI partition first (a Mac's internal disk); the loader reads the
     # kernel and the services from its own volume.
+    # The decoy is on IDE, served by ata, the first block driver; the boot disk on AHCI. vfs_server mounts the volume
+    # the bootloader names in BootInfo, holding the manifest it verified, not the first one it sees (211-KRN-0012).
     with tempfile.TemporaryDirectory(prefix="smoke-decoy-", dir=ROOT / IMAGE) as decoy:
         (Path(decoy) / "EFI/APPLE").mkdir(parents=True)
-        vm = VM(args, disk.relative_to(ROOT).as_posix(), decoy=Path(decoy).relative_to(ROOT).as_posix())
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=True, decoy=Path(decoy).relative_to(ROOT).as_posix())
+        try:
+            require(ANSI.sub("", vm.log), "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
+            vfs = vm.command("dmesg -s vfs_server", raw=True)
+            require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
+            require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            require(vm.command("ls"), "kernel.elf")
+        finally:
+            vm.close()
+    print("PASS: the bootloader reads its own volume when the firmware lists another disk's FAT volume first, and names it "
+          "in BootInfo: vfs_server mounts that one (AHCI), not the other disk ahead of it (IDE)", flush=True)
+    # 350-UPD-0004: the launch record the bootloader printed on COM1 is in the running system's log, the same.
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        serial = re.search(r"BOOT: MANIFEST (\S+ KEY \S+(?: \(THE TEST KEY\))? VERIFIED, \d+ IMAGES CHECKED)", ANSI.sub("", vm.log))
+        assert serial, vm.log[-3000:]
+        require(vm.command("dmesg -s init", raw=True), f"[INIT] LAUNCH: MANIFEST {serial[1]}; THE VOLUME'S ROOT")
+    finally:
         vm.close()
-    print("PASS: bootloader reads its own volume when the firmware lists another disk's FAT volume first", flush=True)
+    print("PASS: the launch record (manifest, key, images checked) in the system log matches the bootloader's serial line", flush=True)
     # 211-KRN-0016: two GPUs, the first listed without a linear framebuffer (virtio-gpu): the loader takes the GOP of a
     # console output that has one. Its progress lines name each step on the console (COM1 here, through the firmware).
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-vga", "none", "-device", "virtio-gpu-pci", "-device", "VGA"])
@@ -5326,6 +5590,28 @@ def boot_suite(args, disk):
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
         print("PASS: a kernel of another ABI version: init refuses to run (ABI MISMATCH, exit 126) and the system halts", flush=True)
+    abi = int(re.search(r"pub const ABI_VERSION: u32 = (\d+);", (ROOT / "common/abi.rs").read_text())[1])
+    if args.loader_abi_kernel:
+        # 211-KRN-0012: a kernel and a bootloader of different ABI versions: the kernel stops at once and says why.
+        target = disk / "kernel.elf"
+        target.write_bytes(Path(args.loader_abi_kernel).read_bytes())
+        sign_manifest.sign_volume(disk)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+        line = f"KERNEL STOPPED: THE BOOTLOADER IS OF ABI {abi}, THIS KERNEL OF ABI {abi + 1}. WRITE BOTH FROM ONE BUILD."
+        try:
+            out = vm.expect(line, timeout=60)
+            assert "INIT STARTED" not in out, out[-2000:]
+            screen = "\n".join(screen_text(vm))
+            assert line in screen, screen
+        finally:
+            vm.close()
+        target.write_bytes(kernel)
+        sign_manifest.sign_volume(disk)
+        print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
+    if args.trial_kernel:
+        trial_check(args, disk)
+    store_disk_check(args, disk)
+    efivar_check(args, disk)
 
 
 def main():
@@ -5346,8 +5632,10 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
+    parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
+    parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5402,6 +5690,8 @@ def main():
                 shutil.copyfile(ROOT / IMAGE / name, disk / name)
             shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
             if suite == "services":
+                # 12 KiB for cat: three times the console's queue (000-KRN-0030).
+                (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
                 # Files the kernel and ABI know nothing about: only loader will find them.
                 shutil.copyfile(disk / "clock.elf", disk / "hello.elf")
                 (disk / "extra").mkdir()
@@ -5451,6 +5741,12 @@ def main():
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)
+                continue
+            if suite == "devicetree":
+                devicetree_suite(args, disk)
+                continue
+            if suite == "efivar":  # aarch64 (AAVMF); on x86 the boot suite runs it
+                efivar_check(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt

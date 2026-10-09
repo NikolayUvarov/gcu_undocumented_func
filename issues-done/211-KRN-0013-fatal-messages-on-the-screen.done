@@ -21,7 +21,7 @@ A kernel panic, in QEMU without a serial console attached, leaves its message re
 
 ## Related
 
-[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-PRT-0002](../issues/211-PRT-0002-x2apic.md).
+[211](../issues/211-intel-pc-from-a-sata-ssd.md), [211-PRT-0002](../issues-done/211-PRT-0002-x2apic.done).
 
 ## Resolution
 

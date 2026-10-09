@@ -124,7 +124,8 @@ impl Heap {
 
     // Returns the freed region to the caller: if others still use it, the kernel holds on to it.
     pub fn free(&mut self, space: &mut Space, address: usize) -> Option<Option<Region>> {
-        let slot = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address))?;
+        // A device mapping may be named by the address of registers inside its first page (MEM_MAP, 211-KRN-0021).
+        let slot = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address || (b.device && b.address == address & !(PAGE - 1))))?;
         let block = self.blocks[slot].take().unwrap();
         space.unmap(block.address, block.size);
         if block.memory.is_some() { self.bytes -= block.size; } else { self.shared -= block.size; }
