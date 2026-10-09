@@ -467,3 +467,72 @@ fn reads_a_model_disk_made_by_fat32_py() {
     assert!(report.clean() && report.lost == 0, "{:?}", report);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// Counts the reads that reach the medium.
+struct Counted { image: Image, sectors: usize, runs: usize }
+impl Sectors for Counted {
+    fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool { self.sectors += 1; self.image.read(lba, out) }
+    fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool { self.image.write(lba, data) }
+    fn flush(&mut self) -> bool { true }
+    fn sectors(&self) -> u64 { self.image.sectors() }
+    fn writable(&self) -> bool { true }
+    fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool {
+        self.runs += 1;
+        let at = lba as usize * SECTOR;
+        match self.image.data.get(at..at + out.len()) { Some(s) => { out.copy_from_slice(s); true } None => false }
+    }
+}
+
+#[test]
+fn reads_in_runs_and_from_anywhere() {
+    // Two files written a cluster at a time in turn (their chains interleave) and one written whole: read back in
+    // pieces of every size, in order and from random offsets. In order, a file is read in runs of clusters and its
+    // FAT is walked once, not again for every piece.
+    if !tools() { return; }
+    let path = temp("runs");
+    let mut v = Volume::mount(Counted { image: mkfs(&path, 32, 40), sectors: 0, runs: 0 }).ok().unwrap();
+    let root = v.root();
+    let per = v.cluster_bytes() as usize;
+    let (mut a, mut b) = (v.create(&root, "a.bin", false, STAMP).unwrap(), v.create(&root, "b.bin", false, STAMP).unwrap());
+    let (da, db) = (content(1, per * 40 + 100), content(2, per * 37 + 9));
+    for i in 0..41 {
+        for (node, data) in [(&mut a, &da), (&mut b, &db)] {
+            let at = (i * per).min(data.len());
+            let end = ((i + 1) * per).min(data.len());
+            if at < end { v.write(node, at as u32, &data[at..end], STAMP).unwrap(); }
+        }
+    }
+    let dc = content(3, 4 << 20);
+    let mut c = v.create(&root, "c.bin", false, STAMP).unwrap();
+    v.write(&mut c, 0, &dc, STAMP).unwrap();
+    let mut seed = 99u32;
+    let mut next = || { seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345); seed >> 8 };
+    for (node, data) in [(a, &da), (b, &db), (c, &dc)] {
+        for piece in [1usize, 511, 512, per + 7, 16384, data.len()] {
+            let mut back = Vec::with_capacity(data.len());
+            let mut buffer = vec![0u8; piece];
+            loop {
+                let got = v.read(&node, back.len() as u32, &mut buffer).unwrap();
+                if got == 0 { break; }
+                back.extend_from_slice(&buffer[..got]);
+            }
+            assert!(back == *data, "pieces of {} bytes", piece);
+        }
+        for _ in 0..200 {
+            let offset = next() as usize % data.len();
+            let len = next() as usize % (3 * per);
+            let mut buffer = vec![0u8; len];
+            let got = v.read(&node, offset as u32, &mut buffer).unwrap();
+            assert_eq!(got, len.min(data.len() - offset));
+            assert!(buffer[..got] == data[offset..offset + got], "{} bytes at {}", len, offset);
+        }
+    }
+    // The contiguous file in 16 KiB pieces, as programs read: about one FAT lookup per cluster, one run per piece.
+    let (sectors, runs) = (v.disk.sectors, v.disk.runs);
+    let mut buffer = vec![0u8; 16384];
+    let mut at = 0;
+    while at < dc.len() { at += v.read(&c, at as u32, &mut buffer).unwrap(); }
+    let clusters = dc.len() / per;
+    assert!(v.disk.sectors - sectors <= clusters + 2, "{} sector reads for {} clusters", v.disk.sectors - sectors, clusters);
+    assert_eq!(v.disk.runs - runs, dc.len() / 16384);
+}

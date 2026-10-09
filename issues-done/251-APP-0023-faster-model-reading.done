@@ -1,0 +1,54 @@
+# 251-APP-0023 — Faster reading from FAT volumes: a 71 MB model in 17 s under QEMU, not 6 minutes — done
+
+**Type:** tools (services) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [251](../issues/251-model-cache-and-model-disk.md) (step 4, first part) · **Roadmap:** track G · **Constitution:** MC-12.1
+
+## Problem
+
+`sha256` read `models:` at about 0.2 MB/s under QEMU without KVM (252-APP-0011). At that rate the 71 MB dictation model ([250](../issues/250-voice-dictation.md)) takes about 6 minutes to load. Reading the code showed where the time went:
+
+- **The chain on every call.** For every read call, `vfs_server` walked the file's whole FAT chain from its first cluster to its end, and built a list of every cluster. Over a whole file that is quadratic.
+- **FAT entries a byte at a time.** It read each byte of a FAT entry through a separate cache lookup.
+- **The cache thrashed.** Past about 16 MiB, a file's FAT no longer fits the 64-sector cache, so every call fetched the FAT from the disk again.
+- **File data a sector at a time,** through the same cache, in block requests of 16 KiB although 64 KiB are allowed.
+- **Small reads.** `sha256` read in 8 KiB pieces, half of what one call to the file service can carry.
+
+## Plan
+
+- **`vfs_server/src/fat.rs`:**
+  - A read starts from where the last read in the same chain ended: a cursor of the first cluster, the cluster's index and the cluster. Any change to the FAT drops the cursor.
+  - It walks only as far as it needs.
+  - A FAT entry's bytes are read one sector at a time.
+  - Clusters that lie next to each other on the disk form a run. Its whole sectors are read with one `Sectors::read_run`.
+- **`vfs_server/src/disk.rs`:** `read_run` asks the driver for up to `BLOCK_MAX_SECTORS` (64 KiB) per request, past the cache. The cached sectors in the run are laid over the result, because they are as new as the medium's or newer, so a changed sector not yet written is read as changed. Metadata still goes through the cache with its read-ahead.
+- **`sha256`:** reads `mind::fs::CHUNK` (16 KiB) at a time.
+
+## Acceptance criteria
+
+- **`tests/fat_host.rs`:** everything that passed still passes (FAT12, 16 and 32 against `mkfs.fat`, `fsck.fat` and mtools; 300 random operations against a model; model disks from `fat32.py`).
+- **New test `reads_in_runs_and_from_anywhere`:**
+  - Files whose chains interleave, and one written whole, read back equal in pieces of 1, 511, 512, a cluster plus 7, 16384 bytes and the whole file, and from 200 random offsets each.
+  - Read in order in 16 KiB pieces, a contiguous 4 MiB file costs at most one FAT sector lookup per cluster (plus 2) and one run per piece.
+- **In QEMU (x86, by hand):** `sha256` of the converted 71 MB model on a model disk gives the host's hash.
+- **The QEMU suites that read files** (`vfs`, `edit`, `disk`) pass.
+
+## Resolution
+
+- **Code:** [`vfs_server/src/fat.rs`](../vfs_server/src/fat.rs), [`vfs_server/src/disk.rs`](../vfs_server/src/disk.rs), [`disk/src/bin/sha256.rs`](../disk/src/bin/sha256.rs), [`tests/fat_host.rs`](../tests/fat_host.rs).
+- **Measured** under QEMU without KVM, x86, 4 CPUs, on a shared host, with `sha256 models:dictate-ru.bin` (71 183 108 bytes, on a `fat32.py` disk on VirtIO):
+
+  | Version | Time | Rate | Note |
+  |---|---|---|---|
+  | Before (estimate) | about 6 min | 0.2 MB/s | from the rate measured in 252-APP-0011 |
+  | New `vfs_server`, 8 KiB reads | 27.7 s | 2.6 MB/s | |
+  | New `vfs_server`, 16 KiB reads | 17.4 s | 4.1 MB/s | the hash computed under TCG included |
+
+  The hash equals the host's.
+- **What remains:**
+  - Each 16 KiB costs one call to the file service, and each call shares a fresh buffer, about six system calls on the client. A version of `vfs.wit` that reads into a buffer lent once, as the block protocol does, is the next step.
+  - `virtio_blk` polls, and sleeps 10 ms when a request takes longer. That belongs to the drivers track.
+  - Writes still walk the whole chain.
+  - The numbers are QEMU's, not hardware's (MC-12.1).
+
+## Related
+
+[251](../issues/251-model-cache-and-model-disk.md), [251-APP-0010](251-APP-0010-models-volume.done), [250](../issues/250-voice-dictation.md), [066](066-vfs-v2-fat-write.done).

@@ -11,7 +11,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("sha256 — the SHA-256 of each file, as sha256sum prints it.\nUsage: sha256 <file>...   (e.g. sha256 models:MANIFEST.json)");
     let paths = mind::process::args_str().split_whitespace();
-    let mut buffer = [0u8; 8 * 1024];
+    let mut buffer = [0u8; mind::fs::CHUNK]; // the most one read of the file service carries
     let mut any = false;
     for path in paths {
         any = true;
