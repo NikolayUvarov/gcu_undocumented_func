@@ -2522,7 +2522,10 @@ def store_suite(vm):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
+    # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
