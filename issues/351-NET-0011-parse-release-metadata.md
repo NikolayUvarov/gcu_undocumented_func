@@ -1,6 +1,6 @@
 # 351-NET-0011 — The parser service reads release channels and boot manifests
 
-**Type:** service (network) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** — ([351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) is done) · **Main task:** [351](351-self-update.md), for [351-UPD-0007](351-UPD-0007-updater-service.md) · **Constitution:** MC-11.5, MC-11.11, Appendix B.6
+**Type:** service (network) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (built, passes on x86; aarch64 to run) · **Blocked by:** — ([351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) is done) · **Main task:** [351](351-self-update.md), for [351-UPD-0007](351-UPD-0007-updater-service.md) · **Constitution:** MC-11.5, MC-11.11, Appendix B.6
 
 ## Problem
 
@@ -10,7 +10,7 @@ The updater must not parse the channel file and the manifests it fetches (MC-11.
 
 - `idl/parse.wit` 1.1 (a minor version: the HTTP head call is unchanged, MC-12.4):
   - `channel(file: bytes<1024>)`: the channel's fields, the length of the signed line and the signature;
-  - `manifest(text: bytes<32768>, start: u32)`: the header lines, the number of files, and up to 32 file lines from `start`.
+  - `manifest(text: bytes<32768>, start: u32)`: the header lines, the number of files, and up to 8 file lines from `start`.
 - `parse` serves them with `mind::release` and logs a refusal with the client's PID, as for heads.
 - `mind::parse` gives the client side.
 
@@ -18,6 +18,15 @@ The updater must not parse the channel file and the manifests it fetches (MC-11.
 
 - Host tests: the records round-trip through the IDL.
 - On QEMU, a client gets a channel and a manifest read by the service, and a malformed one refused and logged. The updater's check (that the answer encodes to the signed bytes) is 351-UPD-0007's.
+
+## Progress (2026-10-09)
+
+- `idl/parse.wit` 1.1: `channel` and `manifest` (8 file lines a reply: a reply of 32 overflowed the shell's 64 KiB stack on QEMU, so a page is 8).
+- `parse` serves them with `mind::release` and logs `[PARSE] REFUSED A CHANNEL|MANIFEST FOR PID <n>: MALFORMED (<n> BYTES)`; its request buffer is static.
+- `mind::parse::read_channel` and `read_manifest` take the answer only if it encodes again to exactly the file (`Refused::Lied` otherwise); a lying answer is caught in `tests/release_host.rs`.
+- The shell's `release` ([351-APP-0019](../issues-done/351-APP-0019-shell-release-command.done)) is the client on the platform. `release_metadata_check` in the `net` suite passes on x86: a channel with two architectures, the boot volume's manifest (81 files over 11 replies), and a channel with a space refused and logged.
+
+Left: the same on aarch64.
 
 ## Related
 

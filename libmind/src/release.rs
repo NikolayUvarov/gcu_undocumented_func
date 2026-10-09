@@ -281,3 +281,36 @@ impl<'a> Manifest<'a> {
     /// File line `i`, in the manifest's order.
     pub fn file(&self, i: usize) -> Option<File> { (i < self.files).then(|| self.lines().nth(self.headers + i).and_then(parse_file)).flatten() }
 }
+
+/// Whether a channel's fields and signature are exactly `file`: its line in the one encoding, then `ed25519 ` and the
+/// signature in hex. What the updater checks of the parser's answer before it trusts any field.
+pub fn channel_is(file: &[u8], channel: &Channel, signed: &Signed) -> bool {
+    let mut line = [0u8; CHANNEL_MAX];
+    let Some(n) = encode_channel(channel, &mut line) else { return false };
+    let mut tail = [0u8; 8 + 128 + 1];
+    let mut o = Out { buf: &mut tail, len: 0 };
+    let encoded = o.put(b"ed25519 ").and_then(|_| o.hex(&signed.signature)).and_then(|_| o.put(b"\n")).is_some();
+    encoded && n == signed.body && file.len() == n + tail.len() && file[..n] == line[..n] && file[n..] == tail
+}
+
+/// Checks that lines given in order make exactly `text`, each with its newline: a manifest's header lines as the parser
+/// gave them, then its files encoded again.
+pub struct Rebuild<'a> { text: &'a [u8], at: usize, broken: bool }
+
+impl<'a> Rebuild<'a> {
+    pub fn new(text: &'a [u8]) -> Self { Self { text, at: 0, broken: false } }
+    /// The next line.
+    pub fn line(&mut self, line: &[u8]) -> bool {
+        let end = self.at + line.len();
+        if self.broken || self.text.get(self.at..end) != Some(line) || self.text.get(end) != Some(&b'\n') { self.broken = true; return false; }
+        self.at = end + 1;
+        true
+    }
+    /// The next file line.
+    pub fn file(&mut self, file: &File) -> bool {
+        let mut line = [0u8; FILE_LINE_MAX];
+        match encode_file(file, &mut line) { Some(n) => self.line(&line[..n]), None => { self.broken = true; false } }
+    }
+    /// Whether every line matched and the text is used up.
+    pub fn done(&self) -> bool { !self.broken && self.at == self.text.len() }
+}

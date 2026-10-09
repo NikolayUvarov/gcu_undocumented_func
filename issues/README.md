@@ -55,7 +55,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [350-UPD-0004](350-UPD-0004-launch-record.md) | The launch record: printed on the serial line at every verified boot; readable in the system once the kernel keeps it | `UPD` | P2 | [requests-KRN.md](requests-KRN.md) | track C |
 | [351](351-self-update.md) | Self-update: fetch over HTTPS or SSH, verify, stage in slot A or B, activate with last-known-good | main task, `UPD` | P1 | 350 | track C |
 | [351-UPD-0007](351-UPD-0007-updater-service.md) | The `updater` service: check, fetch, verify, stage, apply, roll back (decomposed; 0013 done) | `UPD` | P1 | 0008, 351-NET-0011, 351-KRN-0022 on `main` | track C |
-| [351-NET-0011](351-NET-0011-parse-release-metadata.md) | The parser service reads release channels and boot manifests for the updater (`idl/parse.wit` 1.1) | `NET` | P1 | — | track D |
+| [351-NET-0011](351-NET-0011-parse-release-metadata.md) | The parser service reads release channels and boot manifests for the updater (`idl/parse.wit` 1.1; built, passes on x86, aarch64 to run) | `NET` | P1 | — | track D |
 | [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) | An update zone in `vfs_server`: the inactive slot and the boot records only (built; the updater's badged client waits for `init`) | `UPD` | P1 | requests-KRN.md (the updater's VFS client badged) | track C |
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | Minimum version, expiry, key roles, rotation, compromise protocol | `UPD` | P2 | 351-UPD-0007 | track C |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | Updating the bootloader itself (two loaders, `BootNext`) | `UPD`, with `PRT` | P3 | 351-KRN-0022 (351-KRN-0027 done) | track C |

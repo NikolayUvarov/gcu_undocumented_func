@@ -5,7 +5,7 @@
 #[path = "../libmind/src/release.rs"]
 mod release;
 
-use release::{encode_channel, encode_file, expires_unix, parse_channel, Malformed, Manifest, CHANNEL_MAX, FILE_LINE_MAX};
+use release::{channel_is, encode_channel, encode_file, expires_unix, parse_channel, Malformed, Manifest, Rebuild, CHANNEL_MAX, FILE_LINE_MAX};
 use std::process::Command;
 
 // Output of a Python snippet run with scripts/ on its path.
@@ -191,4 +191,43 @@ fn other_forms_of_a_manifest_are_refused() {
     assert_eq!((manifest.headers(), encode_again(&manifest)), (6, more.clone()));
     let nine = changed("toolchain nightly-x\n", "toolchain nightly-x\na 1\nb 2\nc 3\nd 4\n");
     assert!(Manifest::parse(&nine).is_err());
+}
+
+#[test]
+fn a_parser_that_lies_is_caught() {
+    // The updater's check of the parser's answer: the fields it gives must make exactly the file.
+    let file = stable();
+    let (channel, signed) = parse_channel(&file).unwrap();
+    assert!(channel_is(&file, &channel, &signed));
+    let mut lies = vec![channel; 4];
+    lies[0].version += 1;
+    lies[1].minimum = 1;
+    lies[2].manifests[0].1[0] ^= 1;
+    lies[3].count = 1;
+    for lie in &lies { assert!(!channel_is(&file, lie, &signed), "{:?}", lie); }
+    let mut other = signed;
+    other.signature[63] ^= 1;
+    assert!(!channel_is(&file, &channel, &other));
+    other = signed;
+    other.body -= 1;
+    assert!(!channel_is(&file, &channel, &other));
+
+    let text = manifest_of(&[("a.elf", b"1"), ("b.elf", b"2"), ("c.elf", b"3")]);
+    let manifest = Manifest::parse(&text).unwrap();
+    let files: Vec<_> = (0..manifest.files()).map(|i| manifest.file(i).unwrap()).collect();
+    let rebuild = |headers: usize, files: &[release::File]| {
+        let mut r = Rebuild::new(&text);
+        for i in 0..headers { r.line(manifest.header(i).unwrap()); }
+        for f in files { r.file(f); }
+        r.done()
+    };
+    assert!(rebuild(5, &files));
+    assert!(!rebuild(4, &files), "a header line left out");
+    assert!(!rebuild(5, &files[..2]), "a file left out");
+    let mut bigger = files.clone();
+    bigger[1].size += 1;
+    assert!(!rebuild(5, &bigger), "a size changed");
+    let mut swapped = files.clone();
+    swapped.swap(0, 1);
+    assert!(!rebuild(5, &swapped), "files reordered");
 }
