@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (10 requests waiting, 2026-10-09; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-09; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -83,6 +83,34 @@ Line 438 is `awaits_reply`: `self.tasks[client]`. `Table::index` (`&self.chunks[
 ### Acceptance criteria
 
 A reply to a client whose slot's chunk was dropped fails with `ERR_PEER` to the server and does not panic.
+
+## QEMU's vvfat crashes in the aarch64 boot suite on `main` at 661147f
+
+**Recorded by:** the storage session, 2026-10-09, from its local gate and runs of `tests/aarch64_smoke.py` on plain `main`.
+
+### Problem
+
+The group "aarch64: boot and fault containment" (`tests/aarch64_smoke.py`) fails because QEMU itself stops:
+
+```
+qemu-system-aarch64: block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion `j < s->mapping.next' failed.
+```
+
+The test boots from a directory served as `fat:rw:` (vvfat), and the crash comes after `[INIT] READY`. That is when services write to the boot volume (`keystore` makes `system/keystore` and its key on a fresh disk), and in the fault cases while `rtc` restarts.
+
+Measured on this machine, with the build of each tree:
+- `main` at 661147f: fails 2 runs in 3.
+- `main` at 661147f with `vfs_server/src/fat.rs` as it was before b8b172f (175-KRN-0047…0049): fails 2 runs in 4. So it is not the FAT audit fix.
+- The same group passed in the storage branch's gate merged with `main` at a9ac93f, before the kernel branch's 32 commits came in. That was one run, so it does not prove the group was reliable before.
+
+### Plan (a proposal; the kernel track decides)
+
+- Find which of the commits between a9ac93f and 661147f changes the writes vvfat sees, or the timing.
+- Either way, QEMU documents vvfat with `rw` as unreliable. The boot suite could boot from a raw FAT image made with mtools, as `tests/boot_slots_check.py` does, and keep vvfat for read-only directories.
+
+### Acceptance criteria
+
+The group passes in repeated runs (say 5 of 5) on `main`.
 
 ## The `devicetree` suite misses the kernel's line when CI is slow
 
