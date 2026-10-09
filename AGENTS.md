@@ -70,6 +70,13 @@ The registry of tracks — current owners, branches, statuses and starting tasks
    - code that exists only for superseded hardware is marked `LEGACY:` and listed in [docs/legacy.md](docs/legacy.md);
    - generated IDL files are committed;
    - third-party code is recorded in [THIRD_PARTY.md](THIRD_PARTY.md).
+   - **proprietary files** (firmware, microcode or data whose terms forbid redistribution) never enter the repository or a disk image (the maintainer's decision, 2026-10-09):
+     - a script fetches them on the maintainer's machine from a named source and checks them by SHA-256;
+     - after the image is written, the script copies them onto the disk, under `data/firmware/` on the boot volume;
+     - a driver reads them from there and says so in the log when they are missing;
+     - [THIRD_PARTY.md](THIRD_PARTY.md) names the script and the source, not the files.
+
+     A disk that holds them is for the maintainer's own use.
 4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups. `scripts/ci_local.sh` runs every CI group on your machine.
 5. **Update the evidence.** If the change alters a statement in `docs/profile` (a guarantee, the TCB or evidence), update that statement in the same commit. Update the README and `docs/api` when behaviour or interfaces change.
 6. **Commit.** One task per commit where possible. The message says what changed and why, and cites the issue. An agent's commits carry a trailer naming the tool and, if there is one, a link to the session (for example `Co-Authored-By:` and a session URL). The person directing the agent is the author of record and accepts the [licence of contributions](CONTRIBUTING.md#licence-of-contributions).
@@ -142,6 +149,7 @@ The maintainer or the owning track reviews and merges it.
 - Claim a guarantee, profile entry or acceptance criterion that it has not tested on the stated configuration.
 - Edit the Constitution, the RFCs or the roadmap in one language only, or without a new version.
 - Add third-party code or data without its source and licence, or commit secrets, keys or credentials.
+- Put a proprietary file into the repository or into a disk image. It is copied onto the written disk instead (section 3).
 - Post vulnerability details in public. Report them as described in [SECURITY.md](SECURITY.md).
 
 ## 7. A brief to give your agent
