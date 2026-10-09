@@ -1,11 +1,11 @@
 // EL1 exception vectors and the saved state of a task (issue 201). An entry pushes a frame (x0-x30, SP_EL0, ELR,
 // SPSR, ESR, FAR and the vector) on the current stack: the CPU's exception stack for an entry from a task (TPIDR_EL1
 // holds its top), the idle stack for one from the kernel. The handler returns the frame to resume; a task's frame
-// lives in its context record. Programs are soft-float: FP/SIMD stays disabled at EL0 (CPACR_EL1), so there is no
-// FP state to save yet.
+// lives in its context record. After the frame's words come V0-V31, FPCR and FPSR (250-KRN-0056): the common entry
+// saves them and the exit loads them from the frame it resumes. The kernel itself is soft-float and never touches them.
 use core::arch::global_asm;
 
-pub const SIZE: usize = 304; // 37 words, 16-byte aligned
+pub const SIZE: usize = 832; // 37 words (304 bytes, 16-byte aligned), then 32 V registers, FPCR and FPSR
 pub fn size() -> usize { SIZE }
 const X0: usize = 0; const SP_EL0: usize = 31; const ELR: usize = 32; const SPSR: usize = 33; const ESR: usize = 34; const FAR: usize = 35; const KIND: usize = 36;
 pub const MSI_FIRST: usize = 16;
@@ -13,8 +13,10 @@ pub const MSI_FIRST: usize = 16;
 const SYNC_KERNEL: u64 = 0; const IRQ_KERNEL: u64 = 1; const SYNC_TASK: u64 = 2; const IRQ_TASK: u64 = 3;
 
 global_asm!(r#"
+    .arch_extension fp
+    .arch_extension simd
     .macro save kind
-        sub sp, sp, #304
+        sub sp, sp, #832
         stp x0, x1, [sp, #0]
         stp x2, x3, [sp, #16]
         stp x4, x5, [sp, #32]
@@ -79,9 +81,51 @@ exception_vectors:
     .balign 128
     save 4
 context_common:
+    add x0, sp, #304
+    stp q0, q1, [x0, #0]
+    stp q2, q3, [x0, #32]
+    stp q4, q5, [x0, #64]
+    stp q6, q7, [x0, #96]
+    stp q8, q9, [x0, #128]
+    stp q10, q11, [x0, #160]
+    stp q12, q13, [x0, #192]
+    stp q14, q15, [x0, #224]
+    stp q16, q17, [x0, #256]
+    stp q18, q19, [x0, #288]
+    stp q20, q21, [x0, #320]
+    stp q22, q23, [x0, #352]
+    stp q24, q25, [x0, #384]
+    stp q26, q27, [x0, #416]
+    stp q28, q29, [x0, #448]
+    stp q30, q31, [x0, #480]
+    mrs x1, fpcr
+    str x1, [x0, #512]
+    mrs x1, fpsr
+    str x1, [x0, #520]
     mov x0, sp
     bl {handler}
     mov sp, x0
+    add x0, sp, #304
+    ldp q0, q1, [x0, #0]
+    ldp q2, q3, [x0, #32]
+    ldp q4, q5, [x0, #64]
+    ldp q6, q7, [x0, #96]
+    ldp q8, q9, [x0, #128]
+    ldp q10, q11, [x0, #160]
+    ldp q12, q13, [x0, #192]
+    ldp q14, q15, [x0, #224]
+    ldp q16, q17, [x0, #256]
+    ldp q18, q19, [x0, #288]
+    ldp q20, q21, [x0, #320]
+    ldp q22, q23, [x0, #352]
+    ldp q24, q25, [x0, #384]
+    ldp q26, q27, [x0, #416]
+    ldp q28, q29, [x0, #448]
+    ldp q30, q31, [x0, #480]
+    ldr x1, [x0, #512]
+    msr fpcr, x1
+    ldr x1, [x0, #520]
+    msr fpsr, x1
     ldp x0, x1, [sp, #256]
     msr elr_el1, x0
     msr spsr_el1, x1
@@ -105,7 +149,7 @@ context_common:
     ldr x0, [sp, #264]
     tst x0, #0xf
     mrs x0, tpidr_el1
-    add x1, sp, #304
+    add x1, sp, #832
     csel x1, x0, x1, eq
     mov x0, sp
     mov sp, x1
@@ -169,8 +213,8 @@ pub unsafe fn resume_at(_sp: usize, _pc: u64) {}
 pub unsafe fn save(sp: usize, destination: usize) { core::ptr::copy(sp as *const u8, destination as *mut u8, SIZE); }
 
 pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
+    core::ptr::write_bytes(saved as *mut u8, 0, SIZE); // the vector registers and FPCR start at zero too
     let f = frame(saved);
-    f.fill(0);
     f[X0] = crate::paging::USER_INFO as u64;
     f[X0 + 1] = crate::paging::USER_MAILBOX as u64;
     f[30] = crate::paging::USER_EXIT as u64;
@@ -180,5 +224,5 @@ pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
     f[KIND] = SYNC_TASK;
 }
 
-// No per-task FP/SIMD state yet (STAT_CPUS).
-pub fn saved_state() -> u64 { 0 }
+// STAT_CPUS: 1, every task's FP/SIMD state (V0-V31, FPCR, FPSR) is saved.
+pub fn saved_state() -> u64 { 1 }

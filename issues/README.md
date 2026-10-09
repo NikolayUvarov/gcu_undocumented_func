@@ -82,6 +82,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md) | The device key sealed by a TPM instead of stored unencrypted: built in `keystore`, checked with a sketch of the kernel's half | `NET` | P2 | 351-DRV-0015 (requests-KRN: the TPM's registers) | track D |
 | [351-DRV-0015](351-DRV-0015-tpm-driver.md) | A TPM 2.0 driver: the `tpm` service (CRB, FIFO), seal and unseal for `keystore` built and host-tested; the NV counter with 351-UPD-0011 | `DRV` (open) | P2 | [requests-KRN.md](requests-KRN.md) (the TPM's registers, `PLATFORM_TPM`) | track A |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0007 (351-KRN-0014 done) | Assurance |
+| [250-KRN-0056](250-KRN-0056-fp-simd-for-programs-on-aarch64.md) | FP/SIMD for programs on aarch64: V0–V31, FPCR and FPSR saved per task (the tools track's request, for 250 and 252) | `KRN` | P2 | — | tracks A, H |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | The update threat model; fuzzing the metadata parsers | `ASR` (open) | P2 | 351-UPD-0005 | Assurance |
 | [400](400-marain-m0-m2-host-bench.md) | Marain M0–M2 on a host bench (track E, first step) | main task, `MRN` (open) | P3 | — | track E |
 | [500](500-fuzzing-abi-and-idl.md) | Fuzzing the system calls and the IDL decoders (Assurance, first step) | main task, `ASR` (open) | P2 | — | Assurance |
