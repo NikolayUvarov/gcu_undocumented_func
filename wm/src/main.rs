@@ -142,6 +142,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if needs.lifecycle { missing.push("lifecycle"); }
     if needs.log { missing.push("log"); }
     if requests & mind::process::REQUEST_NETWORK != 0 { missing.push("network"); }
+    if requests & mind::process::REQUEST_TLS != 0 { missing.push("tls"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;

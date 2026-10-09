@@ -59,3 +59,21 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## A TLS client without the device certificate (351)
+
+**Recorded by:** the tools track (APP), 2026-10-09, while doing [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done).
+
+### Problem
+
+The shell now lends its client of `tls` to a program that asks for `REQUEST_TLS` and gets a flow grant. With that client, the program may call `connect` with `client-certificate`, and so present the device certificate to a server its grant reaches. Signing in as the device is more than a program needs to fetch a file over HTTPS.
+
+### Plan (a proposal; the network track decides)
+
+- A badge on the TLS client, for example `BADGE_DEVICE_CERTIFICATE`, without which `connect` refuses `client-certificate` (`denied`).
+- The shell keeps the badged client for its own `https -c` and lends one without the badge.
+- `init`'s grant to `updater` (351-KRN-0022) carries the badge only if the update server asks for the device's certificate.
+
+### Acceptance criteria
+
+The `tls` suite: a program with the lent client gets `denied` for `client-certificate`, while the shell's `https -c` still sends it.

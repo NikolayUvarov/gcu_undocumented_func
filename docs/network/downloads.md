@@ -50,7 +50,7 @@ download FILE URL [--sha256 HEX] [--tries N]
 
   The address may be a host name (`download updates.example.org tcp 443`). The broker looks it up when it makes the grant, at the file's `resolver` line or else the stack's DNS server, and the grant keeps that address (351-NET-0003).
 
-Plain HTTP gives neither confidentiality nor authenticity. For a release, authenticity comes from its signature, which the updater checks (351-UPD-0005, 0007), not from the transport. `download` refuses `https://`: no launcher lends a program a TLS client yet. That needs a request flag, which is a kernel task (`issues/requests-KRN.md`), and the shell's lending of its client (`issues/requests-APP.md`). It is 351-NET-0002.
+Plain HTTP gives neither confidentiality nor authenticity. For a release, authenticity comes from its signature, which the updater checks (351-UPD-0005, 0007), not from the transport. `download` refuses `https://`. A program may now ask for the shell's TLS client (`REQUEST_TLS`, 351-KRN-0034), which the shell lends with a flow grant (351-APP-0015), but `download` does not use it yet. That is 351-NET-0002.
 
 ## Tested
 

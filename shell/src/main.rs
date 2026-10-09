@@ -357,6 +357,9 @@ impl Shell {
             lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
         let network_wanted = requests & mind::process::REQUEST_NETWORK != 0 && granted("network");
+        // The shell's TLS client (351-KRN-0034), only to a program that also gets a flow grant: tls runs its sessions
+        // over the program's own flow, so the policy that applies to the program applies to them (351-APP-0015).
+        let tls_wanted = network_wanted && requests & mind::process::REQUEST_TLS != 0 && mind::dev::cap_info(SLOT_TLS).0 != 0 && granted("tls");
         // `--help` only prints the program's text (mind::about!): nothing to ask the user for (211-APP-0013).
         let help = args.trim() == "--help";
         let firmware_granted = granted("firmware") && !help;
@@ -394,6 +397,9 @@ impl Shell {
                 Ok(badge) => network = badge,
                 Err(error) => { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
             }
+        }
+        if tls_wanted && network.is_some() {
+            if let Err(error) | Ok(Err(error)) = lend(SLOT_TLS, SLOT_TLS) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }
         // In front only from the console shown; refused (`rights`) when the shell is not in front: started as before.
         let committed = if front && self.active == self.shown {

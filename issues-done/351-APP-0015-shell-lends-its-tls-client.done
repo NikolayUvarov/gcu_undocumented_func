@@ -1,0 +1,40 @@
+# 351-APP-0015 — The shell lends its TLS client for `REQUEST_TLS` — done
+
+**Type:** tools (shell) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.3, MC-3.11, MC-11.6
+
+The network track's request in `requests-APP.md` (2026-10-08), for [351-NET-0002](../issues/351-NET-0002-https-for-programs.md). The kernel's part, the flag and the loader's slot, is [351-KRN-0034](351-KRN-0034-a-tls-client-for-programs.done).
+
+## Problem
+
+A program that asks for `REQUEST_TLS` should get the shell's client of the TLS service in its `SLOT_TLS`, as it gets the window broker or the pin service. `download` needs it for `https://` URLs. TLS without a flow is of no use to a program, and `tls` runs a session only over a flow the client lends it.
+
+## Plan
+
+- **`Shell::start_with`** lends `SLOT_TLS` to the program's `SLOT_TLS` only when all of these hold:
+  - the program asks for `REQUEST_TLS`;
+  - the shell holds the client;
+  - the program also got a flow grant from the policy broker;
+  - a script that starts it declares `tls`.
+- **`msh`** accepts the word `tls`.
+- **`wm`** names `tls` among what it does not hold, as it names `network`.
+
+## Acceptance criteria
+
+- **QEMU (the `tls` suite):**
+  - a copy of `clock` with `REQUEST_NETWORK | REQUEST_TLS` and a rule in `netpolicy.txt` holds an endpoint of the TLS service in slot 20;
+  - a copy with no rule gets no flow and no TLS client;
+  - a script that declares only `network` starts it without the client, and one that declares `network tls` with it.
+- **Not here:** a TLS session over a program's own grant. That is `download https://…` in [351-NET-0002](../issues/351-NET-0002-https-for-programs.md), the network track's task, which this unblocks.
+
+## Resolution
+
+- **[`shell/src/main.rs`](../shell/src/main.rs):** `tls_wanted`, and the lend after the flow grant.
+- **[`shell/src/msh.rs`](../shell/src/msh.rs):** `tls` among the words.
+- **[`wm/src/main.rs`](../wm/src/main.rs):** `tls` in the missing grants.
+- **Docs:** [`docs/msh.md`](../docs/msh.md) and [`docs/msh_RU.md`](../docs/msh_RU.md).
+- **Tests:** `tls_lending_check` in the `tls` suite of `tests/qemu_smoke.py`, which passed on x86 with 4 CPUs.
+- **A question for the network track.** A program holding the client may also ask `connect` to offer the device certificate (`client-certificate`). It then signs in to a server within its own grant as the device. Whether a lent client should be able to do that is the network track's decision. It is recorded in [requests-NET.md](../issues/requests-NET.md), "A TLS client without the device certificate".
+
+## Related
+
+[351-KRN-0034](351-KRN-0034-a-tls-client-for-programs.done), [351-NET-0002](../issues/351-NET-0002-https-for-programs.md), [094](094-shell-script-language.done), issue 103.

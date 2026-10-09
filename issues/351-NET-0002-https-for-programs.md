@@ -1,6 +1,6 @@
 # 351-NET-0002 — HTTPS for programs, and trust for the update server
 
-**Type:** network (TLS) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** [requests-APP.md](requests-APP.md) (the shell lends its TLS client; the flag and the loader's slot are done in [351-KRN-0034](../issues-done/351-KRN-0034-a-tls-client-for-programs.done)) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-9.2, Appendix B.6
+**Type:** network (TLS) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** — (the shell lends its TLS client: [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done); the flag and the loader's slot: [351-KRN-0034](../issues-done/351-KRN-0034-a-tls-client-for-programs.done)) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-9.2, Appendix B.6
 
 Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (the kernel track, for 351), by the storage session working the network track at the maintainer's request (2026-10-08).
 

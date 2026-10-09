@@ -129,8 +129,8 @@ after an error**:
 
   Without its word a command fails: `ping needs requires: network in the script`.
 - **Programs a script starts** get, of what they ask for, only what the script declared (`sysinfo`, `file`, `files`,
-  `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`);
-  they run without the rest. A program asking for `camera` or `firmware` still gets it only if the user says yes when
+  `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`,
+  `tls`); they run without the rest. `tls` lends the shell's TLS client only together with a flow grant (`network`). A program asking for `camera` or `firmware` still gets it only if the user says yes when
   the shell asks.
 - **A script from outside the boot disk** (`ram:`, a USB disk) asks once before it runs:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.

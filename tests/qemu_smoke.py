@@ -4549,6 +4549,17 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+    # Copies of clock that also ask for the network and the TLS client (351-APP-0015): tlsclock has a rule in the
+    # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
+    elf = bytearray((disk / "clock.elf").read_bytes())
+    note = elf.index(b"MINDREQ1") + 8
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072).to_bytes(4, "little")
+    for name in ("tlsclock", "tlsnone"):
+        (disk / f"{name}.elf").write_bytes(elf)
+    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
+    (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
     # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
     entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
@@ -4604,6 +4615,7 @@ def tls_suite(args, disk):
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
         assert holders == ["tls"], holders
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+        tls_lending_check(vm, servers, real["tls"])
     finally:
         vm.close()
         for server in (good, rogue, asking):
@@ -4622,6 +4634,33 @@ def tls_suite(args, disk):
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
+
+
+def tls_lending_check(vm, servers, tls):
+    """351-APP-0015: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
+    flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
+    service = {ep for ep, server in servers.items() if server == tls}
+
+    def lent(command):
+        out = vm.command(command)
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
+        caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        require(vm.command(f"kill {pid}"), "KILLED")
+        slot = re.search(r"^SLOT=20 [^\n]* EP=(\d+)", caps, re.M)
+        return out, bool(slot and int(slot[1]) in service)
+
+    out, tls_lent = lent("run tlsclock &")
+    assert tls_lent, out
+    require(vm.command("netgrants"), "GRANT ")
+    out, tls_lent = lent("run tlsnone &")
+    require(out, "NETWORK FOR tlsnone: NoPolicy")
+    assert not tls_lent, "no flow grant, no TLS client"
+    out, tls_lent = lent("msh data/notls.msh")
+    assert not tls_lent, "a script without `tls`"
+    out, tls_lent = lent("msh data/tls.msh")
+    assert tls_lent, out
+    print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
+          "grant, and to a script's program only if the script declares tls", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

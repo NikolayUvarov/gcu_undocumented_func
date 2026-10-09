@@ -128,8 +128,8 @@ print("done: {total}")
 
   Без своего слова команда не выполняется: `ping needs requires: network in the script`.
 - **Программы, запущенные сценарием,** получают из того, что просят, только объявленное сценарием (`sysinfo`, `file`,
-  `files`, `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`);
-  без остального они работают так. Программа, которая просит `camera` или `firmware`, получает их, только если
+  `files`, `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`,
+  `tls`); без остального они работают так. `tls` даёт TLS-клиент оболочки только вместе с разрешением на поток (`network`). Программа, которая просит `camera` или `firmware`, получает их, только если
   пользователь ответит «да» на вопрос оболочки.
 - **Сценарий не с загрузочного диска** (`ram:`, USB-диск) один раз спрашивает перед запуском:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.

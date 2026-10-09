@@ -63,7 +63,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | Secure Boot with our own keys; old bootloaders revoked through dbx: done and tested in QEMU (OVMF), the run on a real PC remains | `UPD`, with `PRT` | P2 | the maintainer's PC (issues-human 5) | track C |
 | [251-STO-0010](251-STO-0010-speech-models-in-the-store.md) | Speech models in the block store: a model disk imported as named, pinned objects, read back by name | `STO` | P3 | requests-KRN (a durable disk for the store) | track B |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md) | Releases as objects in the block store, the running and last-known-good ones pinned by the updater (MC-9.3) | `STO` | P3 | a durable disk for the store ([requests-KRN.md](requests-KRN.md)); 351-UPD-0007 | track B, C |
-| [351-NET-0002](351-NET-0002-https-for-programs.md) | HTTPS for programs (`download` over a `tls` session of its own grant) and trust for the update server (a pinned key or shipped roots) | `NET` | P1 | requests-APP (the shell lends its TLS client; 351-KRN-0034 done) | track D |
+| [351-NET-0002](351-NET-0002-https-for-programs.md) | HTTPS for programs (`download` over a `tls` session of its own grant) and trust for the update server (a pinned key or shipped roots) | `NET` | P1 | — (351-KRN-0034 and 351-APP-0015 done) | track D |
 | [351-NET-0004](351-NET-0004-ssh-client.md) | An SSH client: curve25519, ssh-ed25519, a pinned host key, SFTP reads | `NET` | P3 | 351-NET-0005 | track D |
 | [351-NET-0005](351-NET-0005-persistent-device-key.md) | The device key kept across boots, sealed; a purpose for SSH login | `NET` | P3 | — | track D |
 | [351-ASR-0005](351-ASR-0005-power-loss-during-update.md) | Power loss at every step of an update, in QEMU | `ASR` (open) | P1 | 351-UPD-0007 (351-KRN-0014 done) | Assurance |
@@ -84,7 +84,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [600-APL-0012](600-APL-0012-aarch64-suites-on-a-mac.md) | The aarch64 suites on a Mac under TCG and HVF (accelerator, firmware, no `/proc`); evidence for the HVF configuration | `APL` (open) | P3 | a person with a Mac; the test harness (`KRN`) | track H |
 | [650](650-building-on-the-target.md) | Building on the target: a read-only git client, builds through a server, then a POSIX layer, Rust and self-hosting (long-term) | main task, `DEV` (proposed) | P3 | the track's confirmation; by stage: 501, `NET`'s SSH client, `KRN` features | — (proposed track) |
 
-Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-APP.md](requests-APP.md) (the shell lending its TLS client); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550).
+Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md) (none waiting); [requests-NET.md](requests-NET.md) (several network interfaces, an 802.11 station with WPA2-PSK, for 550; a TLS client without the device certificate, for 351).
 
 
 ## Finished tasks (`issues-done/`)
@@ -220,6 +220,7 @@ Requests that wait for a track to number them: [requests-KRN.md](requests-KRN.md
 | [000-APP-0012](../issues-done/000-APP-0012-clocks-read-the-rtc-once-a-minute.done) | `clock` and `dzen-clock` read the RTC once a minute and count the seconds between (`mind::wallclock`); `sysmon` reads endpoints once a second (the kernel track's request) | done (2026-10-09) |
 | [211-APP-0013](../issues-done/211-APP-0013-log-volume-and-efivar-in-the-tools.done) | `log:` in the shell's help, `fm`, `df` and `fsck`; `efivar` in the tools guide; scripts may declare `firmware` and `blockstore`; `--help` asks for no privilege | done (2026-10-09) |
 | [211-APP-0014](../issues-done/211-APP-0014-wm-full-screen-and-window-list.done) | `wm`: Alt+F gives the window in front the whole screen without its frame or the bars, and its frame back; Alt+L lists the windows with their PIDs and states | done (2026-10-09) |
+| [351-APP-0015](../issues-done/351-APP-0015-shell-lends-its-tls-client.done) | The shell lends its TLS client for `REQUEST_TLS`, only with a flow grant and, in a script, `requires: tls` (requested by NET for 351-NET-0002) | done (2026-10-09) |
 | [100](../issues-done/100-virtio-net-driver.done) | `virtio_net`: network card driver in ring 3 | done (2026-10-04) |
 | [101](../issues-done/101-network-stack.done) | Network stack `netstack` (DHCP, ICMP, DNS, UDP, TCP) | done (2026-10-04) |
 | [104](../issues-done/104-virtio-modern-msix.done) | Modern VirtIO interface and MSI-X interrupts | done (2026-10-04) |
