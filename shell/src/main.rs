@@ -360,6 +360,8 @@ impl Shell {
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
         let network_wanted = requests & mind::process::REQUEST_NETWORK != 0 && granted("network");
         let firmware_granted = granted("firmware");
+        // The TLS service's client (351-APP-0017), lent only with a flow grant: without a flow it reaches nothing.
+        let tls = network_wanted && requests & mind::process::REQUEST_TLS != 0 && mind::dev::cap_info(SLOT_TLS).0 != 0 && granted("tls");
         // The camera only when the user agrees, asked every time (MC-11.4, issue 158); a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera")
             && msh::ask(self, &alloc::format!("{} ASKS FOR THE CAMERA. ALLOW?", name.to_ascii_uppercase()));
@@ -394,6 +396,9 @@ impl Shell {
                 Ok(badge) => network = badge,
                 Err(error) => { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
             }
+        }
+        if tls && network.is_some() {
+            if let Ok(Err(error)) | Err(error) = lend(SLOT_TLS, SLOT_TLS) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }
         // In front only from the console shown; refused (`rights`) when the shell is not in front: started as before.
         let committed = if front && self.active == self.shown {
