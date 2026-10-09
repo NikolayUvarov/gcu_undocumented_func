@@ -63,7 +63,7 @@ jobs:
             args: --suites netbench
             tap: true
           - name: services, storage, audio
-            args: --suites services,ahci,audio,tts,listen
+            args: --suites services,ahci,audio,tts,listen,hda
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools

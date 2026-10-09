@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-// LEGACY: AC97 is the only audio device driven so far (docs/legacy.md).
-// audio_gw: ring 3 audio gateway. AC97 driver: playback DMA ring of 32 buffers, capture ring of 16 (microphone);
-// interrupts arrive as IPC messages on the service endpoint, client PCM comes through their shared buffers.
+// audio_gw: ring 3 audio gateway. Intel High Definition Audio (551-DRV-0010, hda.rs) or, LEGACY, AC97 (QEMU's old card,
+// docs/legacy.md): playback DMA ring of 32 buffers, capture ring of 16 (microphone); interrupts arrive as IPC messages
+// on the service endpoint, client PCM comes through their shared buffers.
 // Extension point for TTS: a speech synthesizer is an ordinary client feeding PCM to `play` (idl/audio.wit).
 use mind::abi::*;
 use mind::dev::{Irq, Ports};
@@ -11,6 +11,8 @@ use mind::idl::audio;
 use mind::ipc::Endpoint;
 use mind::sys::Error;
 use mind::mem::{self, Mapping};
+
+mod hda;
 
 const RECEIVED_CAP: usize = 9;
 const BUFFERS: usize = 32;
@@ -174,6 +176,25 @@ impl Ac97 {
     fn interrupt(&mut self) { self.clear_status(); self.interrupts += 1; }
 }
 
+// The device behind the gateway: HDA when init granted memory-mapped registers, AC97 when it granted ports.
+enum Device { Ac97(Ac97), Hda(hda::Hda) }
+impl Device {
+    fn open() -> Option<Self> {
+        if mind::dev::cap_info(SLOT_DEV0).0 == CAP_KIND_MMIO { return hda::Hda::init(SLOT_DEV0, SLOT_MEM).map(Device::Hda); }
+        Ac97::init().map(Device::Ac97)
+    }
+    fn free(&mut self) -> usize { match self { Device::Ac97(d) => d.free(), Device::Hda(d) => d.free() } }
+    fn active(&self) -> bool { matches!(self, Device::Hda(d) if d.active()) }
+    fn play(&mut self, pcm: &[u8]) -> usize { match self { Device::Ac97(d) => d.play(pcm), Device::Hda(d) => d.play(pcm) } }
+    fn tone(&mut self, hz: usize, ms: usize) -> usize { match self { Device::Ac97(d) => d.tone(hz, ms), Device::Hda(d) => d.tone(hz, ms, sine) } }
+    fn reset(&mut self) { match self { Device::Ac97(d) => d.reset(), Device::Hda(d) => d.reset() } }
+    fn record_start(&mut self) -> bool { match self { Device::Ac97(d) => d.record_start(), Device::Hda(d) => d.record_start() } }
+    fn record_stop(&mut self) { match self { Device::Ac97(d) => d.record_stop(), Device::Hda(d) => d.record_stop() } }
+    fn record_read(&mut self, out: &mut [u8]) -> (usize, bool) { match self { Device::Ac97(d) => d.record_read(out), Device::Hda(d) => d.record_read(out) } }
+    fn clear_status(&mut self) { match self { Device::Ac97(d) => d.clear_status(), Device::Hda(d) => d.clear_status() } }
+    fn interrupt(&mut self) -> usize { match self { Device::Ac97(d) => { d.interrupt(); d.interrupts } Device::Hda(d) => { d.interrupt(); d.interrupts } } }
+}
+
 // Clients waiting for ring space: saved reply capability and the number of free buffers needed.
 const WAITERS: usize = 8;
 // While a client waits, the ring is also looked at this often: an interrupt lost to a burst of completions (a host
@@ -181,8 +202,8 @@ const WAITERS: usize = 8;
 const POLL_MS: u32 = 20;
 
 // Answers deferred `wait` calls whose space is now free (or all of them on stop).
-fn release(device: &Option<Ac97>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
-    let free = device.as_ref().map_or(BUFFERS - 1, |d| d.free());
+fn release(device: &mut Option<Device>, waiters: &mut [Option<(Call, u8)>; WAITERS], all: bool) {
+    let free = device.as_mut().map_or(BUFFERS - 1, |d| d.free());
     for waiter in waiters.iter_mut() {
         if waiter.as_ref().is_some_and(|(_, want)| all || free >= *want as usize) { let (call, _) = waiter.take().unwrap(); let _ = audio::reply_wait(call, Ok(free as u32)); }
     }
@@ -190,35 +211,40 @@ fn release(device: &Option<Ac97>, waiters: &mut [Option<(Call, u8)>; WAITERS], a
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut device = Ac97::init();
+    let mut device = Device::open();
     let irq = Irq(SLOT_IRQ);
     let mut waiters: [Option<(Call, u8)>; WAITERS] = [const { None }; WAITERS];
     let mut overflows = 0u32;
     let mut owner: Option<u64> = None; // the task that owns the microphone capture
     match &device {
-        Some(_) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
-        None => mind::println!("[AUDIO] NO AC97 DEVICE; GATEWAY ANSWERS WITHOUT OUTPUT"),
+        Some(Device::Ac97(_)) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
+        Some(Device::Hda(d)) => {
+            let line = irq.bind(Endpoint::SERVICE).is_ok();
+            mind::println!("[AUDIO] HDA READY: {}; {} HZ STEREO S16, {} DMA BUFFERS, {}", d.summary(), AUDIO_RATE, BUFFERS, if line { "INTERRUPTS" } else { "POLLED" });
+        }
+        None => mind::println!("[AUDIO] NO AUDIO DEVICE (HDA OR AC97); GATEWAY ANSWERS WITHOUT OUTPUT"),
     }
     loop {
-        let waiting = waiters.iter().any(Option::is_some);
+        // A running HDA stream is looked at while it runs, so the buffers it played are cleared before it loops.
+        let waiting = waiters.iter().any(Option::is_some) || device.as_ref().is_some_and(Device::active);
         let request = match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if waiting { POLL_MS } else { 0 }) {
             Ok(request) => request,
             Err(Error::Other(ERR_TIMEOUT)) => {
                 // No interrupt for a while: do what it would have done, and unmask the line again.
                 if let Some(device) = device.as_mut() { device.clear_status(); }
                 let _ = irq.ack();
-                release(&device, &mut waiters, false);
+                release(&mut device, &mut waiters, false);
                 continue;
             }
             Err(_) => continue,
         };
         if request.irq.is_some() {
             if let Some(device) = device.as_mut() {
-                device.interrupt();
-                if device.interrupts % 64 == 1 { mind::println!("[AUDIO] IRQ COUNT {}", device.interrupts); }
+                let count = device.interrupt();
+                if count % 64 == 1 { mind::println!("[AUDIO] IRQ COUNT {}", count); }
             }
             let _ = irq.ack();
-            release(&device, &mut waiters, false); // buffers finished playing: wake waiting clients
+            release(&mut device, &mut waiters, false); // buffers finished playing: wake waiting clients
             continue;
         }
         // idl/audio.wit. PCM and capture travel in the client's lent buffer, mapped only for the call.
@@ -233,7 +259,7 @@ fn main(_info: &'static BootInfo) {
             (audio::Request::Overflows, _) => audio::reply_overflows(call, overflows),
             (audio::Request::Wait { buffers }, d) => {
                 let want = (buffers as usize).clamp(1, BUFFERS - 1) as u8;
-                let free = d.as_ref().map_or(BUFFERS - 1, |d| d.free());
+                let free = d.map_or(BUFFERS - 1, |d| d.free());
                 if free >= want as usize { audio::reply_wait(call, Ok(free as u32)) } else {
                     // Parked until the playback interrupt frees enough buffers.
                     let mut call = call;
@@ -250,7 +276,7 @@ fn main(_info: &'static BootInfo) {
             (audio::Request::Play { .. }, None) => audio::reply_play(call, Err(Error::NotFound)),
             (audio::Request::RecordRead { .. }, None) => audio::reply_record_read(call, Err(Error::NotFound)),
             (audio::Request::Tone { hz, ms }, Some(d)) => audio::reply_tone(call, Ok(d.tone(hz as usize, ms as usize) as u32)),
-            (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&device, &mut waiters, true); replied }
+            (audio::Request::Stop, Some(d)) => { d.reset(); let replied = audio::reply_stop(call, Ok(())); release(&mut device, &mut waiters, true); replied }
             (audio::Request::RecordStart, Some(_)) if foreign => audio::reply_record_start(call, Err(Error::Other(ERR_BUSY))),
             (audio::Request::RecordStop, Some(_)) if foreign => audio::reply_record_stop(call, Err(Error::Other(ERR_BUSY))),
             (audio::Request::RecordRead { .. }, Some(_)) if foreign => audio::reply_record_read(call, Err(Error::Other(ERR_BUSY))),

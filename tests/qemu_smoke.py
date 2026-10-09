@@ -59,7 +59,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97"):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
@@ -105,7 +105,8 @@ class VM:
              *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
-             *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
+             *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}",
+                *(["-device", "intel-hda", "-device", "hda-duplex,audiodev=snd0"] if audio_card == "HDA" else ["-device", "AC97,audiodev=snd0"])] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         self.queue = queue.Queue()
@@ -601,7 +602,6 @@ def ram_above_4g(vm):
     print(f"PASS: {frames >> 20} MiB in the frame pool, {high >> 20} MiB of it above 4 GiB; a 144 MiB heap from the highest range written and read back", flush=True)
 
 
-def normal_suite(vm):
 def hardware_report_check(vm):
     """174-KRN-0038: init writes the kernel's hardware report at boot; without a log volume to ram:hardware.txt."""
     for _ in range(60):
@@ -616,6 +616,7 @@ def hardware_report_check(vm):
         require(head, line)
 
 
+def normal_suite(vm):
     # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
     assert "gpio" not in vm.services()
     if vm.arch == "aarch64":
@@ -625,8 +626,8 @@ def hardware_report_check(vm):
         tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",
                          ANSI.sub("", vm.log).replace("\r", ""))
         assert tick and ("pit=off" not in (getattr(vm.args, "machine", None) or "")) == ("NOT COUNTING" not in tick[0]), vm.log[-3000:]
-    baseline = heap_used(vm)
     hardware_report_check(vm)
+    baseline = heap_used(vm)
     require(vm.command("list"), "clock")
     require(vm.command("run clock &"), "PID=1 NAME=clock BACKGROUND")
     require(vm.command("run clock &"), "PID=2 NAME=clock BACKGROUND")
@@ -3976,6 +3977,52 @@ def speech_wav(phrases=SPEECH):
     return header + b"data" + struct.pack("<I", len(pcm)) + pcm, starts
 
 
+def hda_suite(args):
+    """551-DRV-0010: Intel HD Audio in audio_gw. QEMU's intel-hda with a duplex codec (a line out and a line in): the
+    gateway finds the paths, beep's tones reach the wav backend through the output stream, and listen records a second
+    from the input stream (the "none" backend feeds silence at the real rate)."""
+    import wave
+    with tempfile.TemporaryDirectory(prefix="mind-hda-") as temp:
+        wav = Path(temp) / "hda.wav"
+        vm = VM(args, IMAGE, audio=str(wav), audio_card="HDA")
+        try:
+            ready = vm.service_logs("audio_gw", "[AUDIO] HDA READY")
+            found = re.search(r"\[AUDIO\] HDA READY: CODEC 0 ([0-9A-F]{4}):([0-9A-F]{4}) REVISION [0-9A-F]{8}; OUT PIN (0X[0-9A-F]+) \(LINE\) <- DAC (0X[0-9A-F]+); IN PIN (0X[0-9A-F]+) \(LINE\) -> ADC (0X[0-9A-F]+); 48000 HZ STEREO S16, 32 DMA BUFFERS, (INTERRUPTS|POLLED)", ready.upper())
+            assert found, ready
+            require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
+            output = ""
+            for _ in range(60):
+                output += vm.command("logs 1")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DEVICE=true RATE=48000")
+            time.sleep(1.5)
+        finally:
+            vm.close()
+        with wave.open(str(wav)) as audio:
+            frames, rate = audio.readframes(audio.getnframes()), audio.getframerate()
+        left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+        loud = [i for i, sample in enumerate(left) if sample]
+        assert loud, "HDA produced no audio"
+        beep_demo_tones(left, rate, loud[0])
+        vm = VM(args, IMAGE, audio="none", audio_card="HDA")
+        try:
+            require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
+            log = ""
+            for _ in range(60):
+                log += vm.command("logs 1")
+                if "[LISTEN] DONE" in log:
+                    break
+                time.sleep(.25)
+            require(log, "[LISTEN] RECORDED 48000 FRAMES (1000 MS)")
+            require(log, "[LISTEN] PLAYED BACK")
+        finally:
+            vm.close()
+    print(f"PASS: Intel HD Audio: codec {found[1]}:{found[2]}, line out {found[3]} <- DAC {found[4]}, line in {found[5]} -> ADC {found[6]} ({found[7].lower()}); "
+          "beep's tones through the output stream, a second recorded from the input stream", flush=True)
+
+
 def listen_suite(vm, starts):
     # The network card the launchers add shares the sound card's interrupt line: both drivers hear it (issue 159);
     # audio_gw would also play without interrupts, looking at the ring while a client waits (096).
@@ -5622,7 +5669,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5667,6 +5714,9 @@ def main():
             continue
         if suite == "updater":
             updater_suite(args, args.updater_elf)
+            continue
+        if suite == "hda":
+            hda_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)

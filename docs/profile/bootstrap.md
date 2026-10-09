@@ -27,7 +27,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `blockstore` | server endpoint; a write-badged client in slot 2 of its own disk, a VirtIO disk that is blank or holds its superblock (which `vfs_server` never gets, 300-KRN-0025), else of `ramdisk#1` |
 | `vfs_server` | server endpoint, write-badged client endpoints of the running block drivers (`virtio_blk`, `#1`, `#2`: the first three VirtIO disks in PCI order, but not the store's) and of `ramdisk`, an `rtc` client (slot 6), `logd` with the read badge (slot 12: it saves each boot's system log on the log partition, 211-KRN-0019) |
 | `loader` | server endpoint, client endpoints of `rtc`, `vfs_server`, `audio_gw`, `tts`, spawn privilege |
-| `audio_gw` | server endpoint; if an AC97 is present: its two port BARs, its IRQ, 132 KiB DMA |
+| `audio_gw` | server endpoint; if an Intel HD Audio controller is present (class 04:03): its BAR0, its IRQ line where it has one below 16 (else the gateway polls), 204 KiB DMA (551-DRV-0010); else if an AC97 is present: its two port BARs, its IRQ, 200 KiB DMA |
 | `tts` | server endpoint, client endpoint of `audio_gw` |
 | `virtio_net`, `virtio_net#1` | server endpoint (one per instance: the first and the second VirtIO card in PCI order, issue 105); if a VirtIO network card (1AF4:1041 or 1000) is present: the memory BAR holding its modern configuration structures and an MSI-X vector (the IRQ line if MSI-X cannot be set up), or for a legacy-only card its I/O BAR0 and IRQ line; 160 KiB DMA |
 | `netstack` | server endpoint, a client of `virtio_net` (slot 2) and of `virtio_net#1` (slot 3) |

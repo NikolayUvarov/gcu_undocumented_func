@@ -34,6 +34,7 @@ const NVME_DMA_BYTES: usize = 128 * 1024; // queues, identify page, PRP list and
 const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 512 * 1024; // rings, contexts, scratchpad, a 64 KiB data buffer and a pool of pages (usb_host)
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
+const HDA_DMA_BYTES: usize = (32 + 16 + 3) * 4096; // the same rings, two buffer lists, CORB and RIRB (551-DRV-0010)
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
@@ -331,8 +332,18 @@ impl Init {
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
+                // Intel HD Audio (class 04:03, 551-DRV-0010): BAR0's registers, its line where it has one below 16 (else
+                // the gateway polls) and a DMA region. Every PC has it; it wins over AC97.
+                if let Ok(device) = platform::find_device(0x04_03_00, 0xFF_FF_00, 0) {
+                    self.devices[index] = Some(device);
+                    if let Ok(bar) = Self::bar(&mut minted, device, 0, CAP_KIND_MMIO) {
+                        grants.add(SLOT_DEV0, bar, 0);
+                        if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
+                        grants.copy(SLOT_MEM, self.dma(index, HDA_DMA_BYTES)?, 0);
+                    }
+                }
                 // LEGACY: AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
-                if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
+                else if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
                     self.devices[index] = Some(device);
                     let devices = (|| -> Result<[usize; 3]> { Ok([Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, Self::bar(&mut minted, device, 1, CAP_KIND_PORTS)?, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?]) })();
                     if let Ok([mixer, bus_master, irq]) = devices {
@@ -684,6 +695,8 @@ fn main(info: &'static BootInfo) {
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
     // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
+    // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
+    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     let mounted = init.boot_volume_mounted();
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
@@ -695,8 +708,6 @@ fn main(info: &'static BootInfo) {
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
     }
     mind::println!("[INIT] READY");
-    // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
-    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
     // init's endpoint to.
     loop {
