@@ -1,6 +1,6 @@
 # 351-KRN-0028 — UEFI variables on aarch64, and authenticated writes for dbx
 
-**Type:** kernel · **Owner:** `KRN`, with `PRT` (aarch64) · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-9.6
+**Type:** kernel · **Owner:** `KRN`, with `PRT` (aarch64) · **Priority:** P3 · **Status:** in progress (aarch64 done 2026-10-09; dbx open) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-9.6
 
 Split from [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done), which gave x86 `FIRMWARE_VARIABLE` for `BootNext`, `BootOrder` and `Boot####`.
 
@@ -22,6 +22,20 @@ Split from [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done), whic
 
 - On aarch64 QEMU with AAVMF, `efivar` lists the boot entries and `BootNext` boots another entry once.
 - In OVMF with our keys, a `dbx` append signed with our KEK through `FIRMWARE_VARIABLE` stops the revoked bootloader at the next boot, and an unsigned one is refused.
+
+## Progress
+
+**2026-10-09: aarch64 done.**
+
+- `kernel/src/firmware.rs` takes the runtime services table on aarch64 too. AAVMF's runtime code and data are already in the kernel's identity map as normal memory executable at EL1, and its flash as device memory, so nothing new is mapped.
+- For the call the kernel allows FP/SIMD at EL1 (`CPACR_EL1.FPEN = 01`) and traps it again after. Programs are soft-float, so the firmware has no task state to clobber there.
+- **Test:** the `efivar` suite runs on aarch64 (CI group "programs, shell and four CPUs"):
+  - refused without consent;
+  - with consent it lists AAVMF's entries (`Boot0006 EFI Internal Shell`);
+  - `BootNext` to the shell boots it once, then MIND Core again with `BootNext` gone.
+- The aarch64 profile names the variable services in its TCB.
+
+Remaining: authenticated writes for `dbx` (larger requests, and a test in OVMF's Secure Boot build).
 
 ## Related
 

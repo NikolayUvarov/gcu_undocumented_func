@@ -48,7 +48,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [211-KRN-0021](211-KRN-0021-registers-inside-a-page.md) | Device registers that start inside a page (Apple's 1 KiB EHCI BARs) are mapped with that page; other devices there go to no other driver; EHCI start failures logged (in progress) | `KRN` | P1 | — | track H |
 | [351-KRN-0022](351-KRN-0022-updater-grants.md) | The updater's authorities: request flags and init's grants (TLS, the update zone, the network, a restart, the firmware variables) | `KRN` | P2 | 351-UPD-0007 | track C |
 | [171-KRN-0033](171-KRN-0033-six-gib-until-the-pool-ends.md) | Spawning until the frame pool ends on a 6 GiB machine: a test with a cheap program (split from 171-KRN-0032) | `KRN` | P3 | — | track A |
-| [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.md) | UEFI variables on aarch64 (AAVMF), and authenticated writes for `dbx` updates | `KRN`, with `PRT` | P3 | — | track C |
+| [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.md) | UEFI variables on aarch64 (AAVMF: done), and authenticated writes for `dbx` updates (open) | `KRN`, with `PRT` | P3 | — | track C |
 | [000-KRN-0020](000-KRN-0020-parallel-build.md) | The build runs its crates in parallel, one job per processor, each with its own log; failed ones are named with their errors (in progress) | `KRN` | P2 | — | track A |
 | [212](212-disk-tools.md) | Disk tools on the target: list partitions, a service for raw disk changes, MBR/GPT, FAT formatting, mounting (plan) | main task, `PRT` with `KRN`, `APP` | P3 | — (211-KRN-0012 done) | track H |
 | [211-DRV-0002](211-DRV-0002-ahci-every-port.md) | `ahci`: every port with a disk and every controller | `DRV` (open) | P2 | — (211-KRN-0012 done) | track A |

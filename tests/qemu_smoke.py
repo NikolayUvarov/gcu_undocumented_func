@@ -5174,9 +5174,9 @@ def store_disk_check(args, disk):
 
 
 def efivar_check(args, disk):
-    """351-KRN-0027: efivar reads the firmware's boot variables through the kernel's UEFI runtime services, only after
-    the user allows it; BootNext set to the firmware's own shell boots that shell once, and the boot after it is MIND
-    Core again, with BootNext consumed by the firmware."""
+    """351-KRN-0027 (x86, OVMF), 351-KRN-0028 (aarch64, AAVMF): efivar reads the firmware's boot variables through the
+    kernel's UEFI runtime services, only after the user allows it; BootNext set to the firmware's own shell boots that
+    shell once, and the boot after it is MIND Core again, with BootNext consumed by the firmware."""
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True)
 
     def efivar(line, answer):
@@ -5471,7 +5471,7 @@ def main():
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5580,6 +5580,9 @@ def main():
                 continue
             if suite == "devicetree":
                 devicetree_suite(args, disk)
+                continue
+            if suite == "efivar":  # aarch64 (AAVMF); on x86 the boot suite runs it
+                efivar_check(args, disk)
                 continue
             wav = Path(tempfile.gettempdir()) / f"mind-core-{suite}.wav" if suite in ("audio", "tts", "tablet") else "none" if suite == "listen" else None
             # The listen suite also has the launchers' network card: on QEMU's i440FX it shares the sound card's interrupt

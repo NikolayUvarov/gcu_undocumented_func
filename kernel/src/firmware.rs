@@ -16,9 +16,9 @@ pub const BUFFER_TOO_SMALL: usize = ERROR | 5;
 type GetVariable = unsafe extern "efiapi" fn(*const u16, *const [u8; 16], *mut u32, *mut usize, *mut u8) -> usize;
 type SetVariable = unsafe extern "efiapi" fn(*const u16, *const [u8; 16], u32, usize, *const u8) -> usize;
 
-/// The runtime services table the bootloader passed, if it is one; aarch64 does not call it yet.
+/// The runtime services table the bootloader passed, if it is one.
 pub fn init(table: u64) {
-    if table == 0 || !cfg!(target_arch = "x86_64") || table >= crate::mmu::IDENTITY_END { return; }
+    if table == 0 || table >= crate::mmu::IDENTITY_END { return; }
     if unsafe { core::ptr::read_volatile(table as *const u64) } == SIGNATURE { RUNTIME.store(table, Ordering::Release); }
 }
 
@@ -34,7 +34,12 @@ fn call<T>(body: impl FnOnce() -> T) -> T {
     while BUSY.swap(true, Ordering::Acquire) { core::hint::spin_loop(); }
     #[cfg(target_arch = "x86_64")]
     unsafe { let mxcsr: u32 = 0x1F80; core::arch::asm!("fninit", "ldmxcsr [{}]", in(reg) &mxcsr); }
+    // aarch64: FP/SIMD allowed at EL1 for the call (CPACR_EL1.FPEN = 01), trapped again after; tasks hold no FP state.
+    #[cfg(target_arch = "aarch64")]
+    unsafe { core::arch::asm!("msr cpacr_el1, {}", "isb", in(reg) 1u64 << 20); }
     let result = body();
+    #[cfg(target_arch = "aarch64")]
+    unsafe { core::arch::asm!("msr cpacr_el1, {}", "isb", in(reg) 0u64); }
     BUSY.store(false, Ordering::Release);
     result
 }
