@@ -47,6 +47,7 @@ pub mod sha256;
 pub mod stat;
 pub mod sys;
 pub mod time;
+pub mod wallclock;
 pub mod tts;
 pub mod tui;
 pub mod usb;

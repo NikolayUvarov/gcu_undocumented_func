@@ -155,7 +155,9 @@ impl Disk for Mem {
     }
     fn writable(&mut self, path: &str) -> bool { Self::allowed(path) && self.file(path).is_some() }
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
+        if path.starts_with("models:") { return None; } // no model disk
         Some(if path.starts_with("ram:") { VolumeInfo { label: "MIND RAM".into(), fat_bits: 16, bytes: RAM, free: self.space.get() } }
+             else if path.starts_with("log:") { VolumeInfo { label: "MIND LOG".into(), fat_bits: 16, bytes: 16 << 20, free: 15 << 20 } }
              else { VolumeInfo { label: "MINDTEST".into(), fat_bits: 16, bytes: 60 << 20, free: 50 << 20 } })
     }
     fn flush(&mut self, _path: &str) { self.flushes += 1; }
@@ -364,6 +366,8 @@ fn quick_view_info_find_and_menu() {
     fm.key(alt_f(1), &mut disk);
     let screen = draw(&mut fm, 100, 30);
     assert!(screen_has(&screen, "A: boot disk MINDTEST") && screen_has(&screen, "ram: RAM disk MIND RAM FAT16: 64 KiB, 64 KiB free"), "{:#?}", screen);
+    // log: where it is mounted; models: not, without a model disk (211-APP-0013).
+    assert!(screen_has(&screen, "log: boot logs MIND LOG") && !screen_has(&screen, "models:"), "{:#?}", screen);
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.panels[0].path, "");
     // A missing directory leaves the panel as it is, with the error shown.
@@ -751,7 +755,7 @@ fn copy_move_mkdir_delete() {
     fm.key(f(7), &mut disk);
     typed(&mut fm, &mut disk, "system");
     fm.key(code(KEY_ENTER), &mut disk);
-    assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram: and data/ are writable)"));
+    assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram:, log: and data/ are writable)"));
     fm.key(f(7), &mut disk);
     typed(&mut fm, &mut disk, "data/inbox");
     fm.key(code(KEY_ENTER), &mut disk);

@@ -61,6 +61,7 @@ Priority: **P0** — requested, or needed by a requested tool; **P1** — next; 
 | `keymap` | Keyboard layout (English, Russian) and the switch key | Input settings | P2 |
 | `screenshot` | Save the screen as BMP | Display read right from `compositor`, a file handle | P2 |
 | `record` | Record the screen as AVI (Motion JPEG) | The shell's `compositor` client (`REQUEST_DISPLAY`), the user's files | P2 |
+| `efivar` | The firmware's boot variables: `BootCurrent`, `BootNext`, `BootOrder` and the `Boot####` entries; sets `BootNext` (`bootnext <hex>`, `delete bootnext`) and `BootOrder` (`bootorder <hex>,…`), and appends a signed signature list to `db`, `dbx` or `KEK` (`append`). On x86 and aarch64 (351-KRN-0027, 351-KRN-0028) | The firmware privilege (`REQUEST_FIRMWARE`), which the shell lends only after the user agrees, asked every time; a script must declare `firmware`, and the user is still asked | P2 — done by the kernel track |
 
 ### 2.4 Shell as the launcher
 

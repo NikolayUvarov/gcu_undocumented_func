@@ -24,7 +24,7 @@ impl Failure {
         match self {
             Failure::Exists => String::from("it already exists"),
             Failure::NotEmpty => String::from("the directory is not empty"),
-            Failure::Denied => String::from("denied (only ram: and data/ are writable)"),
+            Failure::Denied => String::from("denied (only ram:, log: and data/ are writable)"),
             Failure::NoSpace => String::from("the disk is full"),
             Failure::NotFound => String::from("not found"),
             Failure::Other(text) => text.clone(),
@@ -41,7 +41,7 @@ pub struct VolumeInfo { pub label: String, pub fat_bits: u8, pub bytes: u64, pub
 
 /// The file system as the file manager sees it. Paths name a volume first (`ram:docs`) or are on the boot disk.
 pub trait Disk {
-    /// Entries of a directory (`""` and `"ram:"` are the roots).
+    /// Entries of a directory (`""`, `"ram:"`, `"log:"` and `"models:"` are the roots).
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
@@ -119,7 +119,8 @@ const OUTPUT_MAX: usize = 200; // lines of the command line's output kept
 const FIND_MAX: usize = 500;
 /// Bytes copied per step of a job (the screen and the keys are served between steps).
 pub const SLICE: usize = 64 * 1024;
-const VOLUMES: [(&str, &str); 2] = [("", "A: boot disk"), ("ram:", "ram: RAM disk")];
+// The boot disk and ram: always; log: and models: where they are mounted (211-APP-0013).
+const VOLUMES: [(&str, &str); 4] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models")];
 
 const MENU_TITLES: [&str; 5] = ["Left", "Files", "Commands", "Options", "Right"];
 const PANEL_ITEMS: [&str; 11] = ["Brief", "Full", "Info", "Quick view", "Name", "Extension", "Time", "Size", "Reverse order", "Reread  Ctrl+R", "Volume  Alt+F1/F2"];
@@ -150,7 +151,7 @@ const HELP: [&str; 19] = [
     "Mouse: click — cursor; double click — open; right click — mark;",
     "  wheel — move the cursor; a click on the key bar presses that key",
     "Programs started here open a window of their own under wm; on a screen they run in the",
-    "background (FG <pid> in the shell). Only ram: and data/ on the boot disk are writable.",
+    "background (FG <pid> in the shell). Only ram:, log: and data/ on the boot disk are writable.",
     "",
 ];
 
@@ -285,7 +286,7 @@ pub enum Dialog {
     Mask { select: bool, line: InputLine },
     Find { line: InputLine },
     Results { mask: String, found: Vec<String>, list: ListState },
-    Volume { side: usize, list: ListState, lines: Vec<String> },
+    Volume { side: usize, list: ListState, lines: Vec<String>, paths: Vec<&'static str> },
     /// F5 / F6: where to.
     Target { op: Op, line: InputLine, sources: Vec<(String, Entry)> },
     Mkdir { line: InputLine },
@@ -425,8 +426,8 @@ impl<'b> Fm<'b> {
         };
         let read_only = !new && !disk.writable(path);
         let mut editor = Editor::new(text, path, read_only);
-        // Where the user may write: ram: and data/ on the boot disk.
-        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: (Shift+F2 saves a copy there)")); }
+        // Where the user may write: ram:, log: and data/ on the boot disk.
+        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: and log: (Shift+F2 saves a copy)")); }
         self.editor = Some(editor);
     }
 
@@ -518,9 +519,10 @@ impl<'b> Fm<'b> {
     }
 
     fn volume_dialog(&mut self, side: usize, disk: &mut dyn Disk) {
-        let lines = VOLUMES.iter().map(|(path, _)| Self::volume_line(path, disk)).collect();
-        let selected = VOLUMES.iter().position(|(v, _)| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
-        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines });
+        let paths: Vec<&'static str> = VOLUMES.iter().enumerate().filter(|(i, (path, _))| *i < 2 || disk.volume(path).is_some()).map(|(_, (path, _))| *path).collect();
+        let lines = paths.iter().map(|path| Self::volume_line(path, disk)).collect();
+        let selected = paths.iter().position(|v| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
+        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines, paths });
     }
 
     // F5 / F6: asks where to, with the other panel's directory filled in.
@@ -806,10 +808,10 @@ impl<'b> Fm<'b> {
                     }
                 }
             }
-            Dialog::Volume { side, list, .. } => {
-                if list.key(key, VOLUMES.len(), VOLUMES.len()) { true } else {
+            Dialog::Volume { side, list, paths, .. } => {
+                if list.key(key, paths.len(), paths.len()) { true } else {
                     match key.code() {
-                        Code::Enter => { let (side, path) = (*side, VOLUMES[list.selected.min(VOLUMES.len() - 1)].0); self.load(side, path, None, disk); false }
+                        Code::Enter => { let (side, path) = (*side, paths[list.selected.min(paths.len() - 1)]); self.load(side, path, None, disk); false }
                         Code::Esc | Code::F(10) => false,
                         _ => true,
                     }
@@ -1164,7 +1166,7 @@ impl<'b> Fm<'b> {
                 grid.text(inner.x + 1, inner.bottom() - 1, "Enter: go to   F3: view   Esc: close", theme.dialog);
                 None
             }
-            Some(Dialog::Volume { side, list, lines }) => {
+            Some(Dialog::Volume { side, list, lines, .. }) => {
                 let inner = dialog(grid, if *side == 0 { "Left panel volume" } else { "Right panel volume" }, 64, lines.len() + 4, theme);
                 for (i, volume) in lines.iter().enumerate() {
                     grid.text_padded(inner.x + 1, inner.y + 1 + i, volume, inner.w.saturating_sub(2), if i == list.selected { theme.selected } else { theme.dialog });

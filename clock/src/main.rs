@@ -22,6 +22,7 @@ fn main(info: &'static BootInfo) {
     // its frame when that changes (issue u009).
     let info = mind::windowed::pixels(info, 320, 176, "clock");
     let Some(mut screen) = Screen::new(info) else { return };
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     let mut previous_time = None;
     let (mut x, mut y, mut scale) = face(&screen, previous_time);
     loop {
@@ -30,7 +31,7 @@ fn main(info: &'static BootInfo) {
             if let Some(new) = Screen::new(&resized) { screen = new; (x, y, scale) = face(&screen, previous_time); }
             mind::println!("[CLOCK] SIZE {}X{}", resized.width, resized.height);
         }
-        let Some(seconds) = mind::rtc::seconds_since_midnight() else { continue };
+        let Some(seconds) = rtc.seconds_since_midnight() else { continue };
         if previous_time != Some(seconds) {
             let text = time_text(seconds);
             screen.text(x, y, &text, scale, FOREGROUND, Some(BACKGROUND));
@@ -43,12 +44,13 @@ fn main(info: &'static BootInfo) {
 // Started as a console program (`clock --line`, issue u016): the time and the date on one line, written again with \r
 // every second; Esc in the shell or `console` stops it.
 fn line_face() {
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     let mut previous = None;
     loop {
-        if let Some(seconds) = mind::rtc::seconds_since_midnight().filter(|&s| previous != Some(s)) {
+        if let Some(seconds) = rtc.seconds_since_midnight().filter(|&s| previous != Some(s)) {
             let mut line = util::FixedBuf::<40>::new();
             let _ = write!(line, "\r{}", core::str::from_utf8(&time_text(seconds)).unwrap_or(""));
-            if let Some((year, month, day)) = mind::rtc::date() { let _ = write!(line, "  {:04}-{:02}-{:02}", year, month, day); }
+            if let Some((year, month, day)) = rtc.date() { let _ = write!(line, "  {:04}-{:02}-{:02}", year, month, day); }
             mind::process::log(line.as_bytes());
             previous = Some(seconds);
         }
@@ -70,10 +72,11 @@ fn face(screen: &Screen, seconds: Option<usize>) -> (usize, usize, usize) {
 // The text face (issue 089): drawn again at every change of the second, and at once when a window is resized.
 fn text_face(info: &'static BootInfo) {
     let Some(mut term) = Terminal::open(info, "clock") else { return };
+    let mut rtc = mind::rtc::Clock::new(); // the RTC read once a minute (000-APP-0012)
     let mut previous = None;
     loop {
-        let seconds = mind::rtc::seconds_since_midnight();
-        let date = mind::rtc::date().map(|(y, m, d)| (y, m, d, mind::rtc::days_from_civil(y, m, d).map_or(0, text::weekday)));
+        let seconds = rtc.seconds_since_midnight();
+        let date = rtc.date().map(|(y, m, d)| (y, m, d, mind::rtc::days_from_civil(y, m, d).map_or(0, text::weekday)));
         { let mut grid = term.grid(); text::draw(&mut grid, seconds, date); }
         term.present();
         if seconds.is_some() && seconds != previous {

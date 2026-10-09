@@ -15,7 +15,8 @@ use mind::script::{parse, Host, Interpreter, Script, Value};
 
 /// The functions the shell gives scripts (beside mind::script's).
 pub const HOST_FUNCTIONS: [&str; 8] = ["capture", "ps", "services", "files", "glob", "log", "sleep", "now"];
-const WORDS: [&str; 13] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera"];
+// `firmware` and `camera` still ask the user each time; declaring them only lets a program ask (211-APP-0013).
+const WORDS: [&str; 15] = ["console", "sysinfo", "file", "files", "lifecycle", "log", "network", "authority", "window", "window-manager", "display", "gpio", "camera", "blockstore", "firmware"];
 const MAX_SCRIPT: usize = 64 * 1024;
 
 // The shell's commands that need a declared word in a script.

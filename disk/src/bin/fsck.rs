@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-// fsck [A:|ram:|models:]: checks FAT volumes without changing them (vfs_server walks every chain from the directory tree and
+// fsck [A:|ram:|log:|models:]: checks FAT volumes without changing them (vfs_server walks every chain from the directory tree and
 // looks for lost and cross-linked clusters, broken chains, sizes that do not fit and invalid entries). A console
 // program; without an argument it checks every volume.
 use mind::abi::BootInfo;
@@ -9,18 +9,18 @@ mind::request!(REQUEST_CONSOLE);
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("fsck — checks FAT volumes without changing them: lost and cross-linked clusters, broken chains, sizes, entries.\nUsage: fsck [A:|ram:|models:]   (without an argument: every volume)");
+    mind::about!("fsck — checks FAT volumes without changing them: lost and cross-linked clusters, broken chains, sizes, entries.\nUsage: fsck [A:|ram:|log:|models:]   (without an argument: every volume)");
     let wanted = mind::process::args_str().trim().trim_end_matches('/').trim_end_matches(':');
-    let volumes = [("", "A:"), ("ram", "ram:"), ("models", "models:")];
+    let volumes = [("", "A:"), ("ram", "ram:"), ("log", "log:"), ("models", "models:")];
     if !wanted.is_empty() && !volumes.iter().any(|(name, shown)| wanted.eq_ignore_ascii_case(name) || wanted.eq_ignore_ascii_case(shown.trim_end_matches(':'))) {
-        mind::println!("fsck: no volume {} (A:, ram: or models:)", wanted);
+        mind::println!("fsck: no volume {} (A:, ram:, log: or models:)", wanted);
         return;
     }
     let mut damaged = 0;
     for (name, shown) in volumes {
         if !wanted.is_empty() && !wanted.eq_ignore_ascii_case(name) && !wanted.eq_ignore_ascii_case(shown.trim_end_matches(':')) { continue; }
         let label = mind::fs::volume(name).map(|v| (v.label, v.fat_bits));
-        if wanted.is_empty() && name == "models" && label == Err(mind::fs::Error::NotFound) { continue; } // no model disk (251)
+        if wanted.is_empty() && (name == "log" || name == "models") && label == Err(mind::fs::Error::NotFound) { continue; } // no log partition (211) or model disk (251)
         let result = mind::fs::check(name, |r| {
             if let Ok((label, bits)) = &label {
                 mind::println!("{} {} FAT{}: {} files, {} directories; {} clusters used, {} free", shown, core::str::from_utf8(label).unwrap_or("").trim_end(), bits, r.files, r.directories, r.used, r.free);

@@ -1055,6 +1055,27 @@ def line_faces_check(vm):
         vm.expect("MIND> ")
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: clock --line and dzen-clock --line run as console programs: one line on the screen, written again every second; Esc stops them", flush=True)
+    rtc_load_check(vm)
+
+
+def rtc_load_check(vm):
+    """000-APP-0012: a clock reads the RTC service about once a minute and counts the seconds between, so four clocks
+    in the background add a few messages to its endpoint, not 10 a second each."""
+    rtc = vm.services()["rtc"]
+    def rtc_messages():
+        return sum(int(m) for m, server in re.findall(r"^EP=\d+ .*MESSAGES=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M) if int(server) == rtc)
+    start = rtc_messages()
+    pids = [int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) for _ in range(4)]
+    time.sleep(3)  # each clock waits out one change of the RTC's second when it starts
+    before = rtc_messages()
+    time.sleep(5)
+    added = rtc_messages() - before
+    for pid in pids:
+        vm.command(f"kill {pid}")
+    # Starting, each clock read the RTC until its second changed: the count sees the clocks' calls.
+    assert before - start >= 4, f"{before - start} messages to the RTC service while four clocks started"
+    assert added < 20, f"{added} messages to the RTC service in 5 s with 4 clocks (10 a second each was 200)"
+    print(f"PASS: four clocks: {before - start} messages to the RTC service as they started, {added} in the next 5 s (they read it once a minute)", flush=True)
 
 
 # msh scripts on the shell suite's disk (issue 094).
@@ -3036,6 +3057,13 @@ def services_suite(vm):
     require(output, "fm — file manager")
     assert "STARTED" not in output, output
     require(vm.command("help cat"), "- ls [path], cat <file>: files")
+    # log: named in help, efivar described (211-APP-0013); the USB image test checks log: on a disk that has it.
+    require(vm.command("help ls"), "log: the boot disk's log partition")
+    require(vm.command("help write"), "on ram:, on log: and in data/")
+    output = vm.command("efivar --help")
+    require(output, "efivar — the firmware's boot variables")
+    assert "ALLOW?" not in output, "--help asks the user for nothing"
+    require(vm.command("help efivar"), "bootnext <hex>")
     output = vm.command("help voice")
     require(output, "- voice on [--wav file] [seconds], voice off, voice listen: voice control")
     require(output, "PROGRAM voice:")

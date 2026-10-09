@@ -4,25 +4,6 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-## Clocks ask the RTC service 10 times a second
-
-### Problem
-
-`clock` calls `mind::rtc::seconds_since_midnight()` after every `wait_or_exit(100)`: 10 IPC calls a second per clock.
-
-On x86 each answer is about 14 CMOS port accesses, each a system call. With 60 clocks that came to 8 700 port system calls a second. On aarch64 with 120 clocks, the RTC service's queue was full all the time. A `date` from the shell waited 8.5 s for a place (`000-KRN-0010` covers the kernel's side).
-
-`sysmon` reads `STAT_TASKS` and `STAT_ENDPOINTS` every 100 ms. 171-KRN-0009 made both one pass, but they still cost about a millisecond each under the lock with 170 tasks.
-
-### Plan (a proposal; the tools track decides)
-
-- A clock could read the RTC once and count seconds from `CLOCK` (monotonic nanoseconds), reading the RTC again every minute or so.
-- `sysmon` could sample endpoints less often than tasks.
-
-### Acceptance criteria
-
-The RTC service's load does not grow by 10 calls a second with each clock.
-
 ## `update` in the shell and `msh` (351, phase 2)
 
 **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [351](351-self-update.md) at the maintainer's request.
@@ -105,43 +86,6 @@ The `wm` suite checks that:
 ### Acceptance criteria
 
 The `wm` suite opens three windows and lists them. It brings the second to the front from the list, by key and by click, and checks that a closed window leaves the list.
-
-## The log volume `log:` in the shell's help and in `fm` (211)
-
-**Recorded by:** the kernel track (KRN), 2026-10-08, for [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md).
-
-### Problem
-
-Disk images now have a log partition, mounted as `log:`. On it `vfs_server` keeps each boot's system log, `bootNNNN.log`, and the shell's client may write there. Paths with `log:` already work in the shell's commands, through `libmind::fs`. But the shell's help names only `ram:` and `data/`, and `fm` offers only the boot disk and `ram:`.
-
-### Plan (a proposal; the tools track decides)
-
-- The shell's help:
-  - `ls`, `cat`: "`log:` is the boot disk's log partition, with each boot's system log";
-  - `write`, `mkdir`, `rm`, `mv`: "on `ram:`, on `log:` and in `data/`".
-- `fm` offers `log:` as a volume where it is mounted. `mind::fs::volume("log")` says whether it is.
-
-### Acceptance criteria
-
-The `tools` suite finds `log:` in `help` where the image has the partition. `fm` lists `log:` and shows a boot log in its viewer, in the USB image test or a suite booted from an image with the partition.
-
-## `efivar` in the tools guide and `help` (351)
-
-**Recorded by:** the kernel track (KRN), 2026-10-08, for [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done).
-
-### Problem
-
-`efivar` is a new console program. It lists the firmware's boot variables (`BootCurrent`, `BootNext`, `BootOrder`, `Boot####`) and sets `BootNext` and `BootOrder`. The shell lends it the firmware privilege only after the user agrees, and a script must declare `firmware`. The kernel track wrote it to test its system call. The tools guide (`docs/tools`, EN and RU) and the shell's `help` do not name it. Scripts cannot declare `firmware` (it is not in `msh`'s words), so a program a script starts runs without it.
-
-### Plan (a proposal; the tools track decides)
-
-- A row in `docs/tools/README.md` and `README_RU.md`: what `efivar` shows, its write forms (`bootnext`, `bootorder`, `delete bootnext`, `append db|dbx|KEK <file>`), the consent prompt, on x86 and aarch64.
-- Whether a script may declare `firmware` (the user would still be asked each time) is the tools track's decision.
-- `df` and `fsck` list `log:` as they list `models:` (211-KRN-0019).
-
-### Acceptance criteria
-
-The guide and `help efivar` describe it. The `tools` suite runs `efivar --help`.
 
 ## The shell lends its TLS client for `REQUEST_TLS`
 

@@ -6,6 +6,23 @@ pub fn seconds_since_midnight() -> Option<usize> {
     (seconds < 24 * 3600).then_some(seconds as usize)
 }
 
+/// The time of day for a program that shows it often (a clock face): the RTC service is read about once a minute and
+/// the seconds in between counted from the monotonic clock; the date is read again after midnight (000-APP-0012).
+pub struct Clock { wall: crate::wallclock::WallClock, date: Option<(u32, u32, u32)> }
+
+impl Clock {
+    pub const fn new() -> Self { Self { wall: crate::wallclock::WallClock::new(), date: None } }
+    /// Seconds since midnight, as `seconds_since_midnight` gives them.
+    pub fn seconds_since_midnight(&mut self) -> Option<usize> {
+        self.wall.seconds(crate::time::monotonic_ns(), seconds_since_midnight)
+    }
+    /// Today's date, as `date` gives it.
+    pub fn date(&mut self) -> Option<(u32, u32, u32)> {
+        if self.wall.date_due() || self.date.is_none() { self.date = date(); }
+        self.date
+    }
+}
+
 /// Today's date (year, month 1-12, day 1-31) from the CMOS RTC, no time zone.
 pub fn date() -> Option<(u32, u32, u32)> {
     let days = crate::idl::rtc::date(Endpoint::RTC).ok()??;
