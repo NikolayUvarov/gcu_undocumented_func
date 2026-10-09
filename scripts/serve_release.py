@@ -17,8 +17,10 @@ import threading
 
 class RangeHandler(http.server.SimpleHTTPRequestHandler):
     """Static files with single byte ranges. A server's subclass holds `cuts`, path to a byte count (a test hook: the
-    next response for that path is cut after that many body bytes), and `requests`, (path, Range header) per GET."""
+    next response for that path is cut after that many body bytes), `raw`, path to the bytes sent as the whole response
+    (a test hook: a malformed head), and `requests`, (path, Range header) per GET."""
     cuts = {}
+    raw = {}
     requests = []
 
     def log_message(self, *args):
@@ -27,6 +29,10 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
     def send_head(self):
         self.remaining = None
         self.requests.append((self.path, self.headers.get("Range")))
+        if self.path in self.raw:
+            self.wfile.write(self.raw[self.path])
+            self.close_connection = True
+            return None
         path = self.translate_path(self.path)
         wanted = re.fullmatch(r"bytes=(\d+)-(\d*)", (self.headers.get("Range") or "").strip())
         if not wanted or not os.path.isfile(path):
@@ -65,10 +71,10 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
                 limit -= len(chunk)
 
 
-def serve(directory, cert=None, key=None, host="127.0.0.1", port=0, cuts=None):
+def serve(directory, cert=None, key=None, host="127.0.0.1", port=0, cuts=None, raw=None):
     """Starts the server in a thread, over HTTPS with `cert` and `key` or plain HTTP without; returns it (its port is
     server.server_address[1]; server.cuts and server.requests are its handler's)."""
-    handler = type("Handler", (RangeHandler,), {"cuts": dict(cuts or {}), "requests": []})
+    handler = type("Handler", (RangeHandler,), {"cuts": dict(cuts or {}), "raw": dict(raw or {}), "requests": []})
     server = http.server.ThreadingHTTPServer((host, port), functools.partial(handler, directory=str(directory)))
     server.daemon_threads = True
     server.cuts, server.requests = handler.cuts, handler.requests

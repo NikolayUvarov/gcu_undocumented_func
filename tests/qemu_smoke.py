@@ -6,6 +6,7 @@ from WSL. Run after 02_build.sh; pass --qemu and --firmware as needed. Temporary
 FAT roots are created below usb_root and removed, leaving the built OS intact.
 """
 import argparse
+import base64
 import codecs
 import hashlib
 import json
@@ -37,7 +38,7 @@ import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "keystore", "tls", "windows", "sysmon", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -4222,6 +4223,35 @@ def _msix_only(vm):
     assert rows and all(line >= 16 for line, _ in rows) and any(count > 0 for _, count in rows), rows
 
 
+def policy_answer(vm, command, answer):
+    """A `netpolicy add|remove` command, answered at its (Y/N) question; what it printed."""
+    vm.send(command + "\n")
+    vm.expect("(Y/N)")
+    vm.send(answer)
+    return vm.expect("MIND> ")
+
+
+def policy_edit_check(vm, web_port):
+    """108: the network policy changed while the system runs, only after the user agrees; the change is kept in the
+    broker's private directory, which the shell cannot open, and the next grant follows it."""
+    line = f"rogue 10.0.2.2 tcp {web_port}"
+    require(vm.command("netpolicy"), f"named www.mind.test tcp {web_port}")
+    require(policy_answer(vm, f"netpolicy add {line}", "n"), "NETPOLICY: NOT CHANGED")
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), "NETWORK FOR rogue: NoPolicy")
+    require(policy_answer(vm, f"netpolicy add {line}", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+    require(vm.command("netpolicy"), line)
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), f"NETCHECK tcp:10.0.2.2:{web_port} OK")
+    require(vm.command("cat system/netpolicy/netpolicy.txt"), "ERROR: CAT: DENIED")
+    require(policy_answer(vm, "netpolicy add rogue nowhere", "y"), "NETPOLICY: Invalid")
+    require(policy_answer(vm, f"netpolicy remove {line}", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+    require(vm.command(f"rogue tcp:10.0.2.2:{web_port}"), "NETWORK FOR rogue: NoPolicy")
+    log = vm.command("dmesg -s netpolicy")
+    for expected in (f"POLICY CHANGED BY PID", f"ADDED {line}", f"REMOVED {line} (1 LINES)", "CHANGE REFUSED FOR PID", "NOT A POLICY LINE: rogue nowhere"):
+        require(log, expected)
+    print("PASS: the network policy changed while the system runs: refused without the user's yes, a line added and the next grant following it, "
+          "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -4233,11 +4263,13 @@ def download_check(args, disk):
     big, small = os.urandom(size), os.urandom(200_000)
     (files / "big.bin").write_bytes(big)
     (files / "small.bin").write_bytes(small)
-    # The release server, the first response for each file cut short (a test hook).
-    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000})
+    # The release server, the first response for each file cut short, and a malformed head for /bad.bin (test hooks).
+    release = serve_release.serve(files, cuts={"/big.bin": cut, "/small.bin": 50_000}, raw={"/bad.bin": BAD_HEAD})
     port = release.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release server for an hour, up to 64 MiB\ndownload 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    # A script that lends download everything it asks for but the parser service (109-NET-0009).
+    (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
@@ -4276,6 +4308,39 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
     require(vm.command("dmesg -s netpolicy"), f"TO download: 1 RULES, 3600 S, {64 << 20} BYTES")
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant, https and a file outside data/ refused", flush=True)
+    parser_check(vm, url)
+
+
+BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
+
+
+def parser_check(vm, url):
+    """109-NET-0008, 0009: every response head above was parsed in `parse`, which holds its endpoint and the log client
+    and nothing else; a malformed head is refused there, and download, given everything but the parser, refuses."""
+    out = vm.command(f"download data/bad.bin {url}/bad.bin --tries 1")
+    require(out, "DOWNLOAD: HTTP: Head")
+    real = vm.services()
+    log, head = vm.command("dmesg -s parse"), len(BAD_HEAD.split(b"\r\n\r\n")[0])
+    assert re.search(fr"\[PARSE\] REFUSED AN HTTP HEAD FOR PID \d+: MALFORMED \({head} BYTES\)", log), log
+    # Its capabilities: its own endpoint (served by it) and a client of logd; no memory, device, privilege or other client.
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    text = vm.command(f"stat caps {real['parse']}", raw=True)
+    caps = re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=(\d+) .*?EP=(\d+)", text, re.M)
+    held = sorted((int(slot), int(kind), servers.get(int(ep))) for slot, kind, ep in caps)
+    require(text, "STAT CAPS VERSION=2 COUNT=2 ")
+    assert held == [(1, 1, real["parse"]), (12, 1, real["logd"])], (held, text)
+    out = vm.command("msh noparse.msh")
+    require(out, "DOWNLOAD: NO PARSER SERVICE")
+    # Killed, it is restarted by init behind the same endpoint: the shell's client reaches the new instance.
+    require(vm.command(f"kill {real['parse']}", raw=True), f"KILLED PID={real['parse']}")
+    for _ in range(40):
+        if vm.services().get("parse", real["parse"]) != real["parse"]:
+            break
+        time.sleep(.25)
+    assert vm.services()["parse"] != real["parse"], vm.services()
+    out = vm.command(f"download ram:again.bin {url}/small.bin")
+    require(out, "DOWNLOAD: DONE 200000 BYTES")
+    print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
 
 
 def net_suite(args, disk):
@@ -4346,6 +4411,7 @@ def net_suite(args, disk):
         log = vm.command("dmesg -s netpolicy")
         for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
             require(log, line)
+        policy_edit_check(vm, web_port)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -4594,6 +4660,65 @@ def tls_suite(args, disk):
           "AES-128-GCM and ChaCha20-Poly1305; X25519 and P-256), wrong name, "
           "untrusted CA and refused port reported; the device certificate offered with -c and signed for by the key service, "
           f"which only the TLS service may ask; no {entropy}: no key and no connection", flush=True)
+    device_key_check(args, with_entropy)
+
+
+def device_key_check(args, cpu):
+    """351-NET-0005: the device key kept across boots in the key service's private directory of the boot disk, on a raw
+    image booted three times. The first boot makes and stores it, the second finds the same key, and a stored key damaged
+    from the host is replaced. The shell cannot read the directory, and its public key is logged in the OpenSSH form."""
+    if not raw_tools():
+        print("SKIP: the device key check needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-key-", dir=ROOT / IMAGE) as temp:
+        image, start, fs_sectors = raw_fat_image(Path(temp))
+        part = f"{image}@@{start * 512}"
+
+        def boot():
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc",
+                    extra=["-cpu", cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+            try:
+                log = vm.service_logs("keystore", "PUBLIC KEY")
+                name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
+                assert name, log
+                public = re.search(r"\[KEYSTORE\] PUBLIC KEY ssh-ed25519 ([A-Za-z0-9+/]{68}) MIND-([0-9A-F]{8})", log)
+                assert public and public[2] == name[1], log
+                # The blob of the OpenSSH key: the key type, then the key, whose first four bytes name the device.
+                blob = base64.b64decode(public[1])
+                assert blob[:15] == b"\x00\x00\x00\x0bssh-ed25519" and blob[15:19] == b"\x00\x00\x00\x20" and blob[19:23].hex().upper() == name[1], blob
+                return vm, log, name[1]
+            except BaseException:
+                vm.close()
+                raise
+        vm, log, first = boot()
+        try:
+            require(log, "[KEYSTORE] DEVICE KEY MADE AND STORED IN system/keystore/device.key (ON DISK, NOT SEALED)")
+            # The shell's client lists system/ but opens nothing below it, and writes nothing there.
+            require(vm.command("ls system"), "keystore")
+            require(vm.command("cat system/keystore/device.key"), "ERROR: CAT: DENIED")
+            require(vm.command("ls system/keystore"), "DENIED")
+            require(vm.command("write system/keystore/device.key x"), "ERROR: WRITE: DENIED")
+            # 108: a change of the network policy is kept on the disk too.
+            require(policy_answer(vm, "netpolicy add kept 10.0.2.2 tcp 7", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        finally:
+            vm.close()
+        vm, log, second = boot()
+        try:
+            require(vm.command("netpolicy"), "kept 10.0.2.2 tcp 7")
+        finally:
+            vm.close()
+        require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key (ON DISK, NOT SEALED)")
+        assert second == first, (first, second)
+        damaged = Path(temp) / "device.key"
+        damaged.write_bytes(b"MINDKEY1" + bytes(64))
+        subprocess.run(["mcopy", "-o", "-i", part, str(damaged), "::/system/keystore/device.key"], env=MTOOLS_ENV, check=True, capture_output=True)
+        vm, log, third = boot()
+        vm.close()
+        require(log, "[KEYSTORE] DEVICE KEY MADE ANEW: THE STORED ONE WAS DAMAGED AND STORED IN system/keystore/device.key")
+        assert third != first, (first, third)
+        fsck_volume(image, start, fs_sectors)
+    print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
+          "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
 
 
 class _Bench(socketserver.StreamRequestHandler):

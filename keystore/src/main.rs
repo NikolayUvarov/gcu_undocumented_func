@@ -1,13 +1,15 @@
 #![no_std]
 #![no_main]
 // Key service (issue 103, MC-11.9, Appendix B.6): the device key lives only here. It is an Ed25519 key made from
-// RDRAND at boot (no RDRAND: no key, every request answers no-key), kept in this process's memory and never stored or
-// exported. Serves idl/keystore.wit: the certificate to anyone; signatures only to the signer's badge (the TLS service),
-// only for data of the form the purpose names, and at most BUDGET per boot. Holds: an RTC client (slot 2) for the
-// certificate's start date.
+// RDRAND once (no RDRAND: no key, every request answers no-key) and kept across boots in this service's private
+// directory of the boot disk (351-NET-0005; on disk, not sealed: a TPM is next), never exported. Serves
+// idl/keystore.wit: the certificate to anyone; signatures only to the signer's badge (the TLS service), only for data of
+// the form the purpose names, and at most BUDGET per boot. Holds: an RTC client (slot 2) for the certificate's start
+// date, a VFS client with its own badge (slot 3) for `system/keystore`.
 extern crate alloc;
 
 mod certificate;
+mod stored;
 
 use alloc::vec::Vec;
 use ed25519_dalek::{Signer, SigningKey};
@@ -26,19 +28,48 @@ struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage }
 impl Keys {
     fn new() -> Self {
         let (mut seed, mut serial) = ([0u8; 32], [0u8; 16]);
-        let key = (mind::random::fill(&mut seed) && mind::random::fill(&mut serial)).then(|| SigningKey::from_bytes(&seed));
+        // Without the random source no key is made or used: the service fails closed, as the TLS service does.
+        let key = (mind::random::fill(&mut serial) && Self::seed(&mut seed)).then(|| SigningKey::from_bytes(&seed));
         // The seed is the private key: wipe the stack copy (SigningKey wipes its own on drop).
-        for byte in seed.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; }
+        stored::wipe(&mut seed);
         let certificate = match &key {
             Some(key) => {
                 let start = mind::rtc::unix_time().map(|t| t.saturating_sub(86400)).unwrap_or(0);
                 let der = certificate::build(key, serial, start);
-                mind::println!("[KEYSTORE] DEVICE KEY READY: {} (ED25519, CERTIFICATE {} BYTES)", core::str::from_utf8(certificate::common_name(key).as_bytes()).unwrap_or(""), der.len());
+                let name = certificate::common_name(key);
+                let name = core::str::from_utf8(name.as_bytes()).unwrap_or("");
+                mind::println!("[KEYSTORE] DEVICE KEY READY: {} (ED25519, CERTIFICATE {} BYTES)", name, der.len());
+                mind::println!("[KEYSTORE] PUBLIC KEY {} {}", certificate::openssh(key).as_str(), name.replace(' ', "-"));
                 der
             }
             None => { mind::println!("[KEYSTORE] NO {}: NO DEVICE KEY", mind::random::SOURCE); Vec::new() }
         };
         Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 } }
+    }
+
+    // The stored seed, or a new one made and stored (351-NET-0005); false without the random source.
+    fn seed(seed: &mut [u8; 32]) -> bool {
+        let made = |seed: &mut [u8; 32], why: &str| -> bool {
+            if !mind::random::fill(seed) { return false; }
+            match stored::store(seed) {
+                Ok(()) => mind::println!("[KEYSTORE] DEVICE KEY MADE{} AND STORED IN {} (ON DISK, NOT SEALED)", why, stored::FILE),
+                Err(error) => mind::println!("[KEYSTORE] DEVICE KEY MADE{}, NOT STORED: {:?} (THIS BOOT ONLY)", why, error),
+            }
+            true
+        };
+        match stored::load() {
+            stored::Loaded::Seed(stored) => {
+                seed.copy_from_slice(&stored);
+                let mut stored = stored;
+                stored::wipe(&mut stored);
+                mind::println!("[KEYSTORE] DEVICE KEY FROM {} (ON DISK, NOT SEALED)", stored::FILE);
+                true
+            }
+            stored::Loaded::Missing => made(seed, ""),
+            // A damaged file is replaced: servers that knew the old key must be told the new one.
+            stored::Loaded::Damaged => made(seed, " ANEW: THE STORED ONE WAS DAMAGED"),
+            stored::Loaded::Unreadable(error) => { mind::println!("[KEYSTORE] STORED KEY UNREADABLE: {:?}", error); made(seed, " FOR THIS BOOT") }
+        }
     }
 
     // Whether `data` has the form `purpose` names (so the key cannot sign anything else).

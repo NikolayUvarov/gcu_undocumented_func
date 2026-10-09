@@ -231,6 +231,38 @@ pub fn revoke(out: &mut impl Write, args: &[u8]) {
     }
 }
 
+// netpolicy [add LINE | remove LINE] (108, netpolicy.wit 1.1): the lines of the policy in force; a change only after
+// the user agreed to it on the keyboard or the serial line, which no program can type into.
+pub fn policy(shell: &mut crate::Shell, args: &[u8]) {
+    let args = core::str::from_utf8(args).unwrap_or("").trim();
+    let (verb, line) = args.split_once(char::is_whitespace).map_or((args, ""), |(v, l)| (v, l.trim()));
+    let out = &mut shell.term;
+    match verb {
+        "" => {
+            let mut start = 0;
+            loop {
+                let Ok(lines) = netpolicy::lines(BROKER, start) else { let _ = writeln!(out, "NET: NO POLICY BROKER"); return };
+                if lines.is_empty() { break; }
+                for line in lines.as_slice() { let _ = writeln!(out, "{}", line); }
+                start += lines.len() as u32;
+            }
+            if start == 0 { let _ = writeln!(out, "NETPOLICY: NO LINES"); }
+        }
+        "add" | "remove" if !line.is_empty() => {
+            let question = alloc::format!("{} THE NETWORK POLICY LINE \"{}\"?", if verb == "add" { "ADD" } else { "REMOVE" }, line);
+            if !crate::msh::ask(shell, &question) { let _ = writeln!(shell.term, "NETPOLICY: NOT CHANGED"); return; }
+            let out = &mut shell.term;
+            let result = if verb == "add" { netpolicy::add(BROKER, line).map(|r| r.map(|()| 1)) } else { netpolicy::remove(BROKER, line) };
+            match result {
+                Ok(Ok(n)) => { let _ = writeln!(out, "NETPOLICY: {} {} LINE(S)", if verb == "add" { "ADDED" } else { "REMOVED" }, n); }
+                Ok(Err(error)) => { let _ = writeln!(out, "NETPOLICY: {:?}", error); }
+                Err(_) => { let _ = writeln!(out, "NET: NO POLICY BROKER"); }
+            }
+        }
+        _ => { let _ = writeln!(out, "USAGE: NETPOLICY [ADD <LINE> | REMOVE <LINE>]"); }
+    }
+}
+
 // TLS over the shell's own flow (idl/tls.wit, issue 103): https, tls cert.
 use mind::abi::SLOT_TLS;
 use mind::idl::tls;
