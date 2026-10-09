@@ -35,7 +35,7 @@ Each track has a **code**, a **range of main-task numbers**, an owner, a set of 
 - Two tracks never produce the same number, because the codes differ. A main task is split into tasks by any track that works on it: each numbers its own part.
 - Numbers given before this scheme (`158`, `205`, `u015`, …) stay as they are.
 
-The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane), `ASR` (assurance) and `APL` (Apple Silicon).
+The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane), `ASR` (assurance), `APL` (Apple Silicon) and `BLT` (Bluetooth).
 
 The registry of tracks — current owners, branches, statuses and starting tasks — is [TRACKS.md](TRACKS.md), the authoritative record. Open tracks can be taken in parallel.
 
