@@ -108,7 +108,14 @@ The `wm` suite opens three windows and lists them. It brings the second to the f
 
 ## The log volume `log:` in the shell's help and in `fm` (211)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md). **Reported again by the maintainer on 2026-10-09, P1:** on the MacBook Pro `fm` shows only `A:` and `ram:`, not the log partition of the same disk.
+
+**Nothing waits on other tracks.**
+- `vfs_server` mounts the partition as `log:`.
+- `mind::fs::volume("log")` (and `"models"`) says whether a volume is mounted.
+- `wm` and the shell lend `fm` the shell's VFS client (`REQUEST_FILES`), which reads and writes `log:`.
+
+What is missing is in `fm` alone: `VOLUMES` in `fm/src/fm.rs` (line 122) is fixed to `A:` and `ram:`. Its messages about where one may write (lines 27, 153 and 429) name only `ram:` and `data/`.
 
 ### Problem
 
@@ -119,7 +126,8 @@ Disk images now have a log partition, mounted as `log:`. On it `vfs_server` keep
 - The shell's help:
   - `ls`, `cat`: "`log:` is the boot disk's log partition, with each boot's system log";
   - `write`, `mkdir`, `rm`, `mv`: "on `ram:`, on `log:` and in `data/`".
-- `fm` offers `log:` as a volume where it is mounted. `mind::fs::volume("log")` says whether it is.
+- `fm` offers `log:` as a volume where it is mounted, in the Alt+F1/F2 menu and the panels' volume line. `mind::fs::volume("log")` says whether it is. `models:` (the model disk, read-only) the same way.
+- `fm`'s messages say `log:` is writable, as `ram:` and `data/` are.
 
 ### Acceptance criteria
 
@@ -257,3 +265,21 @@ Audit finding A08 ([audit](../issues-audit/2026-10-09-repository-audit.md), [ass
   - multi-file moves, retry and cancellation;
   - save and copy completion propagate flush errors.
 - `issues-audit/repro/fm_repro.py`'s A08 part becomes the regression test.
+
+## The window being dragged is marked (211-DRV-0018)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for [211-DRV-0018](211-DRV-0018-macbook-trackpad-gestures.md), at the maintainer's request after a run on the MacBook Pro.
+
+### Problem
+
+The trackpad now drags a window by its title: a press held while a finger moves, and, as the kernel session is adding now, a double tap that keeps the button down until the next tap. While a window moves, nothing shows that `wm` holds it, so the user cannot tell whether the drag took.
+
+### Plan (a proposal; the tools track decides)
+
+- While `wm` drags or resizes a window by the pointer, the window is marked. For example, its title bar in the focus colour inverted, or its frame drawn double, until the button is released.
+- The mark is quiet, and the same for a mouse and a trackpad.
+
+### Acceptance criteria
+
+The `wm` suite starts a drag by a title, sees the mark while the button is held and its absence after the release.
+

@@ -1,6 +1,6 @@
 # 211-DRV-0018 — The MacBook Pro's trackpad: fingers, a right click with two, scrolling with three
 
-**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 211, at the maintainer's request) · **Priority:** P1 · **Status:** in progress (made and host-tested; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-11.4, MC-12.4
+**Type:** driver · **Owner:** `DRV` (made by the kernel session for 211 at the maintainer's request; it stays with that session until done, TRACKS 1.5) · **Priority:** P1 · **Status:** in progress (works on the MacBook Pro; the drag lock and three-finger scrolling to be confirmed there) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-11.4, MC-12.4
 
 ## Problem
 
@@ -30,7 +30,8 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
     - one finger moves the pointer, faster strokes further;
     - pressing the pad is the left button, or the right one with two fingers on it;
     - a quick two-finger tap (under 250 ms, little travel) is a right click;
-    - three fingers scroll, vertically or horizontally by the way they first move, in the content's direction (macOS's natural scrolling).
+    - three fingers scroll, vertically or horizontally by the way they first move, in the content's direction (macOS's natural scrolling);
+    - the drag lock, asked for after the third run: a touch within 300 ms of a one-finger tap holds the left button down, whether it moves or taps. The button stays down across touches until a later tap or a press of the pad, so one finger drags a window by its title.
 - **`common/abi.rs`:** a relative pointer event's horizontal wheel in bits 34–37 (`pointer_scroll`, `pointer_across`). Those bits are zero in every other relative event; absolute events keep their wheel there.
 - **`usb_hid`:**
   - For such a device, interface 1 is read with `reports-up-to`. The mode is switched through the keyboard's interface 0 a second after setup, with 250 ms between reading and writing it, as FreeBSD's wsp does.
@@ -46,6 +47,7 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
   - the left and right button, and a right button held while a finger lifts;
   - the two-finger tap, and what is not one;
   - three-finger scrolling on one axis at a time, in both directions;
+  - the drag lock: set by a tap and a touch, or by two taps; kept across touches; ended by a tap or a press; not set by a late touch or two fingers;
   - short packets.
 - **QEMU:** the `usb` suite passes. QEMU has no Apple trackpad, so the gestures are checked only on the Mac.
 - **The MacBook Pro:**
@@ -53,6 +55,7 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
   - if the mode does not take, the cursor still moves through the mouse interface;
   - one finger moves the cursor smoothly;
   - a press is a left click, a press with two fingers or a two-finger tap a right click;
+  - a double tap on a window's title, then one finger, drags the window, and a tap lets it go;
   - three fingers up and down scroll text in `wm`'s windows.
 
 ## Progress
@@ -74,6 +77,15 @@ The trackpad tells its fingers only in its multitouch mode, on interface 1, whic
   - The switch waits until the device is set up and leaves 250 ms between read and write.
   - Its bytes, interface 1's report descriptor and each new packet length are logged, to find why the mode did not take.
   - `Trackpad::feed` says whether a packet held fingers: the header and whole fingers. Host tests cover the packets seen on the Mac.
+
+
+**2026-10-09: the third build (fast-test f4b5d47b3aae) works on the MacBook Pro.**
+
+- **The log.** The mode was read as `[08, 05, …]`, written with byte 0 = 1 and read back as `[01, 05, …]`. Packets of fingers then came: 58 bytes for one finger, 86 for two.
+- **The maintainer.** One-finger and two-finger clicks work, and so does a click with one finger while another drags.
+- **Asked next.**
+  - A double tap that holds the button for dragging a window with one finger: the drag lock, added here with three host tests.
+  - A mark on the window being dragged: `wm` is `APP`'s, requested in [requests-APP.md](requests-APP.md).
 
 ## Related
 

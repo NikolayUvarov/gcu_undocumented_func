@@ -54,11 +54,11 @@ A64="python3 tests/qemu_smoke.py --arch aarch64"
 HOST_GROUPS=(
     "build (x86)|./02_build.sh"
     "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only)"
-    "host tests|host_tests"
+    "host tests|scripts/host_tests.sh"
     "models (TLC)|scripts/model_check.sh"
 )
 X86_GROUPS=(
-    "build (x86 test programs)|x86_fixtures"
+    "build (x86 test programs)|scripts/x86_fixtures.sh"
     "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
@@ -90,33 +90,6 @@ A64_GROUPS=(
     "aarch64: 16 CPUs|$A64 --cpus 16 --suites normal"
 )
 
-host_tests() {
-    local t
-    rustc --edition=2021 --test tests/runtime.rs -o /tmp/runtime-tests && /tmp/runtime-tests || return 1
-    rustc --edition=2021 --test tests/tts_host.rs -o /tmp/tts-tests && /tmp/tts-tests || return 1
-    for t in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm; do
-        rustc --edition=2021 --test "tests/${t}_host.rs" -o "/tmp/$t-tests" && "/tmp/$t-tests" || return 1
-    done
-    rustc --edition=2021 -O --test tests/voice_host.rs -o /tmp/voice-tests && /tmp/voice-tests || return 1
-    python3 tests/idl_test.py && python3 tests/font_test.py && python3 tests/test_usb_writer.py && python3 tests/manifest_test.py && python3 tests/release_test.py
-}
-x86_fixtures() {
-    local f
-    for f in busy_app isolation_app heap_app block_app; do
-        rustc --edition=2021 --target x86_64-unknown-none --crate-type bin -C opt-level=3 -C panic=abort \
-            -C relocation-model=pic -Z relax-elf-relocations=yes -C link-arg=-Tapp/linker.ld \
-            "tests/$f.rs" -o "/tmp/mind-core-$f.elf" || return 1
-    done
-    (cd tests/updater_stub && cargo build --release --target-dir /tmp/mind-updater-target) || return 1
-    (cd kernel && cargo build --release --features panic-test --target-dir /tmp/mind-panic-target)
-    (cd kernel && cargo build --release --features abi-test --target-dir /tmp/mind-abi-target)
-    (cd kernel && cargo build --release --features loader-abi-test --target-dir /tmp/mind-loader-abi-target)
-    (cd kernel && cargo build --release --features trial-test --target-dir /tmp/mind-trial-target)
-    (cd kernel && cargo build --release --features x2apic-test --target-dir /tmp/mind-x2apic-target)
-    (cd kernel && cargo build --release --features bar-move-test --target-dir /tmp/mind-bar-target)
-    (cd kernel && cargo build --release --features xsave-pad-test --target-dir /tmp/mind-xsave-pad-target)
-    (cd kernel && cargo build --release --features protection-test --target-dir /tmp/mind-protection-target)
-}
 tap_bench() {
     ip link show mindtap0 >/dev/null 2>&1 || {
         sudo ip tuntap add dev mindtap0 mode tap user "$(id -un)" && sudo ip addr add 10.0.2.2/24 dev mindtap0 &&
