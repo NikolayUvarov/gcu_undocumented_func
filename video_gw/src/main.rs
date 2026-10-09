@@ -25,7 +25,6 @@ const USB_BUFFER: usize = 512 * 1024;
 const LOOK_MS: usize = 2000; // a missing camera is looked for again at most this often
 const WIDEST: u16 = 640; // the size a camera is offered at: its largest YUY2 frame up to this width
 const FIRST_MS: u64 = 5000; // the wait for a camera's first good frame, and later for the next one
-const FRESH_MS: u64 = 200; // past a frame's time, how long a read waits for a picture newer than the last it gave
 
 // A UVC camera (its control interface stays claimed): the streaming interface's handle, what its descriptors say, its
 // name and what is offered.
@@ -33,7 +32,7 @@ struct Camera { streaming: u32, info: uvc::Camera, name: Text<24>, offered: (u16
 
 // A camera's open stream: the frame size it sends, the frames assembled from its packets, and counts for the log.
 struct Live {
-    size: uvc::FrameSize, assembler: uvc::Assembler, endpoint: u8, setting: u8,
+    size: uvc::FrameSize, assembler: uvc::Assembler, endpoint: u8, setting: u8, interval_ns: u64,
     packets: u64, bytes: u64, damaged: u64, header: [u8; 12], header_len: usize, given: u32, good_ns: u64, opened_ns: u64,
 }
 
@@ -187,7 +186,7 @@ fn start(host: &mut Host, camera: &Camera, width: u16, height: u16, rate: u8) ->
     host.select(camera.streaming, alternate.setting).map_err(|e| failed("SETTING", e))?;
     let bytes = size.exact_bytes().unwrap_or(size.max_bytes as usize);
     let now = mind::time::monotonic_ns();
-    Ok(Live { assembler: uvc::Assembler::new(bytes, true), size, endpoint: alternate.endpoint, setting: alternate.setting,
+    Ok(Live { assembler: uvc::Assembler::new(bytes, true), size, endpoint: alternate.endpoint, setting: alternate.setting, interval_ns: answer.interval().max(1) as u64 * 100,
         packets: 0, bytes: 0, damaged: 0, header: [0; 12], header_len: 0, given: 0, good_ns: 0, opened_ns: now })
 }
 
@@ -199,8 +198,9 @@ fn stop(usb: &mut Usb, live: &Live) -> String {
     report(live)
 }
 
-// The next frame of the camera's stream into the stream's pixels: when it is due and a newer picture came (or FRESH_MS
-// passed). Err(NotFound) without a good frame for FIRST_MS, or when the camera is gone.
+// The next frame of the camera's stream into the stream's pixels: when it is due and a newer picture came, or half a
+// camera frame later than the camera's next one was expected. Err(NotFound) without a good frame for FIRST_MS, or when
+// the camera is gone.
 fn next_camera(stream: &mut Stream, usb: &mut Usb) -> Result<idl::Frame, idl::Error> {
     let (sequence, due) = stream.due();
     let Source::Camera(live) = &mut stream.source else { return Err(idl::Error::NotOpen) };
@@ -209,7 +209,7 @@ fn next_camera(stream: &mut Stream, usb: &mut Usb) -> Result<idl::Frame, idl::Er
         let taken = match pump(host, camera, live) { Ok(n) => n, Err(e) => { mind::println!("[VIDEO] \"{}\" STOPPED ANSWERING ({:?}): {}", camera.name, e, report(live)); usb.lost(); return Err(idl::Error::NotFound) } };
         let now = mind::time::monotonic_ns();
         let fresh = live.assembler.good > live.given;
-        if now >= due && live.assembler.good > 0 && (fresh || now >= due + FRESH_MS * 1_000_000) { break; }
+        if now >= due && live.assembler.good > 0 && (fresh || now >= due.max(live.good_ns) + live.interval_ns * 3 / 2) { break; }
         if now - live.good_ns.max(live.opened_ns) > FIRST_MS * 1_000_000 {
             mind::println!("[VIDEO] \"{}\": NO GOOD FRAME FOR {} MS: {}", camera.name, FIRST_MS, report(live));
             live.good_ns = now; // the next read waits as long again
