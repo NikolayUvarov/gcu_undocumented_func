@@ -3,6 +3,7 @@
 // and bulk transfers through queue heads on the asynchronous schedule, interrupt IN endpoints through rings of
 // transfer descriptors on the periodic schedule, split transactions for full- and low-speed devices behind a
 // high-speed hub. The bus (devices, hubs, interfaces) follows the xHCI one in main.rs.
+use alloc::vec::Vec;
 use crate::xhci::{wait, wait_for};
 use crate::{speed_name, Iface, CLASS_HUB, MAX_INTERFACES, SERVED};
 use mind::dev::{Dma, Mmio};
@@ -15,6 +16,8 @@ const TDS: usize = 0x3000; const TD: usize = 64; const MAX_TDS: usize = 256;
 pub const SMALL: usize = 0x7000; // control data, up to CONTROL_MAX
 const SETUP: usize = 0x8000; // the setup packet
 const REPORTS: usize = 0x9000; const REPORT: usize = 64; // interrupt report buffers, RING per armed endpoint
+// Reports of several packets (a MacBook trackpad's finger data, 211-DRV-0018): up to LONG bytes, for LONG_SLOTS endpoints.
+const LONG: usize = 512; const LONG_SLOTS: usize = 2; const LONG_AREA: usize = REPORTS + MAX_INTERRUPTS * RING * REPORT;
 pub const DATA: usize = 0x10000; // bulk data, a chunk at a time
 const DMA_BYTES: usize = mind::usb::EHCI_DMA_BYTES;
 const CHUNK: usize = 16 * 1024; // bulk bytes per descriptor (five pages hold it at any alignment)
@@ -24,14 +27,17 @@ const ACTIVE: u32 = 0x80; const HALTED: u32 = 0x40; const BUFFER_ERROR: u32 = 0x
 const PID_OUT: u32 = 0; const PID_IN: u32 = 1 << 8; const PID_SETUP: u32 = 2 << 8; const CERR: u32 = 3 << 10; const IOC: u32 = 1 << 15; const TOGGLE: u32 = 1 << 31;
 const T: u32 = 1; const TYPE_QH: u32 = 2;
 
-const RING: usize = 8; const QUEUE: usize = 8; const MAX_INTERRUPTS: usize = 8;
+const RING: usize = 8; const QUEUE: usize = 8; const MAX_INTERRUPTS: usize = 16;
 const MAX_DEVICES: usize = 16; const MAX_PIPES: usize = 6; const MAX_DEPTH: u8 = 5;
 const SCAN_TRIES: u8 = 3;
+const SWEEP_MS: u64 = 5_000; // every hub port is looked at this often; between, only those its status endpoint names
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Kind { Control, Bulk, Interrupt }
 
-struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, queue: [[u8; REPORT]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
+// The queue holds QUEUE reports of `stride` bytes, on the heap: long ones in the controller's state overflowed the
+// program's 64 KiB stack, where it is built (211-DRV-0018).
+struct Interrupt { qh: usize, tds: [usize; RING], next: usize, length: u32, buffer: usize, stride: usize, queue: Vec<u8>, lengths: [u16; QUEUE], head: usize, count: usize, failed: bool, reported: bool }
 
 pub struct Ehci {
     mmio: Mmio, dma: Dma, op: usize, pub ports: usize, high: u32,
@@ -55,7 +61,7 @@ impl Ehci {
         if !wait(|| mmio.read32(op + 4) & 1 << 12 != 0) { return Err("DID NOT HALT"); }
         mmio.write32(op, 2);
         if !wait(|| mmio.read32(op) & 2 == 0) { return Err("DID NOT RESET"); }
-        dma.zero(0, REPORTS + MAX_INTERRUPTS * RING * REPORT);
+        dma.zero(0, LONG_AREA + LONG_SLOTS * RING * LONG);
         let mut ehci = Self { mmio, dma, op, ports: (hcs & 0xF) as usize, high: (base >> 32) as u32, qhs: 0, tds: [0; MAX_TDS / 64], head: 0, chain: 0,
             interrupts: [const { None }; MAX_INTERRUPTS], last: 0 };
         // The asynchronous list's head (H, halted, linked to itself) and the periodic chain's head every frame names.
@@ -254,14 +260,23 @@ impl Ehci {
         Ok(moved)
     }
 
-    /// Starts polling interrupt IN pipe `qh` with a ring of descriptors of up to `packet` bytes each.
-    pub fn arm(&mut self, qh: usize, packet: u16) -> bool {
+    /// Starts polling interrupt IN pipe `qh` with a ring of descriptors of up to `packet` bytes each, or of `longest`
+    /// bytes for reports of several packets that end with a short one.
+    pub fn arm(&mut self, qh: usize, packet: u16, longest: Option<u16>) -> bool {
         let Some(slot) = self.interrupts.iter().position(Option::is_none) else { return false };
+        let long = longest.filter(|&l| l > packet);
+        let (length, buffer, stride) = match long {
+            Some(longest) => {
+                let used = |area: usize| self.interrupts.iter().flatten().any(|e| e.buffer == area);
+                let Some(area) = (0..LONG_SLOTS).map(|i| LONG_AREA + i * RING * LONG).find(|&a| !used(a)) else { return false };
+                ((longest as u32).clamp(1, LONG as u32), area, LONG)
+            }
+            None => ((packet as u32).clamp(1, REPORT as u32), REPORTS + slot * RING * REPORT, REPORT),
+        };
         let mut tds = [0usize; RING];
         for k in 0..RING { match self.td_alloc() { Some(td) => tds[k] = td, None => { for &td in &tds[..k] { self.td_free(td); } return false } } }
-        let (length, buffer) = ((packet as u32).clamp(1, REPORT as u32), REPORTS + slot * RING * REPORT);
-        for k in 0..RING { self.write_td(tds[k], Some(tds[(k + 1) % RING]), ACTIVE | PID_IN | CERR | length << 16, buffer + k * REPORT); }
-        self.interrupts[slot] = Some(Interrupt { qh, tds, next: 0, length, buffer, queue: [[0; REPORT]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
+        for k in 0..RING { self.write_td(tds[k], Some(tds[(k + 1) % RING]), ACTIVE | PID_IN | CERR | length << 16, buffer + k * stride); }
+        self.interrupts[slot] = Some(Interrupt { qh, tds, next: 0, length, buffer, stride, queue: alloc::vec![0; QUEUE * stride], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
         let at = qh_at(qh);
         self.dma.write32(at + 20, T); self.dma.write32(at + 24, 0);
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -270,6 +285,8 @@ impl Ehci {
         true
     }
     pub fn armed(&self, qh: usize) -> Option<usize> { self.interrupts.iter().position(|e| e.as_ref().is_some_and(|e| e.qh == qh)) }
+    /// The report length an armed endpoint polls with.
+    pub fn armed_length(&self, index: usize) -> u32 { self.interrupts[index].as_ref().map_or(0, |e| e.length) }
 
     /// Collects the reports the controller has put in the interrupt rings, and gives their descriptors back to it.
     pub fn pump(&mut self) {
@@ -277,7 +294,7 @@ impl Ehci {
             loop {
                 let Some(e) = self.interrupts[slot].as_ref() else { break };
                 if e.failed { break; }
-                let (td, length, buffer) = (e.tds[e.next], e.length, e.buffer + e.next * REPORT);
+                let (td, length, buffer) = (e.tds[e.next], e.length, e.buffer + e.next * e.stride);
                 let token = self.token(td);
                 if token & ACTIVE != 0 { break; }
                 if token & HALTED != 0 {
@@ -287,12 +304,12 @@ impl Ehci {
                     break;
                 }
                 let got = (length - ((token >> 16) & 0x7FFF).min(length)) as usize;
-                let mut report = [0u8; REPORT]; report[..got].copy_from_slice(self.dma.bytes(buffer, got));
+                let mut report = [0u8; LONG]; report[..got].copy_from_slice(self.dma.bytes(buffer, got));
                 let next = { let e = self.interrupts[slot].as_mut().unwrap();
                     if !e.reported { e.reported = true; mind::println!("[USB] EHCI QUEUE HEAD {}: FIRST REPORT ({} BYTES)", e.qh, got); }
                     let at = (e.head + e.count) % QUEUE;
                     if e.count == QUEUE { e.head = (e.head + 1) % QUEUE; } else { e.count += 1; }
-                    e.queue[at] = report; e.lengths[at] = got as u8;
+                    e.queue[at * e.stride..at * e.stride + got].copy_from_slice(&report[..got]); e.lengths[at] = got as u16;
                     let next = e.tds[(e.next + 1) % RING]; e.next = (e.next + 1) % RING; next };
                 self.write_td(td, Some(next), ACTIVE | PID_IN | CERR | length << 16, buffer);
             }
@@ -303,7 +320,7 @@ impl Ehci {
     pub fn take_reports(&mut self, index: usize, mut each: impl FnMut(&[u8])) -> Result<usize, ()> {
         let Some(e) = self.interrupts[index].as_mut() else { return Err(()) };
         let count = e.count;
-        for n in 0..count { let at = (e.head + n) % QUEUE; each(&e.queue[at][..e.lengths[at] as usize]); }
+        for n in 0..count { let at = (e.head + n) % QUEUE; each(&e.queue[at * e.stride..at * e.stride + e.lengths[at] as usize]); }
         e.head = (e.head + count) % QUEUE; e.count = 0;
         if e.failed && count == 0 { return Err(()); }
         Ok(count)
@@ -318,21 +335,21 @@ impl Ehci {
 pub struct Device {
     address: u8, root: u8, depth: u8, speed: u8,
     parent: Option<(usize, u8)>, tt: Option<(u8, u8)>,
-    hub_ports: u8, failed: u16,
+    hub_ports: u8, failed: u16, status: Option<usize>, pending: u16,
     pub generation: u16, ep0: usize, pipes: [(u8, usize); MAX_PIPES], pipe_count: usize,
     pub interfaces: [Iface; MAX_INTERFACES], pub count: usize,
 }
 
 pub struct Bus {
     pub hc: Ehci, pub devices: [Option<Device>; MAX_DEVICES], generation: u16, addresses: u128,
-    root_tries: [u8; 16], root_failed: u16, name: u8,
+    root_tries: [u8; 16], root_failed: u16, name: u8, swept: u64,
 }
 
 impl Bus {
     pub fn new(hc: Ehci, name: u8) -> Self {
         mind::println!("[USB] EHCI {}: {} PORTS", name, hc.ports);
         for port in 1..=hc.ports { mind::println!("[USB] EHCI {} PORT {} PORTSC {:08X}", name, port, hc.port_status(port)); }
-        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name }
+        Self { hc, devices: [None; MAX_DEVICES], generation: 0, addresses: 1, root_tries: [0; 16], root_failed: 0, name, swept: 0 }
     }
 
     pub fn control(&mut self, index: usize, request_type: u8, request: u8, value: u16, windex: u16, length: u16) -> Result<usize, u32> {
@@ -359,11 +376,28 @@ impl Bus {
                 mind::println!("[USB] EHCI {} PORT {}: DEVICE NOT SET UP (COMPLETION {}, PORTSC {:08X}, TRY {} OF {})", self.name, port, self.hc.last, self.hc.port_status(port), self.root_tries[port], SCAN_TRIES);
             }
         }
+        // Hub ports: those the hub's status endpoint names, and all of them every SWEEP_MS or without one. Each port asked
+        // is a control transfer: asking all of them four times a second kept usb_host from its clients (211-DRV-0017).
+        let now = mind::time::uptime_ms() as u64;
+        let sweep = now >= self.swept + SWEEP_MS;
+        if sweep { self.swept = now; }
         for hub in 0..MAX_DEVICES {
             let Some(device) = self.devices[hub] else { continue };
-            for port in 1..=device.hub_ports {
+            if device.hub_ports == 0 { continue; }
+            let mut pending = device.pending;
+            match device.status.and_then(|qh| self.hc.armed(qh)) {
+                Some(armed) if !sweep => {
+                    if self.hc.take_reports(armed, |report| { for (i, &byte) in report.iter().take(2).enumerate() { pending |= (byte as u16) << (8 * i); } }).is_err() { pending = 0xFFFE; }
+                }
+                _ => pending = 0xFFFE,
+            }
+            if let Some(d) = self.devices[hub].as_mut() { d.pending = 0; }
+            for port in (1..=device.hub_ports).filter(|&p| pending & 1 << p != 0) {
                 let Some((status, change)) = self.hub_port(hub, port) else { break };
                 if change & 1 != 0 { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); } // CLEAR_FEATURE C_PORT_CONNECTION
+                // Enable and over-current changes are cleared too, or the status endpoint would name the port on every poll.
+                if change & 2 != 0 { let _ = self.control(hub, 0x23, 1, 17, port as u16, 0); }
+                if change & 8 != 0 { let _ = self.control(hub, 0x23, 1, 19, port as u16, 0); }
                 let bit = 1u16 << port;
                 if change & 1 != 0 { if let Some(d) = self.devices[hub].as_mut() { d.failed &= !bit; } }
                 let child = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent == Some((hub, port))));
@@ -407,7 +441,7 @@ impl Bus {
         let tt = parent.and_then(|(p, port)| { let hub = self.devices[p]?; if hub.speed == 3 && speed < 3 { Some((hub.address, port)) } else { hub.tt } });
         // Address 0 with the smallest packet size, for the first 8 bytes of the device descriptor and SET_ADDRESS.
         let zero = self.hc.pipe(0, 0, speed, if speed == 3 { 64 } else { 8 }, tt, Kind::Control)?;
-        let mut device = Device { address: 0, root, depth, speed, parent, tt, hub_ports: 0, failed: 0, generation: 0, ep0: zero, pipes: [(0, 0); MAX_PIPES], pipe_count: 0, interfaces: [Iface::default(); MAX_INTERFACES], count: 0 };
+        let mut device = Device { address: 0, root, depth, speed, parent, tt, hub_ports: 0, failed: 0, status: None, pending: 0, generation: 0, ep0: zero, pipes: [(0, 0); MAX_PIPES], pipe_count: 0, interfaces: [Iface::default(); MAX_INTERFACES], count: 0 };
         self.devices[index] = Some(device);
         let first = self.control(index, 0x80, 6, 0x0100, 0, 8).ok().map(|_| self.hc.small(8)[7] as u16);
         let addressed = first.is_some() && self.control(index, 0x00, 5, address as u16, 0, 0).is_ok();
@@ -475,7 +509,13 @@ impl Bus {
             let (ports, power) = (descriptor[2].min(15), descriptor[5] as u64 * 2);
             for port in 1..=ports { let _ = self.control(index, 0x23, 3, 8, port as u16, 0); } // SET_FEATURE PORT_POWER
             mind::time::sleep(power.clamp(20, 500) as usize);
-            if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; }
+            // The status endpoint: a bit for each port whose status changed, polled on the periodic schedule.
+            let endpoint = interfaces[..count].iter().filter(|i| i.info.class == CLASS_HUB).flat_map(|i| i.info.endpoints().iter().copied()).find(|e| e.is_interrupt() && e.is_in());
+            let status = endpoint.and_then(|e| {
+                let qh = self.hc.pipe(device.address, e.address & 0xF, device.speed, e.packet, device.tt, Kind::Interrupt)?;
+                if self.hc.arm(qh, e.packet, None) { Some(qh) } else { self.hc.drop_pipe(qh); None }
+            });
+            if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; d.status = status; d.pending = 0xFFFE; }
         }
         Some(())
     }
@@ -485,6 +525,7 @@ impl Bus {
         for child in 0..MAX_DEVICES { if self.devices[child].is_some_and(|d| d.parent.is_some_and(|p| p.0 == index)) { self.remove(child); } }
         let Some(device) = self.devices[index].take() else { return };
         for &(_, qh) in &device.pipes[..device.pipe_count] { self.hc.drop_pipe(qh); }
+        if let Some(qh) = device.status { self.hc.drop_pipe(qh); }
         self.hc.drop_pipe(device.ep0);
         if device.address != 0 { self.addresses &= !(1 << device.address); }
         mind::println!("[USB] EHCI {} DEVICE {} GONE", self.name, device.address);

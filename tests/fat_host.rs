@@ -467,3 +467,288 @@ fn reads_a_model_disk_made_by_fat32_py() {
     assert!(report.clean() && report.lost == 0, "{:?}", report);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// 175-KRN-0047, 0048, 0049 (audit A02-A04): a refused or failed change leaves the volume as it was, and a volume reads
+// clean only after a flush that succeeded.
+
+// A medium behind a write-back cache like vfs_server's disk.rs: writes wait for a flush, which applies them in LBA
+// order. `medium` is what survives a power loss after `budget` sectors; `fail_write` and `fail_flush` (counted from 1)
+// fail once.
+struct Medium { view: Vec<u8>, medium: Vec<u8>, pending: BTreeMap<u32, [u8; SECTOR]>, budget: usize, applied: usize, writes: usize, fail_write: usize, flushes: usize, fail_flush: usize }
+impl Medium {
+    fn new(data: Vec<u8>) -> Self { Self { medium: data.clone(), view: data, pending: BTreeMap::new(), budget: usize::MAX, applied: 0, writes: 0, fail_write: 0, flushes: 0, fail_flush: 0 } }
+}
+impl Sectors for Medium {
+    fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool {
+        if let Some(s) = self.pending.get(&lba) { out.copy_from_slice(s); return true; }
+        let at = lba as usize * SECTOR;
+        match self.view.get(at..at + SECTOR) { Some(s) => { out.copy_from_slice(s); true } None => false }
+    }
+    fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool {
+        self.writes += 1;
+        if self.writes == self.fail_write || (lba as usize + 1) * SECTOR > self.view.len() { return false; }
+        self.pending.insert(lba, *data);
+        true
+    }
+    fn flush(&mut self) -> bool {
+        self.flushes += 1;
+        if self.flushes == self.fail_flush { return false; }
+        for (lba, sector) in std::mem::take(&mut self.pending) {
+            let at = lba as usize * SECTOR;
+            self.view[at..at + SECTOR].copy_from_slice(&sector);
+            if self.budget > 0 { self.budget -= 1; self.applied += 1; self.medium[at..at + SECTOR].copy_from_slice(&sector); }
+        }
+        true
+    }
+    fn sectors(&self) -> u64 { (self.view.len() / SECTOR) as u64 }
+    fn writable(&self) -> bool { true }
+}
+
+// A volume made by `format` on `sectors` sectors (128: FAT12; 4400: FAT16 with about 4300 clusters).
+fn formatted(sectors: usize) -> Vec<u8> {
+    let mut m = Medium::new(vec![0; sectors * SECTOR]);
+    fat::format(&mut m, "TEST", STAMP).unwrap();
+    assert!(m.flush());
+    m.view
+}
+fn mounted(data: &[u8]) -> Volume<Medium> { Volume::mount(Medium::new(data.to_vec())).ok().unwrap() }
+
+fn contents_of(v: &mut Volume<Medium>, path: &str) -> Option<Vec<u8>> {
+    let node = v.lookup(&v.root(), path).ok()?;
+    let mut back = vec![0u8; node.size as usize];
+    assert_eq!(v.read(&node, 0, &mut back).unwrap(), back.len());
+    Some(back)
+}
+
+// After a refused or failed change: flushed and mounted again, the volume checks clean with `free` clusters free and
+// `path` holding `contents`.
+fn as_before(mut v: Volume<Medium>, path: &str, contents: &[u8], free: u32, what: &str) {
+    v.flush().unwrap();
+    let mut v = mounted(&v.disk.view);
+    let report = v.check().unwrap();
+    assert!(report.clean() && !report.dirty, "{}: {:?}", what, report);
+    assert_eq!(v.free_clusters().unwrap(), free, "{}: free clusters", what);
+    assert_eq!(contents_of(&mut v, path).as_deref(), Some(contents), "{}: contents", what);
+}
+
+// A file `log.dat` of `size` bytes, flushed; returns the volume and its contents.
+fn with_file(sectors: usize, size: usize) -> (Volume<Medium>, Vec<u8>) {
+    let mut v = mounted(&formatted(sectors));
+    let root = v.root();
+    let mut node = v.create(&root, "log.dat", false, STAMP).unwrap();
+    let data = content(7, size);
+    v.write(&mut node, 0, &data, STAMP).unwrap();
+    v.flush().unwrap();
+    (v, data)
+}
+
+#[test]
+fn a_write_refused_for_space_gives_its_clusters_back() {
+    for sectors in [128, 4400] {
+        for size in [0usize, 700] {
+            // A write past the free space, a write after a gap, and truncation upwards: each refused for space.
+            for case in 0..3 {
+                let (mut v, data) = with_file(sectors, size);
+                let (root, per, free) = (v.root(), v.cluster_bytes(), v.free_clusters().unwrap());
+                let mut node = v.lookup(&root, "log.dat").unwrap();
+                let was = node;
+                let too_much = (free + 1) * per;
+                let result = match case {
+                    0 => v.write(&mut node, size as u32, &vec![0x41; too_much as usize], STAMP).map(|_| ()),
+                    1 => v.write(&mut node, size as u32 + too_much - 100, &[0x42; 200], STAMP).map(|_| ()),
+                    _ => v.truncate(&mut node, size as u32 + too_much, STAMP),
+                };
+                let what = format!("{} sectors, a file of {} bytes, case {}", sectors, size, case);
+                assert_eq!(result, Err(Error::NoSpace), "{}", what);
+                assert_eq!(node, was, "{}: the node", what);
+                assert_eq!(v.free_clusters().unwrap(), free, "{}: free clusters before the remount", what);
+                as_before(v, "log.dat", &data, free, &what);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_write_that_fails_on_the_medium_gives_its_clusters_back() {
+    for size in [0usize, 700] {
+        // The writes of a growing write that succeeds, then each of them failing once.
+        let (mut v, _) = with_file(4400, size);
+        let mut node = v.lookup(&v.root(), "log.dat").unwrap();
+        let start = v.disk.writes;
+        v.write(&mut node, size as u32, &content(9, 1800), STAMP).unwrap();
+        let count = v.disk.writes - start;
+        assert!(count > 5);
+        for k in 1..=count {
+            let (mut v, data) = with_file(4400, size);
+            let free = v.free_clusters().unwrap();
+            let mut node = v.lookup(&v.root(), "log.dat").unwrap();
+            v.disk.fail_write = v.disk.writes + k;
+            assert_eq!(v.write(&mut node, size as u32, &content(9, 1800), STAMP), Err(Error::Io), "write {} of {}", k, count);
+            as_before(v, "log.dat", &data, free, &format!("a file of {} bytes, write {} of {} failing", size, k, count));
+        }
+    }
+}
+
+// `alpha.txt` (one slot) with contents, beside fillers of one slot each; a change of case to `AlPhA.txt` needs a long
+// name: two slots.
+fn alpha(v: &mut Volume<Medium>, dir: &Node) -> Vec<u8> {
+    let mut node = v.create(dir, "alpha.txt", false, STAMP).unwrap();
+    let data = b"must survive".to_vec();
+    v.write(&mut node, 0, &data, STAMP).unwrap();
+    data
+}
+fn fill(v: &mut Volume<Medium>, dir: &Node) -> u32 {
+    let mut count = 0;
+    loop {
+        match v.create(dir, &format!("f{:07}", count), false, STAMP) { Ok(_) => count += 1, Err(Error::NoSpace) => return count, Err(e) => panic!("{:?}", e) }
+    }
+}
+fn refused_case_change(mut v: Volume<Medium>, dir: &str, what: &str) {
+    v.flush().unwrap();
+    let parent = v.lookup(&v.root(), dir).unwrap_or(v.root());
+    assert_eq!(v.rename(&parent, "alpha.txt", &parent, "AlPhA.txt").map(|_| ()), Err(Error::NoSpace), "{}", what);
+    let path = if dir.is_empty() { "alpha.txt".to_string() } else { format!("{}/alpha.txt", dir) };
+    let entry = v.find(&parent, "alpha.txt").unwrap();
+    assert_eq!(entry.name, "alpha.txt", "{}: the old name", what);
+    let free = v.free_clusters().unwrap();
+    as_before(v, &path, b"must survive", free, what);
+}
+
+#[test]
+fn a_refused_change_of_case_keeps_the_file() {
+    // The fixed root full.
+    let mut v = mounted(&formatted(4400));
+    let root = v.root();
+    alpha(&mut v, &root);
+    fill(&mut v, &root);
+    refused_case_change(v, "", "a full root");
+    // The fixed root with free slots, none next to another.
+    let mut v = mounted(&formatted(4400));
+    alpha(&mut v, &root);
+    let fillers = fill(&mut v, &root);
+    for k in (1..fillers).step_by(2) { v.remove(&root, &format!("f{:07}", k)).unwrap(); }
+    refused_case_change(v, "", "a fragmented root");
+    // A subdirectory that cannot grow on a full volume.
+    let mut v = mounted(&formatted(128));
+    let dir = v.create(&root, "d", true, STAMP).unwrap();
+    alpha(&mut v, &dir);
+    let free = v.free_clusters().unwrap();
+    let mut big = v.create(&root, "big", false, STAMP).unwrap();
+    v.write(&mut big, 0, &vec![0; (free * v.cluster_bytes()) as usize], STAMP).unwrap();
+    fill(&mut v, &dir);
+    refused_case_change(v, "d", "a full volume's subdirectory");
+}
+
+#[test]
+fn a_rename_that_fails_on_the_medium_keeps_one_name() {
+    // A change of case in the root, and a move into a subdirectory under a long name: each write failing once.
+    for (to_dir, new) in [("", "AlPhA.txt"), ("d", "Alpha moved here.txt")] {
+        let setup = || {
+            let mut v = mounted(&formatted(4400));
+            let root = v.root();
+            let data = alpha(&mut v, &root);
+            v.create(&root, "d", true, STAMP).unwrap();
+            v.flush().unwrap();
+            (v, data)
+        };
+        let (mut v, _) = setup();
+        let (root, target) = (v.root(), v.lookup(&v.root(), "d").unwrap());
+        let target = if to_dir.is_empty() { root } else { target };
+        let start = v.disk.writes;
+        v.rename(&root, "alpha.txt", &target, new).unwrap();
+        let count = v.disk.writes - start;
+        for k in 1..=count {
+            let (mut v, data) = setup();
+            let target = if to_dir.is_empty() { root } else { v.lookup(&root, "d").unwrap() };
+            v.disk.fail_write = v.disk.writes + k;
+            let what = format!("to {:?} as {:?}, write {} of {} failing", to_dir, new, k, count);
+            assert_eq!(v.rename(&root, "alpha.txt", &target, new).map(|_| ()), Err(Error::Io), "{}", what);
+            let free = v.free_clusters().unwrap();
+            v.flush().unwrap();
+            let mut v = mounted(&v.disk.view);
+            let report = v.check().unwrap();
+            assert!(report.clean() && report.files == 1, "{}: {:?}", what, report);
+            assert_eq!(v.free_clusters().unwrap(), free, "{}", what);
+            assert_eq!(v.find(&root, "alpha.txt").unwrap().name, "alpha.txt", "{}: the old name", what);
+            assert_eq!(contents_of(&mut v, "alpha.txt").unwrap(), data, "{}", what);
+        }
+    }
+}
+
+// The scenario of the dirty-bit tests: a file of three clusters made and flushed.
+fn scenario(v: &mut Volume<Medium>) -> Result<(), Error> {
+    let root = v.root();
+    let mut node = v.create(&root, "new.dat", false, STAMP)?;
+    let per = v.cluster_bytes() as usize;
+    v.write(&mut node, 0, &content(3, per * 3), STAMP)?;
+    v.flush()
+}
+
+// What a medium may hold after a power loss: if it reads clean, it holds either nothing of the scenario or all of it.
+fn clean_only_when_whole(medium: &[u8], per: usize, what: &str) {
+    let mut v = mounted(medium);
+    let report = v.check().unwrap();
+    if report.dirty { return; }
+    assert!(report.clean(), "{}: reads clean but {:?}", what, report);
+    match contents_of(&mut v, "new.dat") {
+        None => {}
+        Some(data) => assert_eq!(data, content(3, per * 3), "{}: reads clean with the file incomplete", what),
+    }
+}
+
+fn dirty_until_flushed(image: &[u8], what: &str) {
+    let mut v = mounted(image);
+    let per = v.cluster_bytes() as usize;
+    scenario(&mut v).unwrap();
+    let total = v.disk.applied;
+    assert!(total > 3);
+    // The power lost after each sector that reaches the medium.
+    for budget in 0..=total {
+        let mut v = mounted(image);
+        v.disk.budget = budget;
+        scenario(&mut v).unwrap();
+        clean_only_when_whole(&v.disk.medium, per, &format!("{}: power lost after {} of {} sectors", what, budget, total));
+    }
+    // Each flush failing once: the volume stays dirty until a flush succeeds, which leaves it clean and whole.
+    let flushes = v.disk.flushes;
+    for fail in 1..=flushes {
+        let mut v = mounted(image);
+        v.disk.fail_flush = fail;
+        let what = format!("{}: flush {} of {} failing", what, fail, flushes);
+        let failed = scenario(&mut v).is_err();
+        assert!(failed, "{}", what);
+        assert!(v.check().unwrap().dirty || v.lookup(&v.root(), "new.dat").is_err(), "{}: reads clean in memory", what);
+        clean_only_when_whole(&v.disk.medium, per, &what);
+        // Done again, the scenario completes.
+        let root = v.root();
+        if v.lookup(&root, "new.dat").is_ok() { v.remove(&root, "new.dat").unwrap(); }
+        scenario(&mut v).unwrap();
+        let mut v = mounted(&v.disk.medium);
+        let report = v.check().unwrap();
+        assert!(report.clean() && !report.dirty, "{}: after a good flush {:?}", what, report);
+    }
+}
+
+#[test]
+fn a_volume_reads_clean_only_after_a_good_flush() {
+    dirty_until_flushed(&formatted(4400), "FAT16");
+    if tools() {
+        let path = temp("dirty32");
+        let image = mkfs(&path, 32, 40);
+        dirty_until_flushed(&image.data, "FAT32");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+}
+
+#[test]
+fn the_first_fat_change_keeps_the_dirty_bit() {
+    // The FAT's first sector changed first after a flush (clusters below 256 on FAT16): written out by the cache before
+    // the volume's own flush, it must not carry the clean bit back.
+    let (mut v, _) = with_file(4400, 0);
+    let mut node = v.lookup(&v.root(), "log.dat").unwrap();
+    v.write(&mut node, 0, b"unflushed data", STAMP).unwrap();
+    assert!(node.cluster < 256);
+    assert!(v.disk.flush()); // the cache evicts everything, the volume does not flush
+    let report = mounted(&v.disk.medium).check().unwrap();
+    assert!(report.dirty, "{:?}", report);
+}

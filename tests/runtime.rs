@@ -21,7 +21,9 @@ mod memory;
 // The kernel's context switch is not built on the host: what paging.rs reads of it.
 mod context {
     pub static XSAVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    pub const AREA: usize = 1024;
+    pub static XCR0: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    pub fn set_area(_: usize) {}
+    pub fn area() -> usize { 1024 }
 }
 // The kernel's frame pool is not set up on the host: task memory comes from the allocator.
 mod frames {

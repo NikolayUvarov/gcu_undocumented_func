@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 31;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 32;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -65,6 +65,9 @@ pub const TRIAL_DEADLINE_S: u32 = 120;
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct LaunchRecord { pub key: [u8; 16], pub test_key: u32, pub images: u32 }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
+pub const FEATURE_AVX: u64 = 2; // x86: AVX and AVX2 registers are saved per task (174-KRN-0037)
+pub const FEATURE_AVX512: u64 = 4; // x86: AVX-512's ZMM and opmask registers are saved per task
+pub const FEATURE_AMX: u64 = 8; // x86: AMX's tile configuration and tiles are saved per task
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -375,6 +378,8 @@ pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel 
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL, _RESTART or _OBSERVE; b = PRIVILEGE_ESCROW: in escrow (not _RESTART)
 pub const PRIVILEGE_ESCROW: usize = 1;
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
+pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the hardware report's text, built now (174-KRN-0038)
+pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
@@ -425,6 +430,14 @@ pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
     let signed = |value: u32, bits: u32| ((value << (32 - bits)) as i32) >> (32 - bits);
     (event_mods(event), signed(field & 0x1FF, 9), signed(field >> 9 & 0x1FF, 9), signed(field >> 18 & 0xF, 4))
 }
+// A relative pointer event's horizontal wheel (211-DRV-0018: a trackpad's three-finger swipe): bits 34-37 of the event,
+// signed, positive to the right, where an absolute event keeps its wheel. Zero in every event made before; consumers that
+// do not read it see an ordinary pointer event.
+pub fn pointer_scroll(buttons: u8, dx: i32, dy: i32, wheel: i32, across: i32) -> usize {
+    pointer_event(buttons, dx, dy, wheel) | (across.clamp(-8, 7) as usize & 0xF) << 34
+}
+/// The horizontal wheel steps of a relative pointer event (0 for an absolute one).
+pub fn pointer_across(event: usize) -> i32 { if event & POINTER_ABSOLUTE != 0 { 0 } else { (((event >> 34) & 0xF) as i32) << 28 >> 28 } }
 // An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
 // movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
 // kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
@@ -478,7 +491,8 @@ pub const SYSCALL_SCHED_SET: usize = 52;
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
 // With the platform privilege as arg1, msg[0] = device index: any device, without enabling it (init's inventory).
 pub const SYSCALL_DEVICE_CONFIG: usize = 54;
-// REBOOT (process control): stops all CPUs and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
+// REBOOT (process control, or the restart privilege: init, for a service that may ask it, 351-KRN-0022): stops all CPUs
+// and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
 // else the 8042 controller, else a triple fault; on aarch64 PSCI SYSTEM_RESET. arg1 = REBOOT_POWER_OFF turns the
 // machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
 // return when it works.
@@ -526,7 +540,8 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub kernel_bytes: u64, // the task record, context, mailbox, info and exit pages, page tables, the capability table: in the frame pool, charged to its payers (171-KRN-0032)
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
-// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
+// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX, 0xE0 AVX-512, 0x60000 AMX), 0 with
+// FXSAVE (issue 153, 174-KRN-0037).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }
 // Task memory (bytes) by category, the kernel arena, the frame pool and the global limits. `largest_free` is searched for (trial allocations) only when
 // msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.

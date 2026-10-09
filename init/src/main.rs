@@ -5,11 +5,12 @@
 // each service's capabilities for restarts and gives up the platform privilege (MC-3.12). As the lifecycle owner it
 // restarts failed services within a budget and serves idl/init.wit: start, list, stop and restart services, stop an
 // application.
+mod hardware;
 mod legacy;
 
 use mind::abi::*;
 use mind::dev::cap_info;
-use mind::idl::{init as idl_init, wire};
+use mind::idl::{init as idl_init, netpolicy, vfs, wire};
 use mind::ipc::{self, Endpoint};
 use mind::platform;
 use mind::process::{grant, grant_moved, Image, Quota};
@@ -23,7 +24,8 @@ const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe priv
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege", "screen; process control; input; the serial line"];
+    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
+    "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -32,6 +34,7 @@ const NVME_DMA_BYTES: usize = 128 * 1024; // queues, identify page, PRP list and
 const VIRTIO_BLK_DMA_BYTES: usize = 128 * 1024; // the virtqueue, request headers and a 64 KiB data buffer
 const XHCI_DMA_BYTES: usize = 512 * 1024; // rings, contexts, scratchpad, a 64 KiB data buffer and a pool of pages (usb_host)
 const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list; capture: 16 buffers + list
+const HDA_DMA_BYTES: usize = (32 + 16 + 3) * 4096; // the same rings, two buffer lists, CORB and RIRB (551-DRV-0010)
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
@@ -114,6 +117,21 @@ impl Init {
     // A client of service `name` in the child's `slot`: a copy of the keeper narrowed to send rights, so init needs no
     // slot of its own for it (only badged clients are minted and kept).
     fn lend(&mut self, grants: &mut Grants, slot: usize, name: &str) -> Result<()> { let keeper = self.keeper(name)?; grants.copy(slot, keeper, CLIENT); Ok(()) }
+    // A flow grant the policy broker makes for `program` (idl/netpolicy.wit), kept for restarts; None when the broker does
+    // not run or its policy names nothing for the program.
+    fn flow(&mut self, minted: &mut Minted, program: &str) -> Option<usize> {
+        if !self.running(service_index("netpolicy")) { return None; }
+        let client = ipc::mint_badged(self.keeper("netpolicy").ok()?, CLIENT, 0).ok()?;
+        let broker = Endpoint(client);
+        let taken = netpolicy::prepare(broker, program).ok().and_then(|r| r.ok()).is_some_and(|badge| matches!(netpolicy::take(broker, badge, RECEIVED), Ok(Ok(()))));
+        let _ = ipc::drop_cap(client);
+        if !taken { return None; }
+        let slot = ipc::mint(RECEIVED, u8::MAX, 0, 0).ok();
+        let _ = ipc::drop_cap(RECEIVED);
+        let slot = slot?;
+        minted.slots[minted.count] = slot; minted.count += 1;
+        Some(slot)
+    }
     // The block store's own disk (300-KRN-0025): a VirtIO disk that is blank or starts with the store's superblock;
     // looked at once, through a client of init's own, before vfs_server or the store gets any disk.
     fn store_disk(&mut self) -> Option<&'static str> {
@@ -164,7 +182,13 @@ impl Init {
 
     // A PCI device BAR of the expected kind (port range or MMIO), or NotFound.
     fn bar(minted: &mut Minted, device: usize, bar: usize, kind: usize) -> Result<usize> {
+        // A BAR that shared its page with another kind of device moves when granted (211-KRN-0021): logged here, as a
+        // machine without COM1 shows no kernel line by then.
+        let at = || mind::dev::device_config_at(SLOT_DEV0, device, 0x10 + 4 * bar).map(|v| v & !0xF).unwrap_or(0);
+        let before = at();
         let slot = minted.mint(PLATFORM_DEVICE_BAR, device, bar)?;
+        let after = at();
+        if after != before { mind::println!("[INIT] DEVICE {} BAR {}: REGISTERS MOVED FROM {:08X} TO {:08X}, A PAGE OF THEIR OWN", device, bar, before, after); }
         if cap_info(slot).0 == kind { Ok(slot) } else { Err(Error::NotFound) }
     }
 
@@ -233,7 +257,10 @@ impl Init {
                 // behind them; each its BAR0 and its own DMA region.
                 for (nth, &(bar_slot, dma_slot)) in mind::usb::EHCI.iter().enumerate() {
                     let Ok(ehci) = platform::find_device(0x0C_03_20, 0xFF_FF_FF, nth) else { break };
-                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => { mind::println!("[INIT] EHCI {}: REGISTERS NOT GRANTED ({:?})", nth, e); continue } };
+                    let bar = match Self::bar(&mut minted, ehci, 0, CAP_KIND_MMIO) { Ok(bar) => bar, Err(e) => {
+                        let at = mind::dev::device_config_at(SLOT_DEV0, ehci, 0x10).unwrap_or(0) & !0xF;
+                        mind::println!("[INIT] EHCI {}: REGISTERS AT {:08X} NOT GRANTED ({:?})", nth, at, e); continue
+                    } };
                     grants.add(bar_slot, bar, 0); grants.add(dma_slot, platform::cap(PLATFORM_DMA, mind::usb::EHCI_DMA_BYTES, 0)?, 0);
                 }
             }
@@ -305,8 +332,18 @@ impl Init {
             }
             "audio_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "audio_gw")?, ALL);
+                // Intel HD Audio (class 04:03, 551-DRV-0010): BAR0's registers, its line where it has one below 16 (else
+                // the gateway polls) and a DMA region. Every PC has it; it wins over AC97.
+                if let Ok(device) = platform::find_device(0x04_03_00, 0xFF_FF_00, 0) {
+                    self.devices[index] = Some(device);
+                    if let Ok(bar) = Self::bar(&mut minted, device, 0, CAP_KIND_MMIO) {
+                        grants.add(SLOT_DEV0, bar, 0);
+                        if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
+                        grants.copy(SLOT_MEM, self.dma(index, HDA_DMA_BYTES)?, 0);
+                    }
+                }
                 // LEGACY: AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
-                if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
+                else if let Ok(device) = platform::find_device(0x04_01_00, 0xFF_FF_00, 0) {
                     self.devices[index] = Some(device);
                     let devices = (|| -> Result<[usize; 3]> { Ok([Self::bar(&mut minted, device, 0, CAP_KIND_PORTS)?, Self::bar(&mut minted, device, 1, CAP_KIND_PORTS)?, minted.mint(PLATFORM_DEVICE_IRQ, device, 0)?]) })();
                     if let Ok([mixer, bus_master, irq]) = devices {
@@ -351,6 +388,21 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_KEYSTORE)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }
+            // The updater (351-KRN-0022): the clock and a read-only view of the boot disk; TLS over the flow the policy
+            // gives "updater" (made here and kept for restarts: the policy's term bounds it); a lifecycle client of init
+            // that may ask for a restart of the machine; the firmware's boot variables. The update zone comes with
+            // 351-UPD-0008.
+            "updater" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "updater")?, ALL);
+                self.lend(&mut grants, SLOT_RTC, "rtc")?; self.lend(&mut grants, SLOT_VFS, "vfs_server")?;
+                if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
+                match self.flow(&mut minted, "updater") {
+                    Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
+                    None => mind::println!("[INIT] updater: NO NETWORK GRANT (THE POLICY NAMES NOTHING FOR IT)"),
+                }
+                grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
+                grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
+            }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
@@ -388,7 +440,8 @@ impl Init {
             "shell" => {
                 // Application slots plus process control, input injection (UART) and the serial line.
                 flags |= SPAWN_SCREEN;
-                grants.copy(SLOT_INIT, SLOT_SERVICE, CLIENT);
+                // Badged: an unbadged copy could be badged for reboot by whoever holds it (351-KRN-0022).
+                grants.add(SLOT_INIT, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_LIFECYCLE)?, CLIENT);
                 for (slot, service) in [(SLOT_RTC, "rtc"), (SLOT_AUDIO, "audio_gw"), (SLOT_LOADER, "loader"), (SLOT_TTS, "tts")] { self.lend(&mut grants, slot, service)?; }
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
@@ -533,7 +586,7 @@ impl Init {
         })
     }
 
-    fn serve(&mut self, request: idl_init::Request, call: wire::Call) -> Result<()> {
+    fn serve(&mut self, request: idl_init::Request, call: wire::Call, badge: u16) -> Result<()> {
         use idl_init::{Error as E, Request};
         match request {
             Request::Run { name } => {
@@ -555,7 +608,35 @@ impl Init {
                 let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
+            // Only the updater's badged client may restart the machine (351-KRN-0022).
+            Request::Reboot if badge != mind::process::BADGE_REBOOT => idl_init::reply_reboot(call, Err(E::Denied)),
+            Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
         }
+    }
+
+    // A restart of the machine the updater asked for: what the volumes cache is written, the services stop in reverse
+    // start order (their devices quiesced), then the reset through the restart privilege.
+    fn reboot(&mut self) -> ! {
+        mind::println!("[INIT] RESTARTING THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED");
+        if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
+            for volume in ["", "ram", "log"] {
+                if let Ok(Ok(handle)) = vfs::root(Endpoint(client), volume) { let _ = vfs::flush(Endpoint(client), handle); let _ = vfs::close(Endpoint(client), handle); }
+            }
+            let _ = ipc::drop_cap(client);
+        }
+        let (mut order, mut count) = ([0usize; UNITS], 0);
+        for index in boot_order() { order[count] = index; count += 1; }
+        for &index in order[..count].iter().rev() {
+            if !self.running(index) { continue; }
+            let pid = self.pids[index];
+            self.stopped[index] = true;
+            let _ = mind::control::kill(pid);
+            for _ in 0..200 { if !mind::process::alive(pid) { break; } mind::time::sleep(10); }
+            self.quiesce(index);
+            mind::println!("[INIT] STOPPED {} PID={}", unit_name(index), pid);
+        }
+        let _ = mind::control::reboot();
+        loop { mind::time::sleep(1000); }
     }
 }
 
@@ -566,6 +647,12 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
 }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
+
+// Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
+// instances of an image follow its first one.
+fn boot_order() -> impl Iterator<Item = usize> {
+    (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
+}
 
 // The pause for a photo of the boot screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
 const PHOTO_PAUSE_MS: usize = 5000;
@@ -583,9 +670,9 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
-    // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
-    // instances of an image follow its first one.
-    let order = (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)));
+    let order = boot_order();
+    // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
+    mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
     {
         let (launch, slot) = (&info.launch, &info.boot_slot);
@@ -626,6 +713,8 @@ fn main(info: &'static BootInfo) {
     // End of the initial distribution (MC-3.12): restarts need only what init keeps and the narrower restart privilege.
     // The boot is good when every boot service started and vfs_server mounted the boot volume; on a trial boot the
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
+    // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
+    if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     let mounted = init.boot_volume_mounted();
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
@@ -643,6 +732,7 @@ fn main(info: &'static BootInfo) {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
-        let _ = match idl_init::decode(&request, RECEIVED) { Ok((request, call)) => init.serve(request, call), Err(reason) => wire::reject(reason) };
+        let badge = request.badge;
+        let _ = match idl_init::decode(&request, RECEIVED) { Ok((decoded, call)) => init.serve(decoded, call, badge), Err(reason) => wire::reject(reason) };
     }
 }

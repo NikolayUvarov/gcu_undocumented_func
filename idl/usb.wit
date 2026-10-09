@@ -2,7 +2,7 @@
 /// enumerates devices (through hubs) and hands each interface to one class driver; `usb_hid` and `usb_storage` are its
 /// clients. A client's badge names the device class it may claim (`mind::usb::BADGE_HID`, `BADGE_STORAGE`), so a class
 /// driver reaches only its own interfaces (MC-3.3). Data travel through the client's buffer, lent with `attach`.
-package mind:usb@1.0.0;
+package mind:usb@1.1.0;
 
 interface usb {
     /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -26,4 +26,9 @@ interface usb {
     /// The reports received on the interrupt IN endpoint with address `address` since the last call, written at the buffer's start as
     /// a length byte and the report each; returns their count. The first call starts polling the endpoint.
     reports: func(handle: u32, address: u8) -> result<u16, error-code>;
+    /// 1.1 (211-DRV-0018): as `reports`, for an endpoint whose reports span several packets and end with a short one
+    /// (a MacBook trackpad's finger data), up to `longest` bytes each (at most 512; 64 on xHCI for now). Each is written
+    /// as two length bytes, low first, and the report. The first call starts polling with that length; a later one with
+    /// another length is refused (invalid).
+    reports-up-to: func(handle: u32, address: u8, longest: u16) -> result<u16, error-code>;
 }

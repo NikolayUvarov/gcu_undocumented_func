@@ -1,0 +1,55 @@
+# 551-DRV-0010 — Intel HD Audio in `audio_gw`: controller, codecs, playback and capture
+
+**Type:** driver · **Owner:** `DRV` (open; made by the kernel session for 551) · **Priority:** P1 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [551](551-sound-on-pcs.md) · **Constitution:** MC-1.5, MC-6.3, MC-11.4
+
+## Problem
+
+`audio_gw` drives only AC97. Real PCs and the MacBook Pro have Intel High Definition Audio (PCI class 04:03), so the voice programs have no microphone and no output there (551).
+
+## Plan
+
+- **init** grants `audio_gw` the first HDA controller's BAR0, its interrupt (MSI-X or MSI where the kernel offers it, else the line) and a DMA region, as it grants AC97's today. With both an HDA and an AC97 card present, HDA wins.
+- **The controller:**
+  - reset;
+  - CORB and RIRB in the DMA region, for verbs and their responses;
+  - the codecs found from STATESTS;
+  - one output and one input stream descriptor, each with its buffer descriptor list;
+  - stream reset, 48 kHz 16-bit stereo format, the run bit;
+  - position from the stream's LPIB;
+  - the interrupt on each buffer completion.
+- **The codecs:**
+  - walk the audio function group's widgets (audio output and input converters, pins, mixers and selectors);
+  - read each pin's default configuration (device: speaker, headphone, line out, microphone; connectivity: jack, internal, none) and its connection lists;
+  - choose an output path (internal speaker, else headphone, else line out) and an input path (internal microphone, else microphone jack);
+  - set the converter's stream and format, unmute the amplifiers along the paths and enable the pins (EAPD where a pin has it).
+- **Interface:** `idl/audio.wit` unchanged.
+  - `play` and `wait` feed the output stream from the lent buffer.
+  - `record-start`, `record-read` and `record-stop` read the input stream; one owner as now.
+  - `device` says HDA.
+- **Restart (MC-6.3):** the stream run bits clear and the controller is reset before a new instance starts; the DMA region is cleared, as for the other drivers.
+- **Log:** the controller, the codecs (vendor and device IDs, revision) and the chosen pins with their configurations, for the hardware report.
+
+## Acceptance criteria
+
+- **QEMU x86:** `-device intel-hda -device hda-duplex` and `-device ich9-intel-hda -device hda-micro`. The `audio` suite's tones arrive in QEMU's wav backend, and `listen` records the input QEMU feeds. AC97 still passes.
+- **The MacBook Pro:** the controller and the CS4206 are found and logged. Speaker output and microphone input are 551's next step.
+
+## Progress
+
+**2026-10-09: HDA plays and records in QEMU.**
+
+- **init** grants the first HDA controller's BAR0, its line where it has one below 16, and a 204 KiB DMA region; HDA wins over AC97.
+- **`audio_gw/src/hda.rs`:**
+  - **Controller:** reset; CORB and RIRB in the DMA region. RIRBCTL's response flag is on (CIE off), because a controller stops taking verbs after RINTCNT responses until that flag is cleared; QEMU's does, and the first boot hung on it.
+  - **Codec walk:** the function group and its widgets, connection lists (short and long form, ranges), pin capabilities and default configurations.
+  - **Output path:** an internal speaker, else headphones, else line out, to a DAC; amplifiers unmuted at 0 dB, selectors set, the pin enabled, EAPD where the pin has it.
+  - **Input path:** an internal microphone, else a microphone jack, else line in, from an ADC; the microphone pin's bias at 80 % where it offers it.
+  - **Streams:** one output and one input, each cyclic over its buffer list. Played buffers are cleared, so a ring the writer left plays silence. The position comes from LPIB, read on the interrupt or by the gateway's 20 ms polling while a stream runs.
+- **`audio_gw/src/main.rs`:** a `Device` of HDA or AC97 behind the same `idl/audio.wit`. It logs `[AUDIO] HDA READY: CODEC c VVVV:DDDD REVISION …; OUT PIN … <- DAC …; IN PIN … -> ADC …`.
+- **Tests:** the `hda` suite (x86, CI group "services, storage, audio") runs QEMU's `intel-hda` with `hda-duplex`. beep's demo tones come out in the wav backend, and `listen` records 48000 frames. The `audio` and `listen` suites still pass on AC97.
+
+Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and the internal microphone are 551's step 2).
+
+## Related
+
+[551](551-sound-on-pcs.md), the AC97 path in `audio_gw/src/main.rs`.

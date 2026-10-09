@@ -13,16 +13,56 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailb
     unsafe {
         // AVX when the CPU has it and the kernel saves its state (OSXSAVE, XCR0 with SSE and AVX; issue 153).
         let ecx = core::arch::x86_64::__cpuid(1).ecx;
-        let avx = ecx & (1 << 27) != 0 && ecx & (1 << 28) != 0 && {
+        let xcr0 = if ecx & (1 << 27) != 0 {
             let (low, _high): (u32, u32);
             asm!("xgetbv", in("ecx") 0u32, out("eax") low, out("edx") _high);
-            low & 6 == 6
-        };
-        let message: &[u8] = if avx { b"BUSY FIXTURE: NO WAIT/YIELD CALLS, AVX\r\n" } else { b"BUSY FIXTURE: NO WAIT/YIELD CALLS\r\n" };
+            low
+        } else { 0 };
+        let avx = ecx & (1 << 28) != 0 && xcr0 & 6 == 6;
+        // AVX-512 when the kernel saves opmask, ZMM_Hi256 and Hi16_ZMM too (174-KRN-0037).
+        let avx512 = avx && xcr0 & 0xE0 == 0xE0;
+        let message: &[u8] = if avx512 { b"BUSY FIXTURE: NO WAIT/YIELD CALLS, AVX-512\r\n" } else if avx { b"BUSY FIXTURE: NO WAIT/YIELD CALLS, AVX\r\n" } else { b"BUSY FIXTURE: NO WAIT/YIELD CALLS\r\n" };
         (*mailbox).syscall_num = 3;
         (*mailbox).arg1 = message.as_ptr() as usize;
         (*mailbox).arg2 = message.len();
         asm!("int 0x80");
+        if avx512 {
+            // zmm0's upper half, zmm31 (Hi16_ZMM) and k1 hold values only this task wrote.
+            asm!(
+                "rdtsc",
+                "shl rdx, 32",
+                "or rax, rdx",
+                "mov r12, rax",
+                "not rax",
+                "mov r13, rax",
+                "vpbroadcastq zmm0, r12",
+                "vpbroadcastq zmm1, r13",
+                "vinserti64x4 zmm0, zmm0, ymm1, 1",
+                "vmovdqa64 zmm31, zmm0",
+                "mov eax, r12d",
+                "kmovw k1, eax",
+                "2:",
+                "vmovq rax, xmm0",
+                "cmp rax, r12",
+                "jne 3f",
+                "vextracti64x4 ymm2, zmm0, 1",
+                "vmovq rax, xmm2",
+                "cmp rax, r13",
+                "jne 3f",
+                "vextracti64x4 ymm3, zmm31, 1",
+                "vmovq rax, xmm3",
+                "cmp rax, r13",
+                "jne 3f",
+                "kmovw eax, k1",
+                "cmp ax, r12w",
+                "jne 3f",
+                "inc rdx",
+                "jmp 2b",
+                "3:",
+                "ud2",
+                options(noreturn)
+            );
+        }
         if avx {
             // Both halves of ymm0 hold values only this task wrote; another AVX task on the CPU writes its own.
             asm!(

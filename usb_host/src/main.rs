@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 // Ring 3 USB host controller driver (issue 164): the xHCI controller through its MMIO capability and a DMA region. It
 // enumerates the devices on the root ports and behind USB 2 hubs, configures the endpoints of the interfaces it has
 // class drivers for (HID, mass storage), and serves idl/usb.wit: a class driver claims an interface of the one class
@@ -417,9 +418,12 @@ impl Host {
         }
     }
 
-    fn reports(&mut self, badge: u16, handle: u32, address: u8) -> Result<u16> {
+    // Reports of an interrupt IN endpoint, each after a length byte; with `longest` (usb.wit 1.1), reports of several
+    // packets after two length bytes. xHCI keeps to one packet of up to 64 bytes for now (211-DRV-0018).
+    fn reports(&mut self, badge: u16, handle: u32, address: u8, longest: Option<u16>) -> Result<u16> {
         let (index, iface) = self.interface(handle, badge)?;
-        if let Some((b, _)) = ehci_device(handle) { return self.ehci_reports(b, badge, index, iface, address); }
+        if longest.is_some_and(|l| l == 0 || l as usize > 512) { return Err(Error::Invalid); }
+        if let Some((b, _)) = ehci_device(handle) { return self.ehci_reports(b, badge, index, iface, address, longest); }
         let device = self.devices[index].ok_or(Error::NotFound)?;
         let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_interrupt() && e.is_in()).ok_or(Error::Invalid)?;
         let target = dci(address);
@@ -432,8 +436,9 @@ impl Host {
                 self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }
         };
-        let mut out = [0u8; 8 * 65]; let mut at = 0;
-        let count = self.xhci.take_reports(armed, |report| { out[at] = report.len() as u8; out[at + 1..at + 1 + report.len()].copy_from_slice(report); at += 1 + report.len(); })
+        let wide = longest.is_some();
+        let mut out = [0u8; 8 * 66]; let mut at = 0;
+        let count = self.xhci.take_reports(armed, |report| { at += put(&mut out[at..], report, wide); })
             .map_err(|_| Error::NotFound)?;
         self.buffer(badge)?[..at].copy_from_slice(&out[..at]);
         Ok(count as u16)
@@ -473,23 +478,27 @@ impl Host {
         }
     }
 
-    fn ehci_reports(&mut self, b: usize, badge: u16, index: usize, iface: usize, address: u8) -> Result<u16> {
+    #[allow(clippy::too_many_arguments)]
+    fn ehci_reports(&mut self, b: usize, badge: u16, index: usize, iface: usize, address: u8, longest: Option<u16>) -> Result<u16> {
         let Host { ehci, buffers, .. } = self;
         let bus = ehci[b].as_mut().ok_or(Error::NotFound)?;
         let endpoint = bus.devices[index].ok_or(Error::NotFound)?.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_interrupt() && e.is_in()).ok_or(Error::Invalid)?;
         let qh = bus.pipe_of(index, address).ok_or(Error::Invalid)?;
+        let wanted = longest.filter(|&l| l > endpoint.packet);
         let armed = match bus.hc.armed(qh) {
+            Some(armed) if wanted.is_some_and(|l| l as u32 != bus.hc.armed_length(armed)) => return Err(Error::Invalid),
             Some(armed) => armed,
             None => {
-                if !bus.hc.arm(qh, endpoint.packet) { return Err(Error::NoMemory); }
-                mind::println!("[USB] EHCI {} DEVICE {} ENDPOINT {:02X}: POLLED (PACKET {}, INTERVAL {})", b, bus.address_of(index), address, endpoint.packet, endpoint.interval);
+                if !bus.hc.arm(qh, endpoint.packet, wanted) { return Err(Error::NoMemory); }
+                mind::println!("[USB] EHCI {} DEVICE {} ENDPOINT {:02X}: POLLED (PACKET {}, INTERVAL {}, REPORTS UP TO {} BYTES)", b, bus.address_of(index), address, endpoint.packet, endpoint.interval,
+                    wanted.unwrap_or(endpoint.packet));
                 bus.hc.armed(qh).ok_or(Error::NoMemory)?
             }
         };
-        let mut out = [0u8; 8 * 65]; let mut at = 0;
-        let count = bus.hc.take_reports(armed, |report| { out[at] = report.len() as u8; out[at + 1..at + 1 + report.len()].copy_from_slice(report); at += 1 + report.len(); })
-            .map_err(|_| Error::NotFound)?;
-        buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice()[..at].copy_from_slice(&out[..at]);
+        let wide = longest.is_some();
+        let buffer = buffers.get_mut(badge as usize).and_then(Option::as_mut).ok_or(Error::NotFound)?.as_mut_slice();
+        let mut at = 0;
+        let count = bus.hc.take_reports(armed, |report| { at += put(&mut buffer[at..], report, wide); }).map_err(|_| Error::NotFound)?;
         Ok(count as u16)
     }
 
@@ -508,9 +517,20 @@ impl Host {
             usb::Request::Release { handle } => { let r = self.release(handle, badge); usb::reply_release(call, r) }
             usb::Request::Control { handle, request_type, request, value, index, length } => { let r = self.control_request(badge, handle, request_type, request, value, index, length); usb::reply_control(call, r) }
             usb::Request::Bulk { handle, address, offset, length } => { let r = self.bulk(badge, handle, address, offset, length); usb::reply_bulk(call, r) }
-            usb::Request::Reports { handle, address } => { let r = self.reports(badge, handle, address); usb::reply_reports(call, r) }
+            usb::Request::Reports { handle, address } => { let r = self.reports(badge, handle, address, None); usb::reply_reports(call, r) }
+            usb::Request::ReportsUpTo { handle, address, longest } => { let r = self.reports(badge, handle, address, Some(longest)); usb::reply_reports_up_to(call, r) }
         };
     }
+}
+
+// One report into `out` after its length (one byte, or two, low first, when `wide`); the bytes written.
+fn put(out: &mut [u8], report: &[u8], wide: bool) -> usize {
+    let head = if wide { 2 } else { 1 };
+    let length = report.len().min(if wide { u16::MAX as usize } else { u8::MAX as usize }).min(out.len().saturating_sub(head));
+    if out.len() < head { return 0; }
+    if wide { out[..2].copy_from_slice(&(length as u16).to_le_bytes()); } else { out[0] = length as u8; }
+    out[head..head + length].copy_from_slice(&report[..length]);
+    head + length
 }
 
 mind::entry!(main);

@@ -150,7 +150,7 @@ pub struct Volume<S: Sectors> {
     pub disk: S,
     start: u32, bits: u8, spc: u32, fats: u32, fat_size: u32, fat_start: u32, root_start: u32, root_sectors: u32, data_start: u32,
     root_cluster: u32, clusters: u32, fsinfo: u32, label: [u8; 11],
-    changed: bool, next_free: u32, free: Option<u32>,
+    changed: bool, dirtied: bool, next_free: u32, free: Option<u32>,
 }
 
 impl<S: Sectors> Volume<S> {
@@ -177,7 +177,7 @@ impl<S: Sectors> Volume<S> {
         if boot[if bits == 32 { 66 } else { 38 }] == 0x29 { label.copy_from_slice(&boot[label_at..label_at + 11]); }
         let mut volume = Self { disk, start, bits, spc, fats, fat_size, fat_start: start + reserved, root_start: start + reserved + fats * fat_size, root_sectors,
                                 data_start: start + data, root_cluster: if bits == 32 { u32_at(&boot, 44) } else { 0 }, clusters,
-                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, next_free: 2, free: None };
+                                fsinfo: if bits == 32 { start + u16_at(&boot, 48) } else { 0 }, label, changed: false, dirtied: false, next_free: 2, free: None };
         // The label entry in the root directory wins over the boot sector's copy.
         let root = volume.root();
         if let Ok(sectors) = volume.dir_sectors(&root) {
@@ -201,9 +201,9 @@ impl<S: Sectors> Volume<S> {
         format(&mut self.disk, label, stamp)?;
         if !self.disk.flush() { return Err(Error::Io); }
         let Ok(fresh) = Volume::mount(&mut self.disk) else { return Err(Error::Io) };
-        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, next_free, free } = fresh;
+        let Volume { disk: _, start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors, data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free } = fresh;
         (self.start, self.bits, self.spc, self.fats, self.fat_size, self.fat_start, self.root_start, self.root_sectors) = (start, bits, spc, fats, fat_size, fat_start, root_start, root_sectors);
-        (self.data_start, self.root_cluster, self.clusters, self.fsinfo, self.label, self.changed, self.next_free, self.free) = (data_start, root_cluster, clusters, fsinfo, label, changed, next_free, free);
+        (self.data_start, self.root_cluster, self.clusters, self.fsinfo, self.label, self.changed, self.dirtied, self.next_free, self.free) = (data_start, root_cluster, clusters, fsinfo, label, changed, dirtied, next_free, free);
         Ok(())
     }
 
@@ -238,8 +238,10 @@ impl<S: Sectors> Volume<S> {
         }
         Ok(())
     }
-    // The same bytes in every FAT copy.
+    // The same bytes in every FAT copy. The volume is marked dirty before any sector is read: that mark rewrites FAT
+    // sector 0, and a copy read before it would overwrite it (175-KRN-0049).
     fn set_fat_bytes(&mut self, offset: u32, bytes: &[u8]) -> Result<()> {
+        self.changing()?;
         for copy in 0..self.fats {
             let base = self.fat_start + copy * self.fat_size;
             let mut i = 0;
@@ -275,16 +277,25 @@ impl<S: Sectors> Volume<S> {
         }
     }
 
-    // The first change since the last flush marks the volume dirty (FAT[1]) and, on FAT32, the free count unknown.
+    // The first change since the last flush marks the volume dirty (FAT[1]) and, on FAT32, the free count unknown. The
+    // mark is flushed by itself, so it is on the medium before any change it covers (175-KRN-0049); if it fails, the
+    // next change tries again.
     fn changing(&mut self) -> Result<()> {
         if self.changed { return Ok(()); }
         if !self.disk.writable() { return Err(Error::ReadOnly); }
-        self.changed = true;
+        self.changed = true; // first: the writes below come back here
+        self.dirtied = true; // a mark that failed half way is cleared by the next flush too
+        let marked = self.mark_dirty();
+        if marked.is_err() { self.changed = false; }
+        marked
+    }
+    fn mark_dirty(&mut self) -> Result<()> {
         self.set_clean(false)?;
         if self.bits == 32 && self.fsinfo != 0 {
             let mut info = self.read_sector(self.fsinfo)?;
             if u32_at(&info, 0) == 0x4161_5252 && u32_at(&info, 484) == 0x6141_7272 { put32(&mut info, 488, u32::MAX); put32(&mut info, 492, u32::MAX); self.write_sector(self.fsinfo, &info)?; }
         }
+        if self.bits != 12 && !self.disk.flush() { return Err(Error::Io); }
         Ok(())
     }
 
@@ -298,10 +309,21 @@ impl<S: Sectors> Volume<S> {
         self.set_fat_bytes(offset, &value.to_le_bytes()[..width])
     }
 
-    /// Writes everything to the medium and marks the volume clean.
+    /// Writes everything to the medium and marks the volume clean: the clean bit is written only after the rest has
+    /// reached the medium, and flushed by itself (175-KRN-0049). After an error the volume stays dirty.
     pub fn flush(&mut self) -> Result<()> {
-        if self.changed { self.set_clean(true)?; self.changed = false; }
-        if self.disk.flush() { Ok(()) } else { Err(Error::Io) }
+        if !self.dirtied || self.bits == 12 {
+            if !self.disk.flush() { return Err(Error::Io); }
+            self.changed = false;
+            return Ok(());
+        }
+        if !self.disk.flush() { return Err(Error::Io); }
+        self.changed = true; // the clean mark below is no change to mark dirty for
+        if self.set_clean(true).is_ok() && self.disk.flush() { (self.changed, self.dirtied) = (false, false); return Ok(()); }
+        // The bit may be clean in the cache: it is marked dirty again now, or before the next change at the latest.
+        self.changed = false;
+        let _ = self.changing();
+        Err(Error::Io)
     }
 
     /// Free clusters (counted once, then kept up to date).
@@ -315,19 +337,65 @@ impl<S: Sectors> Volume<S> {
 
     // A free cluster marked as the end of a chain and linked after `previous` (0: none); `zero` clears it.
     fn allocate(&mut self, previous: u32, zero: bool) -> Result<u32> {
+        let cluster = self.free_run(1)?[0];
+        if zero { for s in 0..self.spc { let lba = self.sector_of(cluster) + s; self.write_sector(lba, &[0; SECTOR])?; } }
+        self.link_chain(previous, &[cluster])?;
+        Ok(cluster)
+    }
+
+    // `count` free clusters, found without taking any: NoSpace changes nothing (175-KRN-0047).
+    fn free_run(&mut self, count: usize) -> Result<Vec<u32>> {
         let total = self.clusters;
+        let mut found = Vec::new();
         for i in 0..total {
+            if found.len() == count { break; }
             let cluster = 2 + (self.next_free.saturating_sub(2) + i) % total;
-            if self.fat(cluster)? != 0 { continue; }
-            if zero { for s in 0..self.spc { let lba = self.sector_of(cluster) + s; self.write_sector(lba, &[0; SECTOR])?; } }
-            let eoc = self.eoc();
-            self.set_fat(cluster, eoc)?;
-            if previous != 0 { self.set_fat(previous, cluster)?; }
-            self.next_free = cluster + 1;
-            if let Some(free) = self.free.as_mut() { *free -= 1; }
-            return Ok(cluster);
+            if self.fat(cluster)? == 0 { found.push(cluster); }
         }
-        Err(Error::NoSpace)
+        if found.len() < count { return Err(Error::NoSpace); }
+        Ok(found)
+    }
+
+    // Free `clusters` made one chain after `previous` (0: none): the end marked first, `previous` linked last. On an
+    // error the clusters are freed again and `previous` keeps its end.
+    fn link_chain(&mut self, previous: u32, clusters: &[u32]) -> Result<()> {
+        let eoc = self.eoc();
+        let mut marked = 0;
+        let mut result = Ok(());
+        for k in (0..clusters.len()).rev() {
+            let next = clusters.get(k + 1).copied().unwrap_or(eoc);
+            if let Err(error) = self.set_fat(clusters[k], next) { result = Err(error); break; }
+            marked += 1;
+        }
+        if result.is_ok() && previous != 0 {
+            result = self.set_fat(previous, clusters[0]);
+            if result.is_err() && self.set_fat(previous, eoc).is_err() { self.free = None; }
+        }
+        if let Err(error) = result {
+            // The one that failed too: its first FAT copy may hold the mark.
+            for &cluster in clusters.iter().rev().take(marked + 1) { if self.set_fat(cluster, 0).is_err() { self.free = None; } }
+            return Err(error);
+        }
+        if let Some(&last) = clusters.last() { self.next_free = last + 1; }
+        if let Some(free) = self.free.as_mut() { *free -= clusters.len() as u32; }
+        Ok(())
+    }
+
+    // After a failed write, `node`'s chain is cut back to the `length` clusters it had (all freed for 0) and `node` is
+    // as it was (175-KRN-0047). Errors here leave the volume dirty for a check.
+    fn cut_back(&mut self, node: &mut Node, before: Node, length: usize) {
+        if node.cluster >= 2 {
+            match self.chain(node.cluster) {
+                Ok(chain) if chain.len() > length => {
+                    let eoc = self.eoc();
+                    let cut = if length == 0 { self.free_chain(chain[0]) } else { self.set_fat(chain[length - 1], eoc).and_then(|_| self.free_chain(chain[length])) };
+                    if cut.is_err() { self.free = None; }
+                }
+                Ok(_) => {}
+                Err(_) => self.free = None,
+            }
+        }
+        *node = before;
     }
 
     fn free_chain(&mut self, first: u32) -> Result<()> {
@@ -465,10 +533,12 @@ impl<S: Sectors> Volume<S> {
         let per = self.cluster_bytes() as usize;
         let end = offset as usize + data.len();
         let mut chain = if node.cluster >= 2 { self.chain(node.cluster)? } else { Vec::new() };
-        while chain.len() * per < end {
-            let cluster = self.allocate(chain.last().copied().unwrap_or(0), false)?;
-            if chain.is_empty() { node.cluster = cluster; }
-            chain.push(cluster);
+        // All the clusters needed are found before any is linked.
+        if chain.len() * per < end {
+            let fresh = self.free_run(end.div_ceil(per) - chain.len())?;
+            self.link_chain(chain.last().copied().unwrap_or(0), &fresh)?;
+            if chain.is_empty() { node.cluster = fresh[0]; }
+            chain.extend(fresh);
         }
         let mut done = 0;
         while done < data.len() {
@@ -492,17 +562,32 @@ impl<S: Sectors> Volume<S> {
         Ok(())
     }
 
-    /// Writes `data` at `offset` (a gap after the end reads as zeros); the size, stamp and archive bit follow.
+    // The clusters of `node`'s chain when a write ending at `end` may grow it, for `cut_back`; None when it cannot grow.
+    fn grows(&mut self, node: &Node, end: u32) -> Result<Option<usize>> {
+        let per = self.cluster_bytes();
+        if node.cluster >= 2 && end <= node.size.div_ceil(per) * per { return Ok(None); }
+        Ok(Some(if node.cluster >= 2 { self.chain(node.cluster)?.len() } else { 0 }))
+    }
+
+    /// Writes `data` at `offset` (a gap after the end reads as zeros); the size, stamp and archive bit follow. A write
+    /// that fails leaves the file as it was, its chain cut back (175-KRN-0047).
     pub fn write(&mut self, node: &mut Node, offset: u32, data: &[u8], stamp: u32) -> Result<usize> {
         if node.is_dir() { return Err(Error::IsDirectory); }
         if !self.disk.writable() { return Err(Error::ReadOnly); }
         let end = offset.checked_add(data.len() as u32).ok_or(Error::NoSpace)?;
-        if offset > node.size { let size = node.size; self.zeros(node, size, offset)?; }
-        self.write_raw(node, offset, data)?;
-        node.size = node.size.max(end);
-        node.modified = stamp;
-        node.attributes |= ATTR_ARCHIVE;
-        self.store(node)?;
+        let (before, length) = (*node, self.grows(node, end)?);
+        let result = (|| {
+            if offset > node.size { let size = node.size; self.zeros(node, size, offset)?; }
+            self.write_raw(node, offset, data)?;
+            node.size = node.size.max(end);
+            node.modified = stamp;
+            node.attributes |= ATTR_ARCHIVE;
+            self.store(node)
+        })();
+        if let Err(error) = result {
+            match length { Some(length) => self.cut_back(node, before, length), None => *node = before }
+            return Err(error);
+        }
         Ok(data.len())
     }
 
@@ -519,7 +604,14 @@ impl<S: Sectors> Volume<S> {
     pub fn truncate(&mut self, node: &mut Node, size: u32, stamp: u32) -> Result<()> {
         if node.is_dir() { return Err(Error::IsDirectory); }
         if !self.disk.writable() { return Err(Error::ReadOnly); }
-        if size > node.size { let old = node.size; self.zeros(node, old, size)?; }
+        if size > node.size {
+            // Growing: a failure leaves the file as it was (175-KRN-0047).
+            let (before, length) = (*node, self.grows(node, size)?);
+            let old = node.size;
+            let grown = (|| { self.zeros(node, old, size)?; node.size = size; node.modified = stamp; node.attributes |= ATTR_ARCHIVE; self.store(node) })();
+            if grown.is_err() { match length { Some(length) => self.cut_back(node, before, length), None => *node = before } }
+            return grown;
+        }
         else if node.cluster >= 2 {
             let keep = size.div_ceil(self.cluster_bytes());
             if keep == 0 { let first = node.cluster; self.free_chain(first)?; node.cluster = 0; }
@@ -572,10 +664,12 @@ impl<S: Sectors> Volume<S> {
         Ok(())
     }
 
-    // Writes the entries of `name` (the long name if needed, then the short one) for `node` into `dir`.
-    fn link(&mut self, dir: &Node, name: &str, node: &mut Node) -> Result<()> {
+    // Writes the entries of `name` (the long name if needed, then the short one) for `node` into `dir`; returns their
+    // slots. `own`: a short name that does not count as taken (the entry being renamed keeps its alias). On an error the
+    // slots written are freed again.
+    fn link(&mut self, dir: &Node, name: &str, node: &mut Node, own: Option<[u8; 11]>) -> Result<Vec<At>> {
         let mut shorts: Vec<[u8; 11]> = Vec::new();
-        self.scan(dir, &mut |e| { shorts.push(e.short); true })?;
+        self.scan(dir, &mut |e| { if Some(e.short) != own { shorts.push(e.short); } true })?;
         let (short, long, case) = short_name(name, &|s| shorts.contains(s)).ok_or(Error::Name)?;
         let units: Vec<u16> = name.encode_utf16().collect();
         let parts = if long { units.len().div_ceil(13) } else { 0 };
@@ -600,17 +694,30 @@ impl<S: Sectors> Volume<S> {
                 raw[12] = case;
                 put16(raw, 14, node.modified & 0xFFFF); put16(raw, 16, node.modified >> 16); // created
             }
-            self.write_sector(at.lba, &data)?;
+            if let Err(error) = self.write_sector(at.lba, &data) { let _ = self.unlink_slots(&slots[..k]); return Err(error); }
         }
+        let before = node.entry;
         node.entry = slots.last().copied();
-        self.store(node)
+        if let Err(error) = self.store(node) { node.entry = before; let _ = self.unlink_slots(&slots); return Err(error); }
+        Ok(slots)
     }
 
-    fn unlink(&mut self, entry: &Entry) -> Result<()> {
-        for at in &entry.slots {
+    fn unlink(&mut self, entry: &Entry) -> Result<()> { self.unlink_slots(&entry.slots) }
+
+    // Marks the slots free; if a write fails, those already marked are given their first byte back.
+    fn unlink_slots(&mut self, slots: &[At]) -> Result<()> {
+        let mut marked: Vec<(At, u8)> = Vec::new();
+        for at in slots {
             let mut data = self.read_sector(at.lba)?;
+            let first = data[at.offset as usize];
             data[at.offset as usize] = 0xE5;
-            self.write_sector(at.lba, &data)?;
+            if let Err(error) = self.write_sector(at.lba, &data) {
+                for (at, first) in marked.into_iter().rev() {
+                    if let Ok(mut data) = self.read_sector(at.lba) { data[at.offset as usize] = first; let _ = self.write_sector(at.lba, &data); }
+                }
+                return Err(error);
+            }
+            marked.push((*at, first));
         }
         Ok(())
     }
@@ -635,7 +742,7 @@ impl<S: Sectors> Volume<S> {
             let lba = self.sector_of(node.cluster);
             self.write_sector(lba, &data)?;
         }
-        if let Err(error) = self.link(dir, name, &mut node) {
+        if let Err(error) = self.link(dir, name, &mut node, None) {
             if directory { let _ = self.free_chain(node.cluster); }
             return Err(error);
         }
@@ -683,10 +790,12 @@ impl<S: Sectors> Volume<S> {
                 steps += 1;
             }
         }
+        // The new entry is written before the old one goes, so a failure leaves the old name (175-KRN-0048); a change
+        // of case keeps the short alias.
         let mut node = entry.node;
-        if case_change { self.unlink(&entry)?; self.link(target, new_name, &mut node)?; return Ok(node); }
-        self.link(target, new_name, &mut node)?;
-        self.unlink(&entry)?;
+        let slots = self.link(target, new_name, &mut node, if case_change { Some(entry.short) } else { None })?;
+        if let Err(error) = self.unlink(&entry) { let _ = self.unlink_slots(&slots); return Err(error); }
+        if case_change { return Ok(node); }
         if node.is_dir() && !same_place {
             let lba = self.sector_of(node.cluster);
             let mut data = self.read_sector(lba)?;

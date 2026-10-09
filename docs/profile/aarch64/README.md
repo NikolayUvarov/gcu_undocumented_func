@@ -43,7 +43,7 @@ Variants tested as stand-ins for boards (issue 205): `highmem=on` with 6 GiB (RA
 | PCI | ECAM from the MCFG, the same enumeration, BARs and MSI-X tables (`kernel/src/pci.rs`; the architecture gives configuration access, the legacy line and the MSI message) | ports `0xCF8`/`0xCFC` |
 | Platform devices | `PLATFORM_MMIO` hands out the board's UART and RTC by index (`PLATFORM_UART`, `PLATFORM_RTC`), `PLATFORM_IRQ` their lines (`arch/aarch64/platform.rs`); there are no I/O ports | ISA port ranges and lines 1–15 |
 | Tick and clock | EL1 virtual timer, 100 Hz; `CNTVCT_EL0` at `CNTFRQ_EL0` for the monotonic clock | PIT, TSC |
-| FP/SIMD | Disabled (`CPACR_EL1`): programs and kernel are soft-float, no FP state is saved yet | x87/SSE/AVX saved per task |
+| FP/SIMD | Disabled (`CPACR_EL1`): programs and kernel are soft-float, no FP state is saved yet | x87/SSE/AVX saved per task, with AVX-512 and AMX where the CPU has them (174-KRN-0037) |
 | Entropy | `RNDR` when `ID_AA64ISAR0_EL1` lists it; the kernel tells tasks in `BootInfo.cpu_features` (EL0 cannot read ID registers) | `RDRAND` |
 | CPUs | The boot CPU and the others the MADT lists (a table of 256; issue 171), started with PSCI `CPU_ON` into a trampoline that turns on the MMU with the boot CPU's MAIR, TCR, TTBR0 and SCTLR (its record and code cleaned to memory first); each has its exception stack and redistributor. The boot CPU's virtual timer ticks; the others get the tick as an SGI | INIT-SIPI-SIPI, local APIC timer IPIs |
 | TLB | `TLBI VMALLE1IS`: a change of an address space is broadcast to every CPU by the instruction itself, no IPIs | reload of CR3 on the next switch |

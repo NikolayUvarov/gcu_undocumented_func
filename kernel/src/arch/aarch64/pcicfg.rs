@@ -13,6 +13,8 @@ pub fn configure(base: u64, first_bus: u8, last_bus: u8) {
     ECAM.store(base as usize | last_bus as usize, Ordering::Release);
 }
 pub fn last_bus() -> Option<u8> { let ecam = ECAM.load(Ordering::Acquire); (ecam != 0).then_some(ecam as u8) }
+/// The ECAM range (base, end), where no BAR may be moved (211-KRN-0021).
+pub fn ecam() -> Option<(u64, u64)> { let ecam = ECAM.load(Ordering::Acquire); (ecam != 0).then(|| ((ecam & !0xFF) as u64, (ecam & !0xFF) as u64 + ((ecam as u8 as u64 + 1) << 20))) }
 
 fn address(bus: u8, device: u8, function: u8, offset: u8) -> usize {
     (ECAM.load(Ordering::Relaxed) & !0xFF) | (bus as usize) << 20 | (device as usize) << 15 | (function as usize) << 12 | (offset as usize & 0xFC)

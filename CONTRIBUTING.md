@@ -16,7 +16,7 @@ MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64
 ```bash
 ./01_prepare_env.sh          # Rust nightly and targets (install QEMU and OVMF with your package manager)
 ./02_build.sh                # all crates into usb_root/
-rustc --edition=2021 --test tests/runtime.rs -o /tmp/mind-core-runtime-tests && /tmp/mind-core-runtime-tests
+scripts/host_tests.sh        # every host test, as CI runs them; any compile or test that fails stops it
 python3 tests/idl_test.py    # generated MIND IDL bindings are up to date
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64   # QEMU suites (see README for the test ELFs)
 scripts/ci_local.sh          # every CI group on this machine, with a PASS/FAIL table
