@@ -120,3 +120,20 @@ The check could wait for `[INIT] READY` and for keystore's line before closing t
 ### Acceptance criteria
 
 `python3 tests/aarch64_smoke.py` passes on main.
+
+## A read-only client of a card's counters, for `wm`'s background (000-APP-0047)
+
+**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0047](000-APP-0047-wm-desktop-background.md) (the maintainer's request: the network traffic on `wm`'s desktop background).
+
+### Problem
+
+`wm` can show the network traffic on its desktop, but a card's counters (`net.wit` `counters`: sent, received, dropped) are reached only through a full client of the driver, which can also send and receive frames. The shell holds that client for `net`; lending it to `wm` would give `wm` the card itself.
+
+### Plan (a proposal; the network track decides)
+
+- A badge of the driver's endpoint that answers `info` and `counters` and refuses the rest (`net.wit` 1.x, with its version and transition), minted by whoever holds the full client.
+- The shell lends it to a program that asks for it (a request flag for it comes with the tools track's change; a fixed slot, if one is needed, from the kernel track).
+
+### Acceptance criteria
+
+A program holding the read-only client reads the counters and is refused `send`, `receive` and `attach`.
