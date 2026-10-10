@@ -6114,30 +6114,41 @@ def wm_suite(vm):
             screen_has(f"{page}: a page to read; nothing is set here yet")
         keys("up", "up", "up", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
-        # Enter on a field sets the clock to the fields too: the shell asks in its window, and no keeps the clock.
+        # Enter on each field sets the clock to the fields too: the shell asks in its window, and no keeps the clock.
         shell_ids = set(shell_re.findall("".join(seen)))
         shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
-        known = {m[0] for m in windows_re.findall("".join(seen))}
-        vm.hmp("sendkey ret")
-        vm.serial(enter=False)
-        screen = screen_has("RUN IT? (Y/N)")
-        assert any(canon("date set ") in row for row in screen), screen
-        vm.hmp("sendkey n")
-        vm.serial(enter=False)
-        until('THE SHELL DECLINED "date set ')
-        asking = []
-        for _ in range(100):
-            wait(lines=0)
-            asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
-            if asking:
-                break
-            time.sleep(.1)
-        while state()[1] != asking[-1]:
-            wait()
-        close_shell(asking[-1])
+        fields = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds"]
+        for index, field in enumerate(fields):
+            if index:
+                keys("alt-s", text="MODE=SETTINGS")
+                keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
+                keys(*["down"] * index, text=f"SETTINGS=Date and time:{field}")
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            declined = "".join(seen).count('THE SHELL DECLINED "date set ')
+            vm.hmp("sendkey ret")
+            vm.serial(enter=False)
+            screen = screen_has("RUN IT? (Y/N)")
+            assert any(canon("date set ") in row for row in screen), (field, screen)
+            vm.hmp("sendkey n")
+            vm.serial(enter=False)
+            deadline = time.monotonic() + 20
+            while "".join(seen).count('THE SHELL DECLINED "date set ') <= declined:
+                assert time.monotonic() < deadline, (field, "".join(seen)[-2000:])
+                time.sleep(.1)
+                wait(lines=0)
+            asking = []
+            for _ in range(100):
+                wait(lines=0)
+                asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if asking:
+                    break
+                time.sleep(.1)
+            while state()[1] != asking[-1]:
+                wait()
+            close_shell(asking[-1])
         print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
-              "file with nothing typed says what to do, each page to read says so, and Enter on the date page's year asked "
-              "the shell, where no kept the clock", flush=True)
+              "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
+              "six fields asked the shell, where no kept the clock", flush=True)
 
     def console_joined(console):
         # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
