@@ -246,3 +246,32 @@ fn show(surface: &Surface, printed: &[u8], status: u32) {
     surface.set_cursor(None);
     surface.changed(None);
 }
+
+/// A window opened through a broker client the program names, beside the program's own (`open`): the shell's window
+/// in `wm`, a session of the shell (211-APP-0040). The manager's sizes are taken with `wanted`, its keys with `event`.
+pub struct Window { broker: Endpoint, id: u32, surface: Surface, _mapping: Mapping }
+
+impl Window {
+    /// A window of `kind` with memory for `capacity`, drawn at `size`; the surface arrives in the free slot `receive`,
+    /// which is free again on return.
+    pub fn open(broker: Endpoint, receive: usize, kind: Kind, capacity: (usize, usize), size: (usize, usize), title: &str) -> Option<Self> {
+        let wanted = if kind == Kind::Pixels { api::Kind::Pixels } else { api::Kind::Text };
+        let Ok(Ok(id)) = api::create(broker, wanted, capacity.0 as u16, capacity.1 as u16) else { return None };
+        let mapping = match api::surface(broker, id, receive) { Ok(Ok(())) => Mapping::new(receive).ok(), _ => None };
+        let _ = crate::ipc::drop_cap(receive); // the mapping keeps the memory
+        let Some(mapping) = mapping else { let _ = api::remove(broker, id); return None };
+        let surface = unsafe { Surface::new(mapping.as_ptr::<u8>(), mapping.len()) };
+        surface.set_title(title);
+        surface.set_size(size.0.min(capacity.0).max(1), size.1.min(capacity.1).max(1));
+        Some(Self { broker, id, surface, _mapping: mapping })
+    }
+    pub fn surface(&self) -> Surface { self.surface }
+    /// The next input event the manager queued (a `common/abi.rs` word).
+    pub fn event(&self) -> Option<usize> { self.surface.event() }
+    /// The manager closed it.
+    pub fn closed(&self) -> bool { self.surface.state() == STATE_CLOSE }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) { let _ = api::remove(self.broker, self.id); }
+}

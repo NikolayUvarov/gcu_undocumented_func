@@ -12,6 +12,8 @@ enum Output { Screen { screen: Screen, x0: usize, y0: usize }, Window(Surface) }
 
 pub struct Terminal {
     output: Output, back: Pages, front: Pages, cols: usize, rows: usize, capacity: usize, cursor: Option<(usize, usize)>, shown: Option<(usize, usize)>, valid: bool,
+    // A window not the program's own (`in_window`): its manager's sizes are read from its surface.
+    other: bool,
     // The pointer's cell: whether to show it, and where it was drawn.
     pointer: bool, pointer_shown: Option<(usize, usize)>,
 }
@@ -53,13 +55,23 @@ impl Terminal {
         let (mut back, mut front) = (Pages::new(bytes)?, Pages::new(bytes)?);
         for cell in cells(&mut back, capacity) { *cell = Cell::BLANK; }
         for cell in cells(&mut front, capacity) { *cell = Cell::BLANK; }
-        Some(Self { output, back, front, cols, rows, capacity, cursor: None, shown: None, valid: false, pointer: false, pointer_shown: None })
+        Some(Self { output, back, front, cols, rows, capacity, cursor: None, shown: None, valid: false, other: false, pointer: false, pointer_shown: None })
+    }
+
+    /// A grid in a text window opened through `mind::windowed::Window` (the shell's, 211-APP-0040), with room for
+    /// `capacity` cells; it follows the sizes its manager asks for.
+    pub fn in_window(surface: Surface, capacity: (usize, usize)) -> Option<Self> {
+        let (cols, rows) = surface.size();
+        let mut terminal = Self::buffers(Output::Window(surface), cols.max(1), rows.max(1), capacity.0 * capacity.1)?;
+        terminal.other = true;
+        Some(terminal)
     }
 
     // In a window: takes the size the manager asked for (within the window's memory) and draws everything again.
     fn apply_resize(&mut self) {
         let Output::Window(surface) = &self.output else { return };
-        let Some((cols, rows)) = crate::windowed::resize() else { return };
+        let asked = if self.other { surface.wanted() } else { crate::windowed::resize() };
+        let Some((cols, rows)) = asked else { return };
         let (cols, rows) = (cols.clamp(1, MAX_COLUMNS), rows.clamp(1, MAX_ROWS));
         if cols * rows > self.capacity || !surface.set_size(cols, rows) { return; }
         self.cols = cols; self.rows = rows; self.valid = false;

@@ -67,29 +67,6 @@ Measured on this machine, with the build of each tree:
 ### Acceptance criteria
 
 The group passes in repeated runs (say 5 of 5) on `main`.
-
-## A slot and a request flag for the system clipboard (000-APP-0032)
-
-**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0032](000-APP-0032-system-clipboard.md) (the tools plan's phase T4: the system clipboard).
-
-### Problem
-
-`edit` (Ctrl+C/X/V), `fm`'s command line and the shell's line each keep their own text, so nothing can be copied from one program to another. The tools track writes the clipboard: `idl/clipboard.wit` and a `clipboard` service that holds the text. It needs a way to reach the programs that ask for it.
-
-### Plan (a proposal; the kernel track decides)
-
-The same way as the parser service (109-KRN-0042):
-
-- `init` starts `clipboard` and gives the shell a client.
-- `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are added in `common/abi.rs` and `libmind::process`.
-- A launcher may fill the slot in a launch session.
-
-The shell lends its client only to a program that asks for it, and `msh` gets a `clipboard` word. What the service answers, and to whom, is in 000-APP-0032.
-
-### Acceptance criteria
-
-A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
-
 ## The pinned toolchain installed once before the parallel build (000-KRN-0020)
 
 **Recorded by:** the assurance and drivers session (`ASR`, `DRV`), 2026-10-09, after the maintainer's build of `fast-test` failed.
@@ -113,23 +90,6 @@ All 70 crates fail, and the build reports them as failures of the code. A single
 ### Acceptance criteria
 
 On a machine whose rustup lacks a component the toolchain file names, `02_build.sh` installs it once and the build succeeds. A failed install is reported as such, not as 70 failed crates.
-
-## A fixed slot for the shell's command endpoint (211-APP-0040)
-
-**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md) (the shell's commands in `wm`'s `console`, the kernel track's request for 211).
-
-### Problem
-
-The shell will serve `idl/shell.wit`: a client sends a command line and the shell runs it on its own authority. The endpoint goes from the shell to `wm` and from `wm` to `console` in a launch session, so both need a fixed slot to find it in. The application slots 1–29 are all named, and fixed slots end at `SLOT_DYNAMIC` (30), below which the kernel delivers capabilities into a receive slot.
-
-### Plan (a proposal; the kernel track decides)
-
-- `SLOT_SHELL` in `common/abi.rs` for applications, with `SLOT_DYNAMIC` moved up (the clipboard's `SLOT_CLIPBOARD`, asked for above, can come in the same change).
-- Nothing in `init`: the shell makes the endpoint and lends it itself. `REQUEST_SHELL` goes into `libmind::process` with the tools track's change.
-
-### Acceptance criteria
-
-A launcher fills `SLOT_SHELL` in a launch session and the program holds the endpoint there; the ABI version and the kernel's tests follow the move of `SLOT_DYNAMIC`.
 
 ## `bcm_wifi` as a boot service (550-DRV-0020)
 
@@ -162,6 +122,46 @@ A launcher fills `SLOT_SHELL` in a launch session and the program holds the endp
 ### Acceptance criteria
 
 On the MacBook Pro, `init` starts `bcm_wifi` with BAR0, and its stage-1 lines are in the boot log. On QEMU, which has no such chip, it is not started and says so.
+
+## A slot and a request flag for the system clipboard (000-APP-0032)
+
+**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0032](000-APP-0032-system-clipboard.md) (the tools plan's phase T4: the system clipboard).
+
+### Problem
+
+`edit` (Ctrl+C/X/V), `fm`'s command line and the shell's line each keep their own text, so nothing can be copied from one program to another. The tools track writes the clipboard: `idl/clipboard.wit` and a `clipboard` service that holds the text. It needs a way to reach the programs that ask for it.
+
+### Plan (a proposal; the kernel track decides)
+
+The same way as the parser service (109-KRN-0042):
+
+- `init` starts `clipboard` and gives the shell a client.
+- `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are added in `common/abi.rs` and `libmind::process`.
+- A launcher may fill the slot in a launch session.
+
+The shell lends its client only to a program that asks for it, and `msh` gets a `clipboard` word. What the service answers, and to whom, is in 000-APP-0032.
+
+### Acceptance criteria
+
+A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
+
+## A fixed slot for the shell's command endpoint (211-APP-0044)
+
+**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md) (`console` joined to the shell, split from 211-APP-0040 on 2026-10-10, when that task took the shell's own window, which needs no slot).
+
+### Problem
+
+The shell will serve `idl/shell.wit`: a client sends a command line and the shell runs it on its own authority. The endpoint goes from the shell to `wm` and from `wm` to `console` in a launch session, so both need a fixed slot to find it in. The application slots 1–29 are all named, and fixed slots end at `SLOT_DYNAMIC` (30), below which the kernel delivers capabilities into a receive slot.
+
+### Plan (a proposal; the kernel track decides)
+
+- `SLOT_SHELL` in `common/abi.rs` for applications, with `SLOT_DYNAMIC` moved up (the clipboard's `SLOT_CLIPBOARD`, asked for above, can come in the same change).
+- Nothing in `init`: the shell makes the endpoint and lends it itself. `REQUEST_SHELL` goes into `libmind::process` with the tools track's change.
+
+### Acceptance criteria
+
+A launcher fills `SLOT_SHELL` in a launch session and the program holds the endpoint there; the ABI version and the kernel's tests follow the move of `SLOT_DYNAMIC`.
+
 ## Free clusters counted a FAT sector at a time
 
 **Recorded by:** the storage session, 2026-10-10, from its local gate (the branch at 68d3b80 merged with `main` at 8f05728), for the `disks` check of 251-KRN-0031 and [251-STO-0014](../issues-done/251-STO-0014-importing-a-model-disk.done).
