@@ -3733,7 +3733,10 @@ def disks_check(args, boot, temp):
         require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
         require(mounted, "[VFS] THE BOOT VOLUME:")
         require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS:")
-        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.command("df"), re.M), vm.log[-2000:]
+        # The first df counts the 256 MiB FAT32 volume's free clusters one by one (fat.rs free_clusters): 2.2 to 9.6 s
+        # on aarch64 under TCG by where the build's code lands, more than a command's 8 s (requests-KRN.md).
+        vm.send("df\n")
+        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.expect("MIND> ", timeout=60, after="df\n"), re.M), vm.log[-2000:]
         for _ in range(60):
             if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
                 break
