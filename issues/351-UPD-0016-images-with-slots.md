@@ -1,6 +1,6 @@
 # 351-UPD-0016 — Images built with slots
 
-**Type:** update (images) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([351-UPD-0007](351-UPD-0007-updater-service.md), the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-9.3
+**Type:** update (images) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), the updater, done) · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-9.3
 
 Split from 351-UPD-0007, which took it over from 351-UPD-0006.
 
@@ -23,4 +23,4 @@ The USB images and the volumes of the QEMU suites boot from the volume's root. S
 
 ## Related
 
-[351-UPD-0007](351-UPD-0007-updater-service.md), [docs/update/slots.md](../docs/update/slots.md), [docs/update/updater.md](../docs/update/updater.md).
+[351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), [docs/update/slots.md](../docs/update/slots.md), [docs/update/updater.md](../docs/update/updater.md).

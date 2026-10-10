@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (7 requests waiting, 2026-10-10; QEMU's vvfat crash in the aarch64 boot suite became 000-KRN-0067; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (7 requests waiting, 2026-10-10; QEMU's vvfat crash in the aarch64 boot suite became 000-KRN-0067; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](../issues-done/000-KRN-0060-toolchain-once-before-the-parallel-build.done), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -95,7 +95,7 @@ A new `isolation` case: a program holding an unbadged client without the right g
 
 ## A client of the updater for the shell
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md) and the tools track's `update` command (351-APP-0029, on its branch).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) and the tools track's `update` command (351-APP-0029, on its branch).
 
 ### Problem
 
@@ -113,7 +113,7 @@ The shell holds a client of `updater` (`caps` shows it), and `status` answers th
 
 ## init says whether it confirmed a trial boot
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 
 ### Problem
 

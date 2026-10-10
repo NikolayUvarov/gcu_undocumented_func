@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues/351-UPD-0007-updater-service.md) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;

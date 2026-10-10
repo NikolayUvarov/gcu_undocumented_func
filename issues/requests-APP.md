@@ -29,7 +29,7 @@ The RTC service's load does not grow by 10 calls a second with each clock.
 
 ### Problem
 
-The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will have an interface (`idl/update.wit`) but no command.
+The `updater` service ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)) will have an interface (`idl/update.wit`) but no command.
 
 ### Plan (a proposal; the tools track decides)
 
