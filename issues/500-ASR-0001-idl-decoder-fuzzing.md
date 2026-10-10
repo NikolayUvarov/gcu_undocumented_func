@@ -35,6 +35,8 @@ The generated decoders in `libmind/src/idl/` are where every service meets untru
 - docs/assurance/README.md 1.1 describes it.
 - What remains is the CI line.
 
+**2026-10-10:** `tests/idl_fuzz_host.rs` and docs/assurance/README.md 1.1 are in `main` (8e181ad, after a local gate of all 31 groups). What remains is the CI line, the kernel track's.
+
 ## Related
 
 [500](500-fuzzing-abi-and-idl.md), [351-ASR-0006](351-ASR-0006-update-threat-model.md) (fuzzing the update's parsers, next), `scripts/mind_idl.py`, `tests/idl_host.rs`.
