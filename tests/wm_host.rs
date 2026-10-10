@@ -15,6 +15,14 @@ mod tui;
 mod desk;
 #[path = "../wm/src/menu.rs"]
 mod menu;
+#[path = "../libmind/src/inflate.rs"]
+mod inflate;
+#[path = "../libmind/src/png.rs"]
+mod png;
+#[path = "../libmind/src/jpeg.rs"]
+mod jpeg;
+#[path = "../libmind/src/jpegdec.rs"]
+mod jpegdec;
 #[path = "../wm/src/background.rs"]
 mod background;
 #[path = "../wm/src/settings.rs"]
@@ -709,8 +717,8 @@ fn a_dragged_window_is_marked() {
     wm.pointer(50, 15, 0, 0);
 }
 
-// The desktop background (000-APP-0047).
-use background::{bmp_cover, layout, overlay, pattern, Backdrop, Config, Info, Picture, Place};
+// The desktop background (000-APP-0047, 000-APP-0050).
+use background::{colours, cover, ink, layout, overlay, pattern, Backdrop, Config, Info, Pattern, Picture, Place};
 
 fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 
@@ -719,19 +727,27 @@ fn the_background_configuration_is_read_and_written() {
     assert_eq!(Config::parse("").0, Config::default());
     let d = Config::default();
     assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.net, d.place), (Picture::Abstract, true, true, true, false, Place::BottomRight));
+    assert_eq!((d.pattern, d.speed, d.contrast, d.complexity, d.info), (Pattern::Waves, 1, 20, 2, 30));
     let (c, problems) = Config::parse("# a comment\nbackground = image data/sky.bmp\nshow = cpu, time\nplace = top-left  # here\n");
     assert!(problems.is_empty(), "{:?}", problems);
     assert_eq!(c.picture, Picture::Image("data/sky.bmp".into()));
     assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
     assert_eq!(Config::parse("background = none").0.picture, Picture::None);
     assert_eq!(Config::parse("show = none").0.time, false);
+    // The pattern, its speed, contrast and complexity, the information's brightness; parts of a line between `;`.
+    let (c, problems) = Config::parse("pattern = blobs; speed = 20 ; contrast = 45%\ncomplexity = 5; info = 0  # hidden");
+    assert!(problems.is_empty(), "{:?}", problems);
+    assert_eq!((c.pattern, c.speed, c.contrast, c.complexity, c.info), (Pattern::Blobs, 20, 45, 5, 0));
     // A line not understood is named and leaves the default.
     let (c, problems) = Config::parse("background = plasma\nshow = time, weather\nplace = left\ncolour = red\nnothing here");
     assert_eq!(c, Config::default());
     assert_eq!(problems.len(), 5, "{:?}", problems);
     assert!(problems[0].starts_with("line 1:") && problems[4].contains("no '='"), "{:?}", problems);
+    let (c, problems) = Config::parse("pattern = plasma; speed = 0\nspeed = 51; contrast = 101; complexity = 6; info = -1");
+    assert_eq!((c, problems.len()), (Config::default(), 6), "{:?}", problems);
+    assert!(problems[1].starts_with("line 1: speed") && problems[5].starts_with("line 2: info"), "{:?}", problems);
     // What `format` writes is read back the same.
-    for text in ["background = none", "background = image a b.bmp\nshow = net\nplace = center", "show = date, time"] {
+    for text in ["background = none", "background = image a b.bmp\nshow = net\nplace = center", "show = date, time", "pattern = aurora; speed = 50; contrast = 0; complexity = 1; info = 100"] {
         let c = Config::parse(text).0;
         let (again, problems) = Config::parse(&c.format());
         assert!(problems.is_empty() && again == c, "{:?} {:?}", c, problems);
@@ -741,10 +757,12 @@ fn the_background_configuration_is_read_and_written() {
 #[test]
 fn the_pattern_is_low_contrast_and_moves() {
     let (w, h) = (160, 100);
+    let c = Config::default();
     let (mut a, mut b) = (vec![0u32; w * h], vec![0u32; w * h]);
-    pattern(&mut a, w, h, 0);
-    pattern(&mut b, w, h, 40);
+    pattern(&mut a, w, h, &c, 0);
+    pattern(&mut b, w, h, &c, 40 * 8);
     let channel = |p: u32, s: u32| (p >> s) & 0xFF;
+    assert_eq!(colours(c.contrast), (background::DARK, background::LIGHT));
     for &p in a.iter().chain(&b) {
         for s in [16, 8, 0] { assert!(channel(p, s) >= channel(background::DARK, s) && channel(p, s) <= channel(background::LIGHT, s), "{:06x}", p); }
     }
@@ -752,10 +770,63 @@ fn the_pattern_is_low_contrast_and_moves() {
     let (lo, hi) = (a.iter().map(|&p| channel(p, 0)).min().unwrap(), a.iter().map(|&p| channel(p, 0)).max().unwrap());
     assert!(hi - lo >= 0x0C, "{:x}..{:x}", lo, hi);
     assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > w * h / 4);
-    // Neighbouring steps differ only a little: it moves slowly.
-    pattern(&mut b, w, h, 1);
+    // Neighbouring steps (half a second at speed 1) differ only a little: it moves slowly.
+    pattern(&mut b, w, h, &c, 8);
     let largest = a.iter().zip(&b).map(|(&x, &y)| channel(x, 0).abs_diff(channel(y, 0))).max().unwrap();
     assert!(largest <= 3, "{}", largest);
+}
+
+#[test]
+fn each_pattern_has_its_own_look_contrast_and_complexity() {
+    let (w, h) = (160, 100);
+    let draw = |c: &Config, phase: u32| { let mut f = vec![0u32; w * h]; pattern(&mut f, w, h, c, phase); f };
+    let blue = |f: &[u32]| { let (lo, hi) = (f.iter().map(|&p| p & 0xFF).min().unwrap(), f.iter().map(|&p| p & 0xFF).max().unwrap()); (lo, hi) };
+    // How often the colour turns from lighter to darker or back along every tenth row and column (in 2 × 2 blocks):
+    // more with more complexity.
+    let turns = |f: &[u32]| -> usize {
+        let count = |line: Vec<u32>| { let mut last = 0i32; line.windows(2).filter(|d| { let s = (d[1] as i32 - d[0] as i32).signum(); let turn = s != 0 && last != 0 && s != last; if s != 0 { last = s; } turn }).count() };
+        (0..h).step_by(10).map(|y| count((0..w).step_by(2).map(|x| f[y * w + x] & 0xFF).collect())).sum::<usize>()
+            + (0..w).step_by(10).map(|x| count((0..h).step_by(2).map(|y| f[y * w + x] & 0xFF).collect())).sum::<usize>()
+    };
+    let mut looks = Vec::new();
+    for (name, kind) in background::PATTERNS {
+        let c = Config { pattern: kind, ..Config::default() };
+        let (f, later) = (draw(&c, 0), draw(&c, 400 * 8));
+        let (lo, hi) = blue(&f);
+        let (dark, light) = colours(c.contrast);
+        assert!(lo >= dark & 0xFF && hi <= light & 0xFF && hi - lo >= 8, "{}: {:x}..{:x}", name, lo, hi);
+        assert!(f.iter().zip(&later).filter(|(x, y)| x != y).count() > w * h / 8, "{} moves", name);
+        // Higher contrast: a wider range; contrast 0: one colour.
+        let (lo2, hi2) = blue(&draw(&Config { contrast: 100, ..c.clone() }, 0));
+        assert!(hi2 - lo2 > (hi - lo) * 3, "{}: {:x}..{:x}", name, lo2, hi2);
+        let flat = draw(&Config { contrast: 0, ..c.clone() }, 0);
+        assert!(flat.iter().all(|&p| p == flat[0]), "{}", name);
+        // More detail with more complexity.
+        let (simple, busy) = (turns(&draw(&Config { complexity: 1, contrast: 100, ..c.clone() }, 0)), turns(&draw(&Config { complexity: 5, contrast: 100, ..c.clone() }, 0)));
+        assert!(busy > simple, "{}: {} turns at 1, {} at 5", name, simple, busy);
+        looks.push(f);
+    }
+    for i in 0..looks.len() { for j in i + 1..looks.len() { assert!(looks[i].iter().zip(&looks[j]).filter(|(x, y)| x != y).count() > w * h / 2); } }
+}
+
+#[test]
+fn the_speed_sets_how_often_and_how_far_the_pattern_moves() {
+    let read_nothing = &mut |_: &str| None;
+    let (mut b, _) = Backdrop::new(Config::default(), (64, 32), read_nothing);
+    assert_eq!(b.interval(), 500);
+    // Speed 1: a table step each half second, as before; the milliseconds between frames carried over.
+    for _ in 0..4 { b.advance(250); }
+    assert_eq!(b.phase, 16);
+    for _ in 0..3 { b.advance(21); }
+    assert_eq!(b.phase, 17);
+    let mut fast = Config::default();
+    fast.speed = 20;
+    let (mut b, _) = Backdrop::new(fast.clone(), (64, 32), read_nothing);
+    assert_eq!(b.interval(), 50);
+    b.advance(1000);
+    assert_eq!(b.phase, 320);
+    fast.speed = 3;
+    assert_eq!(Backdrop::new(fast, (64, 32), read_nothing).0.interval(), 166);
 }
 
 // A BMP of `w` × `h` 24-bit pixels, rows from the bottom (`down` false) or from the top.
@@ -782,19 +853,68 @@ fn an_image_covers_the_desktop() {
     let image = |down| bmp(4, 2, down, |x, y| if x < 2 { 0xFF0000 } else { 0x0000FF + y as u32 * 0x100 });
     for down in [false, true] {
         let mut frame = vec![0u32; 8 * 4];
-        assert!(bmp_cover(&image(down), &mut frame, 8, 4).is_some());
+        assert_eq!(cover(&image(down), &mut frame, 8, 4), Ok(()));
         assert_eq!(frame[0], 0xFF0000);
         assert_eq!(frame[7], 0x0000FF);
         assert_eq!(frame[3 * 8 + 7], 0x0001FF, "the bottom row is the image's second");
     }
     // A square frame cuts the sides: the middle two columns are left.
     let mut frame = vec![0u32; 4 * 4];
-    bmp_cover(&image(false), &mut frame, 4, 4).unwrap();
+    cover(&image(false), &mut frame, 4, 4).unwrap();
     assert_eq!((frame[0], frame[3]), (0xFF0000, 0x0000FF));
-    // Not a BMP, or one cut short: refused.
-    assert!(bmp_cover(b"GIF89a", &mut frame, 4, 4).is_none());
+    // Shrunk, each frame pixel the average of those it covers: 8 × 4 of stripes into 2 × 1.
+    let stripes = bmp(8, 4, false, |x, _| if x % 2 == 0 { 0x204060 } else { 0x406080 });
+    let mut small = vec![0u32; 2];
+    cover(&stripes, &mut small, 2, 1).unwrap();
+    assert_eq!(small, [0x305070, 0x305070]);
+    // Not a picture it reads, or one cut short: refused, and why.
+    assert_eq!(cover(b"GIF89a", &mut frame, 4, 4), Err("not a BMP, PNG or JPEG"));
     let short = image(false);
-    assert!(bmp_cover(&short[..short.len() - 4], &mut frame, 4, 4).is_none());
+    assert!(cover(&short[..short.len() - 4], &mut frame, 4, 4).is_err());
+    assert!(cover(&[0x89, b'P', b'N', b'G'], &mut frame, 4, 4).is_err());
+    assert!(cover(&[0xFF, 0xD8, 0xFF], &mut frame, 4, 4).is_err());
+}
+
+// The pictures of tests/data/images (tests/image_host.rs): what each covers a frame with.
+fn picture(name: &str) -> Vec<u8> { std::fs::read(format!("tests/data/images/{}", name)).unwrap() }
+
+#[test]
+fn png_and_jpeg_pictures_cover_the_desktop() {
+    // 40 × 24 pictures into 80 × 48: each pixel twice each way, as the picture has it (JPEG: nearly).
+    let small = |x: usize, y: usize| (((x * 6) & 255) << 16 | ((y * 10) & 255) << 8 | ((x + y) * 4) & 255) as u32;
+    let error = |frame: &[u32]| -> f64 {
+        let sum: u32 = frame.iter().enumerate().map(|(i, &p)| { let q = small(i % 80 / 2, i / 80 / 2); [16, 8, 0].iter().map(|&s| (p >> s & 255).abs_diff(q >> s & 255)).sum::<u32>() }).sum();
+        sum as f64 / (frame.len() * 3) as f64
+    };
+    for (name, bound) in [("rgb.png", 0.0), ("rgba.png", 0.0), ("444.jpg", 3.0), ("plain.jpg", 4.0)] {
+        let mut frame = vec![0u32; 80 * 48];
+        assert_eq!(cover(&picture(name), &mut frame, 80, 48), Ok(()), "{}", name);
+        assert!(error(&frame) <= bound, "{}: {:.2}", name, error(&frame));
+    }
+    // A larger picture shrunk: 160 × 96 into 40 × 24, each frame pixel the average of 4 × 4 (the JPEG's: as libjpeg
+    // decodes it, tests/data/images/big444.jpg.rgb).
+    let (mut png_frame, mut jpeg_frame) = (vec![0u32; 40 * 24], vec![0u32; 40 * 24]);
+    cover(&picture("big.png"), &mut png_frame, 40, 24).unwrap();
+    cover(&picture("big444.jpg"), &mut jpeg_frame, 40, 24).unwrap();
+    let big = |x: usize, y: usize| { let n = (x * 7919 + y * 104_729 + x * y * 31) % 251; (((x * 3 + n / 8) & 255) << 16 | ((y * 5 + n / 4) & 255) << 8 | n & 255) as u32 };
+    let decoded = picture("big444.jpg.rgb");
+    let reference = |x: usize, y: usize| { let at = (y * 160 + x) * 3; (decoded[at] as u32) << 16 | (decoded[at + 1] as u32) << 8 | decoded[at + 2] as u32 };
+    for (i, (&p, &j)) in png_frame.iter().zip(&jpeg_frame).enumerate() {
+        let (fx, fy) = (i % 40, i / 40);
+        let mean = |pixel: &dyn Fn(usize, usize) -> u32, s: u32| (0..16).map(|k| pixel(fx * 4 + k % 4, fy * 4 + k / 4) >> s & 255).sum::<u32>() / 16;
+        for s in [16, 8, 0] {
+            assert_eq!(p >> s & 255, mean(&big, s), "({}, {})", fx, fy);
+            assert!((j >> s & 255).abs_diff(mean(&reference, s)) <= 1, "({}, {}): {:x}", fx, fy, j);
+        }
+    }
+    // A progressive JPEG is named as such.
+    assert_eq!(cover(&picture("progressive.jpg"), &mut png_frame, 40, 24), Err("a progressive or lossless JPEG"));
+    // Through the backdrop: still, and a notice naming the file and why when it cannot be used.
+    let (b, problem) = Backdrop::new(Config::parse("background = image sky.png").0, (80, 48), &mut |_| Some(picture("rgb.png")));
+    assert!(problem.is_none() && !b.moving());
+    let (b, problem) = Backdrop::new(Config::parse("background = image old.jpg").0, (80, 48), &mut |_| Some(picture("progressive.jpg")));
+    assert_eq!(problem.as_deref(), Some("old.jpg: a progressive or lossless JPEG; the pattern instead"));
+    assert!(b.moving());
 }
 
 #[test]
@@ -824,8 +944,17 @@ fn the_information_has_its_place() {
     let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
-    assert!(frame.iter().filter(|&&p| p == background::TEXT).count() > 500);
-    assert!(frame.contains(&background::GRAPH));
+    let (text, graph, _) = ink(c.info);
+    assert!(frame.iter().filter(|&&p| p == text).count() > 500);
+    assert!(frame.contains(&graph));
+    // Paler than it was (0x7890A8), brighter with `info`, and gone at 0.
+    let blue = |p: u32| p & 0xFF;
+    assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
+    assert!(blue(ink(80).0) > blue(text) + 0x40);
+    let mut hidden = vec![background::DARK; fw * fh];
+    overlay(&mut hidden, fw, fh, 1, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
+    let (none, _, _) = ink(0);
+    assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
 
 #[test]
@@ -838,7 +967,8 @@ fn the_backdrop_keeps_its_frame() {
     assert_eq!((b.unit, b.width, b.height), (2, 1280, 800));
     // An image that cannot be read: the pattern, and a notice.
     let (b, problem) = Backdrop::new(Config::parse("background = image data/missing.bmp").0, (640, 400), read_nothing);
-    assert!(problem.unwrap().contains("data/missing.bmp") && b.moving());
+    assert_eq!(problem.as_deref(), Some("data/missing.bmp: not found, or larger than wm reads (32 MiB); the pattern instead"));
+    assert!(b.moving());
     assert_eq!(b.config.picture, Picture::Image("data/missing.bmp".into()), "the choice is kept");
     // An image that can: drawn, and still.
     let file = bmp(2, 1, false, |x, _| if x == 0 { 0x203040 } else { 0x405060 });
@@ -846,6 +976,15 @@ fn the_backdrop_keeps_its_frame() {
     assert!(problem.is_none() && !b.moving());
     b.render(&Info::default(), &glyph);
     assert_eq!((b.pixel(0, 0), b.pixel(63, 31)), (0x203040, 0x405060));
+    // Another speed or contrast keeps the picture without reading it again; another picture is read.
+    let mut reads = 0;
+    let mut count = |_: &str| { reads += 1; Some(file.clone()) };
+    assert!(b.change(Config { speed: 9, contrast: 70, ..b.config.clone() }, &mut count).is_none());
+    b.render(&Info::default(), &glyph);
+    assert_eq!(b.pixel(0, 0), 0x203040);
+    assert!(b.change(Config { picture: Picture::Abstract, ..b.config.clone() }, &mut count).is_none() && b.moving());
+    assert!(b.change(Config { picture: Picture::Image("sky.bmp".into()), ..b.config.clone() }, &mut count).is_none() && !b.moving());
+    assert_eq!(reads, 1);
     // None draws nothing; samples are kept for a minute.
     let (mut b, _) = Backdrop::new(Config::parse("background = none").0, (64, 32), read_nothing);
     assert!(!b.shown() && b.frame.is_empty());
@@ -883,13 +1022,33 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("data/background.bmp".into())), other => panic!("{:?}", other) }
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::None), other => panic!("{:?}", other) }
     match wm.key(chr(' ')) { Action::Settings(c) => assert_eq!(c.picture, Picture::Abstract), other => panic!("{:?}", other) }
+    // The pattern's kind cycles; the speed, contrast, complexity and brightness step and stop at their ends.
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Pattern"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Rings), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Blobs), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_LEFT)), Action::Redraw, "speed 1 is the slowest");
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.speed, 2), other => panic!("{:?}", other) }
+    for _ in 0..12 { wm.key(key(KEY_RIGHT)); }
+    assert_eq!(wm.background.speed, 50);
+    match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.speed, 1, "on from the fastest: the first"), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.contrast, 25), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.complexity, 3), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.info, 25), other => panic!("{:?}", other) }
+    assert_eq!((wm.background.pattern, wm.background.contrast, wm.background.complexity), (Pattern::Blobs, 25, 3));
     // The time off, the place moved, an image's file typed.
     wm.key(key(KEY_DOWN));
-    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Time"), "{}", wm.status());
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu), other => panic!("{:?}", other) }
     for _ in 0..4 { wm.key(key(KEY_DOWN)); }
     match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
-    for _ in 0..5 { wm.key(key(KEY_UP)); }
+    for _ in 0..10 { wm.key(key(KEY_UP)); }
     assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
     for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
@@ -907,6 +1066,15 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     assert!(text.contains("netpolicy") && text.contains("211-APP-0044"), "{}", text);
     // A click on a row of the background page changes it.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
-    match s.click(inner.x + 20, inner.y + 1 + 3, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    match s.click(inner.x + 20, inner.y + 1 + 2, &wm.background) { settings::Outcome::Changed(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
+    // Every row fits the window.
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &wm.background);
+    for (i, (name, value)) in s.rows(&wm.background).iter().enumerate() {
+        let row: String = (inner.x..inner.right()).map(|x| grid.get(x, inner.y + 1 + i).ch).collect();
+        assert!(row.contains(&format!("{:<11} {}", name, value)), "{:?}", row);
+    }
     assert_eq!(s.click(0, 0, &wm.background), settings::Outcome::Close);
 }
