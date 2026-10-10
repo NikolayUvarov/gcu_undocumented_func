@@ -42,6 +42,8 @@ const SHELL_MS: u32 = 2000;
 const ASK_MS: u32 = 300;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
+// How long after asking the shell to set the clock the background reads the RTC each second (000-APP-0055).
+const FRESH_MS: usize = 120_000;
 
 // A window wm shows: its lease of the surface, the program's wake endpoint, what was last drawn.
 struct Live { id: u32, _lease: Mapping, surface: Surface, waker: Option<usize>, changes: u32, asked: Option<(usize, usize)>, modifiers: u8 }
@@ -430,6 +432,7 @@ fn main(info: &'static BootInfo) {
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     let mut last_pattern = mind::time::uptime_ms();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
+    let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -523,6 +526,8 @@ fn main(info: &'static BootInfo) {
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
+                    // The user answers in the shell's window when they like: the background reads the RTC anew for a while.
+                    fresh_clock = mind::time::uptime_ms() + FRESH_MS;
                     manager.wm.notice = Some(text);
                     last_sync = 0;
                 }
@@ -571,8 +576,9 @@ fn main(info: &'static BootInfo) {
         // Settings' date page shows the clock each second (000-APP-0055).
         if let Mode::Settings(settings) = &mut manager.wm.mode {
             if settings.page == wm::settings::DATE && now >= next_clock {
+                // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
-                settings.set_now(clock.date(), clock.seconds_since_midnight());
+                settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
                 relayout = true;
             }
         }
@@ -584,6 +590,7 @@ fn main(info: &'static BootInfo) {
             }
             if now >= next_info {
                 next_info = now + INFO_MS;
+                if now < fresh_clock { clock = mind::rtc::Clock::new(); }
                 if let Some((busy, idle)) = cpu_times() {
                     if let Some((was_busy, was_idle)) = cpu {
                         let (b, i) = (busy.saturating_sub(was_busy), idle.saturating_sub(was_idle));
