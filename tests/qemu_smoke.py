@@ -5331,7 +5331,8 @@ def wm_suite(vm):
     clock's pixels); keys reach only the window in front; halves, quarters, maximize and snapping by keys and by
     dragging a title with the mouse; a program started from wm gets only what wm holds; leaving wm and killing it keep
     the programs running and the next wm shows them where they were; close all ends them. The shell's own window
-    (211-APP-0040) comes with wm: the shell's commands typed there, programs started there in windows of their own."""
+    (211-APP-0040) opens only with Ctrl+Alt+F5 (211-APP-0045): the shell's commands typed there, programs started there
+    in windows of their own."""
     # The broker's first window gives it a heap arena it keeps: one window before the baseline.
     require(vm.command("wintest show W 1"), "W DONE AFTER")
     time.sleep(1.2)  # the broker frees a window within 500 ms of its program's end
@@ -5388,7 +5389,29 @@ def wm_suite(vm):
         x, y, w, h = state()[2][window]
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
-    def shell_window(shell, started):
+    shell_re = re.compile(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"')
+
+    def open_shell():
+        # Ctrl+Alt+F5: the shell opens its window (it takes the key; wm never sees it); in front, as a new window is.
+        before = set(shell_re.findall("".join(seen)))
+        vm.hmp("sendkey ctrl-alt-f5")
+        vm.serial(enter=False)
+        while not set(shell_re.findall("".join(seen))) - before:
+            wait('"shell"', lines=0)
+        window = int((set(shell_re.findall("".join(seen))) - before).pop())
+        while window not in state()[2] or state()[1] != window:
+            wait()
+        return window
+
+    def close_shell(window):
+        # Alt+W: the shell's window goes, and wm goes on.
+        keys("alt-w", text=f"CLOSE {window}")
+        until(f"GONE {window}")
+        while window in state()[2]:
+            wait()
+        assert last_state().startswith("MODE=NORMAL"), last_state()
+
+    def shell_window(started):
         # The shell's window (211-APP-0040): a session of the shell, its keys through wm, every command but fg.
         def shows(window, text):
             # `text` inside `window`'s frame, once it came.
@@ -5405,7 +5428,8 @@ def wm_suite(vm):
             wait(lines=len(line) + 1)
             return shows(shell, text) if text else None
 
-        mode, focus, rects = front(shell)
+        shell = open_shell()
+        mode, focus, rects = state()
         assert focus == shell and rects[shell][2:] == (80, 24), rects
         typed("ps", "TASK(S); SHELL PID=")
         typed("date", "(RTC, NO TIME ZONE)")
@@ -5427,11 +5451,12 @@ def wm_suite(vm):
             wait()
         # Resized by wm, the session wraps and shows at the window's new size: a line of 113 characters on one row.
         front(shell)
+        quarter = state()[2][shell]
         assert keys("alt-ret")[2][shell] == (0, 1, 160, 48)
         long = "logger " + "0123456789" * 10
         rows = typed(long, "LOGGED")
         assert any(canon("MIND> " + long) in row for row in rows), rows
-        assert keys("alt-ret")[2][shell] == (0, 1, 80, 24)
+        assert keys("alt-ret")[2][shell] == quarter
         # reboot asks there; n keeps the machine running (the answer through wm's keyboard: the shell is busy asking).
         typed("reboot", "RESTART THE MACHINE? (Y/N)")
         keys("n")
@@ -5443,22 +5468,16 @@ def wm_suite(vm):
         assert canon("RESTART THE MACHINE? (Y/N) N") in "".join(rows), rows
         # fg is the screen's, not the window's.
         typed("fg 1", "FG WORKS IN A CONSOLE")
-        # Closed, the window goes; Ctrl+Alt+F5 opens it again.
-        keys("alt-w", text=f"CLOSE {shell}")
-        until(f"GONE {shell}")
+        # Closed, the window goes and wm goes on; Ctrl+Alt+F5 opens it again.
+        close_shell(shell)
         until("[SHELL] THE SHELL'S WINDOW CLOSED")
-        vm.hmp("sendkey ctrl-alt-f5")
-        vm.serial(enter=False)
-        out = wait('"shell"', lines=0)
-        again = int(re.findall(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"', "".join(seen))[-1])
+        again = open_shell()
         assert again != shell
-        while again not in state()[2] or state()[1] != again:
-            wait()
         shows(again, "THE SHELL'S WINDOW:")
+        close_shell(again)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
-              "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed, and "
-              "opened again with Ctrl+Alt+F5", flush=True)
-        return again
+              "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
+              "and opened again with Ctrl+Alt+F5", flush=True)
 
     def full_screen_and_list(fm, clock, top):
         # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
@@ -5510,9 +5529,7 @@ def wm_suite(vm):
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
         column = screen[title].index(canon(" Windows "))
         for row, window in zip(screen[title + 1:title + 1 + len(ids)], ids):
-            # The shell is a boot service: its PID is not renumbered as the programs' are.
-            pid = owners[window] if window == shell else owners[window] + BASE
-            assert canon(f"PID {pid} ") in row, (window, row)
+            assert canon(f"PID {owners[window] + BASE} ") in row, (window, row)
         assert canon("in front") in screen[title + 1 + ids.index(top)], screen[title + 1:title + 4]
         keys("home", "down", text=f"LIST={ids[1]}")
         mode, focus, rects = keys("ret")
@@ -5524,7 +5541,7 @@ def wm_suite(vm):
         assert mode == "NORMAL" and focus == ids[1], last_state()
         # A fourth window, closed from the list with Alt+W: the list follows it out.
         keys("alt-r", "c", "l", "o", "c", "k", "ret", text="STARTED clock")
-        while len(state()[2]) < len(frames) + 1:
+        while len(state()[2]) < 4:
             wait()
         extra = max(state()[2])
         keys("alt-l", "end", text=f"LIST={extra}")
@@ -5536,7 +5553,7 @@ def wm_suite(vm):
         screen = screen_text(vm)
         vm.serial(enter=False)
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
-        assert sum(canon("PID ") in row for row in screen[title + 1:title + 2 + len(frames)]) == len(frames), screen[title:title + 2 + len(frames)]
+        assert sum(canon("PID ") in row for row in screen[title + 1:title + 6]) == 3, screen[title:title + 6]
         mode, focus, rects = keys("esc")
         assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
         print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
@@ -5545,10 +5562,11 @@ def wm_suite(vm):
 
     vm.send("wm fm, clock, top\n")
     out = wait()
-    while len(windows_re.findall("".join(seen))) < 4:  # the shell's window and the three programs'
+    while len(windows_re.findall("".join(seen))) < 3:
         out = wait("[WM] WINDOW", lines=0)
     out = "".join(seen)
-    shell = int(re.search(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"', out)[1])
+    # wm starts without the shell's window: it opens only when asked (211-APP-0045).
+    assert not shell_re.findall(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
     started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
     wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
     windows = {int(m[0]): m for m in windows_re.findall(out)}
@@ -5595,7 +5613,7 @@ def wm_suite(vm):
     assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
-    shell = shell_window(shell, started)
+    shell_window(started)
     front(fm)
     # A program fm starts opens a window of its own next to fm's (issue 099), in front; Alt+W closes it.
     read[0] = len(vm.log)
@@ -5795,8 +5813,9 @@ def wm_suite(vm):
     until(f"GONE {console}")
     while console in state()[2]:
         wait()
-    front(shell)
+    shell = open_shell()
     camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
+    close_shell(shell)
     print("PASS: wm: camera shows the synthetic source in its window, started from the run line (wm lends the camera), "
           "in console (lent on by console) and in the shell's window", flush=True)
     # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera at a size the source
@@ -5828,9 +5847,9 @@ def wm_suite(vm):
     full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
-    assert set(places) == {fm, clock, top, shell}, places
+    assert set(places) == {fm, clock, top}, places
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-    require(wait("RESUMED.", lines=0).replace("\n", ""), "DETACHED: 4 WINDOWS KEPT")  # the shell's mirror may break a line
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "DETACHED: 3 WINDOWS KEPT")  # the shell's mirror may break a line
     time.sleep(.1); vm.collect(); vm.output = ""
     names = {row[0] for row in task_rows(vm).values()}
     assert {"fm", "clock", "top"} <= names and "wm" not in names, names
@@ -5854,7 +5873,7 @@ def wm_suite(vm):
     time.sleep(.5)
     # Close all: every program ends, then wm.
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")  # the shell's goes when asked
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     for _ in range(20):
@@ -5867,7 +5886,7 @@ def wm_suite(vm):
           "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; record -w records the clock's window "
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "a program that ended at once with a failure leaves its message and status in its window until a key; "
-          "leaving and a killed wm keep the programs and the shell's window and the next wm restores the places; close all ends them", flush=True)
+          "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
 
 
 def usb_suite(vm):
@@ -5999,24 +6018,23 @@ def tablet_suite(vm, wav):
     time.sleep(.3)
     click(159, 49, "[VIEW] DONE")
     vm.expect("SHELL RESUMED.")
-    # wm: the shell's window in the top left quarter (211-APP-0040), fm in the top right one, top below the shell's;
-    # fm's [▲] maximizes it, [×] next to the screen's right edge closes it.
+    # wm: top in the top right quarter; its [▲] maximizes it, [×] next to the screen's right edge closes it.
     start = len(vm.log)
     vm.send("wm fm, top\n")
     out = logged(vm, start, "[WM] READY")
     for _ in range(100):
         out = logged(vm, start, "[WM] READY")
-        if len(re.findall(r"\[WM\] WINDOW \d+ PID", out)) >= 3:
+        if len(re.findall(r"\[WM\] WINDOW \d+ PID", out)) >= 2:
             break
         time.sleep(.1)
-    fm_pid = re.search(r"\[WM\] STARTED fm PID (\d+)", out)[1]
-    fm = int(re.search(fr"\[WM\] WINDOW (\d+) PID {fm_pid} ", out)[1])
+    top_pid = re.search(r"\[WM\] STARTED top PID (\d+)", out)[1]
+    top = int(re.search(fr"\[WM\] WINDOW (\d+) PID {top_pid} ", out)[1])
     time.sleep(1)
-    out = click(153, 1, f"{fm}@0,1,160x48")
-    assert re.search(fr"FOCUS={fm} .*POINTER=153,1", out), out[-600:]
+    out = click(153, 1, f"{top}@0,1,160x48")
+    assert re.search(fr"FOCUS={top} .*POINTER=153,1", out), out[-600:]
     start = len(vm.log)
-    require(click(156, 1, f"[WM] CLOSE {fm}"), f"[WM] CLOSE {fm}")
-    logged(vm, start, f"[WM] GONE {fm}", timeout=12)  # fm ends: its frame no longer covers the desktop
+    require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
+    logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
     # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
     # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
@@ -6044,15 +6062,25 @@ def tablet_suite(vm, wav):
             break
     else:
         raise AssertionError(screen)
-    # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, which shows
-    # beep's lines; its tones reach the sound card (checked in the WAV below). The menu opens on the desktop left in
-    # the top right quarter: the console of uptime has the bottom right one.
-    assert "MODE=MENU" in click(100, 10, "MODE=MENU", button="right")
-    vm.tablet_at(103 * 8 + 4, 14 * 16 + 8)
+    # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, in the
+    # bottom right quarter, which shows beep's lines; its tones reach the sound card (checked in the WAV below).
+    assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
+    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 14, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    require(click(121, 39, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("[BEEP] DONE") in row[80:] for row in screen[25:]):
+            break
+    else:
+        raise AssertionError(screen)
+    assert any(canon("[BEEP] DEVICE=true RATE=48000") in row[80:] for row in screen[25:]), screen
+    # A window held by its title is marked until the button is released (211-APP-0037): beep's window is pressed on its
+    # title through the tablet, which marks its frame in the accent colour; moved and released, it is unmarked.
     beep_pid = re.findall(r"\[WM\] STARTED console PID (\d+)", logged(vm, 0, "[WM] STARTED console PID"))[-1]
-    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} TEXT"))[1])
+    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} "))[1])
 
     def state(out):
         # beep's frame (cells) and whether wm holds it, from the last state line in `out`.
@@ -6068,19 +6096,7 @@ def tablet_suite(vm, wav):
         return sum(pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == b"\xa6\xe3\xa1"
                    for py in range(y0 + (y + 1) * 16, y0 + (y + h - 1) * 16) for px in range(x0 + x * 8, x0 + x * 8 + 8))
 
-    for _ in range(30):
-        time.sleep(.3)
-        (x, y, w, h), held = state(logged(vm, 0, "[WM] MODE="))
-        screen = screen_text(vm)
-        vm.serial(enter=False)
-        inside = [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
-        if any(canon("[BEEP] DONE") in row for row in inside):
-            break
-    else:
-        raise AssertionError(screen)
-    assert any(canon("[BEEP] DEVICE=true RATE=48000") in row for row in inside), inside
-    # A window held by its title is marked until the button is released (211-APP-0037): beep's window is pressed on its
-    # title through the tablet, which marks its frame in the accent colour; moved and released, it is unmarked.
+    (x, y, w, h), held = state(logged(vm, 0, "[WM] MODE="))
     assert not held and accent_on_left_edge((x, y, w, h)) == 0, (x, y, w, h)
     start = len(vm.log)
     vm.tablet_at((x + w // 3) * 8 + 4, y * 16 + 8)
@@ -6091,7 +6107,7 @@ def tablet_suite(vm, wav):
     time.sleep(.3)
     assert accent_on_left_edge(pressed) >= 8 * (h - 2), "the held window's frame in the accent colour"
     # Moves while the button is held are not logged; the release is, with where the window went.
-    to = (x + w // 3 + 20, y + 6)
+    to = (x + w // 3 - 20, y - 6)
     vm.tablet_at(to[0] * 8 + 4, to[1] * 16 + 8)
     time.sleep(.3)
     start = len(vm.log)
@@ -6102,7 +6118,7 @@ def tablet_suite(vm, wav):
     assert accent_on_left_edge(dropped) == 0, "no mark after the release"
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 5 WINDOWS")  # with the shell's
+    require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     assert task_rows(vm) == {}, task_rows(vm)
     vm.close()
@@ -6114,7 +6130,7 @@ def tablet_suite(vm, wav):
     loud = [i for i, sample in enumerate(left) if sample]
     assert loud, "beep from the menu: no sound"
     beep_demo_tones(left, rate, loud[0])
-    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge (fm's, beside the shell's window); "
+    print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge; "
           "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window; "
           "beep from the menu: its lines in its console window, its tones in the WAV; a window dragged by its title marked until the release", flush=True)
 
