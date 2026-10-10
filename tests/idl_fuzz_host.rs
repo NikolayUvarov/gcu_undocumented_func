@@ -421,7 +421,7 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead;
+    parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
     rtc: Error;
     shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram;
