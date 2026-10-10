@@ -5903,38 +5903,39 @@ def wm_suite(vm):
         # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
         shell_ids = set(shell_re.findall("".join(seen)))
         shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
-
-        def asking_window():
-            # The shell's window, open (where the broker kept the last one's place, when it had one).
-            for _ in range(60):
-                shown = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and int(m[0]) in state()[2]]
-                if shown:
-                    return shown[-1]
-                time.sleep(.2)
-                wait(lines=0)
-            raise AssertionError((last_state(), inside(console), vm.log[-3000:]))
-
         for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
             vm.send_bytes(f"kill {target + BASE}\r".encode())
-            asking = asking_window()
-            if state()[1] != asking:
-                front(asking)
-            rows = None
-            for _ in range(30):
+            # The shell opens its window, in front as a new window is, and waits for the answer there. Meanwhile it
+            # passes wm's lines on no more (it does that between keys): the question is looked for on the screen.
+            screen = []
+            for _ in range(40):
                 time.sleep(.3)
-                rows = inside(asking)
-                written = [row.rstrip() for row in rows if row.strip()]
-                if written and written[-1].endswith(canon("RUN IT? (Y/N)")):  # the question, waiting
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
                     break
             else:
-                raise AssertionError(rows)
-            keys(answer)
+                raise AssertionError(screen)
+            assert any(canon(f"kill {target + BASE}    (ASKED BY PID") in row for row in screen), screen
+            vm.hmp(f"sendkey {answer}")
+            vm.serial(enter=False)
             until(logged_text)
+            # wm's lines come again: its window for the question, in front.
+            opened = []
+            for _ in range(100):
+                wait(lines=0)
+                opened = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if opened:
+                    break
+                time.sleep(.1)
+            asking = opened[-1]
+            while state()[1] != asking:
+                wait()
+            close_shell(asking)
             front(console)
         console_has("not run: the answer in the shell's window was no")
         console_has("KILLED PID=")
-        close_shell(asking)
-        front(console)
 
     def run_line(command, text):
         names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
@@ -5961,7 +5962,8 @@ def wm_suite(vm):
     camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
     close_shell(shell)
     print("PASS: wm: camera shows the synthetic source in its window, started from the run line (wm lends the camera), "
-          "in console (lent on by console) and in the shell's window", flush=True)
+          "in console (lent on by console) and in the shell's window; console sends the shell its commands (quotas runs, "
+          "fg is refused, kill is declined and then agreed in the shell's window)", flush=True)
     # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera at a size the source
     # does not give says so in a window of its own with its status, until a key.
     run_line("camera -z 100x100", "STARTED camera")
