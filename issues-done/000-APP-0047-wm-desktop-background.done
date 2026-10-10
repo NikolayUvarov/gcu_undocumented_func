@@ -1,6 +1,6 @@
-# 000-APP-0047 — `wm`: a configurable desktop background
+# 000-APP-0047 — `wm`: a configurable desktop background — done
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** open · **Blocked by:** — (the network traffic: a read-only source of a card's counters, see Plan) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
 
 The maintainer's request (2026-10-10): "`wm` needs a configuration of the desktop background: clocks over a picture, abstract drawings that move slowly, a static image, the date, the time, the CPU load in the background, the network traffic. Configurable through a configuration file. By default a slowly moving abstract low-contrast picture with the date, the time and the CPU load over it. The current variant, without anything, must stay." And: "can we have the background in text mode too?"
 
@@ -31,4 +31,13 @@ The maintainer's request (2026-10-10): "`wm` needs a configuration of the deskto
 
 ## Related
 
-[000-APP-0048](000-APP-0048-wm-settings.md) (Settings: the background switched from the top bar), [088](../issues-done/088-text-window-manager.done), [u009](../issues-done/u009-pixel-windows-follow-their-frame.done).
+[000-APP-0048](../issues/000-APP-0048-wm-settings.md) (Settings: the background switched from the top bar), [088](088-text-window-manager.done), [u009](u009-pixel-windows-follow-their-frame.done).
+
+## Resolution
+
+- **`wm/src/background.rs`:** the configuration (`Config::parse`, `format`), the abstract pattern (four sines crossing at slants, a quarter of a table step a frame, between two of the desktop's blues), a BMP (24 or 32 bits, uncompressed, rows either way) scaled to cover the desktop, and the information over it: the time in large digits, the date, a minute of CPU load as a graph over a line, in low-contrast colours over a shadow, at the configured place two cells from the edges. `Backdrop` keeps the frame: the screen's pixels, or half of them each way when the frame would exceed 4 MiB (a 2560 × 1600 screen). An image that cannot be read keeps its place in the configuration; the pattern is drawn instead, with a notice.
+- **`wm`:** reads `data/wm.conf` as it starts (`[WM] BACKGROUND …` in the log); `Desk` fills the free desktop with the `BACKGROUND` cell instead of `░`, and the cells still showing it after everything is drawn get the frame's pixels after `present`: those that just became the desktop's or were under the pointer, or all of them when the frame changed. The pattern moves every 500 ms and the information is drawn each second (the time counted from the RTC read once a minute, `mind::rtc::Clock`; the CPU load from `sysinfo` `cpus`). `wm` asks for 48 MiB.
+- **`none`** is the desktop as before. **The network traffic** says "NET: NO COUNTERS": it is split into [000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md), waiting for a read-only client of a card's counters (requests-NET.md).
+- **Host tests** (`tests/wm_host.rs`): the configuration read, written and read back, with its errors; the pattern within its two colours, using their range, changed by 40 steps and by at most 3 levels a step; an image covering a 2:1 and a square frame, from the bottom and from the top, refused when not a BMP or cut short; the information's place for five places and two units, and its drawing kept inside its block; the backdrop's unit, its image fallback, `none`, the minute of samples.
+- **The `wm` suite** (x86, on the branch, 2026-10-10): `background = none` keeps the `░` cells on the desktop; `background = image data/sky.bmp` (a 64 × 40 test BMP) covers the desktop with its two colours; with no configuration the pattern changes between two screenshots in the empty quarter and the information's text colour is drawn there. The rest of the `wm` suite and the `tablet` suite pass with the pattern behind the windows. The digits' values and the graph's bars are checked by the host tests, not on the screen.
+- **Docs:** `docs/tools` (EN, RU), §4.9.

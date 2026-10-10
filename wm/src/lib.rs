@@ -3,7 +3,7 @@
 #![no_std]
 extern crate alloc;
 
-pub use mind::{keys, tui};
+pub use mind::{jpegdec, keys, png, tui};
 
 pub mod background;
 pub mod desk;

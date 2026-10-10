@@ -28,14 +28,13 @@ use wm::menu::{self, Kind as ProgramKind};
 // REQUEST_GPIO: the pin controller's client where the board has one, passed on to pins and pinmap (issue u017).
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
 // 48 MiB: the desktop background's frame and image (000-APP-0047), up to 4 MiB each, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA, memory: 48);
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// The background's pattern moves a step this often; the time and the CPU load are drawn again each second.
-const PATTERN_MS: usize = 500;
+// The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
 
 // A window wm shows: its lease of the surface, the program's wake endpoint, what was last drawn.
@@ -418,6 +417,7 @@ fn main(info: &'static BootInfo) {
     mind::println!("[WM] BACKGROUND {}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "));
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
+    let mut last_pattern = mind::time::uptime_ms();
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -484,9 +484,7 @@ fn main(info: &'static BootInfo) {
                 Action::Settings(config) => {
                     // Settings changed the background (000-APP-0048): used at once and kept in data/wm.conf.
                     let saved = save(&config);
-                    let (mut fresh, problem) = Backdrop::new(config, (screen.width, screen.height), &mut |file| read_file(file, 32 << 20));
-                    fresh.cpu = core::mem::take(&mut backdrop.cpu);
-                    backdrop = fresh;
+                    let problem = backdrop.change(config, &mut |file| read_file(file, 32 << 20));
                     manager.wm.background = backdrop.config.clone();
                     manager.wm.desk.background = backdrop.shown();
                     (next_pattern, next_info) = (0, 0);
@@ -515,10 +513,15 @@ fn main(info: &'static BootInfo) {
         if now - last_sync >= SYNC_MS { last_sync = now; if manager.sync() { relayout = true; mind::println!("[WM] {}", manager.wm.status()); } }
         let (changed, mut pixels) = manager.follow();
         if !manager.wm.desk.take_changed().is_empty() { relayout = true; }
-        // The background: the pattern a step on, the time and the CPU load once a second; drawn again when either came.
+        // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
+        // either came.
         let mut background_moved = false;
-        if backdrop.shown() && (now >= next_pattern || now >= next_info) {
-            if now >= next_pattern && backdrop.moving() { backdrop.step = backdrop.step.wrapping_add(1); }
+        let pattern_due = backdrop.moving() && now >= next_pattern;
+        if backdrop.shown() && (pattern_due || now >= next_info) {
+            if pattern_due {
+                backdrop.advance(now - last_pattern);
+                (last_pattern, next_pattern) = (now, now + backdrop.interval());
+            }
             if now >= next_info {
                 next_info = now + INFO_MS;
                 if let Some((busy, idle)) = cpu_times() {
@@ -529,7 +532,6 @@ fn main(info: &'static BootInfo) {
                     cpu = Some((busy, idle));
                 }
             }
-            next_pattern = now + PATTERN_MS;
             let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], net: None };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;

@@ -1,6 +1,6 @@
 # 000-APP-0048 — `wm`: Settings, one entry point in the top bar
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** open · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: a volume control in `audio.wit`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress (the window and the background's page done; the system's pages wait for 211-APP-0044) · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: a volume control in `audio.wit`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 The maintainer's request (2026-10-10): "Add a background switch to the top menu: we will put settings there, where the screen's parameters (network, sound and the rest that needs configuration) can be managed too, through one entry point."
 
@@ -27,6 +27,12 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
 - With 211-APP-0044: the keyboard page switches the layout through the shell; the network page lists the flow grants.
 - **Host tests:** the settings window's layout and its keys.
 
+## Progress (2026-10-10)
+
+- **Done:** `wm/src/settings.rs` and `wm`: the top bar's last item `Alt+S settings` and Alt+S open the Settings window (pages on the left: Background, Keyboard, Date and time, Network, Sound, Screen). The Background page changes the picture (none, abstract, image and its typed file), what is shown over it and its place, with keys and clicks; each change is used at once and written to `data/wm.conf` (`[WM] SETTINGS … SAVED`), and the next `wm` starts with it. The system's pages say where each setting is made today.
+- **Checked:** host tests (the bar item and Alt+S, the picture cycling, a toggle, the place, a typed file, the system pages' text, clicks); the `wm` suite (Alt+S, the picture to an image's fallback and to none, the desktop's `░` cells at once, the next `wm` reading `none`).
+- **Left:** the system's pages acting through the shell (211-APP-0044, waiting for 211-KRN-0058); the sound's volume (requests-DRV.md).
+
 ## Related
 
-[000-APP-0047](000-APP-0047-wm-desktop-background.md), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md), [u008](../issues-done/u008-clickable-top-bar.done).
+[000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md), [u008](../issues-done/u008-clickable-top-bar.done).
