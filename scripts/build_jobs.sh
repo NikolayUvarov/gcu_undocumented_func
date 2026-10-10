@@ -35,3 +35,22 @@ run_jobs() {
 
 # The number of jobs at once: $MIND_BUILD_JOBS, or one per processor.
 build_jobs() { echo "${MIND_BUILD_JOBS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"; }
+
+# ensure_toolchain ROOT: the pinned toolchain of ROOT/rust-toolchain.toml, with its components and targets, installed once
+# before the jobs; in parallel each cargo would ask rustup for a missing part, and the downloads race on one file
+# (000-KRN-0060). Nothing is fetched when everything is there. Returns 1 with a message if rustup cannot install it.
+ensure_toolchain() {
+    local file="$1/rust-toolchain.toml" channel have item components targets missing=() add=()
+    [ -f "$file" ] || return 0
+    channel=$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' "$file")
+    [ -n "$channel" ] || return 0
+    components=$(sed -n 's/^components *= *\[\(.*\)\].*/\1/p' "$file" | tr -d '",')
+    targets=$(sed -n 's/^targets *= *\[\(.*\)\].*/\1/p' "$file" | tr -d '",')
+    have=$(rustup component list --installed --toolchain "$channel" 2>/dev/null) || have=""
+    for item in $components; do grep -qE "^$item(-|\$)" <<<"$have" || { missing+=("$item"); add+=(--component "$item"); }; done
+    for item in $targets; do grep -qx "rust-std-$item" <<<"$have" || { missing+=("$item"); add+=(--target "$item"); }; done
+    [ -n "$have" ] && [ ${#missing[@]} -eq 0 ] && return 0
+    local what="is not installed"; [ -n "$have" ] && what="lacks ${missing[*]}"
+    echo ">>> The pinned toolchain $channel $what: installing it once, before the parallel build..."
+    rustup toolchain install "$channel" --profile minimal "${add[@]}" || { echo "!!! rustup could not install the pinned toolchain $channel (rust-toolchain.toml)" >&2; return 1; }
+}
