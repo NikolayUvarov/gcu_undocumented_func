@@ -14,10 +14,6 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import boot_slots  # noqa: E402
-import release as release_tool  # noqa: E402
-import sign_manifest  # noqa: E402
 # Services (BOOT_FILES in the ABI) are needed by the bootloader, those the signed manifest lists; apps are all other
 # *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
@@ -127,6 +123,9 @@ def slots(payloads, arch, channel=None):
     the applications, licences and voice stay at the root, shared. With `channel`, a release's signed channel file
     kept in MIND/A/CHANNEL, so the updater knows the version: it must verify with the release key and name this
     manifest for `arch`."""
+    # Only with slots: the packager alone needs no other script.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import boot_slots, release as release_tool, sign_manifest  # noqa: E401
     boot = {"kernel.elf", *BOOT_FILES, *SIGNED}
     out = {(f"MIND/A/{name}" if name in boot else name): data for name, data in payloads.items()}
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
