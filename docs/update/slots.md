@@ -1,6 +1,6 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 0.5 (2026-10-10): a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
 The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater that stages a slot and writes the confirmed record is not yet (see the end of this page).
 
@@ -31,7 +31,7 @@ A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before sl
 | 24 | 484 | zeros |
 | 508 | 4 | CRC-32 (IEEE, as zlib computes it) of bytes 0–507 |
 
-A record of another size, magic or format, with a bad CRC, an unknown slot or flag, or anything but zeros in the reserved bytes is ignored. A record file of zeros is empty: never written.
+A record of another size, magic or format, with a bad CRC, an unknown slot or flag, or anything but zeros in the reserved bytes is ignored. So is one whose sequence number is above 2^64 − 3: a trial writes one more, and its failure one more again, and each must count as newer (351-UPD-0015). A record file of zeros is empty: never written.
 
 ## What the bootloader does
 

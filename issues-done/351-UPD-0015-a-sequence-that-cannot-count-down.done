@@ -1,0 +1,39 @@
+# 351-UPD-0015 — A boot record whose sequence cannot count down is refused — done
+
+**Type:** update (bootloader) · **Owner:** `UPD` track (worked by the storage session) · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-9.3
+
+From the assurance track's request in requests-UPD.md (2026-10-09), a finding of [351-ASR-0006](../issues/351-ASR-0006-update-threat-model.md)'s fuzzing.
+
+## Problem
+
+`bootloader/src/slots.rs` (351-UPD-0006): `plan` writes a trial's record with `sequence + 1`, and `spent` writes one more.
+- At `u64::MAX` the addition panics in a debug build and wraps to 0 in the release build.
+- The written record then counts as older than the one followed, so an unconfirmed slot keeps booting on trial and never falls back.
+
+Reaching that number needs a crafted record. Whoever can write one can also mark a slot confirmed, so this is no new way in; but the count-down (MC-9.3) did not hold at the edge.
+
+## Plan
+
+- `SEQUENCE_LAST = u64::MAX - 2`: a trial writes one more, and its failure one more again.
+- `Record::parse` refuses a record above it, as damaged, and `plan` treats such a record given to it as missing.
+- `scripts/boot_slots.py`'s `parse` mirrors this.
+
+## Acceptance criteria
+
+`tests/update_fuzz_host.rs` passes in a debug and an optimized build: the choice never panics, and every record it writes is newer than the one it follows.
+
+## Resolution
+
+Done as planned in `bootloader/src/slots.rs` and `scripts/boot_slots.py`.
+
+`tests/boot_slots_host.rs` adds `a_sequence_that_cannot_count_down_is_refused`:
+- `SEQUENCE_LAST + 1` and `u64::MAX` are refused, and count as missing beside a valid record;
+- at `SEQUENCE_LAST` the trial writes `SEQUENCE_LAST + 1` and its failure `u64::MAX`.
+
+The round-trip test's edge is now `SEQUENCE_LAST`. The host tests pass in a debug and an `-O` build.
+
+The assurance track's `tests/update_fuzz_host.rs`, run here from its branch with the fixed seed and 200 000 inputs per test, passed in both builds: 0 kinds of finding in the slot choice, and the reader accepted only its one encoding. That is evidence of those inputs, not a proof. `docs/update/slots.md` 0.5 (and `_RU`) states the limit.
+
+## Related
+
+[351-ASR-0006](../issues/351-ASR-0006-update-threat-model.md), [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done).
