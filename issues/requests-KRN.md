@@ -6,7 +6,7 @@ The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other 
 
 ## A memory quota for `blockstore` that fits its disk's index
 
-**Recorded by:** the storage session, 2026-10-09, for [251-STO-0013](251-STO-0013-an-index-that-grows-with-the-medium.md) (the speech models of 251-STO-0010).
+**Recorded by:** the storage session, 2026-10-09, for [251-STO-0013](../issues-done/251-STO-0013-an-index-that-grows-with-the-medium.done) (the speech models of 251-STO-0010).
 
 ### Problem
 
@@ -53,7 +53,7 @@ The group passes in repeated runs (say 5 of 5) on `main`.
 
 ## Free clusters counted a FAT sector at a time
 
-**Recorded by:** the storage session, 2026-10-10, from its local gate (the branch at 68d3b80 merged with `main` at 8f05728), for the `disks` check of 251-KRN-0031 and [251-STO-0014](251-STO-0014-importing-a-model-disk.md).
+**Recorded by:** the storage session, 2026-10-10, from its local gate (the branch at 68d3b80 merged with `main` at 8f05728), for the `disks` check of 251-KRN-0031 and [251-STO-0014](../issues-done/251-STO-0014-importing-a-model-disk.done).
 
 ### Problem
 

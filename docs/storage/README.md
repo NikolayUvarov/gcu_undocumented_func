@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -236,7 +236,7 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 - the history of three versions; a second name of the same object counted once in `usage`; a publication and a pin past the quota refused with `quota`; a pin of an object a name already retains, listed and charged nothing more; a removal and an unpin;
 - the store mounts again with no damage, the removal and the other name as they were, no pin.
 
-## Speech models in the store (251-STO-0014) — built; the QEMU check and the 3 GiB run are still to be run
+## Speech models in the store (251-STO-0013, 0014) — run on the platform; a 3 GiB object on the host
 
 `blocks models import [id]` stores the models of a model disk (`models:`, [251](../../issues/251-model-cache-and-model-disk.md)):
 - **The manifest.** `blocks` reads `models:MANIFEST.json`, at most 60 000 bytes, and has the parser service read it (`parse::model`, `mind::models` over `mind::json`): it never parses the disk's JSON itself. For each model the service gives the id, its files with their sizes and SHA-256, and the bounds of the model's entry in the text.
@@ -260,12 +260,12 @@ On the platform, the QEMU `store` suite (x86 and aarch64) checks:
 
 Tests:
 - `tests/models_host.rs` (passes): the JSON reader against Python's `json`, and the manifest of `models/manifest.toml` read model by model as `scripts/models.py` writes it.
-- The `disks` check of the `vfs` suite (not run yet): a model disk imported into a store disk, its files read back with their SHA-256, also after the store restarted; a model whose file differs is not named.
-- `tests/blockstore_host.rs`, `a_three_gibibyte_object_fits` (ignored by default, for a local run; not run yet): an object of 3 GiB through `dag::Builder` into a store on a file.
+- The `disks` check of the `vfs` suite (x86 and aarch64, also with an NVMe boot disk; passed in the local gate of 2026-10-10): a model disk imported into a store disk, its files read back with their SHA-256, also after the store restarted; a model whose file differs is not named.
+- `tests/blockstore_host.rs`, `a_three_gibibyte_object_fits` (ignored by default, for a local run): an object of 3 GiB whose chunks are all distinct, through `dag::Builder` into a store on a sparse file of 4.5 GiB (an owner may retain three quarters of the medium, MC-4.11), found after a remount and read back in pieces. Run on 2026-10-10, built with `-O`: 197 380 blocks, 6 504 258 sectors written, an index of 225 654 slots (12 340 KiB) sized for them, and a peak resident set of 16 732 KiB for the whole test process, in 104 s.
 
 Not provided:
 - reading a model into a memory object a recognizer maps (251-STO-0015);
-- a 3 GiB model on the platform: QEMU without KVM reads about 4 MB/s;
+- a 3 GiB model on the platform: QEMU without KVM reads about 4 MB/s. The service sizes its index from the medium: a 4.5 GiB disk asks for 2^20 slots (56 MiB) and, within the default memory quota of 16 MiB, gets 2^18 (14 MiB, room for 229 376 blocks) or less; a 3 GiB model needs about 197 000. Not run;
 - the store's memory quota for a large index (requests-KRN.md).
 
 ## Authority (300-STO-0004)
