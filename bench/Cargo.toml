@@ -1,0 +1,20 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# The system's checks and measurements (main task 176): one library of tables, statistics and logs, one ELF per tool.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kbench"
+path = "src/bin/kbench.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

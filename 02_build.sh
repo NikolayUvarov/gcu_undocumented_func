@@ -100,6 +100,7 @@ USER_CRATES=(
     "wintest:winmgr:winmgr.elf"
     "netbench:netbench:netbench.elf"
     "memtest:memtest:memtest.elf"
+    "bench:kbench:kbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
     "sysmon:sysmon:sysmon.elf"
