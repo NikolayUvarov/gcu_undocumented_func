@@ -15,11 +15,12 @@ mod mind {
         pub const BADGE_KEYSTORE: u16 = 2;
         pub const BADGE_NETPOLICY: u16 = 3;
         pub const BADGE_UPDATE: u16 = 4;
+        pub const BADGE_READER: u16 = 5;
     }
 }
 
 use fat::{Error, Sectors, Volume, SECTOR};
-use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE, BADGE_USER};
+use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_READER, BADGE_UPDATE, BADGE_USER};
 use zone::{Zone, RECORD};
 
 const STAMP: u32 = ((2026 - 1980) << 9 | 10 << 5 | 9) << 16 | (12 << 11 | 34 << 5 | 28);
@@ -49,7 +50,7 @@ fn zone(path: &str, badge: u16, inactive: Option<&str>) -> Zone {
 #[test]
 fn the_badges_are_libminds() {
     let source = include_str!("../libmind/src/fs.rs");
-    for (name, value) in [("BADGE_USER", BADGE_USER), ("BADGE_KEYSTORE", BADGE_KEYSTORE), ("BADGE_NETPOLICY", BADGE_NETPOLICY), ("BADGE_UPDATE", BADGE_UPDATE)] {
+    for (name, value) in [("BADGE_USER", BADGE_USER), ("BADGE_KEYSTORE", BADGE_KEYSTORE), ("BADGE_NETPOLICY", BADGE_NETPOLICY), ("BADGE_UPDATE", BADGE_UPDATE), ("BADGE_READER", BADGE_READER)] {
         assert!(source.contains(&format!("pub const {}: u16 = {};", name, value)), "{} is not {} in libmind", name, value);
     }
 }
@@ -80,7 +81,7 @@ fn the_updater_fills_the_slot_that_did_not_boot_and_writes_records() {
 
 #[test]
 fn other_badges_see_the_slots_read_only() {
-    for badge in [APP, BADGE_USER, BADGE_KEYSTORE, BADGE_NETPOLICY, 0x100] {
+    for badge in [APP, BADGE_USER, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_READER, 0x100] {
         for path in ["MIND", "MIND/B", "MIND/B/kernel.elf", "MIND/BOOT0"] {
             assert_eq!(zone(path, badge, Some("B")), Zone::ReadOnly, "{} {}", badge, path);
         }
@@ -88,6 +89,9 @@ fn other_badges_see_the_slots_read_only() {
     // What was there before: the user writes data/, a service its own private directory only.
     assert_eq!(zone("data/notes", BADGE_USER, Some("B")), Zone::Writable);
     assert_eq!(zone("data", APP, Some("B")), Zone::ReadOnly);
+    // A reader (init's badge for services' and programs' clients) sees what an unbadged client sees.
+    for path in ["data", "EFI/BOOT", "kernel.elf"] { assert_eq!(zone(path, BADGE_READER, Some("B")), Zone::ReadOnly, "{}", path); }
+    for path in ["system/keystore", "system/netpolicy"] { assert_eq!(zone(path, BADGE_READER, None), Zone::Hidden, "{}", path); }
     assert_eq!(zone("system/keystore/x", BADGE_KEYSTORE, None), Zone::Writable);
     assert_eq!(zone("system/netpolicy", BADGE_KEYSTORE, None), Zone::Hidden);
     assert_eq!(zone("system/netpolicy", BADGE_NETPOLICY, None), Zone::Writable);

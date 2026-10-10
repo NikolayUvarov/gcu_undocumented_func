@@ -1,6 +1,6 @@
-# 351-UPD-0008 — An update zone in `vfs_server`
+# 351-UPD-0008 — An update zone in `vfs_server` — done
 
-**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** open (the zone is built, 2026-10-09; see Progress) · **Blocked by:** the grant that gives `updater` the zone: its VFS client badged `BADGE_UPDATE` by `init` ([requests-KRN.md](requests-KRN.md), on top of 351-KRN-0022); [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done) (the booted slot in `BootInfo`) is done; [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
+**Type:** update (storage service) · **Owner:** `UPD` track; `vfs_server` has no owner in TRACKS.md · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** the grant that gives `updater` the zone, done in [351-KRN-0022](351-KRN-0022-updater-grants.done); [351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.done) (the booted slot in `BootInfo`) is done; [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done) (the layout) is done · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.2, MC-9.3
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -43,9 +43,15 @@ Tests:
 - The `boot` suite (x86, `tests/boot_slots_check.py`) and `tests/aarch64_smoke.py`: `vfs_server` names slot A as its zone when B booted, slot B when A booted, and none on a root volume.
 
 Left for the acceptance criteria:
-- `init` gives the `updater` its VFS client with this badge. Today 351-KRN-0022, on the kernel branch, lends it an unbadged one ([requests-KRN.md](requests-KRN.md)).
+- `init` gives the `updater` its VFS client with this badge. Today 351-KRN-0022, on the kernel branch, lends it an unbadged one ([requests-KRN.md](../issues/requests-KRN.md)).
 - A client with the badge fills the inactive slot and writes a record on the platform, and is refused elsewhere: the `updater` suite's stand-in can do it once it holds the badge.
+
+## Resolution
+
+The zone (Progress above) is granted. `init` gives the `updater` its client of `vfs_server` badged `BADGE_UPDATE` ([351-KRN-0022](351-KRN-0022-updater-grants.done), 2026-10-10). Every other client `init` hands out is badged as well (`BADGE_READER`), so no holder can set the update badge on one.
+
+On the platform (the x86 `boot` suite and `tests/aarch64_smoke.py`), the updater's test stand-in on a volume booted from slot A fills `MIND/B` and writes `MIND/BOOT0` whole, in place, and is refused everywhere else; the shell's badge is unchanged. Documented in [docs/update/slots.md](../docs/update/slots.md) 0.4 and in `docs/profile` (bootstrap, TCB, evidence).
 
 ## Related
 
-[351](351-self-update.md), [351-UPD-0007](351-UPD-0007-updater-service.md).
+[351](../issues/351-self-update.md), [351-UPD-0007](../issues/351-UPD-0007-updater-service.md).

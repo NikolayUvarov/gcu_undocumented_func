@@ -2596,6 +2596,21 @@ def ahci_suite(vm):
     print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
+def reader_badges_check(vm):
+    """351-UPD-0008: the clients of vfs_server init lends are badged, readers BADGE_READER (5), and a program gets
+    loader's; a badge is set once, so none can be badged for a private directory or the update zone."""
+    real = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    for name, pid in [*((n, real[n]) for n in ("loader", "tls", "video_gw") if n in real), ("clock", task)]:
+        held = vm.command(f"stat caps {pid}", raw=True)
+        found = re.search(r"^SLOT=3 GEN=\d+ KIND=1 RIGHTS=\d+ SIZE=0 BADGE=(\d+) EP=(\d+)", held, re.M)
+        assert found and found[1] == "5" and servers.get(int(found[2])) == real["vfs_server"], (name, held)
+    vm.command(f"kill {clock}")
+    print(f"PASS: the vfs_server clients init lends carry the reader's badge: {', '.join(n for n in ('loader', 'tls', 'video_gw') if n in real)} and a program loader started", flush=True)
+
+
 def blockstore_check(vm):
     """300-KRN-0001 (requested by the storage track): init starts the block store over a RAM disk of its own (ramdisk#1)
     and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
@@ -3293,6 +3308,7 @@ def services_suite(vm):
     assert "STARTED" not in output, output
     blockstore_check(vm)
     escrow_check(vm)
+    reader_badges_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
@@ -6366,16 +6382,22 @@ def boot_suite(args, disk):
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
         try:
-            if not until.startswith("[VFS]"):
+            service = {"[VFS]": "vfs_server", "[UPDATER-STUB]": "updater"}.get(until.split(" ")[0])
+            if not service:
                 return vm.expect(until, timeout=60)
-            # The shell holds the serial line, so vfs_server's lines are read with dmesg once it is up.
+            # The shell holds the serial line, so a service's lines are read with dmesg once it is up.
             output = vm.expect("MIND> ", timeout=90)
             time.sleep(1); vm.collect(); vm.output = ""
-            return output + vm.command("dmesg -s vfs_server", raw=True)
+            for _ in range(30):
+                log = vm.command(f"dmesg -s {service}", raw=True)
+                if until in log:
+                    break
+                time.sleep(1)
+            return output + log
         finally:
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
-        boot_slots_check.run(boot_image, temp, disk, "x86")
+        boot_slots_check.run(boot_image, temp, disk, "x86", args.updater_elf)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:

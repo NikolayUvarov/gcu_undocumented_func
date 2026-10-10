@@ -322,11 +322,12 @@ impl Init {
                 if let Some(slot) = bcm2711 { grants.add(SLOT_DEV0, slot, 0); }
                 if let Some(slot) = pl061 { grants.add(SLOT_DEV1, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                self.lend(&mut grants, SLOT_VFS, "vfs_server")?; // hwdocs/ on the boot disk
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); // hwdocs/ on the boot disk
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
-                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                // Its client of vfs_server, badged for reading, goes to every program it loads.
+                self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
                 self.lend(&mut grants, 6, "tts")?;
             }
@@ -357,7 +358,7 @@ impl Init {
             // usb_host's client for cameras (UVC interfaces only).
             "video_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                self.lend(&mut grants, SLOT_VFS, "vfs_server")?; self.lend(&mut grants, SLOT_DEV0, "compositor")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); self.lend(&mut grants, SLOT_DEV0, "compositor")?;
                 if self.running(service_index("usb_host")) { grants.add(SLOT_DEV1, self.badged(&mut minted, "usb_host", mind::usb::BADGE_VIDEO)?, CLIENT); }
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
@@ -390,13 +391,14 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_KEYSTORE)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }
-            // The updater (351-KRN-0022): the clock and a read-only view of the boot disk; TLS over the flow the policy
-            // gives "updater" (made here and kept for restarts: the policy's term bounds it); a lifecycle client of init
-            // that may ask for a restart of the machine; the firmware's boot variables. The update zone comes with
-            // 351-UPD-0008.
+            // The updater (351-KRN-0022): the clock and the boot disk, read-only but for the update zone (351-UPD-0008:
+            // the slot that did not boot, the boot records in place); TLS over the flow the policy gives "updater" (made
+            // here and kept for restarts: the policy's term bounds it); a lifecycle client of init that may ask for a
+            // restart of the machine; the firmware's boot variables.
             "updater" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "updater")?, ALL);
-                self.lend(&mut grants, SLOT_RTC, "rtc")?; self.lend(&mut grants, SLOT_VFS, "vfs_server")?;
+                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT);
                 if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
                 match self.flow(&mut minted, "updater") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
@@ -408,7 +410,7 @@ impl Init {
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
-                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
             }
             "virtio_net" => {

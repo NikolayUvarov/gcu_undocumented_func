@@ -2,7 +2,7 @@
 
 **Type:** kernel (libmind constant) · **Owner:** `KRN` track · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.2, MC-12.4
 
-Done for [351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md) by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09): a constant in `libmind`.
+Done for [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done) by the storage session, in the kernel track's area with the maintainer's permission (2026-10-09): a constant in `libmind`.
 
 ## Problem
 
@@ -23,4 +23,4 @@ Done in the same change as the zone (351-UPD-0008).
 
 ## Related
 
-[351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+[351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done), [351-KRN-0022](351-KRN-0022-updater-grants.done).
