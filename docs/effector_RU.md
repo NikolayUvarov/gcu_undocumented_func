@@ -112,6 +112,38 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 - **Указывайте, где он шёл:** «локальный гейт на PCU через Effector», и называйте конфигурацию из раздела 1.
 - **Пока полный гейт там не помещается** (раздел 1), удалённая машина добавляет доказательства рядом с гейтом и не заменяет его.
 
+### Часть гейта для aarch64 идёт на удалённой машине (решение сопровождающего, 2026-10-10)
+
+- **Где.** На машине из раздела 1, где есть всё для aarch64: сегодня это `PCU_585240b00e8a`. Сопровождающий добавляет новые машины; каждая попадает в раздел 1 со своей конфигурацией.
+- **Зачем.** На машине агента x86-часть локального гейта идёт около 70 минут, а aarch64-часть — ещё около 65. PCU выполняет группы aarch64 в 1,2–1,6 раза медленнее, но **параллельно** с x86-частью. Тогда гейт длится примерно столько, сколько его более долгая половина, а машина агента занята только x86-частью.
+- **Замеры 2026-10-10** (дерево трека ядра 9c843b4, одна группа на операцию, секунды):
+
+| Группа | Машина сессии ядра | PCU |
+|---|---|---|
+| build (aarch64) | 214 с | 248 с |
+| aarch64: boot and fault containment | 90 с | 8 с, не прошла: QEMU падает в `vvfat` |
+| aarch64: programs, shell and four CPUs | 339 с | 394 с |
+| aarch64: files, network and TLS | 1121 с | 1819 с |
+| aarch64: RAM, ACPI and PCI above 4 GiB | 826 с | 1063 с |
+| aarch64: GICv2 with GICv2m | 758 с | 922 с |
+| aarch64: NVMe boot disk | 132 с | 187 с |
+| aarch64: 16 CPUs | 340 с | 525 с |
+
+- **Как.** Запускайте в клоне своего трека, `/home/un/mind-core/<TRK>/gcu_undocumented_func`, по одной последовательной операции (`"sequential": true`) на шаг; каждая заметно короче часа, отпущенного операции:
+  1. **Дерево.** Приведите клон к своей ветке, слитой с `main`, как это сделал бы `--ref`:
+     - `git merge --abort; git reset -q --hard`;
+     - `git fetch origin`, `git checkout --detach origin/<ваша ветка>`;
+     - `git merge --no-edit origin/main`.
+  2. **Сборка.** `scripts/ci_local.sh --only aarch64 --group "build (aarch64)"`.
+  3. **Группы.** Каждая группа aarch64-части на том же дереве, по операции на группу: `scripts/ci_local.sh --only aarch64 --group "aarch64: programs, shell and four CPUs"` и так далее. Их имена даёт `scripts/ci_local.sh --list --only aarch64`.
+  4. **Журналы.** Нужное скопируйте в каталог своего трека в той же операции. Следующий запуск чьего угодно `ci_local.sh` удаляет `/tmp/mind-core-*.log` и переписывает `/tmp/mind-ci-local`.
+- **В отчёте** указывается, где шла каждая часть: «x86-часть локально; aarch64-часть на PCU через Effector (Ubuntu 22.04, QEMU 8.2.x с qemu.org, AAVMF 2022.02)». Вместе они составляют один локальный гейт в смысле [AGENTS.md](../AGENTS.md), раздел 4, если все группы обеих частей прошли на одном и том же коммите.
+- **Всего около 86 минут на PCU** против 64 на машине сессии ядра, для проходящих групп.
+- **Известно: «aarch64: boot and fault containment» на PCU не проходит.**
+  - Драйвер `vvfat` в QEMU аварийно завершается, когда гостевая система пишет на свой загрузочный том (`fat:rw:`): `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - Так ведут себя и QEMU 8.2.2, и 8.2.10 с qemu.org. На машине сессии ядра тот же тест проходит под 8.2.2 из Ubuntu, в которой нет патчей `vvfat`.
+  - Причину ищет [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Пока она не найдена, эту одну группу запускайте на своей машине.
+
 ## 5. Если что-то пошло не так
 
 - **`timeout` с «agent did not acknowledge»** не доказывает, что ничего не выполнилось. Посмотрите результат операции и состояние машины, прежде чем повторять.
@@ -125,3 +157,4 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-09 | `PCU_585240b00e8a` | Окружение сборки для `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup в `~un/.cargo`; клон трека ядра | KRN, по просьбе сопровождающего |
 | 2026-10-10 | `PCU_585240b00e8a` | Ubuntu Cloud Archive (caracal) добавлен ради QEMU 8.2 и убран: QEMU для 22.04 в нём нет | KRN, по просьбе сопровождающего |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 из релизного архива qemu.org, подпись проверена (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), собран для `x86_64` и `aarch64` с утилитами, в `/opt/qemu-8.2.2`, ссылки в `/usr/local/bin`. Зависимости сборки из Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, по просьбе сопровождающего (та же версия QEMU, что в CI) |
+| 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 из релиза qemu.org (тот же подписавший) собран в `~un/qemu-upstream/stage`, чтобы проверить тест загрузки aarch64 (000-KRN-0067), **не установлен**; список патчей QEMU из Ubuntu noble в `~un/qemu-noble-patches` (только чтение) | KRN |
