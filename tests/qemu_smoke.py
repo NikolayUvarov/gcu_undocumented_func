@@ -5390,16 +5390,20 @@ def wm_suite(vm):
 
     def shell_window(shell, started):
         # The shell's window (211-APP-0040): a session of the shell, its keys through wm, every command but fg.
-        def typed(line, text):
+        def shows(window, text):
+            # `text` inside `window`'s frame, once it came.
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(window)
+                if any(canon(text) in row for row in rows):
+                    return rows
+            raise AssertionError((window, text, rows))
+
+        def typed(line, text=None):
             # A line typed on the serial line, which the shell passes to wm and wm to the window in front.
             vm.send_bytes(line.encode() + b"\r")
             wait(lines=len(line) + 1)
-            for _ in range(30):
-                time.sleep(.3)
-                rows = inside(shell)
-                if any(canon(text) in row for row in rows):
-                    return rows
-            raise AssertionError((line, rows))
+            return shows(shell, text) if text else None
 
         mode, focus, rects = front(shell)
         assert focus == shell and rects[shell][2:] == (80, 24), rects
@@ -5409,16 +5413,14 @@ def wm_suite(vm):
         typed(f"logs {clock_pid}", f"LOGS PID={clock_pid}")
         # A program started there opens a window of its own in wm, and the session goes on.
         known = {m[1] for m in windows_re.findall("".join(seen))}
-        typed("top", "NAME=top IN A WINDOW")
+        typed("top")
         while not any(m[1] not in known for m in windows_re.findall("".join(seen))):
             wait("[WM] WINDOW", lines=0)
         top2 = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] not in known)
-        for _ in range(20):
-            time.sleep(.3)
-            if any(canon("PID NAME") in row for row in inside(top2)):
-                break
-        else:
-            raise AssertionError(inside(top2))
+        front(shell)
+        shows(shell, "NAME=top IN A WINDOW")
+        front(top2)
+        shows(top2, "PID NAME")
         keys("alt-w", text=f"CLOSE {top2}")
         until(f"GONE {top2}")
         while top2 in state()[2]:
@@ -5452,12 +5454,7 @@ def wm_suite(vm):
         assert again != shell
         while again not in state()[2] or state()[1] != again:
             wait()
-        for _ in range(20):
-            time.sleep(.3)
-            if any(canon("THE SHELL'S WINDOW:") in row for row in inside(again)):
-                break
-        else:
-            raise AssertionError(inside(again))
+        shows(again, "THE SHELL'S WINDOW:")
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed, and "
               "opened again with Ctrl+Alt+F5", flush=True)
