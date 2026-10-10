@@ -50,6 +50,7 @@ A second shell in every window is not the way: it would spread the authority to 
   - `console` sends the shell's commands it does not do itself, and says first when the shell will ask in its window.
   - `docs/profile` (MC-10.2) names what a client of the shell's commands can read.
   - Checks: host tests of the choice (`tests/shell_host.rs`) and of `console`'s routing (`tests/console_host.rs`). In the `wm` suite, `console` runs `quotas` through the shell, `fg` is refused, and `kill` is declined and then agreed in the shell's window.
+- **A launch session holds 5 grants** (`loader`). `console` started by `wm` for `record -w` needs six with the shell's commands. `wm` and the shell now grant `SLOT_SHELL` last and start the program without it when the session is full; the limit is asked of the kernel track ([requests-KRN.md](requests-KRN.md), "A launch session holds as many grants as there are launch slots").
 - **Not done:** `start(program, args)`, the shell starting a program on its authority in a window of its own. The shell's window already does it.
 
 ## Related

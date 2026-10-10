@@ -545,9 +545,10 @@ impl Shell {
         if tls && network.is_some() {
             if let Ok(Err(error)) | Err(error) = lend(SLOT_TLS, SLOT_TLS) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }
+        // Last, and not needed to start: a launch session holds 5 grants (requests-KRN.md); without it the program
+        // runs, as from a console.
         if commands {
-            let lent = self.commands_client().and_then(|client| { let lent = lend(SLOT_SHELL, client); let _ = mind::ipc::drop_cap(client); lent }); // the loader holds its copy
-            if let Ok(Err(error)) | Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+            if let Ok(client) = self.commands_client() { let _ = lend(SLOT_SHELL, client); let _ = mind::ipc::drop_cap(client); } // the loader holds its copy
         }
         // In front only from the console shown; refused (`rights`) when the shell is not in front: started as before.
         let committed = if front && self.active == self.shown {

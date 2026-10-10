@@ -64,3 +64,31 @@ In `main`'s run with the same debug lines, no flush write failed during the outa
 ### Acceptance criteria
 
 `tests/usb_image_smoke.py` passes with 211-DRV-0019's `usb_storage` (branch `claude/ASR-DRV`): the first `sync` after the disk is back says `OK`. A flush whose own write fails still reports it.
+
+## A launch session holds as many grants as there are launch slots (211-APP-0044)
+
+**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md).
+
+### Problem
+
+`loader`'s launch session keeps at most 5 grants (`Session.grants: [(u8, usize); 5]` in `loader/src/main.rs`). A sixth `grant` is refused with `limit`. `LAUNCH_SLOTS` (211-KRN-0058) names 16 slots a launcher may fill.
+
+`console` started by `wm` now asks for the shell's commands too, so it may need six grants:
+
+- the window;
+- the user's files;
+- system information;
+- the camera;
+- the shell's commands (`SLOT_SHELL`);
+- for `record -w`, the window to see.
+
+The `wm` suite's `record -w` lost its window lease to the limit. The tools track now grants `SLOT_SHELL` last and lets a start go on without it (wm and the shell), so the program runs without the shell's commands when the session is full.
+
+### Plan (a proposal; the kernel track decides)
+
+- **The session's array** holds `LAUNCH_SLOTS.len()` grants, or `SPAWN_GRANTS_MAX` less the loader's own.
+- **A refused grant** still answers `limit`.
+
+### Acceptance criteria
+
+A launcher grants each of `LAUNCH_SLOTS` in one session and the program holds them all. `console` from `wm` gets the shell's commands beside the window lease of `record -w`.
