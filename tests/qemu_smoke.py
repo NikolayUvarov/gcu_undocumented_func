@@ -6720,13 +6720,13 @@ def tablet_suite(vm, wav):
     logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
     # The desktop menu (issue u003): a right click on the desktop lists the shell's window first (211-APP-0044), then the
-    # programs by category; the mouse on Clocks opens its programs beside it (the categories are 20 cells wide: "Sound
-    # and voice"); a click starts clock.
+    # programs by category; the mouse on Clocks opens its programs beside it (the categories are 26 cells wide: "Tests
+    # and performance", 176-APP-0051); a click starts clock.
     logged(vm, 0, "[WM] PROGRAMS: ")
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
     vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 39, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    require(click(127, 39, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
     # The top bar's items can be clicked (issue u008): help opens and a click closes it; the run line opens.
     assert "MODE=HELP" in click(80, 0, "MODE=HELP")
     assert "MODE=NORMAL" in click(80, 30, "MODE=NORMAL")
