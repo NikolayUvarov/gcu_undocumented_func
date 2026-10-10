@@ -22,7 +22,7 @@ pub fn cpus(out: &mut impl Write) {
     let Ok(records) = stat::read(STAT_CPUS, 0, pages.as_mut_slice()) else { return };
     for (index, c) in records.iter::<StatCpu>().enumerate() {
         // aarch64 saves no FP/SIMD state yet: programs are soft-float.
-        let state = if cfg!(target_arch = "aarch64") { "NONE" } else if c.xsave & 4 != 0 { "XSAVE+AVX" } else if c.xsave != 0 { "XSAVE" } else { "FXSAVE" };
+        let state = if cfg!(target_arch = "aarch64") { if c.xsave != 0 { "FP/SIMD" } else { "NONE" } } else if c.xsave & 4 != 0 { "XSAVE+AVX" } else if c.xsave != 0 { "XSAVE" } else { "FXSAVE" };
         let _ = writeln!(out, "CPU={} APIC={} ONLINE={} TICKS={} BUSY_MS={} IDLE_MS={} SWITCHES={} IRQS={} CURRENT={} FPU={}", index, c.apic_id, c.online != 0, c.ticks, c.busy_ns / 1_000_000, c.idle_ns / 1_000_000, c.switches, c.interrupts, c.current_pid, state);
     }
 }

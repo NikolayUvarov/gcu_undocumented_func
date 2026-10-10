@@ -297,7 +297,7 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
 
 `camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]` works through the video gateway `video_gw` (`idl/video.wit`).
 
-- **Consent.** The gateway's only client is the shell's. It lends it in slot 24 to a program that asks for `REQUEST_CAMERA`, and only after the user answers yes to `CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)`. It asks every time. A refused program runs without a camera: `camera` says so and exits with 1.
+- **Who gets the camera.** The gateway's only client is the shell's. It lends it in slot 24 to a program that asks for `REQUEST_CAMERA`, without a question: starting the program is the user's request. The camera mark shows while a stream is open. A script must declare `camera`. A program started without the client says so: `camera` exits with 1.
 - **The stream.** One task owns a camera at a time. Frames come at the requested rate, each with its number and the time it was taken, into a buffer `camera` lends for each read. The gateway logs every open and close with who asked.
 - **The camera mark.** While a stream is open, the compositor draws a green camera mark left of the capture dot. It is drawn on the framebuffer only, so no program can hide it and no capture holds it.
 - **What `camera` does:**

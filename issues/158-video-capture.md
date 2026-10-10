@@ -1,6 +1,6 @@
 # 158 — Video capture devices: cameras through a video gateway
 
-**Type:** drivers + service · **Owner:** kernel track (USB and the driver), with the tools track for the programs · **Priority:** P1 (the maintainer's MacBook Pro camera, 2026-10-09) · **Status:** open · **Blocked by:** — (the USB stack, step 1 below, is done: [164](../issues-done/164-usb-hid-keyboard-and-mouse.done)) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
+**Type:** drivers + service · **Owner:** the kernel session (`claude/youthful-mendel-mf1soy`): `usb_host`'s isochronous transfers and the UVC class, taken from the drivers track at the maintainer's word (2026-10-09); the tools track for the programs · **Priority:** P1 (the maintainer's MacBook Pro camera, 2026-10-09) · **Status:** open · **Blocked by:** — (the USB stack, step 1 below, is done: [164](../issues-done/164-usb-hid-keyboard-and-mouse.done)) · **Roadmap:** tracks A and G · **Constitution:** MC-3.3, MC-10.2, MC-11.4 (a camera is a sensor of the user's surroundings), Appendix B.6
 
 ## Problem
 
@@ -34,7 +34,7 @@ Steps 3–5 are done on the synthetic source; step 2 (UVC with isochronous trans
 - **Done — the test source** (`libmind/src/video.rs`), only when the boot disk holds `video/synthetic`: eight colour bars moving left 4 pixels a frame, and the frame number in 32 cells of the bottom 16 rows. The module also has the YUY2 conversion a UVC camera will need.
 - **Done — consent:**
   - `init` gives the gateway's only client to the shell (`SLOT_CAMERA` = 24, so `SLOT_DYNAMIC` is now 25).
-  - The shell lends it for `REQUEST_CAMERA` (8192) only after the user answers yes to `<NAME> ASKS FOR THE CAMERA. ALLOW? (Y/N)`, asked every time.
+  - The shell lends it for `REQUEST_CAMERA` (8192). It asked `<NAME> ASKS FOR THE CAMERA. ALLOW? (Y/N)` every time until 2026-10-09, when the maintainer ruled that a tool started for its purpose gets its device without a question (CONTRIBUTING.md); the camera mark still shows while a stream is open.
   - A script must declare `camera` too (msh's words; `gpio` was added there as well).
 - **Done — the indicator:**
   - `display.wit` 1.1 `camera`: the gateway's heartbeat while a stream is open.
@@ -71,6 +71,57 @@ The maintainer asked that the mind can use the test MacBook Pro's camera, starte
   2. isochronous transfers in `usb_host`, on EHCI (iTD) and on xHCI. QEMU's `usb-audio`, an isochronous device, tests the transfer path without a camera;
   3. the UVC class itself (step 2): the probe and commit of a format, payload headers, frame assembly, and YUY2 and MJPEG into `video_gw`.
 
+## Progress (2026-10-09): the UVC driver, made and host-tested; the Mac's run left
+
+The camera came to the kernel session on 2026-10-09 (its owner line). Step 2 is written. QEMU 8.2 has no video class device and no other high-speed isochronous one, so the iTD path runs only on the MacBook Pro. What it does there is not known until the maintainer's run.
+
+- **`usb_host`, EHCI: one isochronous IN stream a controller.**
+  - **The ring.** A ring of up to 64 iTDs, one a frame. Frame list entry j names iTD j mod n, and that iTD then links to the interrupt chain.
+  - **The buffers.** Each microframe's transaction has up to 3 × 1024 bytes (Mult). The region grew by 776 KiB to hold the ring: `EHCI_DMA_BYTES`.
+  - **Collecting.** Each look collects every iTD the controller finished, in the order of the frames they ran in. Each iTD remembers the frame it was armed for, counted past the frame list's wrap.
+  - **Arming.** Every free iTD at least two frames ahead of the controller is armed again. A controller may hold an iTD up to a frame (its isochronous scheduling threshold).
+  - **Its test.** The order (`usb_host/src/iso_ring.rs`) is host-tested against a model of the controller (`tests/iso_ring_host.rs`). A look at least every n − 2 frames loses no frame. Later looks lose frames but keep the order, never arm an iTD the controller may hold, and count the losses. A first version that walked the ring from one pointer stalled behind an unarmed iTD; the model found it.
+  - **The queue.** Packets wait in a queue of 1 MiB. When it is full, new ones are dropped and counted.
+  - **Polling.** While a stream runs, `usb_host` collects every tick, and again at each request.
+  - **Not done.** Split isochronous (siTD) for a full-speed camera behind a hub, and isochronous on xHCI. `select` refuses both, with a log line.
+- **`idl/usb.wit` 1.2.**
+  - `select(handle, alternate)`: SET_INTERFACE, then the setting's endpoints written back, and its isochronous IN endpoint's stream started; setting 0 stops it. `control` now refuses SET_INTERFACE.
+  - `isochronous(handle, address, offset, length)`: whole packets, each after two length bytes (bit 15: an error the controller reported).
+  - `BADGE_VIDEO` (class 0x0E). `init` gives `video_gw` that client in `SLOT_DEV1`.
+- **`mind::uvc`** (host-tested, `tests/uvc_host.rs`):
+  - the control and streaming interfaces, the input header, YUY2 and MJPEG formats, frame sizes with listed or continuous intervals, and the isochronous alternate settings;
+  - the probe and commit controls by UVC version (26, 34 or 48 bytes);
+  - the choice of the smallest YUY2 frame size that holds the picture asked for, the slowest interval that is fast enough, and the setting carrying the committed payload size;
+  - frames from payloads: FID, EOF, ERR, a damaged packet, a header of the wrong length, too many bytes.
+- **`video_gw`.**
+  - It claims a camera's interfaces from `usb_host` at start and whenever one is asked for, and reads its descriptors and product name.
+  - It logs the formats, frame sizes and settings, then probes and commits, and logs what the camera committed.
+  - It selects the setting and takes the packets every tick while the stream is open.
+  - It gives frames on the rate's grid, scaled to the size asked for (`mind::video::yuy2_scaled`).
+  - Without a good frame for 5 s, a read fails and the log says what came: packets, bytes, broken frames, the first header.
+  - The USB camera is listed first, the test pattern after it.
+- **Open:**
+  - the maintainer's run;
+  - MJPEG (no decoder yet);
+  - bulk streaming;
+  - siTD and xHCI isochronous;
+  - a camera passed through to QEMU (manual).
+
+## The Mac's run (2026-10-10): the camera streams from the shell's screen
+
+The maintainer ran `fast-test` bc681376b8d8 on the MacBook Pro (`log:boot0001.log`, `hw0001.txt`, photos of the screen).
+
+- **What the log shows.**
+  - `video_gw` found the FaceTime HD camera: `05AC:8510`, UVC 1.00, isochronous endpoint 82, YUY2 from 160×120 to 1280×720 and MJPEG.
+  - `camera`, started from the shell's screen, opened it at 320×240 and 10/s on setting 2 (512 bytes a microframe). The first frame came after 433 ms.
+  - Over 6 s it got 64 frames, 72 assembled whole and none broken. `usb_host` counted 29 467 packets, 11 294 936 bytes, none with errors, dropped or late.
+  - So EHCI's iTD ring and the UVC class work on the Mac.
+- **What does not work yet: the camera from `wm`.** From `wm`'s menu or `console`, `camera` ends with "no camera was granted": `wm` neither holds nor passes `SLOT_CAMERA`.
+  - At the maintainer's choice the tools track does it, with the shell in a window and the full `console` (211-APP-0040).
+  - The request is in [requests-APP.md](requests-APP.md) ("The camera from `wm`, and the shell in a window").
+  - The kernel track's part is `SLOT_SHELL`.
+- **Still to see on the Mac:** the picture in a window (after the request above), the camera mark, and `camera -s still.bmp`.
+
 ## Acceptance criteria
 
 - **QEMU** (CI, synthetic source):
@@ -80,6 +131,7 @@ The maintainer asked that the mind can use the test MacBook Pro's camera, starte
   - `camera` writes a still and a 3-second AVI that ffprobe accepts.
 - **USB:** `usb_storage` works unchanged on top of `usb_host` (the `ahci`/USB image suites).
 - **Manual** (documented): with a passed-through webcam, `camera` shows its picture.
+- **The MacBook Pro** (the maintainer's run): `camera` shows the FaceTime HD camera's picture in its window, the camera mark is on, and `camera -s still.bmp` writes a still of it. These were the drivers track's request until the camera came to the kernel session on 2026-10-09; the request is withdrawn from `requests-DRV.md`.
 - **Host tests:** UVC payload-header parsing and frame assembly (with packet loss); YUY2 conversion.
 
 ## Related

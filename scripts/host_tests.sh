@@ -8,7 +8,7 @@ rustc --edition=2021 --test tests/runtime.rs -o "$OUT/runtime-tests"
 "$OUT/runtime-tests"
 rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
-for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm; do
+for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid aml gpio pins video uvc iso_ring line beep console say jpeg script cid blockstore dag checkpoint boot_slots http tpm; do
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done

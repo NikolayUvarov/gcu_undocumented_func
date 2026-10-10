@@ -210,12 +210,33 @@ fn release(device: &mut Option<Device>, waiters: &mut [Option<(Call, u8)>; WAITE
 }
 
 mind::entry!(main);
+// A capture as the log tells it (551-DRV-0010): its first second's loudest sample, a stream that gives nothing, and
+// what it gave in all, so a microphone that does not work shows in the boot log.
+#[derive(Default)]
+struct Session { start_ms: u64, bytes: usize, peak: i32, first: bool, idle: bool }
+impl Session {
+    fn read(&mut self, pcm: &[u8]) {
+        for sample in pcm.chunks_exact(2) { self.peak = self.peak.max((i16::from_le_bytes([sample[0], sample[1]]) as i32).abs()); }
+        self.bytes += pcm.len();
+        let elapsed = (mind::time::uptime_ms() as u64).saturating_sub(self.start_ms);
+        if !self.first && self.bytes >= AUDIO_RATE * 4 {
+            self.first = true;
+            mind::println!("[AUDIO] CAPTURE: THE FIRST SECOND'S PEAK {} OF 32767{}", self.peak, if self.peak < 64 { ", SILENT: THE MICROPHONE GIVES NOTHING" } else { "" });
+        }
+        if !self.idle && self.bytes == 0 && elapsed > 2000 { self.idle = true; mind::println!("[AUDIO] CAPTURE: NO DATA 2 S AFTER THE START: THE INPUT STREAM DOES NOT RUN"); }
+    }
+    fn stopped(&self, overflows: u32) {
+        mind::println!("[AUDIO] CAPTURE STOPPED: {} MS OF SOUND, PEAK {}, {} OVERFLOWS", self.bytes / (AUDIO_RATE * 4 / 1000), self.peak, overflows);
+    }
+}
+
 fn main(_info: &'static BootInfo) {
     let mut device = Device::open();
     let irq = Irq(SLOT_IRQ);
     let mut waiters: [Option<(Call, u8)>; WAITERS] = [const { None }; WAITERS];
     let mut overflows = 0u32;
     let mut owner: Option<u64> = None; // the task that owns the microphone capture
+    let mut session = Session::default(); // what the current capture gave, for the log
     match &device {
         Some(Device::Ac97(_)) => { let _ = irq.bind(Endpoint::SERVICE); mind::println!("[AUDIO] AC97 READY: {} HZ STEREO S16, {} DMA BUFFERS", AUDIO_RATE, BUFFERS); }
         Some(Device::Hda(d)) => {
@@ -284,12 +305,19 @@ fn main(_info: &'static BootInfo) {
                 overflows = 0;
                 if owner.is_none() { d.record_stop(); } // a capture left by a task that ended starts afresh
                 let started = d.record_start();
-                if started { owner = Some(sender); }
+                if started { owner = Some(sender); session = Session { start_ms: mind::time::uptime_ms() as u64, ..Session::default() }; }
+                mind::println!("[AUDIO] CAPTURE {} FOR PID {}", if started { "STARTED" } else { "REFUSED: NO INPUT PATH" }, sender);
                 audio::reply_record_start(call, if started { Ok(()) } else { Err(Error::NotFound) })
             }
-            (audio::Request::RecordStop, Some(d)) => { d.record_stop(); owner = None; audio::reply_record_stop(call, Ok(())) }
+            (audio::Request::RecordStop, Some(d)) => { d.record_stop(); owner = None; session.stopped(overflows); audio::reply_record_stop(call, Ok(())) }
             (audio::Request::RecordRead { capacity, buffer }, Some(d)) => {
-                let result = lent(buffer).map(|mut out| { let len = (capacity as usize).min(out.len()); let (bytes, lost) = d.record_read(&mut out.as_mut_slice()[..len]); overflows += lost as u32; bytes as u32 });
+                let result = lent(buffer).map(|mut out| {
+                    let len = (capacity as usize).min(out.len());
+                    let (bytes, lost) = d.record_read(&mut out.as_mut_slice()[..len]);
+                    overflows += lost as u32;
+                    session.read(&out.as_slice()[..bytes]);
+                    bytes as u32
+                });
                 audio::reply_record_read(call, result)
             }
             (audio::Request::Play { bytes, pcm }, Some(d)) => {

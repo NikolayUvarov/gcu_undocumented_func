@@ -353,10 +353,12 @@ impl Init {
                 }
             }
             "tts" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "tts")?, ALL); self.lend(&mut grants, SLOT_AUDIO, "audio_gw")?; }
-            // The video gateway (issue 158): the boot disk for video/synthetic, the compositor for the camera mark.
+            // The video gateway (issue 158): the boot disk for video/synthetic, the compositor for the camera mark, and
+            // usb_host's client for cameras (UVC interfaces only).
             "video_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 self.lend(&mut grants, SLOT_VFS, "vfs_server")?; self.lend(&mut grants, SLOT_DEV0, "compositor")?;
+                if self.running(service_index("usb_host")) { grants.add(SLOT_DEV1, self.badged(&mut minted, "usb_host", mind::usb::BADGE_VIDEO)?, CLIENT); }
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
             "netstack" => {

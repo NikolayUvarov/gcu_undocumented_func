@@ -55,5 +55,5 @@ pub fn cpu(out: &mut String) {
 
 /// The platform section: what the kernel chose on this machine.
 pub fn kernel(out: &mut String) {
-    let _ = writeln!(out, "  architecture      aarch64\n  timer             {} Hz (CNTFRQ_EL0)\n  vector state      none (programs are built soft-float; 174 step 1b)\n  protection        {}", read!("cntfrq_el0"), if super::cpu::pan() { "PXN PAN" } else { "PXN" });
+    let _ = writeln!(out, "  architecture      aarch64\n  timer             {} Hz (CNTFRQ_EL0)\n  vector state      FP/SIMD: V0-V31, FPCR and FPSR saved a task (250-KRN-0056)\n  protection        {}", read!("cntfrq_el0"), if super::cpu::pan() { "PXN PAN" } else { "PXN" });
 }

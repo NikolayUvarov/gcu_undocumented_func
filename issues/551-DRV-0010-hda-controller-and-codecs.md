@@ -56,6 +56,23 @@ Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and th
 - **The change**, made here ahead of step 2 because the maintainer's run needs it: for a Cirrus codec with Apple's subsystem ID, `audio_gw` sets those GPIOs (mask, direction, data: speakers, or headphones when the output pin is a headphone jack). It logs `HDA: APPLE <SSID>, CIRRUS AMPLIFIERS: GPIO … OF <count> SET, READ …`.
 - **Left.** The MacBook Pro's run. If it is still silent, the next thing to try is Cirrus's errata coefficients for the vendor widget 0x11. Jack detection and the internal microphone stay with step 2, which `DRV`'s owner numbers.
 
+
+**2026-10-09, later: sound on the MacBook Pro, the microphone silent, clicks** (fast-test fe6e7e250512).
+- **Sound.** The amplifier GPIO took (`GPIO 0x08 OF 4 SET, READ 0x08`), and speech is heard. But Russian speech is barely intelligible and clicks. The clicks are this task's to find, below; the synthesizer's intelligibility is `APP`'s ([requests-APP.md](requests-APP.md)).
+- **The microphone.** No program that listens worked.
+  - By Linux's facts, the MacBook Pro 10,1's internal microphone is a digital one on the CS4206's pin 0xE (DMIC1). It is switched on by bit 3 of coefficient 4 of the vendor widget 0x11, and nothing set it.
+  - `audio_gw` now sets it, and logs the coefficient before and after.
+- **Capture in the log.** Each capture logs:
+  - its start, with the client's PID, or the refusal;
+  - the first second's peak (`SILENT: THE MICROPHONE GIVES NOTHING` under 64);
+  - `NO DATA` when the input stream gives nothing for 2 s;
+  - at its stop, how much sound it gave and how many overflows.
+- **The clicks, to find out.**
+  - The Mac's controller runs `POLLED`, without an interrupt line, at a 20 ms poll against 21 ms buffers. A late poll lets the ring run dry, and the controller plays stale buffers.
+  - Next: count the underruns in the log (debug mode), take the interrupt (MSI) where the line is missing, or poll at 5 ms while a stream plays, and listen again on the Mac.
+  - **Measured in QEMU (2026-10-09).** The `tts` suite's recording has no silence of a buffer's length inside the speech, so the driver's ring did not run dry there. What it does have is the synthesizer's: onsets rising to 3000–5000 within two or three samples after its pauses, and the linear upsampler's images at 8–12 kHz, only 8 dB below the sibilants. Both are recorded for the tools track (requests-APP.md, the note for 252-APP-0041). The maintainer also hears a periodic hiss in the sounds, which fits those images. The Mac's polled ring is still to be counted.
+
+
 ## Related
 
 [551](551-sound-on-pcs.md), the AC97 path in `audio_gw/src/main.rs`.

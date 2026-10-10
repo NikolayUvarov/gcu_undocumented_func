@@ -34,12 +34,9 @@ fn call<T>(body: impl FnOnce() -> T) -> T {
     while BUSY.swap(true, Ordering::Acquire) { core::hint::spin_loop(); }
     #[cfg(target_arch = "x86_64")]
     unsafe { let mxcsr: u32 = 0x1F80; core::arch::asm!("fninit", "ldmxcsr [{}]", in(reg) &mxcsr); }
-    // aarch64: FP/SIMD allowed at EL1 for the call (CPACR_EL1.FPEN = 01), trapped again after; tasks hold no FP state.
-    #[cfg(target_arch = "aarch64")]
-    unsafe { core::arch::asm!("msr cpacr_el1, {}", "isb", in(reg) 1u64 << 20); }
+    // aarch64: FP/SIMD stays enabled (250-KRN-0056); the registers the firmware changes are the task's, which the exit
+    // loads again from its frame.
     let result = body();
-    #[cfg(target_arch = "aarch64")]
-    unsafe { core::arch::asm!("msr cpacr_el1, {}", "isb", in(reg) 0u64); }
     BUSY.store(false, Ordering::Release);
     result
 }

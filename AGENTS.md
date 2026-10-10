@@ -35,7 +35,7 @@ Each track has a **code**, a **range of main-task numbers**, an owner, a set of 
 - Two tracks never produce the same number, because the codes differ. A main task is split into tasks by any track that works on it: each numbers its own part.
 - Numbers given before this scheme (`158`, `205`, `u015`, …) stay as they are.
 
-The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane), `ASR` (assurance) and `APL` (Apple Silicon).
+The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane), `ASR` (assurance), `APL` (Apple Silicon) and `BLT` (Bluetooth).
 
 The registry of tracks — current owners, branches, statuses and starting tasks — is [TRACKS.md](TRACKS.md), the authoritative record. Open tracks can be taken in parallel.
 
@@ -124,14 +124,17 @@ The gate is one of the following:
 
 The maintainer or the owning track reviews and merges it.
 
-**`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. The maintainer builds it and tries a fix on a real machine at once, without waiting for the tests.
+**`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. Only the maintainer builds it, to try a fix on a real machine at once, without waiting for the tests.
 
-- An agent of the maintainer pushes a commit there as soon as it builds, before running its tests: it merges its branch into `fast-test`, or fast-forwards it. Never force-push it.
+- **An agent never builds, tests or gates `fast-test`** (a strict rule): no build, no test suite, no `scripts/ci_local.sh` on it or on a worktree of it. Builds, tests and gates run only on the agent's own branch.
+- **The order:** an agent of the maintainer commits on its own branch and makes sure it builds there; then merges its branch into `fast-test` (or fast-forwards it), resolves any conflict in the merge, and pushes the merge as it is; only then runs the tests and the gate, on its own branch. Never force-push `fast-test`.
 - When `main` moves, it is merged into `fast-test`.
 - Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the gate.
 - A build from `fast-test` is not evidence of anything (section 1) until its commits pass the gate.
 
 **A maintainer's machine can run the gate continuously.** `scripts/ci_watch.sh` fetches `origin` every 10 minutes. It tests each new commit of `main`, and of every other branch merged with `main`, and keeps a history in `~/.cache/mind-ci-watch/history.log`. Run it with `--once` for a single pass.
+
+**The maintainer's remote machines (Effector).** Builds and tests on the maintainer's machines go through Effector, which several agents share: long work waits in each machine's sequential queue, each track has a directory of its own there, nothing runs detached, and no machine is rebooted. How to use them is in [docs/effector.md](docs/effector.md) (Russian: [docs/effector_RU.md](docs/effector_RU.md)).
 
 ## 5. Working next to other tracks
 
@@ -155,6 +158,7 @@ The maintainer or the owning track reviews and merges it.
 ## 6. What an agent must not do
 
 - Push to `main` without a green gate, except a text-only commit (section 4), or push to another track's branch.
+- Build, test or run a gate on `fast-test`: it only receives merges of the agents' branches (section 4).
 - Skip, disable or weaken a test to get a green result, or push an empty commit to re-trigger CI.
 - Change the system-call ABI outside a kernel issue, or change a service interface without a new IDL version.
 - Claim a guarantee, profile entry or acceptance criterion that it has not tested on the stated configuration.
@@ -172,7 +176,9 @@ You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <n
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
-Never push to other branches; reach main only through the gate in AGENTS.md section 4.
+Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
+Remote build machines (Effector): read docs/effector.md first; long work goes into a machine's sequential queue, in your track's own directory.
+Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.
 Before pushing: run the tests the change touches (scripts/ci_local.sh for the full set) and update docs/profile if a stated guarantee changed.

@@ -18,6 +18,7 @@ pub mod checkpoint;
 pub mod cid;
 pub mod control;
 pub mod dag;
+pub mod debug;
 pub mod dev;
 pub mod fs;
 pub mod firmware;
@@ -60,6 +61,8 @@ pub mod windowed;
 pub mod avi;
 #[cfg(feature = "alloc")]
 pub mod jpeg;
+#[cfg(feature = "alloc")]
+pub mod uvc;
 #[cfg(feature = "alloc")]
 pub mod script;
 #[cfg(feature = "alloc")]

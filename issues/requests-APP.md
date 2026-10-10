@@ -321,3 +321,88 @@ The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
 
 The kernel track added `unreadable` to the loader's errors. The shell's match on loader errors is exhaustive, so the interface change took the shell's mapping with it: `ERR_IO` → `CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)` in `shell/src/main.rs`. The tools track may word it otherwise. `wm`, `fm` and `console` print loader errors with `{:?}` and show `Unreadable`.
 
+## Russian speech is barely intelligible on the MacBook Pro (252)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, at the maintainer's request after a run on the MacBook Pro: "Russian audio output is barely understandable, very poor, with clicks". The task is to find out whether it can be fixed.
+
+### Problem
+
+`tts` runs its 16 kHz formant synthesizer and upsamples to 48 kHz for `audio_gw`. On the Mac's speakers Russian is hard to follow. The clicks are looked for in the driver (551-DRV-0010: polled playback without an interrupt). How intelligible the voice is, is the synthesizer's.
+
+### Plan (a proposal; the tools track decides)
+
+- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
+- Then the cheapest gains: the upsampler's filter, and the Russian rules and voice parameters. 252's neural synthesis is the larger step.
+
+### Acceptance criteria
+
+A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
+
+## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
+
+The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
+
+## Note: the hiss and the clicks in Russian speech, measured (252-APP-0041)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for the tools track's 252-APP-0041.
+
+The maintainer hears not only clicks but a periodic hiss in the synthesized sounds themselves.
+
+**Measured by the kernel track** on the `tts` suite's recording (`/tmp/mind-core-tts.wav`, QEMU's wav backend at 44.1 kHz; the averaged spectrum of the loud frames):
+
+| Band | Share of the energy |
+|---|---|
+| 0–4 kHz | −0.1 dB |
+| 4–8 kHz | −16.7 dB |
+| 8–12 kHz | −24.7 dB |
+| 12–16 kHz | −46.3 dB |
+| 16–24 kHz | about −40 dB |
+
+- **The hiss is likely the upsampler's images.** A 16 kHz synthesizer has nothing above 8 kHz. Yet 8–12 kHz holds energy only 8 dB below the sibilants' 4–8 kHz.
+  - `tts` upsamples 16 → 48 kHz by linear interpolation (`tts/src/main.rs`, `Upsampler`). Its response, sinc² of f / 16 kHz, leaves the image of each component at 16 kHz − f only 4 to 21 dB down.
+  - So every fricative and burst gets a mirrored hiss at 8–12 kHz, which a laptop's small speakers make prominent.
+- **The clicks are likely the onsets.** After the synthesizer's pauses (exact silences of 23, 65, 123 and 285 ms), several onsets rise from 0 to 3000–5000 within two or three samples, with no ramp. Examples: 450.9 ms, 2698.0 ms and 4130.0 ms of the recording.
+  - The driver's path showed no underrun in QEMU: no silences of a buffer's length inside the speech.
+  - The polled playback on the Mac is still looked at in 551-DRV-0010.
+
+What the kernel track would try (the tools track decides):
+
+- The upsampler: a polyphase low-pass FIR instead of linear interpolation. For example, 48 taps (16 a phase) of a windowed sinc with its cutoff near 7 kHz at 48 kHz, which puts the images 50 dB or more down. Measure the 8–12 kHz band again: it should fall well below −40 dB.
+- The onsets: a ramp of a few milliseconds where a segment starts or ends at silence, and bursts limited in their slope.
+
+## The camera from `wm`, and the shell in a window (158, 211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, for main tasks [158](158-video-capture.md) and [211](211-intel-pc-from-a-sata-ssd.md), at the maintainer's request after a run on the MacBook Pro (`fast-test` bc681376b8d8). The maintainer chose that the tools track does it.
+
+### Problem
+
+- **The camera works from the shell's screen.** `camera` there streamed the FaceTime HD camera: 64 frames at 320×240, none broken (`log:boot0001.log`, `video_gw` and `usb_host` lines at 27.7–34.1 s).
+- **From `wm` it does not.** Started from the menu or from `wm`'s `console`, it ends with `camera: no camera was granted (start camera from the shell and allow it)`:
+  - `wm` does not ask the shell for the camera (`mind::request!` in `wm/src/main.rs` has no `REQUEST_CAMERA`), so it holds nothing in `SLOT_CAMERA`;
+  - `wm`'s `start()` and `console`'s `run()` do not handle `REQUEST_CAMERA`, so a program they start never gets it.
+- **The maintainer asks for more:**
+  - `camera` in `wm` shows its stream in its window, started from the menu and from `console`;
+  - `console` from the right-click menu works fully, as the shell does;
+  - the shell itself runs in a window in `wm`;
+  - the difference between `console` and the shell, and its reason, is explained to the user.
+
+### Plan (a proposal; the tools track decides)
+
+- **The camera.**
+  - `wm` asks for `REQUEST_CAMERA`. The shell lends it without a question, by the maintainer's rule "No question about a tool's own purpose".
+  - `wm` lends `SLOT_CAMERA` to a program that asks for it, and so does `console` to what it starts. `console` asks for it too.
+- **The shell in a window.**
+  - With [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md), `console` joined to the shell is the shell in a window. The menu can offer it as `shell`.
+  - A program that needs what `wm` does not hold (the network, the camera, the log, the lifecycle client) could be started by the shell on its own authority, through `shell.wit`. It then opens its window in `wm`, rather than being started by `console` with `wm`'s fewer grants.
+  - Either way only one shell holds the operator's authorities.
+- **The kernel track's part:** `SLOT_SHELL` (and `SLOT_CLIPBOARD`), asked for in `requests-KRN.md` for 211-APP-0040 and 000-APP-0032. The kernel track takes it now as a task of its own.
+- **The explanation:** a section in `docs/tools` (EN, RU) and in `console`'s help:
+  - the shell is the one holder of the operator's authorities;
+  - `console` is a terminal window that asks the shell for them;
+  - why a second full shell in every window is not made: it would spread the authority to reboot, kill, change the network policy and the firmware's boot order.
+
+### Acceptance criteria
+
+- The `wm` suite starts `camera` from the menu and from `console` with the video gateway's synthetic source, and sees its window show the stream.
+- The `shell` item opens a window where `ps` lists the tasks, `reboot` asks and, once confirmed, resets the machine, and `camera` shows the stream.
+- On the MacBook Pro, `camera` shows the FaceTime camera in a `wm` window.
