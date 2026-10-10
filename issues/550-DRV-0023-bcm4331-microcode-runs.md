@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; skipped until `init` gives the file access) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
