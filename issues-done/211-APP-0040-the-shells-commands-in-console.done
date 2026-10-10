@@ -1,0 +1,45 @@
+# 211-APP-0040 — The shell's commands in `wm`: the shell's own window — done
+
+**Type:** tools (`shell`, `console`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-10-10: without a proper console `wm` is hard to work in) · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+
+Numbered from the kernel track's request in `requests-APP.md` (2026-10-09, at the maintainer's request after a run on the MacBook Pro). Its second request ("The camera from `wm`, and the shell in a window", 2026-10-10) asks for the same: the shell in a window, and the difference between `console` and the shell explained. What needs a channel from `wm` and `console` to the shell went to [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md).
+
+## Problem
+
+Before `wm` starts, every shell command works on the shell's screen. In `wm` the user has `console`, which starts programs and has a few commands of its own (`ps`, `ls`, `cat`, `date`, `ping`, …), but it names the shell's other commands and refuses them: `reboot`, `kill`, `logs`, `stop`, `boot`, `sync`, `ip`, `nslookup`, `fetch`, `stat`, `cpus` and the rest need what only the shell holds (process control, the lifecycle client, the operator's network client). A second shell in every window would spread those authorities.
+
+## Plan
+
+The request offered two ways: `console` sends lines to the shell over a lent endpoint, or a window that is a view of the shell's own session. The first needs a new fixed slot from `KRN` (asked for on 2026-10-09; every application slot below `SLOT_DYNAMIC` is named). The second needs none, and it is taken (2026-10-10, at the maintainer's raised priority):
+
+- **The shell's window.** When the shell starts a window manager, it opens a text window of its own through its broker client (`SLOT_WINDOWS`), titled `shell`, and shows there a session of its own, a fifth console beside the four of Ctrl+Alt+F1…F4: its line editing, history, Tab, scrollback, `msh` statements and every command, run by the shell on its own authority as on its screen. Nothing is lent to anyone, and `wm` only shows the window and passes it the keys, as it does for every window.
+- **Programs started there** open as windows in `wm` (the shell lends them its broker client, as `wm` does), not over `wm` on a screen of their own; a console program prints into the shell's window, as on the shell's screen.
+- **The window follows its frame:** the session's lines and rows take the size `wm` gives it.
+- **Closed** with `[×]` or Alt+W, the window goes; Ctrl+Alt+F5 (the shell listens for it, as for F1…F4) or the next window manager the shell starts opens it again.
+- **`reboot` and `stop` ask** in the window before they act: its keys come through the window manager.
+- **`fg` is refused** there: the window has no screen to give a program; a window manager is started from a console.
+- `libmind` gains what this needs: a window opened through a broker client of the program's choosing (`mind::windowed::Window`), and a `mind::tui::Terminal` over such a window.
+- `console` keeps its own commands; its help points to the shell's window for the shell's commands.
+- **Docs:** `docs/tools` (EN, RU) and the shell's help, with the difference between the shell and `console` and its reason: the shell is the one holder of the operator's authorities; `console` is a terminal for programs with what `wm` holds; a second full shell in every window would spread the authority to reboot, kill, change the network policy and the firmware's boot order.
+
+## Acceptance criteria
+
+- **The `wm` suite:** `wm` started from the shell shows the shell's window; typed there, `ps` lists the tasks, `logs` of a program and `date` answer, a program started there opens as a window, and the window resized by `wm` shows its prompt again at its new size; `reboot` there asks, and `n` keeps the machine running; closed, the window goes, and Ctrl+Alt+F5 opens it again.
+- **Host tests:** the console's resizing (`tests/console_host.rs` or the shell's own).
+
+## Related
+
+[211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), [158-APP-0043](../issues/158-APP-0043-the-camera-from-wm-and-console.md), [u004](u004-console.done), [u006](u006-console-commands.done), [088](088-text-window-manager.done).
+
+## Resolution
+
+- **The window** (`shell/src/main.rs`): when the shell starts a program that asks for the window manager client, it first opens a text window titled `shell` through its broker client (`SLOT_WINDOWS`), so the manager places it first (the top left quarter). No slot was added and nothing is lent. A fifth session lives there beside the four consoles (`WINDOW`, `ps` shows `CONSOLE=5`): the window's events (keys; the wheel scrolls) go to the session's line editing and commands, and it is drawn into the window whatever console is on the screen.
+- **Programs started there:** one that is not a console program gets the shell's broker client and opens a window of its own (`STARTED PID=n NAME=x IN A WINDOW`), and the session goes on; a console program prints into the window. `fg` and a window manager are refused there; `reboot` and `stop` ask first (`msh::ask` and a script's Esc read the window's keys there, `Shell::next_key`).
+- **Its size:** `shell/src/ring.rs` holds a console's lines (moved out of `console.rs`): as wide as the screen's cells in the window, wrapped and shown at the frame's width and height, so a narrower window keeps what it does not show. Host-tested in `tests/shell_host.rs` (wrapping, the input line's positions, truncation, the scrollback, a console that follows its window).
+- **Closed** (`[×]`, Alt+W), the window goes with its session; Ctrl+Alt+F5, which the shell listens for as for F1…F4, opens it again, and so does the next window manager the shell starts.
+- **`libmind`:** `mind::windowed::Window` (a window through a broker client the program names; it unmaps its surface before it removes it) and `mind::tui::Terminal::in_window` (the sizes its manager asks for are read from the surface).
+- **The broker** (`windows`): a window its owner removes while a manager is attached now goes as one whose program ended (issue 088): the manager keeps its lease until it lists the windows again. Before, `wm` ended when the shell removed its window, since the memory it drew went from under it.
+- **`console`:** its help and its answer to a shell's command point to the shell's window (`fg` to the shell's screen).
+- **The `wm` suite (x86):** `wm` started from the shell shows the shell's window; typed there through `wm`, `ps`, `date` and `logs <clock>` answer; `top` started there opens a window of its own; maximized, a line of 113 characters is on one row of the window, and back at its quarter; `reboot` asks and `n` keeps the machine running; `fg 1` is refused; closed with Alt+W it goes (`[SHELL] THE SHELL'S WINDOW CLOSED`), and Ctrl+Alt+F5 opens it again; leaving `wm`, killing it and closing all keep counting it among the windows, and the kernel heap returns to its baseline. The `tablet` suite places it too. Both passed on the branch (2026-10-10).
+- **Docs:** `docs/tools` (EN, RU): the shell's window in §4.8 and why `console` is not a second shell in §4.10; `docs/api`: `windowed`; the shell's help.
+- **Not done here:** `console` joined to the shell and a `shell` item in `wm`'s menu: [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), waiting for `SLOT_SHELL` from the kernel track. Keys typed on the serial line reach the window only while the shell's loop runs (it passes them to `wm`), so a question asked there is answered with the keyboard.

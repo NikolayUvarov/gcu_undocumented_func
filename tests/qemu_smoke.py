@@ -5510,7 +5510,9 @@ def wm_suite(vm):
         title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
         column = screen[title].index(canon(" Windows "))
         for row, window in zip(screen[title + 1:title + 1 + len(ids)], ids):
-            assert canon(f"PID {owners[window] + BASE} ") in row, (window, row)
+            # The shell is a boot service: its PID is not renumbered as the programs' are.
+            pid = owners[window] if window == shell else owners[window] + BASE
+            assert canon(f"PID {pid} ") in row, (window, row)
         assert canon("in front") in screen[title + 1 + ids.index(top)], screen[title + 1:title + 4]
         keys("home", "down", text=f"LIST={ids[1]}")
         mode, focus, rects = keys("ret")
@@ -5624,7 +5626,8 @@ def wm_suite(vm):
     mode, focus, rects = front(clock)
     x, y, w, h = rects[clock]
     dx, dy = (x + 4) * 8 + 4 - 640, y * 16 + 8 - 400
-    for move in [f"mouse_move {dx // 4} 0"] * 4 + [f"mouse_move 0 {dy // 4}"] * 4 + ["mouse_button 1"] + ["mouse_move -100 0"] * 8 + ["mouse_move 0 80"] * 2 + ["mouse_button 0"]:
+    down = (12 - y) * 16 // 2  # let go about row 12: the left side, not its corners
+    for move in [f"mouse_move {dx // 4} 0"] * 4 + [f"mouse_move 0 {dy // 4}"] * 4 + ["mouse_button 1"] + ["mouse_move -100 0"] * 8 + [f"mouse_move 0 {down}"] * 2 + ["mouse_button 0"]:
         vm.hmp(move)
         time.sleep(.12)
     vm.serial(enter=False)
@@ -6049,7 +6052,7 @@ def tablet_suite(vm, wav):
     time.sleep(.2)
     require(click(121, 14, "[WM] STARTED console PID"), "[WM] STARTED console PID")
     beep_pid = re.findall(r"\[WM\] STARTED console PID (\d+)", logged(vm, 0, "[WM] STARTED console PID"))[-1]
-    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} "))[1])
+    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} TEXT"))[1])
 
     def state(out):
         # beep's frame (cells) and whether wm holds it, from the last state line in `out`.
