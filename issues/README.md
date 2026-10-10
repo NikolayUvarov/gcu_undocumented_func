@@ -109,7 +109,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [176-APP-0051](176-APP-0051-tests-and-performance-in-wms-menu.md) | A "Tests and performance" category in `wm`'s menu (requested by KRN) | `APP` | P2 | — | track G |
 | [000-APP-0052](000-APP-0052-voice-control-as-a-service.md) | Voice control as a service one can turn on (requested by KRN) | `APP` | P2 | `svc enable` (173) for the boot part; the MacBook Pro's microphone (551-DRV-0010) | track G |
 | [000-APP-0053](000-APP-0053-hear-shows-what-it-heard.md) | `hear` shows what it heard, for the operator (requested by KRN) | `APP` | P2 | — | track G |
-| [000-APP-0054](000-APP-0054-help-keys-in-the-shells-commands.md) | The shell's and `console`'s commands answer the help keys (requested by KRN) | `APP` | P2 | — | track G |
+| [000-APP-0054](000-APP-0054-help-keys-in-the-shells-commands.md) | The shell's and `console`'s commands answer the help keys (requested by KRN) | `APP` | P2 | 000-KRN-0066 in `main` | track G |
 | [000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) | The date and the time set from `wm`'s Settings (requested by KRN) | `APP` | P1 | — | track G |
 | [000-APP-0056](000-APP-0056-every-entry-of-wms-menu-reacts.md) | Every entry of `wm`'s menu and Settings reacts (requested by KRN) | `APP` | P1 | — | track G |
 | [211-APP-0057](211-APP-0057-top-and-free-show-the-machines-memory.md) | `top` and `free` show the machine's memory, not only the kernel's arena (requested by KRN) | `APP` | P2 | — | track G |
