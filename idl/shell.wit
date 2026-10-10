@@ -1,12 +1,21 @@
-/// What a window manager asks of the shell (211-APP-0044). The shell alone holds the operator's authorities (MC-3.11);
-/// it lends a client of this interface in SLOT_SHELL to a program that asks for it (REQUEST_SHELL), and a client gets
-/// only what the interface offers.
-package mind:shell@1.0.0;
+/// What a window manager and its console ask of the shell (211-APP-0044). The shell alone holds the operator's
+/// authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
+/// (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
+/// asks the user in its own window before one that changes the machine.
+package mind:shell@1.1.0;
 
 interface shell {
-    /// Why the shell could not do it: it has no window broker client, or no memory for the window.
-    enum error { unavailable, no-memory }
+    /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
+    /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
+    /// with a program.
+    enum error { unavailable, no-memory, refused, declined, busy }
     /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
     /// the manager to bring it to the front.
     window: func() -> result<u32, error>;
+    /// Runs one command line on the shell's authority and answers what it printed (its last 7000 bytes, UTF-8) (1.1).
+    /// What system information gives any program runs at once; what changes the machine or reaches beyond it (process
+    /// control, the network, a task's logs and capabilities, the system log) runs in the shell's window, opened if need
+    /// be, after the user agrees there (shell/src/clients.rs). The shell's screen commands, scripts and programs are
+    /// refused.
+    run: func(line: string<240>) -> result<bytes<7000>, error>;
 }

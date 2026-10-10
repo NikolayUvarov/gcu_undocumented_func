@@ -26,7 +26,7 @@ pub const SHELL: &str = "shell";
 
 /// The menu's first item, the shell's window, before `catalogue`'s.
 pub fn with_shell(mut menu: Vec<Item>) -> Vec<Item> {
-    menu.insert(0, Item::program("Shell (its window)", SHELL));
+    menu.insert(0, Item::program("Shell", SHELL));
     menu
 }
 

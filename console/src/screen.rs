@@ -33,9 +33,14 @@ pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str
 
 /// Commands console does itself, with what it holds (issue u006).
 pub const BUILTINS: [&str; 10] = ["ps", "ls", "cat", "date", "time", "ping", "mkdir", "rm", "mv", "write"];
-/// The shell's commands that need what only the shell holds: process control, its network and device clients.
-pub const SHELL_ONLY: [&str; 30] = ["kill", "fg", "logs", "stop", "boot", "ip", "nslookup", "fetch", "https", "tls", "net", "netgrants", "netrevoke",
-    "pmap", "stat", "free", "cpus", "physmap", "irqs", "devices", "endpoints", "faults", "quotas", "budget", "heap", "sync", "logger", "reboot", "keymap", "screenshot"];
+/// The shell's commands that need what only the shell holds: process control, its network and device clients. With
+/// the shell's commands (`SLOT_SHELL`, 211-APP-0044) console sends them to the shell; `fg`, `boot`, `keymap` and
+/// `screenshot` act on the shell's own screen, and the shell refuses them.
+pub const SHELL_ONLY: [&str; 32] = ["kill", "fg", "logs", "stop", "boot", "ip", "nslookup", "fetch", "https", "tls", "net", "netgrants", "netrevoke",
+    "netpolicy", "tpm", "pmap", "stat", "free", "cpus", "physmap", "irqs", "devices", "endpoints", "faults", "quotas", "budget", "heap", "sync", "logger",
+    "reboot", "keymap", "screenshot"];
+/// Of those, the ones the shell runs in its own window after the user agrees there (shell/src/clients.rs).
+pub const ASKED: [&str; 14] = ["kill", "stop", "reboot", "budget", "netrevoke", "netpolicy", "logs", "stat", "pmap", "logger", "nslookup", "fetch", "https", "tpm"];
 
 // The first word and the rest.
 fn split(line: &str) -> (&str, &str) { line.split_once(char::is_whitespace).map_or((line, ""), |(n, a)| (n, a.trim())) }
@@ -51,6 +56,7 @@ pub fn parse(line: &str) -> Command<'_> {
         "exit" | "quit" => Command::Exit,
         "list" if args.is_empty() => Command::List,
         "run" => { let (name, args) = split(args); Command::Run { name: program(name), args } }
+        "date" if args.starts_with("set") => Command::Shell(name),
         _ if BUILTINS.contains(&name) => Command::Builtin { name, args },
         _ if SHELL_ONLY.contains(&name) => Command::Shell(name),
         _ => Command::Run { name: program(name), args },

@@ -4,6 +4,7 @@
 // a console program (uptime, df, grep, …) is lent an endpoint of console's in SLOT_CONSOLE (issue 162) and what it
 // prints shows here, as the shell shows it; a program with a screen opens a window of its own (in wm) or a screen in
 // the background. Of what a program asks for, it gets what console holds: the user's files and system information.
+// The shell's commands go to the shell through its commands (idl/shell.wit, 211-APP-0044) when console holds them.
 extern crate alloc;
 
 mod builtins;
@@ -14,15 +15,15 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use mind::abi::*;
-use mind::idl::loader;
+use mind::idl::{loader, shell as commands};
 use mind::input::{Input, Key};
 use mind::ipc::{self, Endpoint};
 use mind::tui::Terminal;
 use screen::{parse, Command, Kind, Screen};
 
 // The network only for its own `ping`: a flow grant the policy names for console, when the shell starts it. The camera
-// to pass on to camera (158-APP-0043).
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO | REQUEST_CAMERA);
+// to pass on to camera (158-APP-0043). The shell's commands, to send it its own (211-APP-0044).
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL);
 
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const HELP: &str = "Type a program and its arguments: uptime, df, find ram: -name *.txt, grep -i word docs/notes.txt, fm, …\n\
@@ -30,8 +31,9 @@ A console program prints here; one with a screen opens a window of its own. run 
 command has its name (run ping: the IPC demo).\n\
 Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
 clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
-kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them in the shell's\n\
-window (titled shell: Ctrl+Alt+F5 opens it in wm) or on its screen.";
+kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: console sends them to the\n\
+shell, which runs them on its authority; for process control, the network, logs and the like it asks first in its own\n\
+window (titled shell). Without the shell's commands, type them in the shell's window or on its screen.";
 
 struct Job { pid: u64, name: String, console: bool, printed: bool, front: bool }
 
@@ -81,6 +83,31 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
     Ok(Job { pid, name: String::from(name), console, printed: false, front })
 }
 
+// The shell runs `line` on its authority (idl/shell.wit `run`), and what it printed shows here.
+fn shell_line(screen: &mut Screen, line: &str) {
+    let mut out = alloc::vec![0u8; 7000];
+    let word = line.split_whitespace().next().unwrap_or("");
+    match commands::run(Endpoint(SLOT_SHELL), line, &mut out) {
+        Ok(Ok(len)) => {
+            mind::println!("[CONSOLE] SHELL RAN {} ({} BYTES)", word, len);
+            screen.output(&out[..len]);
+            if len > 0 && out[len - 1] != b'\n' { screen.output(b"\n"); }
+            if len == 0 { screen.say(&format!("({} printed nothing)", word), Kind::Note); }
+        }
+        Ok(Err(error)) => {
+            mind::println!("[CONSOLE] SHELL {:?} {}", error, word);
+            let text = match error {
+                commands::Error::Refused => format!("{}: the shell does not take it from console; type it in the shell's window or on its screen", word),
+                commands::Error::Declined => format!("{}: not run: the answer in the shell's window was no, or none came", word),
+                commands::Error::Busy => format!("{}: the shell's window is running a program; try again when it ends", word),
+                commands::Error::Unavailable | commands::Error::NoMemory => format!("{}: the shell could not open its window to ask", word),
+            };
+            screen.say(&text, Kind::Error);
+        }
+        Err(_) => screen.say(&format!("{}: the shell does not answer", word), Kind::Error),
+    }
+}
+
 fn list(screen: &mut Screen) {
     let Ok(programs) = loader::list(Endpoint::LOADER) else { screen.say("list: the loader does not answer", Kind::Error); return };
     let mut names: Vec<&str> = programs.as_slice().iter().filter(|p| !p.service).map(|p| p.name.as_str()).collect();
@@ -110,6 +137,7 @@ fn main(info: &'static BootInfo) {
     mind::println!("[CONSOLE] READY");
     let mut dirty = true;
     let mut checked = 0usize;
+    let mut to_shell: Option<String> = None; // a line for the shell, sent once it is drawn
     loop {
         if let Some((line, echo)) = pending.take() {
             if echo { screen.say(&format!("{}{}", screen::PROMPT, line), Kind::Command); }
@@ -120,6 +148,11 @@ fn main(info: &'static BootInfo) {
                 Command::Exit => break,
                 Command::List => list(&mut screen),
                 Command::Builtin { name, args } => builtins::run(&mut screen, name, args),
+                Command::Shell(name) if holds(SLOT_SHELL) => {
+                    // To the shell, once the line and a note are drawn: the shell may ask in its window first.
+                    if screen::ASKED.contains(&name) || name == "date" { screen.say(&format!("{}: the shell asks you first in its own window, titled shell (Y or N there)", name), Kind::Note); }
+                    to_shell = Some(line.clone());
+                }
                 Command::Shell(name) => screen.say(&format!("{}: a command of the shell (it needs what only the shell holds); type it in the shell's {}", name, if name == "fg" { "screen (Ctrl+Alt+F1…F4)" } else { "window" }), Kind::Error),
                 Command::Run { name: "", .. } => screen.say("run <program> [arguments]", Kind::Error),
                 Command::Run { name, args } => match run(name, args, output) {
@@ -142,6 +175,11 @@ fn main(info: &'static BootInfo) {
             term.set_title(&if busy.is_empty() { String::from("console") } else { format!("console — {}", busy) });
             term.present();
             dirty = false;
+        }
+        if let Some(line) = to_shell.take() {
+            shell_line(&mut screen, &line);
+            dirty = true;
+            continue;
         }
         // What the programs print; then the keys; ended programs.
         let mut wait = 20;

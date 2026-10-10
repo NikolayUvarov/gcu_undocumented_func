@@ -8,6 +8,7 @@
 extern crate alloc;
 
 mod bmp;
+mod clients;
 mod console;
 mod files;
 mod keymap;
@@ -48,6 +49,8 @@ const SCOPE_RECEIVE: usize = 11;
 // Where a capability sent with a request of the shell's commands (idl/shell.wit) would arrive, to be dropped: a fixed
 // slot the shell holds nothing in.
 const COMMANDS_RECEIVE: usize = SLOT_SHELL;
+// What a client gets back of a command's output: its end.
+const ANSWER_MAX: usize = 7000;
 
 const CONSOLES: usize = 4;
 const LABELS: [&str; CONSOLES] = [" CONSOLE 1 ", " CONSOLE 2 ", " CONSOLE 3 ", " CONSOLE 4 "];
@@ -210,17 +213,55 @@ impl Shell {
     fn serve_commands(&mut self, wait_ms: u32) {
         let Some(endpoint) = self.commands else { return };
         let mut wait = wait_ms;
-        while let Ok(request) = endpoint.recv_timeout(COMMANDS_RECEIVE, wait.max(1)) {
+        while let Ok(message) = endpoint.recv_timeout(COMMANDS_RECEIVE, wait.max(1)) {
             wait = 1;
-            let Ok((request, call)) = commands::decode(&request, COMMANDS_RECEIVE) else { continue };
+            let Ok((request, call)) = commands::decode(&message, COMMANDS_RECEIVE) else { continue };
             match request {
                 commands::Request::Window => {
                     let result = self.open_window();
                     self.note(format_args!("THE WINDOW MANAGER ASKED FOR THE SHELL'S WINDOW: {}", if result.is_ok() { "SHOWN" } else { "NOT OPENED" }));
                     let _ = commands::reply_window(call, result);
                 }
+                commands::Request::Run { line } => {
+                    let result = self.client_line(line.as_str(), message.sender);
+                    let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    let answer = result.as_ref().map(|bytes| { let mut from = bytes.len().saturating_sub(ANSWER_MAX); while from < bytes.len() && bytes[from] & 0xC0 == 0x80 { from += 1; } &bytes[from..] });
+                    let _ = commands::reply_run(call, answer.map_err(|e| *e));
+                }
             }
         }
+    }
+
+    // A command line from a client of the shell's commands (`console` in a window manager, 211-APP-0044), run on the
+    // shell's authority as if typed: what it printed. One that changes the machine runs in the shell's window, shown as
+    // typed there with the client's PID, once the user agrees (reboot and stop ask themselves).
+    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> {
+        let line = line.trim();
+        let word = line.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        let taken = clients::taken(line);
+        if taken == clients::Taken::Refused { return Err(commands::Error::Refused); }
+        if taken == clients::Taken::Now {
+            let outer = self.term.capture.replace(alloc::vec::Vec::new());
+            self.command(line.as_bytes());
+            return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
+        }
+        self.open_window()?;
+        let back = self.active;
+        self.activate(WINDOW);
+        if self.console.is_some() { self.activate(back); return Err(commands::Error::Busy); }
+        let _ = writeln!(self.term, "{}    (ASKED BY PID {} THROUGH THE SHELL'S COMMANDS)", line, client);
+        let agreed = matches!(word.as_str(), "reboot" | "stop") || msh::ask(self, "RUN IT?");
+        let result = if agreed {
+            self.term.tee = true;
+            let outer = self.term.capture.replace(alloc::vec::Vec::new());
+            self.command(line.as_bytes());
+            self.term.tee = false;
+            Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default())
+        } else { Err(commands::Error::Declined) };
+        self.prompt();
+        self.activate(back);
+        result
     }
 
     // The shell's window between keys: the keys and wheel the manager queued, its size, its close; drawn whatever
@@ -446,8 +487,10 @@ impl Shell {
         let granted = |word: &str| self.script.as_ref().is_none_or(|words| words.iter().any(|w| w == word));
         // The pin controller service's control client, where the board has one (issue 207).
         let gpio = requests & mind::process::REQUEST_GPIO != 0 && mind::dev::cap_info(SLOT_GPIO).0 != 0 && granted("gpio");
-        // The shell's commands (idl/shell.wit): a window manager asks, to open the shell's window from its menu (211-APP-0044).
-        let commands = requests & mind::process::REQUEST_SHELL != 0 && granted("shell");
+        // The shell's commands (idl/shell.wit, 211-APP-0044): for a window manager, which opens the shell's window from its
+        // menu and passes them on to console, and for what the shell's window starts; that is, where the shell's window
+        // can ask before a command that changes the machine.
+        let commands = requests & mind::process::REQUEST_SHELL != 0 && (window_manager || self.active == WINDOW) && granted("shell");
         // The block store client (300-KRN-0001), where the store runs.
         let blockstore = requests & mind::process::REQUEST_BLOCKSTORE != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE).0 != 0 && granted("blockstore");
         // A program that asks only to read gets the client with the get badge alone, in the same slot (300-KRN-0024).

@@ -5488,7 +5488,7 @@ def wm_suite(vm):
         # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
         before = set(shell_re.findall("".join(seen)))
         keys("alt-p", text="MODE=MENU")
-        keys("down", text="MENU=Shell (its window)")
+        keys("down", text="MENU=Shell")
         keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
         while not set(shell_re.findall("".join(seen))) - before:
             wait('"shell"', lines=0)
@@ -5876,6 +5876,60 @@ def wm_suite(vm):
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
         return counts
 
+    def console_joined(console):
+        # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
+        # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
+        # ends it.
+        assert "shell" in re.findall(r"\[WM\] STARTED console PID \d+ WITH ([^\n]*)", "".join(seen))[-1].split(","), "wm lends the shell's commands"
+        def console_has(text):
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(console)
+                if any(canon(text) in row for row in rows):
+                    return rows
+            raise AssertionError((text, rows))
+        vm.send_bytes(b"quotas\r")
+        until("[CONSOLE] SHELL RAN quotas")
+        console_has("PID NAME TASKS ENDPOINTS")
+        vm.send_bytes(b"fg 1\r")
+        until("[CONSOLE] SHELL Refused fg")
+        console_has("fg: the shell does not take it from console")
+        run_line("clock", "STARTED clock")
+        target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
+        front(console)
+
+        def asking_window():
+            # The shell's window, open (the first time the shell opens it, in front as a new window is).
+            for _ in range(60):
+                shown = [int(w) for w in shell_re.findall("".join(seen)) if int(w) in state()[2]]
+                if shown:
+                    return shown[-1]
+                time.sleep(.2)
+                wait(lines=0)
+            raise AssertionError(last_state())
+
+        for answer, logged_text in (("n", "[CONSOLE] SHELL Declined kill"), ("y", "[CONSOLE] SHELL RAN kill")):
+            vm.send_bytes(f"kill {target + BASE}\r".encode())
+            asking = asking_window()
+            if state()[1] != asking:
+                front(asking)
+            rows = None
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(asking)
+                written = [row.rstrip() for row in rows if row.strip()]
+                if written and written[-1].endswith(canon("RUN IT? (Y/N)")):  # the question, waiting
+                    break
+            else:
+                raise AssertionError(rows)
+            keys(answer)
+            until(logged_text)
+            front(console)
+        console_has("not run: the answer in the shell's window was no")
+        console_has("KILLED PID=")
+        close_shell(asking)
+        front(console)
+
     def run_line(command, text):
         names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
         return keys("alt-r", *names, "ret", text=text)
@@ -5892,6 +5946,7 @@ def wm_suite(vm):
         wait()
     camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
     assert state()[1] == console, state()
+    console_joined(console)
     keys("alt-w", text=f"CLOSE {console}")
     until(f"GONE {console}")
     while console in state()[2]:

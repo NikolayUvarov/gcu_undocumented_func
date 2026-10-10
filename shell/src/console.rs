@@ -39,6 +39,8 @@ pub struct Console {
     pub label: &'static str,
     /// While a script captures a command's output (`capture`, issue 094): the bytes it printed, kept off the screen.
     pub capture: Option<Vec<u8>>,
+    /// While capturing, show the bytes too: a command run in the shell's window for a client (211-APP-0044).
+    pub tee: bool,
     /// Drawn in a window: its lines and rows follow the window's size, last seen as `seen` (211-APP-0040).
     follows: bool, seen: (usize, usize),
 }
@@ -46,7 +48,7 @@ pub struct Console {
 impl Console {
     fn with(term: Option<Terminal>, text: Ring<Text>, serial: Option<Uart>, follows: bool) -> Self {
         let seen = (text.cols, text.rows);
-        Self { term, text, dirty: true, utf8: 0, need: 0, serial, label: "", capture: None, follows, seen }
+        Self { term, text, dirty: true, utf8: 0, need: 0, serial, label: "", capture: None, tee: false, follows, seen }
     }
 
     pub fn new(screen: Option<Screen>, serial: Option<Uart>) -> Self {
@@ -90,7 +92,7 @@ impl Console {
 
     /// A byte of output: to the serial line as is (LF as CRLF), to the screen decoded as UTF-8.
     pub fn print_char(&mut self, byte: u8) {
-        if let Some(captured) = self.capture.as_mut() { if captured.len() < 64 * 1024 { captured.push(byte); } return; }
+        if let Some(captured) = self.capture.as_mut() { if captured.len() < 64 * 1024 { captured.push(byte); } if !self.tee { return; } }
         if byte == b'\n' { self.serial(b'\r'); }
         self.serial(byte);
         self.text.follow();

@@ -1,6 +1,6 @@
 # 211-APP-0044 — `console` joined to the shell, and `shell` in `wm`'s menu
 
-**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-10: the shell's window from the right-click menu) · **Status:** in progress (the menu's `shell` done; `console` joined to the shell next) · **Blocked by:** — (211-KRN-0058, `SLOT_SHELL`, reached `main` on 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-10: the shell's window from the right-click menu) · **Status:** in progress (the menu's `shell` done; `console` joined to the shell written, its check in the `wm` suite next) · **Blocked by:** — (211-KRN-0058, `SLOT_SHELL`, reached `main` on 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) on 2026-10-10, when that task took the shell's own window, which needs no new slot. Numbered with the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, the maintainer's request after the run on the MacBook Pro).
 
@@ -37,10 +37,20 @@ A second shell in every window is not the way: it would spread the authority to 
 - **The menu's `shell` (done).**
   - `idl/shell.wit` 1.0 has the one call the menu needs: `window` opens the shell's window, or answers the open one, and gives its id in the broker.
   - The shell makes the endpoint at the first lend, lends a client in `SLOT_SHELL` to a program that asks for `REQUEST_SHELL` (`mind::process`, bit 20), and serves it between keys.
-  - `wm` asks for it. Where it holds it, its menus (the right click on the desktop, Alt+P) start with `Shell (its window)`. `wm` calls `window`, waits at most 2 s, and brings the window to the front once it shows.
+  - `wm` asks for it. Where it holds it, its menus (the right click on the desktop, Alt+P) start with `Shell`. `wm` calls `window`, waits at most 2 s, and brings the window to the front once it shows.
   - `mind::idl::wire::with_timeout` gives a word call a timeout. A shell busy with a command (a question it waits on in its own window, whose keys come through `wm`) cannot hold `wm`.
   - Checks: the `wm` suite opens the window from the menu after Ctrl+Alt+F5's was closed, and brings it to the front from behind another window (the `tablet` suite's menu clicks move a row down). Host tests: the menu's first item and its command (`tests/wm_host.rs`), and the timeout of a call (`tests/idl_host.rs`).
-- **Next:** `run(line, confirmed)` and `start` in `shell.wit` 1.1; `console` sending the shell's commands; `wm` passing the client to `console`.
+- **`console` joined to the shell (written; to be checked in the `wm` suite).**
+  - `shell.wit` 1.1 `run(line)` answers what a line printed. The plan's `confirmed` flag is not used: a client could set it without asking anyone. The shell asks the user itself, in its own window, before a line that changes the machine or reaches beyond it. The window opens if need be, shows the line with the PID that sent it, and asks `RUN IT? (Y/N)`; `reboot` and `stop` ask their own question.
+  - What it takes, and when (`shell/src/clients.rs`):
+    - at once, only what `sysmon` gives any program that asks: `ps`, `free`, `quotas`, `ip`, `netgrants` and the like;
+    - after asking: process control, the network on the shell's badge, a task's `logs`, `stat`, `pmap` and `caps`, `tpm`, `logger`, `date set` and `netpolicy` changes;
+    - refused: the screen's own commands, scripts and programs.
+  - The shell lends the client only to a window manager and to what its window starts, where its window can ask. `wm` passes it on to programs that ask for `REQUEST_SHELL`; `console` asks.
+  - `console` sends the shell's commands it does not do itself, and says first when the shell will ask in its window.
+  - `docs/profile` (MC-10.2) names what a client of the shell's commands can read.
+  - Checks: host tests of the choice (`tests/shell_host.rs`) and of `console`'s routing (`tests/console_host.rs`). In the `wm` suite, `console` runs `quotas` through the shell, `fg` is refused, and `kill` is declined and then agreed in the shell's window.
+- **Not done:** `start(program, args)`, the shell starting a program on its authority in a window of its own. The shell's window already does it.
 
 ## Related
 

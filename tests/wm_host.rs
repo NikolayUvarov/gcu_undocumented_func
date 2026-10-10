@@ -611,7 +611,7 @@ fn the_programs_by_category() {
     assert_eq!(labels(&catalogue(&[])), ["No programs found"]);
     // Where wm holds the shell's commands, the shell's window comes first (211-APP-0044); Enter on it runs `shell`.
     let menu = menu::with_shell(catalogue(&programs(true)));
-    assert_eq!(labels(&menu), ["Shell (its window)", "Files", "System", "Clocks", "Other"]);
+    assert_eq!(labels(&menu), ["Shell", "Files", "System", "Clocks", "Other"]);
     assert_eq!(menu[0].command.as_deref(), Some(menu::SHELL));
     let mut open = menu::Menu::new(10, 5);
     assert_eq!(open.key(&menu, key(KEY_DOWN)), menu::Outcome::Stay);
