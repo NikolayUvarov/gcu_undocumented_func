@@ -1,10 +1,10 @@
-# 550-DRV-0020 — `bcm_wifi`, stage 1: a read-only probe of the MacBook Pro's BCM4331
+# 550-DRV-0020 — `bcm_wifi`, stage 1: a read-only probe of the MacBook Pro's BCM4331 — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (the driver is written and builds; it waits to be started) · **Blocked by:** `init` starting it, a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` as a boot service") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
-Stage 1 of the Wi-Fi driver for the MacBook Pro's BCM4331 ([550-DRV-0006](550-DRV-0006-broadcom-wifi.md)). Nothing is known yet from the chip itself, only from its PCI header:
+Stage 1 of the Wi-Fi driver for the MacBook Pro's BCM4331 ([550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md)). Nothing is known yet from the chip itself, only from its PCI header:
 
 - which core BAR0's windows show;
 - whether the 802.11 core is held in reset;
@@ -29,6 +29,17 @@ Every result goes to the log, which the run leaves on the log volume.
 
 On the MacBook Pro, one boot logs the chip as `4331` on an AI backplane, the core in window 1 with its state, and either a valid SPROM with its MAC address or why none was read. The machine runs on as before. This is evidence of reads on this machine only (MC-12.1), not of the chip working.
 
+## Resolution
+
+`bcm_wifi/src/main.rs` (commit b51ea28), started by `init` on `fast-test` (the kernel session's a00618b). On the MacBook Pro (LOG:boot0001.log, 2026-10-10):
+- `PCI 14E4:4331, BAR0 WINDOWS 18001000 AND 18101000`: core 1 in window 1, its wrapper in window 2;
+- `CHIP 4331 REVISION 2 PACKAGE 9 CORES 3 BUS AI`; capabilities `58500000` (a SPROM fitted), chip control `00010092`, SROM control `00000003`;
+- core 1: I/O control `00002055` (the clock on, with the PHY clock and G-mode bits of an 802.11 core), reset `00000000`: **the firmware left the 802.11 core running**;
+- the PCIe core at BAR0+0x2000 reads `FFFFFFFF`: not there on this chip;
+- the SPROM read zeros at both places: chip control's bits 4 and 7 give its pins to the external amplifier lines.
+
+The machine ran on: the boot went on for 340 s, with the camera streaming. This is evidence of reads on this machine only (MC-12.1). What the run found is acted on in [550-DRV-0022](../issues/550-DRV-0022-bcm4331-core-reset-and-sprom.md).
+
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550](550-network-on-real-hardware.md), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md) (the machine), `bcm_wifi/`.
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550](../issues/550-network-on-real-hardware.md), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the machine), `bcm_wifi/`.
