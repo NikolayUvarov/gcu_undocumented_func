@@ -21,17 +21,22 @@ use mind::keys::Key;
 use mind::mem::Mapping;
 use mind::tui::{Rect, Terminal, DARK};
 use mind::window::{Kind, Surface, STATE_CLOSE, TITLE};
-use wm::desk::{Action, Content, Mode, Win, Wm};
+use wm::background::{self, Backdrop, Config, Info};
+use wm::desk::{Action, Content, Mode, Win, Wm, BACKGROUND};
 use wm::menu::{self, Kind as ProgramKind};
 
 // REQUEST_GPIO: the pin controller's client where the board has one, passed on to pins and pinmap (issue u017).
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA);
+// 48 MiB: the desktop background's frame and image (000-APP-0047), up to 4 MiB each, beside the rest.
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA, memory: 48);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
+// The background's pattern moves a step this often; the time and the CPU load are drawn again each second.
+const PATTERN_MS: usize = 500;
+const INFO_MS: usize = 1000;
 
 // A window wm shows: its lease of the surface, the program's wake endpoint, what was last drawn.
 struct Live { id: u32, _lease: Mapping, surface: Surface, waker: Option<usize>, changes: u32, asked: Option<(usize, usize)>, modifiers: u8 }
@@ -342,6 +347,42 @@ fn blit(screen: &Screen, origin: (usize, usize), owner: &[u16], cols: usize, ind
 // The mouse pointer: an arrow, black outline (X) and white inside (W).
 const ARROW: [&[u8; 8]; 12] = [b"X       ", b"XX      ", b"XWX     ", b"XWWX    ", b"XWWWX   ", b"XWWWWX  ", b"XWWWWWX ", b"XWWWWWWX", b"XWWWXXXX", b"XWXWX   ", b"XX XWX  ", b"    XX  "];
 
+// A whole file of at most `limit` bytes from the user's files.
+fn read_file(path: &str, limit: usize) -> Option<Vec<u8>> {
+    let file = mind::fs::File::open(path).ok()?;
+    if file.size() > limit { return None; }
+    let mut data = vec![0u8; file.size()];
+    (file.read_at(0, &mut data).ok()? == data.len()).then_some(data)
+}
+
+// The desktop's background as data/wm.conf says (000-APP-0047): the default without the file; what is not understood
+// is logged and left at the default.
+fn backdrop(screen: &Screen) -> (Backdrop, Option<String>) {
+    let config = match read_file(background::FILE, 64 << 10) {
+        Some(data) => {
+            let (config, problems) = Config::parse(&String::from_utf8_lossy(&data));
+            for problem in &problems { mind::println!("[WM] {}: {}", background::FILE, problem); }
+            config
+        }
+        None => Config::default(),
+    };
+    Backdrop::new(config, (screen.width, screen.height), &mut |file| read_file(file, 32 << 20))
+}
+
+// The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
+fn cpu_times() -> Option<(u64, u64)> {
+    let list = mind::idl::sysinfo::cpus(Endpoint::SYSINFO, 0).ok()?.ok()?;
+    Some(list.as_slice().iter().filter(|c| c.online).fold((0, 0), |(busy, idle), c| (busy + c.busy_ns, idle + c.idle_ns)))
+}
+
+// The background's pixels in the cells `cells` (indices in a grid `cols` wide).
+fn paint(screen: &Screen, origin: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
+    for index in cells {
+        let (x, y) = (origin.0 + index % cols * 8, origin.1 + index / cols * 16);
+        for py in y..y + 16 { for px in x..x + 8 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
+    }
+}
+
 fn draw_pointer(screen: &Screen, x: usize, y: usize) {
     for (row, line) in ARROW.iter().enumerate() {
         for (col, &b) in line.iter().enumerate() {
@@ -364,6 +405,12 @@ fn main(info: &'static BootInfo) {
     let Some(mut term) = Terminal::new(screen) else { return };
     let (_, x0, y0) = term.screen().unwrap();
     let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
+    let (mut backdrop, problem) = backdrop(&screen);
+    if let Some(problem) = problem { mind::println!("[WM] {}", problem); manager.wm.notice = Some(problem); }
+    manager.wm.desk.background = backdrop.shown();
+    mind::println!("[WM] BACKGROUND {}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "));
+    // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
+    let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -449,6 +496,25 @@ fn main(info: &'static BootInfo) {
         if now - last_sync >= SYNC_MS { last_sync = now; if manager.sync() { relayout = true; mind::println!("[WM] {}", manager.wm.status()); } }
         let (changed, mut pixels) = manager.follow();
         if !manager.wm.desk.take_changed().is_empty() { relayout = true; }
+        // The background: the pattern a step on, the time and the CPU load once a second; drawn again when either came.
+        let mut background_moved = false;
+        if backdrop.shown() && (now >= next_pattern || now >= next_info) {
+            if now >= next_pattern && backdrop.moving() { backdrop.step = backdrop.step.wrapping_add(1); }
+            if now >= next_info {
+                next_info = now + INFO_MS;
+                if let Some((busy, idle)) = cpu_times() {
+                    if let Some((was_busy, was_idle)) = cpu {
+                        let (b, i) = (busy.saturating_sub(was_busy), idle.saturating_sub(was_idle));
+                        if b + i > 0 { backdrop.sample((b * 100 / (b + i)) as u8); }
+                    }
+                    cpu = Some((busy, idle));
+                }
+            }
+            next_pattern = now + PATTERN_MS;
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], net: None };
+            backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
+            background_moved = true;
+        }
         if changed || relayout {
             let focused_cursor = manager.wm.desk.focus().and_then(|id| manager.live(id)).and_then(|l| l.surface.cursor());
             let owner = {
@@ -456,23 +522,37 @@ fn main(info: &'static BootInfo) {
                 let lives = &manager.lives;
                 let mut cell = |id: u32, x: usize, y: usize| lives.iter().find(|l| l.id == id).and_then(|l| l.surface.cell(x, y));
                 let (owner, cursor) = manager.wm.draw(&mut grid, &DARK, &mut cell, focused_cursor);
+                // The cells still showing the background after everything was drawn (000-APP-0047).
+                let cells: Vec<bool> = if backdrop.shown() { (0..grid.cols * grid.rows).map(|i| grid.get(i % grid.cols, i / grid.cols) == BACKGROUND).collect() } else { Vec::new() };
                 drop(grid);
                 term.set_cursor(cursor);
-                owner
+                (owner, cells)
             };
+            let (owner, cells) = owner;
+            let mut touched = Vec::new();
             // The cells under the pointer drawn last time are drawn again (pixel windows: all of them below).
             if let Some((sx, sy)) = shown_pointer.take() {
-                for cy in (sy.saturating_sub(y0) / 16)..=((sy + 11).saturating_sub(y0) / 16) { for cx in (sx.saturating_sub(x0) / 8)..=((sx + 7).saturating_sub(x0) / 8) { term.touch(cx, cy); } }
+                for cy in (sy.saturating_sub(y0) / 16)..=((sy + 11).saturating_sub(y0) / 16) { for cx in (sx.saturating_sub(x0) / 8)..=((sx + 7).saturating_sub(x0) / 8) { term.touch(cx, cy); touched.push(cy * term.cols() + cx); } }
                 relayout = true;
             }
             term.present();
             let cols = term.cols();
+            // The background in the cells that just became the desktop's, those under the pointer, or all when it moved.
+            if !cells.is_empty() {
+                let fresh = |i: &usize| cells[*i] && (background_moved || !shown_background.get(*i).copied().unwrap_or(false) || touched.contains(i));
+                paint(&screen, (x0, y0), cols, (0..cells.len()).filter(fresh), &backdrop);
+            }
+            shown_background = cells;
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
                 let (Some(index), Some(live)) = (manager.wm.desk.index(id), manager.live(id)) else { continue };
                 blit(&screen, (x0, y0), &owner, cols, index, manager.wm.desk.content(id), &live.surface);
             }
             if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py); shown_pointer = Some((px, py)); }
+        } else if background_moved && !shown_background.is_empty() {
+            // Nothing else changed: the background's cells only, and the pointer over them again.
+            paint(&screen, (x0, y0), term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
+            if let Some((sx, sy)) = shown_pointer { draw_pointer(&screen, sx, sy); }
         }
         mind::time::sleep(if busy { 5 } else { 30 });
     }
