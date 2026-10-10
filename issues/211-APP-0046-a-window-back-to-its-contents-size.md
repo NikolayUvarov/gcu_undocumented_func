@@ -1,6 +1,6 @@
 # 211-APP-0046 — A window back to its content's size
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; its check in the `wm` suite next) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) (and [158](158-video-capture.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (`clock` done in QEMU; the camera's part waits for the kernel track's camera change in `main`) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) (and [158](158-video-capture.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
 
 Numbered from the kernel track's request in `requests-APP.md` ("A window back to its content's size", 2026-10-10), at the maintainer's request after a run on the MacBook Pro: "the picture should stretch with the window, and the window should be able to take the size of its content, to get the original display back".
 
@@ -32,7 +32,7 @@ Numbered from the kernel track's request in `requests-APP.md` ("A window back to
 - **What the program sees:** `wm` asks it for the inside's size, as for any frame. A pixel window draws at its first size again, a text window takes back the size it opened with.
 - **A limit:** a window `wm` takes over after it restarts has its size at that moment as its first size.
 - **Host tests:** `tests/wm_host.rs` covers the key, the bar item, the double click (and two slow clicks), the screen edge, full screen and a text window.
-- **The `wm` suite:** Alt+0 takes the clock from the left half back to 42 × 13, and it draws at 320 × 176 again.
+- **The `wm` suite:** Alt+0 takes the clock from the left half back to 42 × 13, and it draws at 320 × 176 again. This passed in QEMU and in the local gate (2026-10-10).
 - **Waiting:** the camera's part waits for the kernel track's camera change to reach `main`.
 
 ## Related

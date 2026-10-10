@@ -1,6 +1,6 @@
 # 000-APP-0053 — `hear` shows what it heard, for the operator
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; its QEMU check in the `listen` suite next) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-10.2
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU; the MacBook Pro's microphone left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-10.2
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -49,7 +49,8 @@ When the microphone gives silence or noise, every one of these reads as an error
 - **Authority.** `hear` asks for the user's files for `--save`. It drops them at start without it, and with it once the file is written, before recognizing.
 - **`voice`** logs `[VOICE] <ms> MS <level> DBFS: "<phrase>" <confidence>, …` for each utterance.
 - **Host tests** (`tests/voice_host.rs`) check the meter, the threshold and the ranked candidates.
-- **The `listen` suite** is to check the lines, `--save` and the noise floor.
+- **The `listen` suite** checks the lines, `--save` and the noise floor. Each utterance of the test recording has its time, length, level and three candidates; a refusal names its reason. The saved first utterance is heard again. Silence gives the meter line and the noise floor, and `voice` logs its candidates. It passed in QEMU and in the local gate (2026-10-10).
+- **Left:** on the MacBook Pro, the operator sees whether the microphone gives sound, once capture works there (551-DRV-0010).
 
 ## Related
 

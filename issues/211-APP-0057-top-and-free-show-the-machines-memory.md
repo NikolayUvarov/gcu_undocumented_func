@@ -1,6 +1,6 @@
 # 211-APP-0057 — `top` and `free` show the machine's memory, not only the kernel's arena
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; its QEMU check next) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-10.2
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (done in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-10.2
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -40,6 +40,10 @@ Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded i
 - **Docs:** `docs/tools` (EN, RU) and `docs/idl` describe it.
 - **Host tests:** `tests/monitor_host.rs` checks both lines of `top` (7768 MiB, 89 MiB in use, as the MacBook Pro's pool was).
 - **The boot suite's frame-pool check** compares `free`'s first line and `top`'s `Mem` bar with the pool's size.
+- **Checked:**
+  - in QEMU with 512 MiB, `free` and `top` show 386 MiB of memory (38 MiB in use) and the arena apart;
+  - the local gate's host tests and every x86 QEMU group passed (2026-10-10), the 6 GiB machine's `normal` suite among them.
+- **Left:** the MacBook Pro's 7.6 GiB in `top` and `free`.
 
 ## Related
 

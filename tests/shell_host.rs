@@ -86,6 +86,8 @@ fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
     use clients::{taken, Taken};
     // At once: what system information gives any program that asks for it.
     for line in ["ps", " QUOTAS ", "free", "ip", "netgrants", "date", "netpolicy", "sync", "endpoints"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
+    // What a command or program does (000-APP-0054): text only.
+    for line in ["help kill", "help", "HELP fm"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
     // In the shell's window once the user agrees there: what changes the machine or reaches beyond it.
     for line in ["kill 7", "reboot", "reboot -f", "stop", "budget 7 5 10", "netrevoke fetch", "netpolicy add allow x", "date set 2026-10-10 12:00",
                  "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }

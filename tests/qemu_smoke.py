@@ -3477,6 +3477,17 @@ def services_suite(vm):
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
+    # The shell's commands answer the same keys with their lines of help; fm /? shows fm's text unstarted (000-APP-0054).
+    for line, want in (("date -h", "- date: calendar date and time from the RTC"), ("date /?", "- date: calendar date"),
+                       ("ls --help", "- ls [path], cat <file>: files"), ("ps -help", "- ps: tasks"), ("kill /H", "- kill <id>: terminate")):
+        output = vm.command(line)
+        require(output, want)
+        assert "TAKES NO ARGUMENTS" not in output and "ERROR" not in output and "KILLED" not in output, (line, output)
+    output = vm.command("fm /?")
+    require(output, "fm — file manager")
+    assert "STARTED" not in output, output
+    print("PASS: the shell's commands answer the help keys with their lines of help (date -h, date /?, ls --help, ps -help, "
+          "kill /H); fm /? shows fm's text without starting it", flush=True)
     blockstore_check(vm)
     escrow_check(vm)
     reader_badges_check(vm)
@@ -6270,6 +6281,7 @@ def wm_suite(vm):
                 break
         close_menu()
         started, said, unseen = [], [], []
+        RUN_TO_END = {"check", "bench", "kbench"}
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6289,8 +6301,25 @@ def wm_suite(vm):
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
                     time.sleep(.1)
                     wait(lines=0)
-                if not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                ids = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == pid]
+                if not ids:
                     unseen.append(name)
+                # The state line that has the window, which may come after its own line: tidy() reads the state.
+                for _ in range(100):
+                    if not ids or ids[-1] in state()[2]:
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
+                # The self-test and the benchmarks go on after their console closes (libmind keeps a program whose
+                # launcher ended), so the walk lets them finish rather than run the rest of the suite beside them.
+                # console's own lines stay off the serial line: its note in the window says when the program ended.
+                tool = name.split(">")[-1]
+                if tool in RUN_TO_END and ids:
+                    deadline = time.monotonic() + 900
+                    while not any(f"({tool} ended" in row for row in inside(ids[-1])):
+                        assert time.monotonic() < deadline, (tool, inside(ids[-1]))
+                        time.sleep(2)
+                        wait(lines=0)
             else:
                 said.append(f"{name}: {line}")
             close_menu()
@@ -6396,6 +6425,16 @@ def wm_suite(vm):
         vm.send_bytes(b"fg 1\r")
         console_has("fg: the shell does not take it from console")
         until('THE SHELL REFUSED "fg 1"')
+        # The help keys (000-APP-0054): console's own command says its line; the shell's command the shell's lines,
+        # taken at once; a program with a screen prints its text into console and opens no window.
+        vm.send_bytes(b"date -h\r")
+        console_has("date: the date and time from the RTC")
+        vm.send_bytes(b"free /?\r")
+        console_has("- free: the machine's memory")
+        until('THE SHELL RAN "help free"')
+        vm.send_bytes(b"fm --help\r")
+        console_has("fm — file manager")
+        console_has("(fm ended)")
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
@@ -6463,7 +6502,8 @@ def wm_suite(vm):
     close_shell(shell)
     print("PASS: wm: camera shows the synthetic source in its window, started from the run line (wm lends the camera), "
           "in console (lent on by console) and in the shell's window; console sends the shell its commands (quotas runs, "
-          "fg is refused, kill is declined and then agreed in the shell's window)", flush=True)
+          "fg is refused, kill is declined and then agreed in the shell's window); help keys: date -h says console's line, "
+          "free /? the shell's, fm --help prints fm's text into console", flush=True)
     # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera at a size the source
     # does not give says so in a window of its own with its status, until a key.
     run_line("camera -z 100x100", "STARTED camera")
