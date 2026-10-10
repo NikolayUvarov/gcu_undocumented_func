@@ -418,7 +418,8 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead;
+    parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
+    rtc: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load;
     tls: Error Peer;
