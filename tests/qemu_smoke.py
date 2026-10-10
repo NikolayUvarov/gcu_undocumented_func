@@ -5876,6 +5876,60 @@ def wm_suite(vm):
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
         return counts
 
+    def clock_from_settings():
+        # The date and time page (000-APP-0055): the year one on, set through the shell once agreed in its window, shown
+        # on the page; then back. The shell waits for the answer in its window, so the question is read on the screen.
+        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+
+        def page():
+            keys("alt-s", text="MODE=SETTINGS")
+            keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
+            for _ in range(20):
+                time.sleep(.3)
+                shown = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen_text(vm)))
+                vm.serial(enter=False)
+                if shown:
+                    return int(shown[1])
+            raise AssertionError(screen_text(vm))
+
+        def set_year(step):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            year = page()
+            keys("right" if step > 0 else "left")
+            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            vm.hmp("sendkey ret")
+            vm.serial(enter=False)
+            screen = []
+            for _ in range(40):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
+                    break
+            else:
+                raise AssertionError(screen)
+            assert any(canon(f"date set {year + step:04}-") in row for row in screen), screen
+            vm.hmp("sendkey y")
+            vm.serial(enter=False)
+            until(f'THE SHELL RAN "date set {year + step:04}-')
+            for _ in range(100):
+                wait(lines=0)
+                asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if asking:
+                    break
+                time.sleep(.1)
+            while state()[1] != asking[-1]:
+                wait()
+            close_shell(asking[-1])
+            assert page() == year + step
+            keys("esc", text="MODE=NORMAL")
+            return year
+
+        year = set_year(1)
+        set_year(-1)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window", flush=True)
+
     def console_joined(console):
         # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
         # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
@@ -6009,6 +6063,7 @@ def wm_suite(vm):
     assert sum(row.count(canon("░")) for row in free) > 600, free
     print("PASS: wm settings: Alt+S opens them; the background switched to an image's fallback and to none, the desktop "
           "follows at once, and data/wm.conf keeps it", flush=True)
+    clock_from_settings()
     full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]

@@ -36,8 +36,10 @@ const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// How long wm waits for the shell to answer its menu's Shell item.
+// How long wm waits for the shell to answer its menu's Shell item, and for a question the shell asks the user in its
+// window (the answer comes later: wm passes the keys).
 const SHELL_MS: u32 = 2000;
+const ASK_MS: u32 = 300;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
 
@@ -427,6 +429,7 @@ fn main(info: &'static BootInfo) {
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     let mut last_pattern = mind::time::uptime_ms();
+    let mut next_clock = 0usize; // when Settings' date page reads the clock again
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -439,6 +442,7 @@ fn main(info: &'static BootInfo) {
     }
     let mut programs = Some(Programs::new());
     manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
+    manager.wm.shell = holds(SLOT_SHELL);
     if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
@@ -504,6 +508,24 @@ fn main(info: &'static BootInfo) {
                     return;
                 }
                 Action::CloseAll => { manager.close_all(); mind::println!("[WM] DONE"); return; }
+                Action::SetClock { date, seconds } => {
+                    // The shell sets the clock once the user agrees in its window (000-APP-0055): wm brings the
+                    // window to the front, asks, and stops waiting soon; the page shows the clock as it then is.
+                    let (y, mo, d) = mind::rtc::civil_from_days(date);
+                    let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
+                        if let Ok(Ok(id)) = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL))) { shell_window = Some(id); }
+                        match mind::idl::wire::with_timeout(ASK_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                            Ok(Ok(())) => format!("The clock is set to {}", when),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
+                            Ok(Err(error)) => format!("The clock is not set ({:?})", error),
+                            Err(_) => format!("Answer the shell in its window (Y or N): set the clock to {}?", when),
+                        }
+                    };
+                    mind::println!("[WM] SET CLOCK {}: {}", when, text);
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
                 Action::Settings(config) => {
                     // Settings changed the background (000-APP-0048): used at once and kept in data/wm.conf.
                     let saved = save(&config);
@@ -546,6 +568,14 @@ fn main(info: &'static BootInfo) {
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
         // either came.
         let mut background_moved = false;
+        // Settings' date page shows the clock each second (000-APP-0055).
+        if let Mode::Settings(settings) = &mut manager.wm.mode {
+            if settings.page == wm::settings::DATE && now >= next_clock {
+                next_clock = now + INFO_MS;
+                settings.set_now(clock.date(), clock.seconds_since_midnight());
+                relayout = true;
+            }
+        }
         let pattern_due = backdrop.moving() && now >= next_pattern;
         if backdrop.shown() && (pattern_due || now >= next_info) {
             if pattern_due {

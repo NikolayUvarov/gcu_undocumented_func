@@ -2,13 +2,13 @@
 /// authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 /// (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
 /// asks the user in its own window before one that changes the machine.
-package mind:shell@1.1.0;
+package mind:shell@1.2.0;
 
 interface shell {
     /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
     /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
-    /// with a program.
-    enum error { unavailable, no-memory, refused, declined, busy }
+    /// with a program; (1.2) a time the clock does not take.
+    enum error { unavailable, no-memory, refused, declined, busy, invalid }
     /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
     /// the manager to bring it to the front.
     window: func() -> result<u32, error>;
@@ -18,4 +18,8 @@ interface shell {
     /// be, after the user agrees there (shell/src/clients.rs). The shell's screen commands, scripts and programs are
     /// refused.
     run: func(line: string<240>) -> result<bytes<7000>, error>;
+    /// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
+    /// does, once the user agrees in the shell's window (1.2, 000-APP-0055: wm's Settings). A word call, so a caller
+    /// may stop waiting while the shell asks (`mind::idl::wire::with_timeout`) and see the clock change.
+    set-clock: func(date: u32, seconds: u32) -> result<_, error>;
 }

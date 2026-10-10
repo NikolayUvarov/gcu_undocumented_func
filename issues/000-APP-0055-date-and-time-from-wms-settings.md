@@ -1,6 +1,6 @@
 # 000-APP-0055 — The date and the time set from `wm`'s Settings
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (written; its check in the `wm` suite next) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -25,6 +25,21 @@ The Settings page "Date and time" (000-APP-0048, `wm/src/settings.rs`) only show
 - In the `wm` suite, the page sets the clock, and `date` in the shell then shows the new date.
 - An invalid date (2026-02-30) is refused with its reason.
 - On the MacBook Pro, the maintainer sets the clock from `wm`.
+
+## Progress (2026-10-10)
+
+- **The page** (`wm/src/settings.rs`):
+  - it shows the clock each second and has six fields and a `Set the clock` button;
+  - ← → step a field, digits replace it, Enter sets;
+  - a time the clock does not take is named on the page;
+  - without the shell's commands, the page says so.
+- **Setting it.**
+  - `shell.wit` 1.2 `set-clock(date, seconds)` is a word call, so `wm` can stop waiting (0.3 s) while the shell asks. A buffer call's client must not give up while the server holds its buffer.
+  - The shell runs it as `date set …` from a client: in its window, after the user agrees. This is one question, the shell's: `wm` asks nothing itself.
+  - Settings closes so the keys reach the shell's window, which `wm` brings to the front (`window` first).
+- **Checks:**
+  - host tests: the day count and the months' lengths; the page's fields, digits, refusal of 2027-02-30, the button's action, and the case without the shell;
+  - the `wm` suite sets the year one on and back, agreed in the shell's window, and reads it on the page.
 
 ## Related
 

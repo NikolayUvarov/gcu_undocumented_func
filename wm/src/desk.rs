@@ -378,6 +378,8 @@ pub enum Action {
     Pointer { id: u32, x: usize, y: usize, buttons: u8, wheel: i32 },
     /// Settings changed the desktop background (000-APP-0048): use it and keep it.
     Settings(crate::background::Config),
+    /// Settings asks for the clock to be set (000-APP-0055): through the shell, which asks the user in its window.
+    SetClock { date: u32, seconds: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,10 +454,12 @@ pub struct Wm {
     pub programs: Vec<menu::Item>,
     /// The desktop background's configuration, as Settings shows and changes it (000-APP-0048).
     pub background: Config,
+    /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
+    pub shell: bool,
 }
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default() } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -499,6 +503,8 @@ impl Wm {
                     Outcome::Stay => Action::Redraw,
                     Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+                    // Settings closes: the keys go to the shell's window, where the shell asks.
+                    Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
                 };
             }
             Mode::Normal => {}
@@ -571,6 +577,7 @@ impl Wm {
                 Outcome::Stay => Action::Redraw,
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+                Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
             };
         }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
@@ -722,7 +729,11 @@ impl Wm {
     fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS" } }
 
     /// Settings (000-APP-0048), at the page of the background.
-    pub fn open_settings(&mut self) { self.mode = Mode::Settings(Settings::new(&self.background, (self.desk.cols, self.desk.rows))); }
+    pub fn open_settings(&mut self) {
+        let mut settings = Settings::new(&self.background, (self.desk.cols, self.desk.rows));
+        settings.shell = self.shell;
+        self.mode = Mode::Settings(settings);
+    }
 
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
@@ -800,7 +811,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)

@@ -1085,3 +1085,53 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     }
     assert_eq!(s.click(0, 0, &wm.background), settings::Outcome::Close);
 }
+
+// The date and time page (000-APP-0055).
+#[test]
+fn days_count_from_2000_and_refuse_days_a_month_does_not_have() {
+    use settings::days;
+    assert_eq!((days(2000, 1, 1), days(2000, 3, 1), days(2026, 10, 10), days(2027, 2, 28), days(2099, 12, 31)), (Some(0), Some(60), Some(9779), Some(9920), Some(36524)));
+    assert_eq!((days(2026, 2, 29), days(2024, 2, 29).is_some(), days(2026, 4, 31), days(2026, 13, 1), days(1999, 12, 31), days(2100, 1, 1)), (None, true, None, None, None, None));
+}
+
+#[test]
+fn the_date_page_sets_the_clock_through_the_shell() {
+    let mut wm = Wm::new(160, 50);
+    wm.shell = true;
+    wm.key(alt_char('s'));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(wm.status().ends_with("SETTINGS=Date and time:Year"), "{}", wm.status());
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    // The fields follow the clock until one is changed.
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 31));
+    assert_eq!(s.fields, [2026, 10, 10, 14, 5, 31]);
+    let screen = draw_wm(&mut wm);
+    assert!(screen.iter().any(|row| row.contains("2026-10-10 14:05:31")) && screen.iter().any(|row| row.contains("Set the clock")), "{:?}", &screen[15..35]);
+    // → steps the year; digits replace the month and the day; a day February does not have is refused on the page.
+    wm.key(key(KEY_RIGHT));
+    wm.key(key(KEY_DOWN));
+    for ch in "02".chars() { wm.key(chr(ch)); }
+    wm.key(key(KEY_DOWN));
+    for ch in "30".chars() { wm.key(chr(ch)); }
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 32));
+    assert_eq!(s.fields, [2027, 2, 30, 14, 5, 31], "changed fields stay");
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("2027-02-30 14:05:31 is not a time the clock takes")));
+    // Day 28, then the button: the clock is asked for, and Settings closes (the shell asks in its window).
+    for ch in "28".chars() { wm.key(chr(ch)); }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().ends_with(":Set the clock"), "{}", wm.status());
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::SetClock { date: 9920, seconds: 14 * 3600 + 5 * 60 + 31 });
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    // Without the shell's commands it says so instead.
+    let mut alone = Wm::new(160, 50);
+    alone.key(alt_char('s'));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_ENTER));
+    assert_eq!(alone.key(chr(' ')), Action::Redraw);
+    assert!(draw_wm(&mut alone).iter().any(|row| row.contains("wm holds no shell's commands")));
+}

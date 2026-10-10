@@ -222,6 +222,20 @@ impl Shell {
                     self.note(format_args!("THE WINDOW MANAGER ASKED FOR THE SHELL'S WINDOW: {}", if result.is_ok() { "SHOWN" } else { "NOT OPENED" }));
                     let _ = commands::reply_window(call, result);
                 }
+                commands::Request::SetClock { date, seconds } => {
+                    // As `date set` from a client: asked in the shell's window first (000-APP-0055, wm's Settings).
+                    let (year, month, day) = mind::rtc::civil_from_days(date);
+                    let line = alloc::format!("date set {:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, seconds / 3600, seconds / 60 % 60, seconds % 60);
+                    let result = if seconds >= 86_400 || mind::rtc::days_from_civil(year, month, day) != Some(date) { Err(commands::Error::Invalid) } else {
+                        self.client_line(&line, message.sender).and_then(|out| {
+                            let out = core::str::from_utf8(&out).unwrap_or("");
+                            if out.contains("CLOCK SET") { Ok(()) } else if out.contains("NOT AVAILABLE") { Err(commands::Error::Unavailable) } else { Err(commands::Error::Invalid) }
+                        })
+                    };
+                    let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line));
+                    let _ = commands::reply_set_clock(call, result);
+                }
                 commands::Request::Run { line } => {
                     let result = self.client_line(line.as_str(), message.sender);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
