@@ -6053,6 +6053,31 @@ def wm_suite(vm):
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+    # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
+    # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
+    seen.clear()
+    read[0] = len(vm.log)
+    vm.send("wm console\n")
+    out = wait("[WM] READY", lines=0)
+    while "[WM] STARTED console PID" not in "".join(seen):
+        wait("[WM] STARTED console", lines=0)
+    time.sleep(2)  # console's window in front, its prompt drawn
+    vm.send_bytes(b"reboot\r")
+    screen = []
+    for _ in range(40):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("RESTART THE MACHINE? (Y/N)") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
+    assert any(canon("reboot    (ASKED BY PID") in row for row in screen), screen
+    vm.hmp("sendkey y")
+    vm.process.wait(timeout=90)
+    vm.collect()
+    assert "PANIC" not in vm.log, vm.log[-2000:]
+    print("PASS: wm: reboot typed in console asks in the shell's window and, once agreed, restarts the machine", flush=True)
 
 
 def usb_suite(vm):
