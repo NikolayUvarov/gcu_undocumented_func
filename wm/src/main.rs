@@ -155,6 +155,8 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_PARSE != 0 { missing.push("parse"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
+    // The shell's commands, for console to send the shell its own (211-APP-0044): the shell decides what it takes.
+    if requests & mind::process::REQUEST_SHELL != 0 { if holds(SLOT_SHELL) && grant(SLOT_SHELL, SLOT_SHELL) { lent.push("shell"); } else { missing.push("shell"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {

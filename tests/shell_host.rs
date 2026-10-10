@@ -1,8 +1,11 @@
 //! Host tests of the shell console's lines (shell/src/ring.rs): wrapping, the input line's positions, truncation, the
-//! scrollback, and a console that follows its window's size (211-APP-0040).
+//! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
+//! commands (shell/src/clients.rs, 211-APP-0044).
 #![allow(dead_code)]
 #[path = "../shell/src/ring.rs"]
 mod ring;
+#[path = "../shell/src/clients.rs"]
+mod clients;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -76,4 +79,16 @@ fn a_console_in_a_window_follows_its_size() {
     r.scroll(true);
     r.resize(40, 2);
     assert_eq!((r.cols, r.rows, r.back()), (20, 2, 0));
+}
+
+#[test]
+fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
+    use clients::{taken, Taken};
+    // At once: what system information gives any program that asks for it.
+    for line in ["ps", " QUOTAS ", "free", "ip", "netgrants", "date", "netpolicy", "sync", "endpoints"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
+    // In the shell's window once the user agrees there: what changes the machine or reaches beyond it.
+    for line in ["kill 7", "reboot", "reboot -f", "stop", "budget 7 5 10", "netrevoke fetch", "netpolicy add allow x", "date set 2026-10-10 12:00",
+                 "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
+    // The screen's own commands, scripts, programs and statements are refused.
+    for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh x.msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
 }

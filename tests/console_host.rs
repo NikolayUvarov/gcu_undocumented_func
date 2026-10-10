@@ -131,6 +131,11 @@ fn the_command_line() {
     assert_eq!(parse("run"), Command::Run { name: "", args: "" });
     assert_eq!(parse("kill 3"), Command::Shell("kill"));
     assert_eq!(parse("nslookup ya.ru"), Command::Shell("nslookup"));
+    // To the shell through its commands (211-APP-0044): `date set` and `netpolicy` too; `date` alone stays console's.
+    assert_eq!(parse("date set 2026-10-10 12:00"), Command::Shell("date"));
+    assert_eq!(parse("date"), Command::Builtin { name: "date", args: "" });
+    assert_eq!(parse("netpolicy add x"), Command::Shell("netpolicy"));
+    assert!(screen::ASKED.iter().all(|c| screen::SHELL_ONLY.contains(c)));
 }
 
 #[test]
