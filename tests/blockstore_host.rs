@@ -1228,8 +1228,15 @@ fn a_three_gibibyte_object_fits() {
     // for the object's blocks; the peak resident set is printed with it.
     const SIZE: u64 = 3 << 30;
     let path = std::env::var("MIND_STORE_FILE").unwrap_or_else(|_| std::env::temp_dir().join("mind-store-3g.img").to_string_lossy().into_owned());
-    let sectors = (SIZE + SIZE / 16) / SECTOR as u64; // the records' headers and padding, and the nodes
-    let piece = |at: u64| -> u8 { ((at.wrapping_mul(2_654_435_761) >> 13) ^ (at >> 20)) as u8 };
+    // An owner may retain three quarters of the medium (MC-4.11), so the medium is half again the object (a sparse file).
+    let sectors = (SIZE + SIZE / 2) / SECTOR as u64;
+    // No two chunks alike (splitmix64 of each 8-byte word), as a model's files are, so every block is stored once.
+    let piece = |at: u64| -> u8 {
+        let mut z = (at / 8).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> (at % 8 * 8)) as u8
+    };
     let blocks = SIZE.div_ceil(dag::CHUNK as u64) + SIZE.div_ceil(dag::CHUNK as u64 * 256) + 16;
     let mut room = Room::new((blocks as usize) * 8 / 7 + 64);
     let (root, written) = {
@@ -1260,6 +1267,7 @@ fn a_three_gibibyte_object_fits() {
     }
     let index_kib = room.index.len() * std::mem::size_of::<Entry>() / 1024;
     println!("3 GiB object: {} blocks, {} sectors of {}; index {} slots, {} KiB; peak resident set {} KiB", written.blocks, written.used, sectors, room.index.len(), index_kib, peak_kib());
+    assert!(written.blocks as u64 >= SIZE / dag::CHUNK as u64, "the chunks were not all distinct");
     assert!(peak_kib() < (SIZE >> 10) / 8, "the process held {} KiB", peak_kib());
     let _ = std::fs::remove_file(&path);
 }
