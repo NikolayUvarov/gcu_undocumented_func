@@ -33,13 +33,15 @@ pub fn with_shell(mut menu: Vec<Item>) -> Vec<Item> {
     menu
 }
 
-/// The categories, in this order; programs not named here go under "Other".
-pub const CATEGORIES: [(&str, &[&str]); 5] = [
+/// The categories, in this order; programs not named here go under "Other". "Tests and performance" (176-APP-0051)
+/// gathers the self-test and the benchmarks, console programs whose tables show in `console`'s window.
+pub const CATEGORIES: [(&str, &[&str]); 6] = [
     ("Files", &["fm", "edit", "view", "find", "grep", "df", "fsck", "format"]),
     ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "pinmap", "reboot"]),
     ("Clocks", &["clock", "dzen-clock"]),
     ("Sound and voice", &["beep", "say", "listen", "hear"]),
-    ("Network", &["netcheck", "netbench"]),
+    ("Network", &["netcheck"]),
+    ("Tests and performance", &["check", "bench", "kbench", "netbench", "memtest"]),
 ];
 /// Programs with a text face (issue 089) get a second entry for it.
 const TEXT_FACES: [&str; 2] = ["clock", "dzen-clock"];
