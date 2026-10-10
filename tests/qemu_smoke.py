@@ -6114,12 +6114,13 @@ def wm_suite(vm):
                 if any(canon(text) in row for row in rows):
                     return rows
             raise AssertionError((text, rows))
+        # console's own lines go to its log, not to the serial line; the shell notes each request there.
         vm.send_bytes(b"quotas\r")
-        until("[CONSOLE] SHELL RAN quotas")
         console_has("PID NAME TASKS ENDPOINTS")
+        until('THE SHELL RAN "quotas"')
         vm.send_bytes(b"fg 1\r")
-        until("[CONSOLE] SHELL Refused fg")
         console_has("fg: the shell does not take it from console")
+        until('THE SHELL REFUSED "fg 1"')
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
@@ -6134,7 +6135,7 @@ def wm_suite(vm):
                 wait(lines=0)
             raise AssertionError(last_state())
 
-        for answer, logged_text in (("n", "[CONSOLE] SHELL Declined kill"), ("y", "[CONSOLE] SHELL RAN kill")):
+        for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
             vm.send_bytes(f"kill {target + BASE}\r".encode())
             asking = asking_window()
             if state()[1] != asking:
