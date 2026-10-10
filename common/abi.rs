@@ -34,10 +34,10 @@ const fn channel(value: u32, mask: u32) -> u32 {
 }
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
 // ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
-// BOOT_CONFIRM ends a trial. The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
+// BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058). The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
 // into every task's BootInfo, and libmind refuses to run a program built for another one. Fields up to abi_version
 // keep their places across versions, so each side finds the other's version where it expects it.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, }
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
@@ -298,8 +298,15 @@ pub const SLOT_FIRMWARE: usize = 27;
 pub const SLOT_PARSE: usize = 28;
 // The shell's client of the TPM service (idl/tpm.wit), without the seal badge: `tpm` shows the TPM (351-KRN-0043).
 pub const SLOT_TPM: usize = 29;
+// The shell's command endpoint (idl/shell.wit), lent for REQUEST_SHELL and passed by wm to console (ABI 5, 211-KRN-0058).
+pub const SLOT_SHELL: usize = 30;
+// A client of the clipboard service (idl/clipboard.wit), lent for REQUEST_CLIPBOARD (ABI 5, 211-KRN-0058).
+pub const SLOT_CLIPBOARD: usize = 31;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 30;
+pub const SLOT_DYNAMIC: usize = 32;
+// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own.
+pub const LAUNCH_SLOTS: [usize; 16] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK,
+    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
