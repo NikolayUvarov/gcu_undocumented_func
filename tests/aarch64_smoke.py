@@ -125,7 +125,9 @@ def main():
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     slots = Path(tempfile.mkdtemp(prefix="mind-slots-"))
     atexit.register(shutil.rmtree, slots, True)
-    boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64")
+    updater = BUILD / "fixture-updater.elf"  # scripts/build_aarch64.sh --fixtures
+    boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64",
+                         updater if updater.exists() else None)
 
     for case, code in CASES.items():
         output = boot(args, disk_with(case), "QUARANTINED", timeout=120)

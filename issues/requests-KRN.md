@@ -1,29 +1,8 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md); on the kernel branch, the panic in `awaits_reply` became 171-KRN-0054 and the `devicetree` suite's pacing 210-KRN-0055) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md); the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done); on the kernel branch, the panic in `awaits_reply` became 171-KRN-0054 and the `devicetree` suite's pacing 210-KRN-0055) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
-
-## The updater's VFS client badged `BADGE_UPDATE`
-
-**Recorded by:** the storage session for the update track, 2026-10-09, for [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md).
-
-### Problem
-
-`vfs_server` now has the update zone (docs/update/slots.md): a client badged `mind::fs::BADGE_UPDATE` (4) may fill the slot that did not boot and write the boot records whole, in place, and nothing else. 351-KRN-0022 (on the kernel branch) lends `updater` an unbadged, read-only VFS client, so no client holds the badge.
-
-### Plan (a proposal)
-
-- In `init`'s `"updater"` arm, give slot `SLOT_VFS` a client of `vfs_server` badged `BADGE_UPDATE` in place of the lent one, as `keystore` and `netpolicy` get theirs: `grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT)`.
-- The `updater` suite's stand-in (`tests/updater_stub`), booted from a slot volume (`scripts/boot_slots.py layout … --both`):
-  - writes a file in the inactive slot and a whole record;
-  - is refused in the running slot, in `EFI/`, a record of another size and a new file in `MIND/`.
-
-  The update track can write those cases once the grant is in `main`.
-
-### Acceptance criteria
-
-Only `updater` holds a client with `BADGE_UPDATE`; it reads as before and may write only the update zone.
 
 ## A memory quota for `blockstore` that fits its disk's index
 
