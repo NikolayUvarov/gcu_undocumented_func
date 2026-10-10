@@ -152,6 +152,10 @@ fn exercise(bits: u32, mib: u64) {
     let node = v.lookup(&root, "документы/отчёт ЗА октябрь.txt").unwrap();
     assert_eq!(node.modified, STAMP);
     assert_eq!(v.create(&root, "x", false, STAMP).unwrap_err(), Error::ReadOnly);
+    // 251-KRN-0072: the count read a FAT sector at a time is the count entry by entry.
+    let clusters = (v.total_bytes() / v.cluster_bytes() as u64) as u32;
+    let by_entry = (2..clusters + 2).filter(|&c| v.fat(c).unwrap() == 0).count() as u32;
+    assert_eq!(v.free_clusters().unwrap(), by_entry, "FAT{}: free clusters", bits);
     let _ = (free, docs);
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }

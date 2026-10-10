@@ -1,6 +1,8 @@
-# 351-KRN-0073 — The updater gets a client of the parser service — done
+# 351-KRN-0074 — The updater gets a client of the parser service — done
 
 **Type:** kernel (init grants) · **Owner:** `KRN` (done by the update track for 351-UPD-0007, as TRACKS.md allows for a grant line) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.11, MC-3.11
+
+Numbered 351-KRN-0073 at first; the kernel track had taken that number for 000-KRN-0073 (the badge right), so it became 0074.
 
 ## Problem
 

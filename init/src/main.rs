@@ -39,6 +39,7 @@ const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
+const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
@@ -100,12 +101,13 @@ impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
 
     // Keeper of the endpoint of service `name`, created on first use and kept across restarts, so clients granted
-    // earlier reach the restarted server; while no server runs, sends fail with ERR_PEER.
+    // earlier reach the restarted server; while no server runs, sends fail with ERR_PEER. It alone may badge clients:
+    // what init hands out lacks CAP_BADGE unless the grant names it (000-KRN-0073).
     fn keeper(&mut self, name: &str) -> Result<usize> {
         let index = service_index(name);
         if let Some(slot) = self.keepers[index] { return Ok(slot); }
         let root = Endpoint::create()?.0;
-        let keeper = ipc::mint(root, CAP_KEEP | CAP_WRITE | CAP_GRANT, 0, 0);
+        let keeper = ipc::mint(root, CAP_KEEP | CAP_WRITE | CAP_GRANT | CAP_BADGE, 0, 0);
         let _ = ipc::drop_cap(root);
         let keeper = keeper?;
         self.keepers[index] = Some(keeper);
@@ -314,7 +316,8 @@ impl Init {
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
-                grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
+                // It badges the file clients it hands out (idl/vfs.wit), so its endpoint keeps the right to (000-KRN-0073).
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL | CAP_BADGE);
                 let mut slot = SLOT_BLOCK_FIRST;
                 let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
                 for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
@@ -376,12 +379,12 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL);
                 self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; self.lend(&mut grants, SLOT_DEV1, "virtio_net#1")?; // one client per card
             }
-            // The broker mints flow grants from an unbadged stack client (which itself may open nothing), registers them
-            // through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge opens its
-            // private directory for the policy as changed (108, 108-KRN-0041).
+            // The broker mints flow grants from an unbadged stack client that may badge (which itself may open nothing),
+            // registers them through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge
+            // opens its private directory for the policy as changed (108, 108-KRN-0041, 000-KRN-0073).
             "netpolicy" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netpolicy")?, ALL);
-                self.lend(&mut grants, 2, "netstack")?;
+                grants.copy(2, self.keeper("netstack")?, CLIENT | CAP_BADGE);
                 grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_NETPOLICY)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "netstack", mind::network::BADGE_POLICY)?, CLIENT);
             }
@@ -501,6 +504,8 @@ impl Init {
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
+            // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
+            "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
             // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
             // MacBook Pro's Retina panel, 211-PRT-0004).
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
@@ -518,7 +523,8 @@ impl Init {
         let mut grants = plan.grants; let mut receiver = None;
         if let Some(keeper) = self.keepers[index] {
             for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == SLOT_SERVICE) {
-                let slot = ipc::mint(keeper, ALL, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, ALL); receiver = Some(slot);
+                let rights = g.rights; // ALL, with CAP_BADGE for a server that badges its own clients
+                let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, rights); receiver = Some(slot);
             }
         }
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
