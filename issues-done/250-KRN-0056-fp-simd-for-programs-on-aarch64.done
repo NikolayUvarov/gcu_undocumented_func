@@ -1,6 +1,6 @@
-# 250-KRN-0056 — FP/SIMD for programs on aarch64: V0–V31, FPCR and FPSR saved per task
+# 250-KRN-0056 — FP/SIMD for programs on aarch64: V0–V31, FPCR and FPSR saved per task — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** tracks A and H, for main tasks [250](250-voice-dictation.md) and [252](252-neural-speech-synthesis.md) · **Constitution:** MC-2.1 (a task's state is its own), MC-10.5 (no state passes between tasks through the vector registers)
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** tracks A and H, for main tasks [250](../issues/250-voice-dictation.md) and [252](../issues/252-neural-speech-synthesis.md) · **Constitution:** MC-2.1 (a task's state is its own), MC-10.5 (no state passes between tasks through the vector registers)
 
 ## Problem
 
@@ -32,6 +32,26 @@ On aarch64 the kernel left FP/SIMD disabled at EL0 (`CPACR_EL1` = 0), and progra
 - The rest of the aarch64 gate passes, the firmware variable suite (`efivar`) among it.
 - **Not here:** building the voice engines hard-float is the tools track's step.
 
+## Resolution
+
+**What changed** (bc3559c, in `main` since ac042f5):
+- **The frame.** The aarch64 exception frame is 832 bytes.
+  - The common entry saves V0–V31, FPCR and FPSR after the frame's 37 words. The exit loads them from the frame it resumes, so a switch brings the next task's registers with its frame.
+  - The kernel stays soft-float.
+- **`CPACR_EL1.FPEN` = 0b11** on every CPU, set before the vector base.
+- **The firmware variable call** no longer toggles `CPACR_EL1`. The registers the firmware may change are the calling task's, and come back from its frame.
+- **A new task** starts with zeroed vector registers and FPCR.
+- **Reporting.** `STAT_CPUS` reports 1, `cpus` shows `FPU=FP/SIMD`. The aarch64 profile, threat model, TCB, hardware report and API note say so.
+
+**Evidence** (local gate, `virt` under QEMU 8.2 TCG):
+- **4 CPUs.** The gate of ac042f5 with `main` 4ffaec7, all aarch64 groups:
+  - `busy`: the fixture keeps both halves of V8 and V31 and FPCR's rounding mode across preemption, and `cpus` shows `FPU=FP/SIMD` on every CPU;
+  - `smp`: register preservation with tasks on the same CPU;
+  - `efivar`: the firmware call path.
+- **1 CPU.** `tests/qemu_smoke.py --arch aarch64 --cpus 1 --suites smp,busy` passed on the same tree.
+
+**Not here:** building the voice engines hard-float (`aarch64-unknown-none`) is the tools track's step, for 250 and 252.
+
 ## Related
 
-[153](../issues-done/153-xsave-avx-state.done) (x86's vector state), 174-KRN-0037, 351-KRN-0028 (firmware calls on aarch64), [250](250-voice-dictation.md), [252](252-neural-speech-synthesis.md).
+[153](../issues-done/153-xsave-avx-state.done) (x86's vector state), 174-KRN-0037, 351-KRN-0028 (firmware calls on aarch64), [250](../issues/250-voice-dictation.md), [252](../issues/252-neural-speech-synthesis.md).
