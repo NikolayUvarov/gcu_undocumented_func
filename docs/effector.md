@@ -93,7 +93,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 6. **Retry without duplicating.**
    - A call that was cut off may still have queued its operation. Before you submit again, list the active operations and wait for yours if it is there.
    - When you resubmit an uncertain submission, reuse its `idempotency_key`.
-7. **Cancel only your own operation, by its ID** (`POST /api/v1/operations/cancel` with `operation_id`). Never cancel by `agent_id`: that cancels every agent's queued work on the machine.
+7. **Cancel only your own operation, by its ID**: `POST /api/v1/operations/cancel` with `operation_id`, an `idempotency_key` of its own and a `reason`; without the last two the request is refused (HTTP 400). Queued and running operations can be cancelled. Never cancel by `agent_id`: that cancels every agent's queued work on the machine.
 8. **Work as `un`.**
    - The root account (`run_as` `service`) is for a change to the machine that the maintainer asked for. Record such a change in section 6 in the same commit as the work that needed it.
    - Never install, remove or upgrade packages, change `/opt`, `/usr/local` or the system's configuration for your own convenience. Ask the maintainer.
