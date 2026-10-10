@@ -5990,7 +5990,6 @@ def wm_suite(vm):
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
         # own, or in console's for a console program) or says why not; every window that opens is closed again.
-        until("[WM] PROGRAMS:")
         base = set(state()[2])
         reaction_re = re.compile(r"\[WM\] (STARTED (\S+) PID (\d+)[^\n]*|SHELL WINDOW: [^\n]*|cannot start [^\n]*|[^\n]* is a console program[^\n]*|[^\n]* is a window manager|the window broker gives no client)\n")
 
@@ -6017,8 +6016,15 @@ def wm_suite(vm):
                     wait()
             raise AssertionError(state())
 
-        # The tree, walked once with the keys: → opens a category at its first program, ↓ wraps at the end.
-        keys("alt-p", "down", text="MODE=MENU")
+        # The tree, walked once with the keys: → opens a category at its first program, ↓ wraps at the end. The menu
+        # is read from the loader as wm starts (its line on the serial may be broken by the shell's): until then its
+        # one entry is "Looking for programs…".
+        for _ in range(30):
+            keys("alt-p", "down", text="MODE=MENU")
+            if not at().startswith("Looking for programs"):
+                break
+            close_menu()
+            time.sleep(1)
         first, tree = at(), []
         while True:
             label = at()
