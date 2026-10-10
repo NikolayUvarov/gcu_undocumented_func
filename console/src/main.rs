@@ -101,6 +101,7 @@ fn shell_line(screen: &mut Screen, line: &str) {
                 commands::Error::Declined => format!("{}: not run: the answer in the shell's window was no, or none came", word),
                 commands::Error::Busy => format!("{}: the shell's window is running a program; try again when it ends", word),
                 commands::Error::Unavailable | commands::Error::NoMemory => format!("{}: the shell could not open its window to ask", word),
+                commands::Error::Invalid => format!("{}: the shell does not take it as written", word),
             };
             screen.say(&text, Kind::Error);
         }
