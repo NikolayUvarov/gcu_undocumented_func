@@ -6525,7 +6525,7 @@ def tablet_suite(vm, wav):
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
     vm.tablet_at(103 * 8 + 4, 40 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 40, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    require(click(127, 40, "[WM] STARTED console PID"), "[WM] STARTED console PID")  # 26 cells wide, as above
     for _ in range(30):
         time.sleep(.3)
         screen = screen_text(vm)
