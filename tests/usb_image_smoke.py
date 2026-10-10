@@ -173,6 +173,11 @@ def run(args, booted):
     for section in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "Memory map (the firmware's)", "ACPI tables", "PCI functions", "The kernel's choices", "Kernel lines", "MIND CORE KERNEL: INIT STARTED"):
         assert section in report, (section, report[:2000])
     assert re.search(r"USB controller", report), report
+    # 550-KRN-0070: no function a driver was not granted masters the bus, bridges and display controllers aside.
+    functions = re.findall(r"class ([0-9A-F]{6}) .*? command ([0-9A-F]{4}) status [0-9A-F]{4}(.*)", report)
+    assert functions, report[:3000]
+    masters = [(c, cmd, note) for c, cmd, note in functions if int(cmd, 16) & 4 and "granted" not in note and c[:2] not in ("03", "06")]
+    assert not masters, masters
     for table in ("FACP", "DSDT", "APIC"):
         data = read(f"acpi/{table}.bin")
         assert data[:4] == table.encode() and len(data) == struct.unpack_from("<I", data, 4)[0], (table, len(data))

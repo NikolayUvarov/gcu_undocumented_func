@@ -6,7 +6,7 @@ use crate::pcicfg::{read, write};
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool, pub windows: [(u64, u64); 2] }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool, pub windows: [(u64, u64); 2], pub mastered_at_boot: bool }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -93,6 +93,16 @@ unsafe fn ehci_handoff(bus: u8, device: u8, function: u8, bar: Bar) {
         if released { "TAKEN FROM THE FIRMWARE" } else { "THE FIRMWARE DID NOT LET GO" }));
 }
 
+// Bus mastering the firmware left on is turned off until a driver is granted the function (550-KRN-0070): until then it
+// cannot reach memory. Bridges carry their devices' DMA and a display controller may scan out the boot screen: left as is.
+unsafe fn stop_mastering(bus: u8, device: u8, function: u8, class: u32) -> bool {
+    let command = read(bus, device, function, 0x04);
+    if command & 0x4 == 0 || matches!(class >> 16, 0x03 | 0x06) { return false; }
+    write(bus, device, function, 0x04, command & !0x4);
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: {:02X}:{:02X}.{} CLASS {:06X}: BUS MASTERING TURNED OFF UNTIL A DRIVER HAS IT\n", bus, device, function, class));
+    true
+}
+
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
 pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     let mut devices = alloc::vec::Vec::new();
@@ -109,7 +119,8 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 let bars = bars(bus, device, function);
                 if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
-                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false, windows: windows(bus, device, function) });
+                let mastered_at_boot = stop_mastering(bus, device, function, class);
+                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false, windows: windows(bus, device, function), mastered_at_boot });
             }
         }
     }

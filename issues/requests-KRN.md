@@ -4,23 +4,6 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, from the MacBook Pro's run of [550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done).
-
-### Problem
-
-The kernel turns bus mastering on when it grants a device's resource to a driver (`pci::enable`) and off before a driver is restarted (`pci::quiesce`). It leaves every other function's command register as the firmware set it. On the MacBook Pro the firmware leaves the BCM4331 with bus mastering on and its 802.11 core running (command `0006` in `hw0001.txt`). `bcm_wifi` now holds that core in reset when it starts ([550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done)), about 5 s into the boot. Until then, and for any device no driver is given, a device the firmware left running may write to memory. The profile declares no IOMMU (MC-1.5), so nothing else stops it.
-
-### Plan (a proposal; the kernel track decides)
-
-- At PCI enumeration, clear bus mastering (command bit 2) on every function except the bridges, and log the ones that had it on.
-- `pci::enable` turns it on when a driver is granted the device, as now.
-
-### Acceptance criteria
-
-On QEMU and on the MacBook Pro, the hardware report shows bus mastering off for every function no driver was granted, and the drivers work as before.
-
 ## A memory quota for `blockstore` that fits its disk's index
 
 **Recorded by:** the storage session, 2026-10-09, for [251-STO-0013](../issues-done/251-STO-0013-an-index-that-grows-with-the-medium.done) (the speech models of 251-STO-0010).
