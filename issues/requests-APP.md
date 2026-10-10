@@ -369,3 +369,111 @@ What the kernel track would try (the tools track decides):
 
 - The upsampler: a polyphase low-pass FIR instead of linear interpolation. For example, 48 taps (16 a phase) of a windowed sinc with its cutoff near 7 kHz at 48 kHz, which puts the images 50 dB or more down. Measure the 8–12 kHz band again: it should fall well below −40 dB.
 - The onsets: a ramp of a few milliseconds where a segment starts or ends at silence, and bursts limited in their slope.
+
+## The camera from `wm`, and the shell in a window (158, 211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, for main tasks [158](158-video-capture.md) and [211](211-intel-pc-from-a-sata-ssd.md), at the maintainer's request after a run on the MacBook Pro (`fast-test` bc681376b8d8). The maintainer chose that the tools track does it.
+
+### Problem
+
+- **The camera works from the shell's screen.** `camera` there streamed the FaceTime HD camera: 64 frames at 320×240, none broken (`log:boot0001.log`, `video_gw` and `usb_host` lines at 27.7–34.1 s).
+- **From `wm` it does not.** Started from the menu or from `wm`'s `console`, it ends with `camera: no camera was granted (start camera from the shell and allow it)`:
+  - `wm` does not ask the shell for the camera (`mind::request!` in `wm/src/main.rs` has no `REQUEST_CAMERA`), so it holds nothing in `SLOT_CAMERA`;
+  - `wm`'s `start()` and `console`'s `run()` do not handle `REQUEST_CAMERA`, so a program they start never gets it.
+- **The maintainer asks for more:**
+  - `camera` in `wm` shows its stream in its window, started from the menu and from `console`;
+  - `console` from the right-click menu works fully, as the shell does;
+  - the shell itself runs in a window in `wm`;
+  - the difference between `console` and the shell, and its reason, is explained to the user.
+
+### Plan (a proposal; the tools track decides)
+
+- **The camera.**
+  - `wm` asks for `REQUEST_CAMERA`. The shell lends it without a question, by the maintainer's rule "No question about a tool's own purpose".
+  - `wm` lends `SLOT_CAMERA` to a program that asks for it, and so does `console` to what it starts. `console` asks for it too.
+- **The shell in a window.**
+  - With [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md), `console` joined to the shell is the shell in a window. The menu can offer it as `shell`.
+  - A program that needs what `wm` does not hold (the network, the camera, the log, the lifecycle client) could be started by the shell on its own authority, through `shell.wit`. It then opens its window in `wm`, rather than being started by `console` with `wm`'s fewer grants.
+  - Either way only one shell holds the operator's authorities.
+- **The kernel track's part:** `SLOT_SHELL` (and `SLOT_CLIPBOARD`), asked for in `requests-KRN.md` for 211-APP-0040 and 000-APP-0032. The kernel track takes it now as a task of its own.
+- **The explanation:** a section in `docs/tools` (EN, RU) and in `console`'s help:
+  - the shell is the one holder of the operator's authorities;
+  - `console` is a terminal window that asks the shell for them;
+  - why a second full shell in every window is not made: it would spread the authority to reboot, kill, change the network policy and the firmware's boot order.
+
+### Acceptance criteria
+
+- The `wm` suite starts `camera` from the menu and from `console` with the video gateway's synthetic source, and sees its window show the stream.
+- The `shell` item opens a window where `ps` lists the tasks, `reboot` asks and, once confirmed, resets the machine, and `camera` shows the stream.
+- On the MacBook Pro, `camera` shows the FaceTime camera in a `wm` window.
+
+## The shell's window opens only when the user asks (211-APP-0040, 211-APP-0044)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's report from the MacBook Pro (`fast-test` a00618b): "a program started by itself when `wm` started (the shell). It should not start by itself, only at the user's request from `wm`'s menu."
+
+### Problem
+
+211-APP-0040 opens the shell's window whenever the shell starts a window manager (`shell/src/main.rs`: "when the shell starts a program that asks for the window manager client, it first opens a text window titled `shell`"). So it appears at every start of `wm`, unasked.
+
+### Plan (a proposal; the tools track decides)
+
+- `wm` starts with no shell window.
+- The user opens it from `wm`'s menu (a `shell` item, under System or at the top), and by a key. Ctrl+Alt+F5 already opens it.
+- The menu item reaches the shell through its command endpoint, which is 211-APP-0044's: `SLOT_SHELL` comes from the kernel track in 211-KRN-0058, now in its gate on the way to `main`.
+- Until then, the item can be left out rather than the window opened at the start.
+
+### Acceptance criteria
+
+- The `wm` suite starts `wm` and finds no shell window.
+- The menu item opens one, and closing it with Alt+W leaves `wm` running.
+- On the MacBook Pro, `wm` starts with the desktop alone.
+
+## A window back to its content's size (158, 211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request after a run on the MacBook Pro: "the picture should stretch with the window, and the window should be able to take the size of its content, to get the original display back".
+
+### Problem
+
+- **The picture now follows the window.** `camera` scales its picture to whatever size `wm` gives its window (the kernel track's 158 change, f760714 on its branch).
+- **But nothing brings a window back to the size of its content.**
+  - For `camera` that is the stream's size, 320×240 by default, where the picture is drawn pixel for pixel.
+  - `wm` updates `Win::size` when the program takes a new size (`wm/src/main.rs`, the resize handling), so `Win::natural()` follows the current size, not the first.
+
+### Plan (a proposal; the tools track decides)
+
+- **Keep the first size.** `wm` keeps the size a pixel window opened at (the content size its program asked for), beside its current one.
+- **A "fit to content" command** sets the frame back to that size. It asks the program for it as a resize does, and keeps the frame on the screen.
+  - For example a key (`Alt+0`), a double click on the title, or a title-bar button beside zoom.
+  - The help screen and the top bar's key list name it.
+- **Text windows:** the same command can take the frame to the text's own size, if that is meaningful there.
+
+### Acceptance criteria
+
+- The `wm` suite opens `camera` (the synthetic source), resizes its window and sees the picture scaled.
+- The command brings the frame back to 320×240, and the picture is then the test pattern pixel for pixel.
+- On the MacBook Pro the FaceTime camera's window returns to its first size.
+
+## `top` and `free` show the machine's memory, not only the kernel's arena (211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's question after a run on the MacBook Pro: "why is the available memory shown as 64 MB, when the computer has gigabytes?"
+
+### Problem
+
+- **The memory bar shows the kernel arena.** `top`'s memory bar and line (`monitor/src/top.rs`, `m.used` of `m.arena`) show the kernel arena: the 64 MiB of kernel structures (tasks, endpoints, capability tables). So it reads "2 MB of 64 MB" as if that were all the memory.
+- **The machine's memory is not shown, though the kernel sees it.**
+  - On the MacBook Pro the firmware's map has 7.6 GiB of conventional memory, 5.7 GiB of it above 4 GiB.
+  - The kernel's frame pool is `7768 MiB, 7679 MiB free` (`hw0001.txt`, "The kernel's choices").
+  - `StatMemory` carries it already: `frames` and `frames_free`, in bytes. That pool holds the programs' images, stacks, screens, heaps and objects, so about 89 MiB were in use, not 2 MB.
+- **`free` prints it on a second line** (`FRAMES=… FRAMES_FREE=…`), after `ARENA=…`, so it reads the same way.
+
+### Plan (a proposal; the tools track decides)
+
+- **`top`:** the first memory bar is the machine's memory: `frames - frames_free` of `frames` (named "memory" or "RAM"). The arena gets a second, smaller line named "kernel arena".
+- **`free`:** the frame pool first, as "memory", then the arena as "kernel arena". `load`'s "kernel arena" series keeps its name.
+- **`sysmon`'s and `wm`'s summaries, if they show memory:** the same.
+- **`docs/tools` (EN, RU):** what the frame pool and the arena are.
+
+### Acceptance criteria
+
+- On QEMU with 512 MiB, `top` and `free` show about 400 MiB of memory with what is in use, and the arena separately.
+- On the MacBook Pro they show about 7.6 GiB.

@@ -107,6 +107,21 @@ The camera came to the kernel session on 2026-10-09 (its owner line). Step 2 is 
   - siTD and xHCI isochronous;
   - a camera passed through to QEMU (manual).
 
+## The Mac's run (2026-10-10): the camera streams from the shell's screen
+
+The maintainer ran `fast-test` bc681376b8d8 on the MacBook Pro (`log:boot0001.log`, `hw0001.txt`, photos of the screen).
+
+- **What the log shows.**
+  - `video_gw` found the FaceTime HD camera: `05AC:8510`, UVC 1.00, isochronous endpoint 82, YUY2 from 160×120 to 1280×720 and MJPEG.
+  - `camera`, started from the shell's screen, opened it at 320×240 and 10/s on setting 2 (512 bytes a microframe). The first frame came after 433 ms.
+  - Over 6 s it got 64 frames, 72 assembled whole and none broken. `usb_host` counted 29 467 packets, 11 294 936 bytes, none with errors, dropped or late.
+  - So EHCI's iTD ring and the UVC class work on the Mac.
+- **What does not work yet: the camera from `wm`.** From `wm`'s menu or `console`, `camera` ends with "no camera was granted": `wm` neither holds nor passes `SLOT_CAMERA`.
+  - At the maintainer's choice the tools track does it, with the shell in a window and the full `console` (211-APP-0040).
+  - The request is in [requests-APP.md](requests-APP.md) ("The camera from `wm`, and the shell in a window").
+  - The kernel track's part is `SLOT_SHELL`.
+- **Still to see on the Mac:** the picture in a window (after the request above), the camera mark, and `camera -s still.bmp`.
+
 ## Acceptance criteria
 
 - **QEMU** (CI, synthetic source):
