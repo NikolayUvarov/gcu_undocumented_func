@@ -1282,8 +1282,9 @@ def kbench_check(vm):
     require(output, f"kbench: {count} measurements, 0 failed")
     assert rows["uptime (empty call)"][0] < 10_000, rows
     assert rows["call and reply"][0] < 1_000_000, rows
-    # Sleeps end on the 10 ms tick, counted from the tick's start, so one may be shorter than asked (000-KRN-0065).
-    assert 1e6 <= rows["sleep 10 ms"][0] <= 40e6, rows
+    # A sleep is never shorter than asked and at most a tick longer, give or take QEMU's timing (000-KRN-0065).
+    assert "shorter than asked" not in output, output[-3000:]
+    assert rows["sleep 1 ms"][1] >= 1e6 and rows["sleep 10 ms"][1] >= 10e6 and rows["sleep 10 ms"][0] <= 40e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
     width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
@@ -1303,10 +1304,10 @@ def kbench_check(vm):
 
 
 # The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
-# a reason, except "sleeps last as asked", which fails until 000-KRN-0065.
+# a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
                "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
-               "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "ram: write, read",
+               "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
                "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
@@ -1319,7 +1320,7 @@ def check_tool_check(vm):
     for name in CHECKS_PASS:
         assert rows.get(name, ("?",))[0] == "✓", (name, rows.get(name), output[-4000:])
     failed = [name for name, (mark, _) in rows.items() if mark == "✗"]
-    assert set(failed) <= {"sleeps last as asked"}, (failed, output[-4000:])
+    assert not failed, (failed, output[-4000:])
     assert all(detail for mark, detail in rows.values() if mark == "○"), rows
     summary = re.search(r"check: (\d+) passed, (\d+) failed, (\d+) skipped \((\d+) checks\)", output)
     assert summary and int(summary[4]) == len(rows) and int(summary[2]) == len(failed), (summary and summary[0], len(rows), failed)
