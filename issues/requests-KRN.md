@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-10; the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -20,30 +20,6 @@ The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other 
 ### Acceptance criteria
 
 CI runs the test on every push, and a finding fails the host-test step.
-
-## The pinned toolchain installed once before the parallel build (000-KRN-0020)
-
-**Recorded by:** the assurance and drivers session (`ASR`, `DRV`), 2026-10-09, after the maintainer's build of `fast-test` failed.
-
-### Problem
-
-`rust-toolchain.toml` gained `components = ["rust-src"]` (e5a34c2, 250-APP-0020). On a machine with `nightly-2026-10-02` but without that component, `02_build.sh` starts every crate's cargo at once (000-KRN-0020). Each cargo asks rustup to add `rust-src`, and the downloads race on one file:
-
-```
-error: component download failed for rust-src: could not rename 'downloaded' file from
-'~/.rustup/downloads/7da4d…partial' to '…': No such file or directory (os error 2)
-```
-
-All 70 crates fail, and the build reports them as failures of the code. A single `rustup component add rust-src --toolchain nightly-2026-10-02` fixed it.
-
-### Plan (a proposal; the kernel track decides)
-
-- Before the parallel step, `02_build.sh` runs `rustup toolchain install` once in the repository. It reads `rust-toolchain.toml` and installs the channel, the components and the targets. A failure stops the build with that message.
-- `01_prepare_env.sh` does the same, so the two cannot disagree.
-
-### Acceptance criteria
-
-On a machine whose rustup lacks a component the toolchain file names, `02_build.sh` installs it once and the build succeeds. A failed install is reported as such, not as 70 failed crates.
 
 ## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
 
@@ -88,29 +64,6 @@ In `main`'s run with the same debug lines, no flush write failed during the outa
 ### Acceptance criteria
 
 `tests/usb_image_smoke.py` passes with 211-DRV-0019's `usb_storage` (branch `claude/ASR-DRV`): the first `sync` after the disk is back says `OK`. A flush whose own write fails still reports it.
-
-## `bcm_wifi` reads its microcode: a read-only VFS client (550-DRV-0023)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, for [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), stage 2 of the MacBook Pro's Wi-Fi.
-
-### Problem
-
-Stage 2 of `bcm_wifi` loads Broadcom's microcode into the BCM4331's 802.11 core. The maintainer's build copies it onto the written disk under `data/firmware/b43/` (AGENTS.md section 3, `scripts/proprietary.sh`), never into the image. `init` gives `bcm_wifi` BAR0 only (550-KRN-0059 on `fast-test`), so it cannot read the file.
-
-### Plan (a proposal; the kernel track decides)
-
-In `init`'s `bcm_wifi` arm, the same read-only client `gpio` gets for `hwdocs/`:
-
-```rust
-grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
-```
-
-`vfs_server` starts before `bcm_wifi` (PIDs 12 and 18 on the MacBook Pro). Nothing else is needed for stage 2: the microcode goes through the core's registers, without DMA or an interrupt.
-
-### Acceptance criteria
-
-On the MacBook Pro, `bcm_wifi` opens `data/firmware/b43/ucode29_mimo.fw` and logs its size. Without the file it logs that it is missing and runs on. It cannot write anywhere or open a private directory.
-
 
 ## A launch session holds as many grants as there are launch slots (211-APP-0044)
 
