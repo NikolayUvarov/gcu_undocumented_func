@@ -3,8 +3,9 @@
 //! the model's `accept`) and clearly better than the best phrase meaning something else (`margin`). Host tests include
 //! this file.
 use super::features::{normalize, Features};
-use super::grammar::{Decoded, Grammar, Phrase};
+use super::grammar::{confidence, Decoded, Grammar, Phrase};
 use super::model::Model;
+use alloc::vec::Vec;
 
 pub struct Recognizer { pub features: Features, pub model: Model, pub grammar: Grammar, silence: u16 }
 
@@ -29,10 +30,29 @@ impl Recognizer {
 
     /// `recognize` among the phrases `keep` chooses (for instance only yes and no).
     pub fn recognize_where(&self, samples: &[i16], keep: &dyn Fn(&Phrase) -> bool) -> Option<Recognition> {
+        self.recognize_ranked(samples, keep, 0).map(|(recognition, _)| recognition)
+    }
+
+    /// `recognize_where`, and the best `count` phrases with their confidence in per mille, the best first
+    /// (000-APP-0053: what `hear` shows the operator).
+    pub fn recognize_ranked(&self, samples: &[i16], keep: &dyn Fn(&Phrase) -> bool, count: usize) -> Option<(Recognition, Vec<(usize, u32)>)> {
         let mut features = self.features.log_mel(samples);
         normalize(&mut features);
         let scores = self.model.scores(&features);
-        let decoded = self.grammar.decode_where(&scores, self.model.classes.len(), self.silence, keep)?;
-        Some(Recognition { decoded, accepted: decoded.deficit() <= self.model.accept && decoded.margin() >= self.model.margin })
+        let classes = self.model.classes.len();
+        let ranked = self.grammar.rank_where(&scores, classes, self.silence, keep);
+        let decoded = self.grammar.best(&ranked, scores.len() / classes)?;
+        let candidates = ranked.iter().take(count).map(|&(phrase, score)| (phrase, confidence(score, decoded.frames))).collect();
+        Some((Recognition { decoded, accepted: self.accepts(&decoded) }, candidates))
+    }
+
+    /// Whether a decoding is understood: near the best phone sequence and clear of other meanings.
+    pub fn accepts(&self, decoded: &Decoded) -> bool { decoded.deficit() <= self.model.accept && decoded.margin() >= self.model.margin }
+
+    /// Why a decoding is refused: too far from any phrase, or too close to one meaning something else.
+    pub fn refusal(&self, decoded: &Decoded) -> Option<&'static str> {
+        if decoded.deficit() > self.model.accept { Some("FAR FROM EVERY PHRASE") }
+        else if decoded.margin() < self.model.margin { Some("TOO CLOSE TO ANOTHER MEANING") }
+        else { None }
     }
 }

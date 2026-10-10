@@ -65,9 +65,11 @@ impl Source for Client {
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
         let m = take(sysinfo::memory(Endpoint::SYSINFO))?;
+        let pool = take(sysinfo::pool(Endpoint::SYSINFO)).unwrap_or_default();
         Ok(Memory { arena: m.arena, used: m.used, free: m.free, images: m.images, stacks: m.stacks, task_pages: m.task_pages, screens: m.screens, heaps: m.heaps,
                     objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks, endpoints: m.endpoints,
-                    largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit })
+                    largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit,
+                    frames: pool.frames, frames_free: pool.frames_free })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> {
         let list = take(sysinfo::physmap(Endpoint::SYSINFO))?;

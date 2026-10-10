@@ -609,6 +609,13 @@ fn the_programs_by_category() {
     assert_eq!(menu[1].children[2].command.as_deref(), Some("console uptime"));
     assert_eq!(labels(&menu[3].children), ["app", "zzz"]);
     assert_eq!(labels(&catalogue(&[])), ["No programs found"]);
+    // The self-test and the benchmarks have a category of their own, each run in console (176-APP-0051).
+    let mut with_tests = programs(true);
+    with_tests.extend([("memtest", Kind::Console), ("netbench", Kind::Console), ("check", Kind::Console), ("netcheck", Kind::Console)].iter().map(|&(n, k)| (n.to_string(), k)));
+    let menu = catalogue(&with_tests);
+    assert_eq!(labels(&menu), ["Files", "System", "Clocks", "Network", "Tests and performance", "Other"]);
+    assert_eq!(labels(&menu[4].children), ["check", "netbench", "memtest"]);
+    assert_eq!(menu[4].children.iter().map(|i| i.command.as_deref().unwrap()).collect::<Vec<_>>(), ["console check", "console netbench", "console memtest"]);
     // Where wm holds the shell's commands, the shell's window comes first (211-APP-0044); Enter on it runs `shell`.
     let menu = menu::with_shell(catalogue(&programs(true)));
     assert_eq!(labels(&menu), ["Shell", "Files", "System", "Clocks", "Other"]);

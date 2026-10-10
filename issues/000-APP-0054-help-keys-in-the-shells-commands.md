@@ -1,6 +1,6 @@
 # 000-APP-0054 — The shell's and `console`'s commands answer the help keys
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** 000-KRN-0066 reaching `main` (`mind::process::HELP_KEYS` and `asks_help` are on `fast-test` only, 2026-10-10) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 

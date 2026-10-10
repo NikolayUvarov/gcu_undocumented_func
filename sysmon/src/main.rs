@@ -171,6 +171,11 @@ fn serve(monitor: &mut Monitor, request: Request, call: Call, authority: bool) -
                 largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit });
             sysinfo::reply_memory(call, memory.as_ref().map_err(|e| *e))
         }
+        Request::Pool => {
+            // The frame pool (211-APP-0057), without the search for the arena's largest block.
+            let pool = records!(STAT_MEMORY, 0).and_then(|r| r.iter::<StatMemory>().next().ok_or(Error::Unavailable)).map(|m| sysinfo::Pool { frames: m.frames, frames_free: m.frames_free });
+            sysinfo::reply_pool(call, pool.as_ref().map_err(|e| *e))
+        }
         Request::Physmap => {
             let items: Result<Vec<sysinfo::Range>, Error> = records!(STAT_PHYSMAP, 0).map(|r| r.iter::<StatPhys>().take(256).map(|p| sysinfo::Range { start: p.start, pages: p.pages, kind: p.kind, index: p.index }).collect());
             sysinfo::reply_physmap(call, items.as_deref().map_err(|e| *e))
@@ -261,7 +266,7 @@ fn refuse(request: Request, call: Call) -> mind::Result<()> {
         Request::Endpoints { .. } => sysinfo::reply_endpoints(call, Err(busy)), Request::Irqs => sysinfo::reply_irqs(call, Err(busy)),
         Request::Devices => sysinfo::reply_devices(call, Err(busy)), Request::History { .. } => sysinfo::reply_history(call, Err(busy)),
         Request::Load => sysinfo::reply_load(call, Err(busy)), Request::Holders { .. } => sysinfo::reply_holders(call, Err(busy)),
-        Request::Authority { .. } => sysinfo::reply_authority(call, Err(busy)),
+        Request::Authority { .. } => sysinfo::reply_authority(call, Err(busy)), Request::Pool => sysinfo::reply_pool(call, Err(busy)),
     }
 }
 

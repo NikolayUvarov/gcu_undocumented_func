@@ -4,7 +4,8 @@
 //! request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`; 3.0:
 //! `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
 //! position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
-//! its mean and maximum (171-APP-0002, 171-APP-0007).
+//! its mean and maximum (171-APP-0002, 171-APP-0007); 4.1: `pool`, the machine's memory the kernel gives programs
+//! (211-APP-0057).
 //!
 //! Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 //! carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
@@ -19,7 +20,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:sysinfo";
-pub const VERSION: (u8, u8, u8) = (4, 0, 0);
+pub const VERSION: (u8, u8, u8) = (4, 1, 0);
 const MAJOR: usize = 4;
 
 /// Why a request failed.
@@ -151,6 +152,16 @@ impl Wire for Sample {
     const MAX: usize = <List<u16, 16> as Wire>::MAX + <u16 as Wire>::MAX + <u16 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.busy.encode(w)?; self.busy_total.encode(w)?; self.busy_max.encode(w)?; self.interrupts.encode(w)?; self.syscalls.encode(w)?; self.messages.encode(w)?; self.switches.encode(w)?; self.used_kib.encode(w)?; self.tasks.encode(w)?; self.runnable.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { busy: Wire::decode(r)?, busy_total: Wire::decode(r)?, busy_max: Wire::decode(r)?, interrupts: Wire::decode(r)?, syscalls: Wire::decode(r)?, messages: Wire::decode(r)?, switches: Wire::decode(r)?, used_kib: Wire::decode(r)?, tasks: Wire::decode(r)?, runnable: Wire::decode(r)? }) }
+}
+
+/// The frame pool (StatMemory `frames`, `frames_free`, bytes): the machine's memory the kernel gives programs' images,
+/// stacks, screens, heaps and memory objects; `memory` is the kernel arena, apart from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pool { pub frames: u64, pub frames_free: u64 }
+impl Wire for Pool {
+    const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.frames.encode(w)?; self.frames_free.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { frames: Wire::decode(r)?, frames_free: Wire::decode(r)? }) }
 }
 
 /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
@@ -353,6 +364,20 @@ pub fn authority(endpoint: Endpoint, start: u32) -> Result<core::result::Result<
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<AuthorityEntry, 128> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The frame pool (4.1).
+pub fn pool(endpoint: Endpoint) -> Result<core::result::Result<Pool, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 16, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Pool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `sysinfo` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -369,6 +394,7 @@ pub enum Request {
     Load,
     Holders { index: u32 },
     Authority { start: u32 },
+    Pool,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -480,6 +506,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Authority { start }, call))
         }
+        14 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 16, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Pool, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -535,4 +568,8 @@ pub fn reply_holders(call: Call, value: core::result::Result<&[Holder], Error>) 
 pub fn reply_authority(call: Call, value: core::result::Result<&[AuthorityEntry], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<AuthorityEntry, 128>(value, w))
+}
+pub fn reply_pool(call: Call, value: core::result::Result<&Pool, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

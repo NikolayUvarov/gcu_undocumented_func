@@ -10,10 +10,13 @@ pub fn free(out: &mut impl Write) {
     // Argument 1: the kernel also searches for the largest free block.
     let mut buffer = [0u8; 512];
     let Some(m) = stat::read(STAT_MEMORY, 1, &mut buffer).ok().and_then(|r| r.iter::<StatMemory>().next()) else { let _ = writeln!(out, "ERROR: STAT NOT AVAILABLE"); return };
-    let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
+    // The machine's memory first, the frame pool programs run in; then the kernel's own arena (211-APP-0057).
+    let mib = |bytes: u64| bytes >> 20;
+    let _ = writeln!(out, "MEMORY: {} MIB, {} MIB IN USE, {} MIB FREE (THE FRAME POOL PROGRAMS RUN IN)", mib(m.frames), mib(m.frames.saturating_sub(m.frames_free)), mib(m.frames_free));
+    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
+    let _ = writeln!(out, "KERNEL ARENA: ARENA={} USED={} FREE={} LARGEST={} (THE KERNEL'S OWN STRUCTURES)", m.arena, m.used, m.free, m.largest_free);
     let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
     let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
-    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
 }
 
 pub fn cpus(out: &mut impl Write) {
