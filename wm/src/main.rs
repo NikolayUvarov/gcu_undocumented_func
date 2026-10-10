@@ -215,7 +215,9 @@ impl Manager {
         infos.sort_by_key(|i| i.place.z);
         let known: Vec<u32> = self.lives.iter().map(|l| l.id).collect();
         for info in infos.iter().filter(|i| !known.contains(&i.id)) {
-            let Some(live) = adopt(info.id) else { continue };
+            // A window whose surface the broker cannot lend yet (its program is still setting it up) is tried again at
+            // the next sync, whatever the generation says (211-APP-0044: the shell's window opened for a question).
+            let Some(live) = adopt(info.id) else { self.generation = u64::MAX; continue };
             let content = if info.kind == api::Kind::Pixels { Content::Pixels } else { Content::Text };
             let size = live.surface.check().map_or((info.width as usize, info.height as usize), |(_, w, h)| (w, h));
             let mut win = Win::new(info.id, info.owner, content, size, info.title.as_str());

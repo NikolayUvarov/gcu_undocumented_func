@@ -247,6 +247,7 @@ impl Shell {
             self.command(line.as_bytes());
             return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
         }
+        self.note(format_args!("FOR PID {} THE SHELL ASKS IN ITS WINDOW: \"{}\"", client, line));
         self.open_window()?;
         let back = self.active;
         self.activate(WINDOW);
