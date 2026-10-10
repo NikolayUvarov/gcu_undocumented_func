@@ -452,3 +452,109 @@ What the kernel track would try (the tools track decides):
 - The `wm` suite opens `camera` (the synthetic source), resizes its window and sees the picture scaled.
 - The command brings the frame back to 320×240, and the picture is then the test pattern pixel for pixel.
 - On the MacBook Pro the FaceTime camera's window returns to its first size.
+
+## `top` and `free` show the machine's memory, not only the kernel's arena (211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's question after a run on the MacBook Pro: "why is the available memory shown as 64 MB, when the computer has gigabytes?"
+
+### Problem
+
+- **The memory bar shows the kernel arena.** `top`'s memory bar and line (`monitor/src/top.rs`, `m.used` of `m.arena`) show the kernel arena: the 64 MiB of kernel structures (tasks, endpoints, capability tables). So it reads "2 MB of 64 MB" as if that were all the memory.
+- **The machine's memory is not shown, though the kernel sees it.**
+  - On the MacBook Pro the firmware's map has 7.6 GiB of conventional memory, 5.7 GiB of it above 4 GiB.
+  - The kernel's frame pool is `7768 MiB, 7679 MiB free` (`hw0001.txt`, "The kernel's choices").
+  - `StatMemory` carries it already: `frames` and `frames_free`, in bytes. That pool holds the programs' images, stacks, screens, heaps and objects, so about 89 MiB were in use, not 2 MB.
+- **`free` prints it on a second line** (`FRAMES=… FRAMES_FREE=…`), after `ARENA=…`, so it reads the same way.
+
+### Plan (a proposal; the tools track decides)
+
+- **`top`:** the first memory bar is the machine's memory: `frames - frames_free` of `frames` (named "memory" or "RAM"). The arena gets a second, smaller line named "kernel arena".
+- **`free`:** the frame pool first, as "memory", then the arena as "kernel arena". `load`'s "kernel arena" series keeps its name.
+- **`sysmon`'s and `wm`'s summaries, if they show memory:** the same.
+- **`docs/tools` (EN, RU):** what the frame pool and the arena are.
+
+### Acceptance criteria
+
+- On QEMU with 512 MiB, `top` and `free` show about 400 MiB of memory with what is in use, and the arena separately.
+- On the MacBook Pro they show about 7.6 GiB.
+
+## A "Tests and performance" category in `wm`'s menu (176)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, for main task [176](176-test-and-performance-utilities.md) at the maintainer's request.
+
+### Problem
+
+The kernel track is making three console programs in a new crate, `bench/`:
+
+- `check`, a self-test of what is done;
+- `bench`, the components' performance;
+- `kbench`, the kernel's performance.
+
+The maintainer wants them at hand from the menu as well as from the command line. With no category in `wm/src/menu.rs` (`CATEGORIES`), they land under "Other", next to `netbench` and `memtest`, which belong with them.
+
+### Plan (a proposal; the tools track decides)
+
+- A category "Tests and performance" with `check`, `bench`, `kbench`, `netbench` and `memtest`, each started as `console <name>`, so its table shows in a window.
+- Their lines in `help` and `docs/tools` (EN, RU) once the programs are in `main` (the kernel track writes their own pages).
+
+### Acceptance criteria
+
+The five programs are under that category in `wm`'s menu and run in a `console` window.
+
+## Voice control as a service one can turn on (the maintainer's request, 2026-10-10)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request.
+
+### Problem
+
+The maintainer asked for "a service that can be switched on for audio commands, so that the system can be run by voice".
+
+Today voice control lives in one shell:
+
+- `voice on` starts the `voice` program for that shell's console only, and it stops with it;
+- F12 is push-to-talk, and only while that console has the keyboard;
+- nothing turns it on at boot, and `wm` and its windows have no part in it.
+
+### Plan (a proposal; the tools track decides)
+
+- **A boot service**, off by default, that `svc enable voice` (173) turns on for the next boots and `svc start voice` for this one. It holds the microphone only while it listens.
+- **How it listens.** It listens on push-to-talk from whichever program has the keyboard (the shell's F12, a key in `wm`), or continuously on a wake phrase if the maintainer chooses that later.
+- **What it does.** It hands what it recognized to the shell's command endpoint (`SLOT_SHELL`, 211-KRN-0058), so the same confirmations hold: it asks before stopping a service or rebooting. In `wm` it can also open programs from the menu by name.
+- **What it shows.** A mark that voice control is on and when it is listening, on the shell's line and in `wm`'s bar; every phrase heard and what was done with it goes to the system log.
+- **Least authority (Art. 11.11).** It holds the audio, tts and read-only file clients and the shell's endpoint, nothing else.
+
+### Acceptance criteria
+
+- `svc enable voice` and a reboot leave voice control on, without a shell command.
+- In QEMU, a WAV file standing in for the microphone opens a program and asks before a reboot.
+- On the MacBook Pro, the same by the microphone once capture works there (551-DRV-0010).
+
+## `hear` shows what it heard, for the operator (the maintainer's request, 2026-10-10)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request.
+
+### Problem
+
+The maintainer: "`hear` prints only errors now; it should print what it heard, so the operator can check it."
+
+What it prints today:
+
+- `HEARD "<phrase>" …` for an accepted command;
+- `NOT UNDERSTOOD (CLOSEST "…", CONFIDENCE=…)` for a refused one;
+- `NOT UNDERSTOOD (TOO SHORT)`, `NOTHING HEARD`;
+- `HEAR: NO MICROPHONE …`, `HEAR: NO INPUT FROM THE MICROPHONE`, or `HEAR: THE MICROPHONE IS BUSY …`.
+
+When the microphone gives silence or noise, every one of these reads as an error. Nothing tells the operator whether sound came in at all, how loud it was, or what the recognizer made of it.
+
+### Plan (a proposal; the tools track decides)
+
+- **While it listens:** a level meter on one line (the peak and RMS in dBFS, refreshed several times a second), and the threshold that starts an utterance.
+- **For each utterance:** its length, its level, and the best three phrases with their confidence, then the verdict: accepted, refused below the threshold, or too short.
+- **When nothing was heard:** the noise floor's level over the wait, so that "the microphone gives nothing" and "it was too quiet" are told apart.
+- **`--save FILE`** keeps the utterance (or the whole wait) as a WAV file on `ram:` or `log:`, for the operator to send for analysis or to feed back with `hear --wav`. (`listen` already shows a level and plays a recording back, but separately from recognition.)
+- **`voice`** prints the same per-utterance lines on its console.
+
+### Acceptance criteria
+
+- In QEMU, `hear --wav` of the test recordings prints the level, the length and three candidates for each utterance. With no input it prints the noise floor.
+- On the MacBook Pro, the operator can see whether the microphone gives sound (551-DRV-0010 logs the capture's peak on the driver's side).
