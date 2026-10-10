@@ -1,16 +1,16 @@
-# 351-KRN-0022 — The updater's authorities: request flags and init's grants
+# 351-KRN-0022 — The updater's authorities: request flags and init's grants — done
 
-**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 (the update track waits for it) · **Status:** in progress (all but the update zone) · **Blocked by:** [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md) (the update zone) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.11, MC-9.3
+**Type:** kernel (ABI) · **Owner:** `KRN` · **Priority:** P1 (the update track waits for it) · **Status:** done (2026-10-10) · **Blocked by:** [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done) (the update zone, done) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-3.11, MC-9.3
 
 ## Problem
 
-[351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done) gave the system its slot, the trial and init's confirmation. It left out the grants the updater needs, because no updater exists yet to ask for them:
+[351-KRN-0014](351-KRN-0014-trial-boot-and-confirmation.done) gave the system its slot, the trial and init's confirmation. It left out the grants the updater needs, because no updater exists yet to ask for them:
 
 - TLS, for the release download;
-- the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md));
+- the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done));
 - a network grant;
 - restarting the machine through `init`;
-- the firmware variable privilege (`SLOT_FIRMWARE`, [351-KRN-0027](../issues-done/351-KRN-0027-uefi-variables.done)), for `BootNext` and `BootOrder` ([351-UPD-0010](351-UPD-0010-updating-the-bootloader.md)).
+- the firmware variable privilege (`SLOT_FIRMWARE`, [351-KRN-0027](351-KRN-0027-uefi-variables.done)), for `BootNext` and `BootOrder` ([351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md)).
 
 ## Plan
 
@@ -46,8 +46,20 @@ The updater is a boot service, not a program a launcher starts, so init grants i
   - `updater` suite (x86 and aarch64), with `tests/updater_stub` standing in for the service. The stand-in reports exactly slots 1, 2, 3, 11, 12, 18, 20 and 27; firmware variables read; the file system read and a write denied. When the shell makes `data/reboot`, the stand-in asks init to restart, and QEMU exits on the reset with the volume clean (`fsck.fat`). vfs_server writes directories through today, so the test shows the volume whole after the restart, not the flush itself.
   - `isolation` case `k`: a program with the lifecycle client cannot badge it for restart (`ERR_INVALID`), and `init` answers its `reboot` with `denied`.
 
-Left: the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md)), granted in place of the read-only client once it exists.
+Left: the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done)), granted in place of the read-only client once it exists.
+
+## Resolution
+
+All five authorities come from `init`. The fifth, the update zone, was granted by the storage session for the update track (2026-10-10), as the maintainer allowed it small grant changes in `init`:
+- **The updater's client.** The `updater` arm gives slot 3 a client of `vfs_server` badged `BADGE_UPDATE` in place of the lent read-only one. It reads as before and writes only the update zone (351-UPD-0008).
+- **Every other client of `vfs_server` that `init` hands out carries a badge too.** `gpio`, `loader` (and so every program it starts), `video_gw` and `tls` get `BADGE_READER` (5, `mind::fs`), which reads what an unbadged client read. A badge is set once, so none of them can be badged for the update zone or a private directory; the shell's client of `init` is badged for the same reason.
+
+Tests:
+- The `boot` suite (x86) and `tests/aarch64_smoke.py` (`tests/boot_slots_check.py`): with the test stand-in on a volume booted from slot A, its client writes a file in `MIND/B` and `MIND/BOOT0` whole, which the host reads back. It is refused a part of a record, the record made afresh, `MIND/A`, `EFI/` and a new file in `MIND/`, and the volume passes `fsck.fat`. These checks' volumes leave `keystore` out: its first-boot write of the device key could be cut where a check stops QEMU.
+- The `updater` suite (x86, aarch64): as before; on a root volume the write is refused.
+- The `services` suite (x86): `loader`'s, `tls`'s, `video_gw`'s and a program's client of `vfs_server` carry badge 5.
+- `tests/vfs_zone_host.rs`: `BADGE_READER` sees what an unbadged client sees.
 
 ## Related
 
-[351-UPD-0007](351-UPD-0007-updater-service.md), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md).
+[351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done).

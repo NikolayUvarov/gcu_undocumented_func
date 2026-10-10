@@ -12,7 +12,7 @@ Only the shell holds a client of the TLS service (`SLOT_TLS`). A program had no 
 
 - `REQUEST_TLS` in `libmind::process`: the launcher's TLS client in the program's `SLOT_TLS` (20), as `REQUEST_GPIO` does with `SLOT_GPIO`.
 - The loader accepts a client lent for `SLOT_TLS` in a launch session.
-- The shell's part, lending its client only with a flow grant, is the tools track's (`issues/requests-APP.md`, "The shell lends its TLS client for `REQUEST_TLS`"). init's grant to `updater` is [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+- The shell's part, lending its client only with a flow grant, is the tools track's (`issues/requests-APP.md`, "The shell lends its TLS client for `REQUEST_TLS`"). init's grant to `updater` is [351-KRN-0022](351-KRN-0022-updater-grants.done).
 
 ## Acceptance criteria
 
@@ -30,4 +30,4 @@ The kernel's part done on 2026-10-09:
 
 ## Related
 
-[351-NET-0002](351-NET-0002-https-for-programs.done), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md), issue 103 (the TLS service).
+[351-NET-0002](351-NET-0002-https-for-programs.done), [351-KRN-0022](351-KRN-0022-updater-grants.done), issue 103 (the TLS service).

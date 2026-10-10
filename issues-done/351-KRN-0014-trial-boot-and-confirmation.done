@@ -39,7 +39,7 @@ In QEMU:
 
 ## Resolution
 
-Done on 2026-10-08, with ABI 4 shared with [211-KRN-0012](211-KRN-0012-boot-volume-identity.done), except the updater's grants, split into [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+Done on 2026-10-08, with ABI 4 shared with [211-KRN-0012](211-KRN-0012-boot-volume-identity.done), except the updater's grants, split into [351-KRN-0022](351-KRN-0022-updater-grants.done).
 
 - **`BootInfo.boot_slot`:** the slot (`BOOT_SLOT_ROOT`, `_A`, `_B`), the trial flag, the deadline (`TRIAL_DEADLINE_S`, 120 s) and the SHA-256 of the manifest the bootloader verified, from `load_slots` and `load_set` in the bootloader.
 - **The deadline** (`kernel/src/trial.rs`).
@@ -48,7 +48,7 @@ Done on 2026-10-08, with ABI 4 shared with [211-KRN-0012](211-KRN-0012-boot-volu
 - **The confirmation.**
   - `BOOT_CONFIRM` (60) needs the platform privilege. `libmind::platform::confirm_boot` calls it.
   - init calls it before it drops that privilege, when every boot service with its hardware started and the boot volume's root opens through a `vfs_server` client of its own. It logs `[INIT] TRIAL BOOT CONFIRMED` or why not.
-  - Writing the confirmed record to the disk stays with the updater ([351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md)).
+  - Writing the confirmed record to the disk stays with the updater ([351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done)).
 - **Tests.**
   - `boot` suite with `--trial-kernel`, a kernel built with `trial-test` whose deadline is at most 15 s:
     - slot B on trial from IDE is confirmed and still up after 18 s;

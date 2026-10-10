@@ -37,6 +37,7 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+import release as release_tool  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
 from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
@@ -2763,11 +2764,30 @@ def ahci_suite(vm):
     print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
+def reader_badges_check(vm):
+    """351-UPD-0008: the clients of vfs_server init lends are badged, readers BADGE_READER (5), and a program gets
+    loader's; a badge is set once, so none can be badged for a private directory or the update zone."""
+    real = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    for name, pid in [*((n, real[n]) for n in ("loader", "tls", "video_gw") if n in real), ("clock", task)]:
+        held = vm.command(f"stat caps {pid}", raw=True)
+        found = re.search(r"^SLOT=3 GEN=\d+ KIND=1 RIGHTS=\d+ SIZE=0 BADGE=(\d+) EP=(\d+)", held, re.M)
+        assert found and found[1] == "5" and servers.get(int(found[2])) == real["vfs_server"], (name, held)
+    vm.command(f"kill {clock}")
+    print(f"PASS: the vfs_server clients init lends carry the reader's badge: {', '.join(n for n in ('loader', 'tls', 'video_gw') if n in real)} and a program loader started", flush=True)
+
+
 def blockstore_check(vm):
     """300-KRN-0001 (requested by the storage track): init starts the block store over a RAM disk of its own (ramdisk#1)
     and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    # `logs` drains: the index's line, printed before READY, is read in the same output.
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
+    # The index is sized from the medium (251-STO-0013): the least, 4681 slots for 4096 blocks, on 8 MiB.
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     real = vm.services()
     assert "ramdisk#1" in real, real
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
@@ -2794,7 +2814,10 @@ def store_suite(vm):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
+    # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
@@ -3467,6 +3490,7 @@ def services_suite(vm):
           "kill /H); fm /? shows fm's text without starting it", flush=True)
     blockstore_check(vm)
     escrow_check(vm)
+    reader_badges_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
@@ -3879,10 +3903,21 @@ def vfs_suite(args):
 def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
-    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks."""
+    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
-    (temp / "models-tree").mkdir()
-    (temp / "models-tree" / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
+    tree = temp / "models-tree"
+    files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
+    entries = []
+    for model_id, model_files in files.items():
+        for path, data in model_files.items():
+            (tree / model_id / path).parent.mkdir(parents=True, exist_ok=True)
+            (tree / model_id / path).write_bytes(data)
+        entries.append({"id": model_id, "role": "asr", "licence": "MIT", "terms": "Тест: для проверки.",
+                        "files": [{"path": p, "size": len(d), "sha256": hashlib.sha256(d if model_id != "tts-bad" else b"other").hexdigest()} for p, d in model_files.items()]})
+    (tree / "MANIFEST.json").write_text(json.dumps({"format": 1, "models": entries}, ensure_ascii=False, indent=1), encoding="utf-8")
     subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(models), str(temp / "models-tree")], check=True, capture_output=True)
     with store.open("wb") as f:
         f.truncate(8 << 20)  # the store formats it at start: about 10 s on aarch64 (polled VirtIO under TCG) for 8 MiB
@@ -3896,12 +3931,41 @@ def disks_check(args, boot, temp):
         require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
         require(mounted, "[VFS] THE BOOT VOLUME:")
         require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS:")
-        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.command("df"), re.M), vm.log[-2000:]
+        # The first df counts the 256 MiB FAT32 volume's free clusters one by one (fat.rs free_clusters): 2.2 to 9.6 s
+        # on aarch64 under TCG by where the build's code lands, more than a command's 8 s (requests-KRN.md).
+        vm.send("df\n")
+        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.expect("MIND> ", timeout=60, after="df\n"), re.M), vm.log[-2000:]
         for _ in range(60):
             if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
                 break
             time.sleep(2)
         assert re.search(r"SECTORS=\d+/16384", vm.command("blocks stat", raw=True)), vm.log[-2000:]
+        # The models into the store: the parser service reads MANIFEST.json, each file is checked as it is read.
+        vm.send("blocks models import\n")
+        out = vm.expect("MIND> ", timeout=240, after="blocks models import\n")
+        encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
+        require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
+        require(out, "AS models/asr-test VERSION 1")
+        require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
+        require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
+
+        def get_back(path, data):
+            vm.send(f"blocks models get asr-test {path} ram:got.bin\n")
+            require(vm.expect("MIND> ", timeout=120, after=f"blocks models get asr-test {path} ram:got.bin\n"),
+                    f"GOT {path} OF models/asr-test: {len(data)} BYTES, SHA-256 {hashlib.sha256(data).hexdigest()}")
+            require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
+        get_back("am/encoder.int8.onnx", encoder)
+        get_back("tokens.txt", tokens)
+        # A restarted store finds the model again on its disk.
+        pid = vm.services()["blockstore"]
+        require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
+        for _ in range(60):
+            if vm.services().get("blockstore", pid) != pid and "BLOCKS=" in vm.command("blocks stat", raw=True):
+                break
+            time.sleep(2)
+        get_back("tokens.txt", tokens)
+        print(f"PASS: models in the block store: a model disk's model imported as one object named models/asr-test, its files read back "
+              f"by name with their SHA-256 (also after the store restarted), a model whose file differs from the manifest not named", flush=True)
     finally:
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-disks-{args.cpus}cpu.log").write_text(vm.log)
@@ -4833,6 +4897,11 @@ def download_check(args, disk):
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
+    # A release channel as release.py publishes it, and one with a space where its one encoding has none (351-NET-0011).
+    body = release_tool.channel_bytes("stable", 7, 5, "2026-11-08T00:00:00Z", {"x86_64": "ab" * 32, "aarch64": "0c" * 32})
+    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    (disk / "data" / "stable").write_bytes(channel)
+    (disk / "data" / "spaced").write_bytes(channel.replace(b'"version":7', b'"version": 7'))
     # TLS takes random bytes from RDRAND only.
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
     # The guest's clock on UTC: the certificates start at the host's UTC time, whatever the host's zone (351-KRN-0057).
@@ -4879,6 +4948,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
+    release_metadata_check(vm)
 
 
 def _spki_pin(certificate):
@@ -4949,6 +5019,24 @@ def parser_check(vm, url):
     out = vm.command(f"download ram:again.bin {url}/small.bin")
     require(out, "DOWNLOAD: DONE 200000 BYTES")
     print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+
+
+def release_metadata_check(vm):
+    """351-NET-0011, 351-APP-0019: the parser service reads a release channel and the boot volume's own manifest for the
+    shell's `release`, which takes the answer only if it makes the file's bytes; a channel in another form is refused
+    there and logged."""
+    out = vm.command("release data/stable")
+    signed = (ROOT / vm.disk / "data" / "stable").read_bytes().index(b"\n") + 1
+    for line in ("CHANNEL stable: VERSION 7, MINIMUM 5, EXPIRES 2026-11-08T00:00:00Z", "aarch64 MANIFEST 0c0c0c0c0c0c0c0c...",
+                 "x86_64 MANIFEST abababababababab...", f"SIGNED: THE FIRST {signed} BYTES; THE ANSWER MAKES THE FILE"):
+        require(out, line)
+    text = (ROOT / vm.disk / "MANIFEST").read_text()
+    files = [line.split(" ")[1] for line in text.splitlines() if line.startswith("file ")]
+    require(vm.command("release MANIFEST"), f"MANIFEST: 5 HEADER LINES, {len(files)} FILES ({sum('/' not in f for f in files)} AT THE ROOT); THE ANSWER MAKES THE TEXT")
+    require(vm.command("release data/spaced"), "RELEASE: MALFORMED")
+    assert re.search(r"\[PARSE\] REFUSED A CHANNEL FOR PID \d+: MALFORMED \(\d+ BYTES\)", vm.command("dmesg -s parse")), vm.command("dmesg -s parse")
+    print(f"PASS: release metadata: the parser service reads a channel (2 architectures) and the boot manifest ({len(files)} files, over "
+          f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
 def net_suite(args, disk):
@@ -7077,6 +7165,8 @@ def boot_suite(args, disk):
             vfs = vm.command("dmesg -s vfs_server", raw=True)
             require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
             require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            # Booted from the volume's root, not a slot: nothing for an updater to fill (351-UPD-0008).
+            require(vfs, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")
             require(vm.command("ls"), "kernel.elf")
         finally:
             vm.close()
@@ -7108,11 +7198,22 @@ def boot_suite(args, disk):
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
         try:
-            return vm.expect(until, timeout=60)
+            service = {"[VFS]": "vfs_server", "[UPDATER-STUB]": "updater"}.get(until.split(" ")[0])
+            if not service:
+                return vm.expect(until, timeout=60)
+            # The shell holds the serial line, so a service's lines are read with dmesg once it is up.
+            output = vm.expect("MIND> ", timeout=90)
+            time.sleep(1); vm.collect(); vm.output = ""
+            for _ in range(30):
+                log = vm.command(f"dmesg -s {service}", raw=True)
+                if until in log:
+                    break
+                time.sleep(1)
+            return output + log
         finally:
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
-        boot_slots_check.run(boot_image, temp, disk, "x86")
+        boot_slots_check.run(boot_image, temp, disk, "x86", args.updater_elf)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:

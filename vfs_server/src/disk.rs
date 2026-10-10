@@ -107,7 +107,8 @@ impl Sectors for Disk {
             run.clear();
             for &index in &dirty[at..end] { run.extend_from_slice(self.line(index)); }
             let lba = self.tags[dirty[at]] as u64;
-            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { self.failed = true; return false; }
+            // A run that fails stays dirty and is written by the next flush: nothing is lost, so `failed` is not set.
+            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { return false; }
             for &index in &dirty[at..end] { self.dirty[index] = false; }
             at = end;
         }

@@ -1,0 +1,31 @@
+# 351-APP-0019 — The shell's `release` command — done
+
+**Type:** tool (shell command) · **Owner:** `APP` track · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.5, MC-11.11
+
+Done for [351-NET-0011](351-NET-0011-parse-release-metadata.done) by the storage session, in the tools track's area with the maintainer's permission (2026-10-09): a shell command.
+
+## Problem
+
+The parser service's new requests need a client on the platform before the updater exists. An operator holding a USB stick or a copy of a server also has no way to see what a channel file or a manifest says as the system reads it.
+
+## Plan and resolution
+
+`release <file>` (`shell/src/release.rs`) reads a file of up to 32 KiB and has the parser service read it, through the shell's `parse` client:
+- **a boot manifest** (it starts with `MIND-MANIFEST 1`): `MANIFEST: <n> HEADER LINES, <n> FILES (<n> AT THE ROOT); THE ANSWER MAKES THE TEXT`;
+- **anything else, as a channel:** its name, version, minimum, expiry, the first 16 hex digits of each architecture's manifest, and how many bytes the signature covers.
+
+It shows the answer only if `mind::parse::read_channel` or `read_manifest` finds that it encodes again to exactly the file. Otherwise it says `RELEASE: MALFORMED`, `NO PARSER SERVICE`, or that the parser's answer does not make the file. It checks no signature: that is the updater's, with the release and boot keys. Added to the shell's help and its command list.
+
+The `update` command of [requests-APP.md](../issues/requests-APP.md) stays the tools track's.
+
+## Acceptance criteria
+
+On QEMU, `release` shows a channel and the boot volume's own manifest as read by the service, and refuses a malformed channel.
+
+## Resolution
+
+Done: `release_metadata_check` in the `net` suite passes on x86 and aarch64.
+
+## Related
+
+[351-NET-0011](351-NET-0011-parse-release-metadata.done), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done).

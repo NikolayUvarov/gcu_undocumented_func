@@ -51,8 +51,8 @@ Done on 2026-10-09: aarch64 as in the progress above, and authenticated writes o
   - `efivar append dbx dbx.auth` (the same list signed with our KEK) is taken;
   - after `reboot` the firmware refuses the bootloader (`Access Denied`).
 - **Not tested:** authenticated writes on aarch64, whose firmware package has no Secure Boot build here.
-- The updater's grant of the privilege is [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md); the update itself is the updater's (351-UPD-0009, 0010).
+- The updater's grant of the privilege is [351-KRN-0022](351-KRN-0022-updater-grants.done); the update itself is the updater's (351-UPD-0009, 0010).
 
 ## Related
 
-[351-KRN-0027](351-KRN-0027-uefi-variables.done), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0022](../issues/351-KRN-0022-updater-grants.md).
+[351-KRN-0027](351-KRN-0027-uefi-variables.done), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0022](351-KRN-0022-updater-grants.done).

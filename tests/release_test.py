@@ -2,7 +2,7 @@
 """Tests of releases (scripts/release.py, issue 351-UPD-0005; MC-9.2, 9.4, 9.6): a staged release published to a
 directory verifies; a version not above the channel's is refused; an upload cut before the channel leaves the old
 channel whole; a changed channel, manifest or blob, an expired channel and a channel signed with the boot key are
-refused by the checker."""
+refused by the checker; a signed body that is not a channel gets a reason, never an exception (351-UPD-0014)."""
 import datetime
 import hashlib
 import json
@@ -93,6 +93,38 @@ class Releases(unittest.TestCase):
         blob = self.dest / "blobs" / hashlib.sha256(b"\x7fELF kernel 1").hexdigest()
         blob.write_bytes(b"\x7fELF kernel 9")
         self.assertIn("missing or not as listed", self.check())
+
+    def test_a_signed_channel_of_another_shape_gets_a_reason(self):
+        # 351-UPD-0014 (from 351-ASR-0006's fuzzing): a body signed with the release key, which anyone may do with the
+        # public test key, but not a channel, is refused with a reason; none raises.
+        release.publish(self.staged(1), self.dest, now=NOW)
+        channel = self.dest / "channels/stable"
+        good = json.loads(channel.read_bytes().split(b"\n")[0])
+        def answer(body):
+            if isinstance(body, dict):
+                body = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            channel.write_bytes(body + b"ed25519 " + sm.sign(release.release_seed(), body).hex().encode() + b"\n")
+            return self.check()
+        cases = [
+            (b"\xff\xfe not UTF-8\n", "not UTF-8 JSON"),
+            (b"{not json\n", "not UTF-8 JSON"),
+            (b"[" * 100000 + b"\n", "not UTF-8 JSON"),
+            ({k: v for k, v in good.items() if k != "expires"}, "not the fields of a channel"),
+            ({**good, "minimum": [1]}, "version and minimum not with 1 <= minimum <= version"),
+            ({**good, "version": True}, "version and minimum not with 1 <= minimum <= version"),
+            ({**good, "minimum": 2}, "version and minimum not with 1 <= minimum <= version"),
+            ({**good, "version": 2**64}, "version and minimum not with 1 <= minimum <= version"),
+            ({**good, "manifests": 5}, "manifests not 1 to 4 architectures with a SHA-256 each"),
+            ({**good, "manifests": {}}, "manifests not 1 to 4 architectures with a SHA-256 each"),
+            ({**good, "manifests": {"x86_64": "A" * 64}}, "manifests not 1 to 4 architectures with a SHA-256 each"),
+            ({**good, "expires": "2099-01-01"}, "expires not a time as YYYY-MM-DDTHH:MM:SSZ"),
+            ({**good, "expires": "2026-02-30T00:00:00Z"}, "expires not a time as YYYY-MM-DDTHH:MM:SSZ"),
+            ({**good, "expires": 2099}, "expires not a time as YYYY-MM-DDTHH:MM:SSZ"),
+            ({**good, "channel": "beta"}, "another channel"),
+            (json.dumps(good).encode() + b"\n", "not in its one encoding"),
+        ]
+        for body, why in cases:
+            self.assertEqual(answer(body), f"channels/stable: {why}", body[:80] if isinstance(body, bytes) else body)
 
     def test_the_release_key_is_not_the_boot_key(self):
         # A channel signed with the boot key is refused: the keys have different purposes (MC-9.6).

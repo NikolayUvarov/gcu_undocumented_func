@@ -3,7 +3,7 @@
 /// endpoint and the system log: no files, no network, no spawn, no devices. Each request is parsed on its own; nothing
 /// of one stays for the next. A refusal is logged with the client's PID. The client still checks what a typed message
 /// says against what it asked for (MC-11.5).
-package mind:parse@1.0.0;
+package mind:parse@1.2.0;
 
 interface parse {
     /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -16,4 +16,31 @@ interface parse {
 
     /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
     http-head: func(head: bytes<8192>) -> result<http-head, error>;
+
+    /// An architecture's boot manifest in a channel: its name and the manifest's SHA-256 (1.1, 351-NET-0011).
+    record manifest-ref { arch: string<16>, digest: list<u8, 32> }
+    /// A release channel file (docs/update/publishing.md), read in its one encoding (`mind::release`): its fields; the
+    /// signature covers the file's first `signed` bytes. The updater accepts the fields only if they encode again to
+    /// exactly those bytes.
+    record channel { name: string<32>, version: u64, minimum: u64, expires: string<20>, manifests: list<manifest-ref, 4>, signed: u32, signature: list<u8, 64> }
+    /// A file line of a boot manifest.
+    record file { path: string<96>, size: u64, digest: list<u8, 32>, flags: u32, mib: u32 }
+    /// A boot manifest's header lines (its format line first, as text), its number of file lines, and up to 8 of them
+    /// from the one asked for (a reply small enough for a program's 64 KiB stack).
+    record manifest { headers: list<string<128>, 8>, files: u32, page: list<file, 8> }
+
+    /// A channel file (1.1).
+    channel: func(file: bytes<1024>) -> result<channel, error>;
+    /// A boot manifest of format 1, checked whole, and its file lines from `start` (1.1).
+    manifest: func(text: bytes<32768>, start: u32) -> result<manifest, error>;
+
+    /// A file of a model on a model disk: its path below the model's directory, its size and SHA-256 (1.2, 251-STO-0014).
+    record model-file { path: string<96>, size: u64, sha256: list<u8, 32> }
+    /// One model of a model disk's MANIFEST.json (`mind::models`): how many models the manifest lists, the model's id,
+    /// where its entry lies in the text (`entry-start`, `entry-length`), its number of files and up to 8 of them from
+    /// the one asked for.
+    record model { models: u32, id: string<64>, entry-start: u32, entry-length: u32, files: u32, page: list<model-file, 8> }
+
+    /// Model `index` of a model disk's MANIFEST.json, read whole, and its files from `start` (1.2).
+    model: func(text: bytes<60000>, index: u32, start: u32) -> result<model, error>;
 }

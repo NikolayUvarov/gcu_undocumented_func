@@ -23,9 +23,9 @@ use store::{record_sectors, Collected, Device, Entry, Error, Extent, Head, Pin, 
 
 /// A medium in memory that counts how often each sector was written.
 #[derive(Clone)]
-struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize }
+struct Memory { data: Vec<u8>, writes: Vec<u32>, writable: bool, fail_write: bool, flushes: usize, reads: usize, fail_read_at: Option<usize>, written: usize, fail_write_at: Option<usize> }
 impl Memory {
-    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0 } }
+    fn new(sectors: usize) -> Self { Self { data: vec![0; sectors * SECTOR], writes: vec![0; sectors], writable: true, fail_write: false, flushes: 0, reads: 0, fail_read_at: None, written: 0, fail_write_at: None } }
     fn flip(&mut self, sector: u64, byte: usize) { self.data[sector as usize * SECTOR + byte] ^= 0x10; }
 }
 impl Device for &mut Memory {
@@ -33,6 +33,8 @@ impl Device for &mut Memory {
     fn writable(&self) -> bool { self.writable }
     fn read(&mut self, lba: u64, out: &mut [u8]) -> bool {
         assert!(out.len() % SECTOR == 0 && out.len() <= BUFFER, "reads are whole sectors, at most a record");
+        self.reads += 1;
+        if self.fail_read_at == Some(self.reads) { return false; }
         let at = lba as usize * SECTOR;
         out.copy_from_slice(&self.data[at..at + out.len()]);
         true
@@ -40,6 +42,8 @@ impl Device for &mut Memory {
     fn write(&mut self, lba: u64, data: &[u8]) -> bool {
         assert!(self.writable && data.len() % SECTOR == 0 && data.len() <= BUFFER);
         if self.fail_write { return false; }
+        self.written += 1;
+        if self.fail_write_at == Some(self.written) { return false; }
         let at = lba as usize * SECTOR;
         // A block, name, pin or commit record goes only into blank sectors: nothing stored is overwritten.
         if [&b"MIND-BLK"[..], b"MIND-REF", b"MIND-PIN", b"MIND-TXN"].iter().any(|m| data.starts_with(m)) {
@@ -1082,3 +1086,188 @@ fn a_commit_record_goes_once_no_name_keeps_its_versions() {
     assert_eq!((store.snapshot(b"a").unwrap().0, store.snapshot(b"b").unwrap().0, store.stats().damaged), (2 + HISTORY as u64, 2 + HISTORY as u64, 0));
 }
 
+
+#[test]
+fn a_collection_cut_by_a_failure_leaves_no_erased_block_acknowledged() {
+    // Audit A05 (175-STO-0012): a sweep that fails after erasing a record must not leave it indexed, or a put of the
+    // same bytes is acknowledged without a write. Each read and each write of a collection fails in turn; then every
+    // block is put again on the same instance, and each must read back whole.
+    let blocks: Vec<Vec<u8>> = (0..5).map(|i| block(i, 300 + 2000 * i)).collect();
+    // Three blocks whose leases run out, then two put later whose leases still run at the collection; `fail` sets the
+    // device's failing read or write for the collection and gives back how many reads and writes it made.
+    let run = |fail: (Option<usize>, Option<usize>)| -> (bool, usize, usize) {
+        let mut medium = Memory::new(160);
+        let mut room = Room::new(16);
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let mut cids: Vec<Cid> = blocks[..3].iter().map(|b| store.put(Codec::Raw, b).unwrap()).collect();
+        store.set_time(LEASE_NS / 2);
+        cids.extend(blocks[3..].iter().map(|b| store.put(Codec::Raw, b).unwrap()));
+        store.set_time(LEASE_NS + 1);
+        let device = store.device();
+        (device.reads, device.written, device.fail_read_at, device.fail_write_at) = (0, 0, fail.0, fail.1);
+        let cut = store.collect().is_err();
+        let device = store.device();
+        let counts = (device.reads, device.written);
+        (device.fail_read_at, device.fail_write_at) = (None, None);
+        for (b, cid) in blocks.iter().zip(&cids) {
+            assert_eq!(store.put(Codec::Raw, b), Ok(*cid), "{:?}", fail);
+            assert_eq!(get(&mut store, cid).as_deref(), Ok(&b[..]), "{:?}: a put acknowledged what is not there", fail);
+        }
+        (cut, counts.0, counts.1)
+    };
+    let (cut, reads, writes) = run((None, None));
+    assert!(!cut && reads > 1 && writes > 3, "{} reads, {} writes", reads, writes);
+    for k in 1..=reads { assert!(run((Some(k), None)).0, "read {} of {}", k, reads); }
+    for k in 1..=writes { assert!(run((None, Some(k))).0, "write {} of {}", k, writes); }
+}
+
+#[test]
+fn the_index_grows_with_the_medium() {
+    // 251-STO-0013: a hash table of 56-byte slots; inserts and lookups do not shift the index, so 100 000 blocks go in,
+    // are found again after a remount, and a collection that frees half of them leaves the rest found.
+    assert_eq!(std::mem::size_of::<Entry>(), 56);
+    assert_eq!((store::slots_for(1_000), store::slots_for(80_000), store::slots_for(1 << 40)), (4681, 11_428, 1 << 20));
+    // The least is 4096 blocks, as the static index held before.
+    let mut medium = Memory::new(64);
+    let mut room = Room::new(store::slots_for(64));
+    assert_eq!(mount(&mut medium, &mut room).unwrap().stats().capacity, 4096);
+    let count = 100_000;
+    let mut medium = Memory::new(count + 64);
+    let mut room = Room::new(store::slots_for(count as u64 * 10));
+    let blocks: Vec<Vec<u8>> = (0..count).map(|i| (i as u32).to_le_bytes().to_vec()).collect();
+    let started = std::time::Instant::now();
+    let cids: Vec<Cid> = {
+        let mut store = mount(&mut medium, &mut room).unwrap();
+        let cids: Vec<Cid> = blocks.iter().map(|b| store.put(Codec::Raw, b).unwrap()).collect();
+        assert_eq!(store.stats().blocks as usize, count);
+        cids
+    };
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    assert_eq!(store.stats().blocks as usize, count);
+    assert!(cids.iter().all(|c| store.has(c)));
+    assert!(!store.has(&Cid::raw(b"never stored")));
+    // Half are put again later, so their leases still run at the collection.
+    store.set_time(LEASE_NS / 2);
+    for b in blocks.iter().step_by(2) { store.put(Codec::Raw, b).unwrap(); }
+    store.set_time(LEASE_NS + 1);
+    assert_eq!(store.collect().unwrap().blocks as usize, count / 2);
+    for (i, (b, c)) in blocks.iter().zip(&cids).enumerate() {
+        assert_eq!(store.has(c), i % 2 == 0, "block {}", i);
+        if i % 2 == 0 && i % 997 == 0 { assert_eq!(get(&mut store, c).unwrap(), *b); }
+    }
+    assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
+}
+
+#[test]
+fn a_medium_past_two_tebibytes_is_refused() {
+    // An index entry names a sector below 2^32.
+    struct Huge;
+    impl Device for Huge {
+        fn sectors(&self) -> u64 { (1 << 32) + 1 }
+        fn writable(&self) -> bool { true }
+        fn read(&mut self, _: u64, _: &mut [u8]) -> bool { panic!("read before the size is checked") }
+        fn write(&mut self, _: u64, _: &[u8]) -> bool { false }
+        fn flush(&mut self) -> bool { true }
+    }
+    let mut room = Room::new(4);
+    let mounted = Store::mount(Huge, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0);
+    assert_eq!(mounted.err(), Some(Error::TooLarge));
+}
+
+#[test]
+fn removals_keep_every_other_block_found() {
+    // Deletion without tombstones moves later entries back; a small index and many rounds of puts and collections make
+    // runs that wrap around its end. A model says what must be found after each round.
+    let mut rng = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = || { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; rng };
+    let mut medium = Memory::new(4096);
+    let mut room = Room::new(48);
+    let mut store = mount(&mut medium, &mut room).unwrap();
+    let mut held: HashMap<Cid, (Vec<u8>, u64)> = HashMap::new();
+    let mut now = 0;
+    for round in 0..200 {
+        for _ in 0..(next() % 12) {
+            let data = (next() % 300).to_le_bytes().repeat(1 + (next() % 3) as usize);
+            match store.put(Codec::Raw, &data) {
+                Ok(cid) => { held.insert(cid, (data, now)); }
+                Err(Error::Full) => {}
+                Err(e) => panic!("round {}: {:?}", round, e),
+            }
+        }
+        now += LEASE_NS / 3;
+        store.set_time(now);
+        if round % 3 == 0 {
+            store.collect().unwrap();
+            held.retain(|_, (_, at)| now < *at + LEASE_NS);
+        }
+        for (cid, (data, _)) in &held { assert_eq!(get(&mut store, cid).as_ref(), Ok(data), "round {}", round); }
+        assert_eq!(store.stats().blocks as usize, held.len(), "round {}", round);
+    }
+}
+
+/// A medium in a file, for objects larger than memory.
+struct FileMedium { file: std::fs::File, sectors: u64 }
+impl Device for FileMedium {
+    fn sectors(&self) -> u64 { self.sectors }
+    fn writable(&self) -> bool { true }
+    fn read(&mut self, lba: u64, out: &mut [u8]) -> bool { use std::os::unix::fs::FileExt; self.file.read_exact_at(out, lba * SECTOR as u64).is_ok() }
+    fn write(&mut self, lba: u64, data: &[u8]) -> bool { use std::os::unix::fs::FileExt; self.file.write_all_at(data, lba * SECTOR as u64).is_ok() }
+    fn flush(&mut self) -> bool { true }
+}
+
+// The resident set's peak of this process (Linux), in KiB.
+fn peak_kib() -> u64 {
+    std::fs::read_to_string("/proc/self/status").ok().and_then(|s| s.lines().find(|l| l.starts_with("VmHWM:")).and_then(|l| l.split_whitespace().nth(1)?.parse().ok())).unwrap_or(0)
+}
+
+#[test]
+#[ignore = "writes a 3 GiB file and takes minutes: run with --ignored, built with -O (MIND_STORE_FILE names the file)"]
+fn a_three_gibibyte_object_fits() {
+    // 251-STO-0010: an object of 3 GiB goes into a store on a file through dag::Builder, a chunk at a time, is found
+    // whole after a remount and reads back in pieces; neither the writer nor the store holds it. The index is sized
+    // for the object's blocks; the peak resident set is printed with it.
+    const SIZE: u64 = 3 << 30;
+    let path = std::env::var("MIND_STORE_FILE").unwrap_or_else(|_| std::env::temp_dir().join("mind-store-3g.img").to_string_lossy().into_owned());
+    // An owner may retain three quarters of the medium (MC-4.11), so the medium is half again the object (a sparse file).
+    let sectors = (SIZE + SIZE / 2) / SECTOR as u64;
+    // No two chunks alike (splitmix64 of each 8-byte word), as a model's files are, so every block is stored once.
+    let piece = |at: u64| -> u8 {
+        let mut z = (at / 8).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) >> (at % 8 * 8)) as u8
+    };
+    let blocks = SIZE.div_ceil(dag::CHUNK as u64) + SIZE.div_ceil(dag::CHUNK as u64 * 256) + 16;
+    let mut room = Room::new((blocks as usize) * 8 / 7 + 64);
+    let (root, written) = {
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).unwrap();
+        file.set_len(sectors * SECTOR as u64).unwrap();
+        let mut store = Store::mount(FileMedium { file, sectors }, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+        let mut builder = Box::new(dag::Builder::new());
+        let mut buffer = vec![0u8; 1 << 20];
+        let mut at = 0u64;
+        while at < SIZE {
+            for (i, b) in buffer.iter_mut().enumerate() { *b = piece(at + i as u64); }
+            builder.write(&mut store, &buffer).unwrap();
+            at += buffer.len() as u64;
+        }
+        let (root, size) = builder.finish(&mut store).unwrap();
+        assert_eq!(size, SIZE);
+        store.publish(b"models/three-gib", 0, &root, OWNER).unwrap();
+        (root, store.stats())
+    };
+    let file = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+    let mut store = Store::mount(FileMedium { file, sectors }, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap();
+    assert_eq!(store.resolve(b"models/three-gib").map(|(_, cid)| cid), Ok(root));
+    let mut chunk = [0u8; dag::CHUNK];
+    let mut out = vec![0u8; 100_000];
+    for at in [0, 1 << 20, SIZE / 2 + 12345, SIZE - out.len() as u64] {
+        assert_eq!(dag::read_at(&mut store, &root, at, &mut out, &mut chunk), Ok(out.len()));
+        assert!(out.iter().enumerate().all(|(i, &b)| b == piece(at + i as u64)), "at {}", at);
+    }
+    let index_kib = room.index.len() * std::mem::size_of::<Entry>() / 1024;
+    println!("3 GiB object: {} blocks, {} sectors of {}; index {} slots, {} KiB; peak resident set {} KiB", written.blocks, written.used, sectors, room.index.len(), index_kib, peak_kib());
+    assert!(written.blocks as u64 >= SIZE / dag::CHUNK as u64, "the chunks were not all distinct");
+    assert!(peak_kib() < (SIZE >> 10) / 8, "the process held {} KiB", peak_kib());
+    let _ = std::fs::remove_file(&path);
+}

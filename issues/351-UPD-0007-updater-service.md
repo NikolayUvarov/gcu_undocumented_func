@@ -1,6 +1,6 @@
 # 351-UPD-0007 — The `updater` service
 
-**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](351-UPD-0008-update-zone-in-vfs.md), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), HTTPS downloads from `NET` (done: [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), with a pinned key for the server; the download with resume itself is [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
+**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) (done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), HTTPS downloads from `NET` (done: [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), with a pinned key for the server; the download with resume itself is [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -29,6 +29,19 @@ Something on the device has to turn a published release into a staged, verified 
   - `scripts/make_usb_image.py` puts the build in slot A, confirmed, with an empty slot B, as `scripts/boot_slots.py layout` does;
   - the programs and docs that name `kernel.elf` at the root (`files`, the disk-writing guides) follow.
 - **The slot's manifest** is the release's own. The bootloader checks the slot's kernel and services against it by name ([slots.md](../docs/update/slots.md)), so the updater writes the release's `MANIFEST` and `MANIFEST.SIG` into the slot as published and never signs on the device.
+
+## Decomposition (the storage session for the UPD track, 2026-10-09)
+
+| Task | Track | What | State |
+|---|---|---|---|
+| [351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) | `UPD` | `mind::release`: the channel and the manifest read in their one encoding, and encoded again | done |
+| [351-NET-0011](../issues-done/351-NET-0011-parse-release-metadata.done) | `NET` | `parse` reads channels and manifests for the updater (`idl/parse.wit` 1.1) | done |
+| [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) | `UPD` | The update zone in `vfs_server` | done (2026-10-10) |
+| [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) | `KRN` | `updater` as a boot service with its grants, the update zone's badge included | done (2026-10-10) |
+| this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | open |
+| images with slots (below) | `UPD` | `make_usb_image.py` puts the build in slot A | open |
+
+How the updater uses the parser: it verifies the signature over the raw bytes itself (the release key for the channel, the boot key for a manifest), asks `parse` for the fields, and accepts them only if `mind::release` encodes them again to exactly the signed bytes. It never parses network bytes.
 
 ## Acceptance criteria
 

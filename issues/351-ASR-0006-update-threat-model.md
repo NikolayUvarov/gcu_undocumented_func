@@ -36,7 +36,7 @@ The threat table exists and names a test for every attack it says is covered. Th
   - `tests/manifest_fuzz/` (the bootloader's manifest reader with its own crates, `cargo test --release`): no finding, and a reader that skips the hash was caught;
   - `tests/update_fuzz_host.rs` (the boot records and the slot choice);
   - `tests/update_fuzz_test.py` (the host's channel checker).
-- **Two findings, sent to the update track** in [requests-UPD.md](requests-UPD.md):
+- **Two findings, sent to the update track** in requests-UPD.md, which numbered them [351-UPD-0014](../issues-done/351-UPD-0014-a-channel-checked-field-by-field.done) and [351-UPD-0015](../issues-done/351-UPD-0015-a-sequence-that-cannot-count-down.done), both done (2026-10-10):
   - `release.check` raises on signed channels it should refuse;
   - the trial's count-down stops at the largest sequence number.
 - **Where it is.** The document and the fuzzers are on `claude/351-ASR-0006-update-threats`.

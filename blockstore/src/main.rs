@@ -18,13 +18,11 @@ use mind::idl::blockstore::{self, Collected, Error, Head as Current, Kept, Pinne
 use mind::idl::codec::List;
 use mind::idl::wire;
 use mind::ipc::Endpoint;
-use store::{Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, SECTOR};
+use store::{slots_for, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, SECTOR};
 
 const RECEIVED: usize = 9;
 /// The block client init grants.
 const BLOCK: usize = 2;
-/// Blocks the index holds (48 bytes each).
-const CAPACITY: usize = 4096;
 /// Names the store holds (120 bytes each).
 const NAMES: usize = 256;
 /// Runs of blank sectors the store keeps track of between scans.
@@ -32,7 +30,6 @@ const HOLES: usize = 512;
 /// Pins the store holds.
 const PINS: usize = 64;
 
-static mut INDEX: [Entry; CAPACITY] = [Entry::EMPTY; CAPACITY];
 static mut HEADS: [Head; NAMES] = [Head::EMPTY; NAMES];
 static mut RUNS: [Extent; HOLES] = [Extent::EMPTY; HOLES];
 static mut PINNED: [Pin; PINS] = [Pin::EMPTY; PINS];
@@ -74,15 +71,34 @@ fn error(e: store::Error) -> Error {
 
 fn parse(bytes: &[u8]) -> Result<Cid, Error> { Cid::from_bytes(bytes).map_err(|_| Error::Unsupported) }
 
+// The index's slots for a medium of `sectors` (251-STO-0013): as many as it asks for and the task's memory quota allows,
+// halving down to the least; none if not even that can be had.
+fn index_for(sectors: u64) -> &'static mut [Entry] {
+    let mut slots = slots_for(sectors);
+    loop {
+        if let Some(mut pages) = mind::mem::Pages::new(slots * core::mem::size_of::<Entry>()) {
+            // Page-aligned memory the store keeps for its life: all zeros is an empty slot, and mount empties it anyway.
+            let index = unsafe { core::slice::from_raw_parts_mut(pages.as_mut_slice().as_mut_ptr() as *mut Entry, slots) };
+            core::mem::forget(pages);
+            mind::println!("[BLOCKSTORE] INDEX: {} SLOTS ({} KiB) FOR {} SECTORS", slots, slots * core::mem::size_of::<Entry>() / 1024, sectors);
+            return index;
+        }
+        if slots == slots_for(0) { break; }
+        slots = (slots / 2).max(slots_for(0));
+    }
+    mind::println!("[BLOCKSTORE] NO MEMORY FOR AN INDEX OF {} SLOTS", slots);
+    &mut []
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let (index, heads, pinned, runs, record, walk, scratch, out) = unsafe {
-        (&mut *core::ptr::addr_of_mut!(INDEX), &mut *core::ptr::addr_of_mut!(HEADS), &mut *core::ptr::addr_of_mut!(PINNED), &mut *core::ptr::addr_of_mut!(RUNS),
+    let (heads, pinned, runs, record, walk, scratch, out) = unsafe {
+        (&mut *core::ptr::addr_of_mut!(HEADS), &mut *core::ptr::addr_of_mut!(PINNED), &mut *core::ptr::addr_of_mut!(RUNS),
          &mut *core::ptr::addr_of_mut!(RECORD), &mut *core::ptr::addr_of_mut!(WALK), &mut *core::ptr::addr_of_mut!(SCRATCH),
          &mut *core::ptr::addr_of_mut!(OUT))
     };
     let mounted = match Client::open(Endpoint(BLOCK)) {
-        Ok(client) => Store::mount(Medium(client), index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()),
+        Ok(client) => { let index = index_for(client.sectors()); Store::mount(Medium(client), index, heads, pinned, runs, record, walk, mind::time::monotonic_ns()) }
         Err(_) => Err(store::Error::Device),
     };
     // Without a medium every request is answered with the reason, so clients are not left waiting.

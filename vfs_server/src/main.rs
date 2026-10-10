@@ -7,11 +7,13 @@
 // in the boot disk's `data` directory only, so boot files and models are never writable. A handle opened from another
 // never has a wider zone (MC-3.4); `..` is refused (paths stay below a handle). The boot disk's `system/` holds the
 // private directories of services (351-NET-0005): only the client with the directory's badge may open, read or write
-// it. Each boot's system log goes to the log volume (journal.rs).
+// it. The updater's badge may fill the slot the system did not boot from and write the boot records in place (351-UPD-0008,
+// zone.rs). Each boot's system log goes to the log volume (journal.rs).
 extern crate alloc;
 mod disk;
 mod fat;
 mod journal;
+mod zone;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -19,8 +21,9 @@ use alloc::vec::Vec;
 use disk::{Disk, Shared};
 use fat::{Node, Volume};
 use journal::Journal;
+use zone::{Zone, PRIVATE, RECORD};
 use mind::abi::*;
-use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::fs::{BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
 use mind::idl::wire::Call;
@@ -31,30 +34,6 @@ const RECEIVED: usize = 9;
 const MODELS_LABEL: &str = "MIND MODELS";
 const HANDLES: usize = 96;
 
-/// What a handle may change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Zone { ReadOnly, Writable, BootRoot, BootReadOnly, System, Hidden }
-
-// The private directories of the boot disk's `system/`, each with the only badge that may open, read or write it.
-const PRIVATE: [(&str, u16); 2] = [("keystore", BADGE_KEYSTORE), ("netpolicy", BADGE_NETPOLICY)];
-
-impl Zone {
-    // The zone of `name` below a directory of this zone, for a client with `badge`: below the boot root `data` is the
-    // user's to write and `system` holds private directories; below `system` everything is hidden but the client's own.
-    fn below(self, name: &str, badge: u16) -> Zone {
-        match self {
-            Zone::BootRoot if fat::same_name(name, "data") => Zone::Writable,
-            Zone::BootRoot | Zone::BootReadOnly if fat::same_name(name, "system") => Zone::System,
-            Zone::BootRoot | Zone::BootReadOnly => Zone::ReadOnly,
-            Zone::System => match PRIVATE.iter().find(|(dir, _)| fat::same_name(name, dir)) {
-                Some(&(_, owner)) if owner == badge => Zone::Writable,
-                _ => Zone::Hidden,
-            },
-            zone => zone,
-        }
-    }
-}
-
 struct Handle { owner: u64, badge: u16, volume: usize, node: Node, name: String, zone: Zone }
 
 struct Mounted { name: &'static str, volume: Volume<Shared> }
@@ -63,7 +42,8 @@ struct Mounted { name: &'static str, volume: Volume<Shared> }
 // ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user.
 struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize }
 
-struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)> }
+// `inactive`: the slot the updater may fill, None on a system booted from its volume's root.
+struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)>, inactive: Option<&'static str> }
 
 const SCOPES: usize = 8;
 const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
@@ -125,7 +105,7 @@ impl Server {
     // From directory node `node` (zone `zone`) along `parts`; `create` makes missing directories where allowed.
     fn walk(&mut self, volume: usize, mut node: Node, mut zone: Zone, parts: &[&str], create: bool, badge: u16) -> Result<(Node, Zone), Error> {
         for part in parts {
-            let next = zone.below(part, badge);
+            let next = zone.below(part, badge, self.inactive);
             if next == Zone::Hidden { return Err(Error::Denied); }
             let v = &mut self.volumes[volume].volume;
             node = match v.find(&node, part) {
@@ -225,10 +205,14 @@ impl Server {
             Request::Open { dir, path, mode } => {
                 let result = (|| {
                     let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
-                    let zone = zone.below(name, badge);
+                    let zone = zone.below(name, badge, self.inactive);
                     if zone == Zone::Hidden { return Err(Error::Denied); }
                     let write = mode & (MODE_WRITE | MODE_CREATE | MODE_TRUNCATE) != 0;
-                    if write { self.writable(zone, volume)?; }
+                    // A boot record is only written in place: never made, emptied or replaced.
+                    if write && zone == Zone::Record {
+                        if mode & (MODE_CREATE | MODE_TRUNCATE | MODE_NEW) != 0 { return Err(Error::Denied); }
+                        if !self.volumes[volume].volume.writable() { return Err(Error::ReadOnly); }
+                    } else if write { self.writable(zone, volume)?; }
                     let v = &mut self.volumes[volume].volume;
                     let mut node = match v.find(&parent, name) {
                         Ok(_) if mode & MODE_NEW != 0 => return Err(Error::Exists),
@@ -236,7 +220,8 @@ impl Server {
                         Err(fat::Error::NotFound) if mode & MODE_CREATE != 0 => v.create(&parent, name, false, now()).map_err(error)?,
                         Err(e) => return Err(error(e)),
                     };
-                    if node.is_dir() { return Err(Error::IsDirectory); }
+                    if node.is_dir() { return Err(if zone == Zone::Record { Error::Denied } else { Error::IsDirectory }); }
+                    if zone == Zone::Record && mode & MODE_WRITE != 0 && node.size != RECORD { return Err(Error::Invalid); }
                     if mode & MODE_TRUNCATE != 0 && node.size != 0 { v.truncate(&mut node, 0, now()).map_err(error)?; }
                     let zone = if mode & MODE_WRITE != 0 { zone } else { Zone::ReadOnly };
                     let id = self.add(Handle { owner: sender, badge, volume, node, name: String::from(name), zone })?;
@@ -261,6 +246,14 @@ impl Server {
                 let result = (|| {
                     let h = self.get(file, sender, badge)?;
                     let (volume, mut node, zone) = (h.volume, h.node, h.zone);
+                    // A boot record: the whole record in its sector, then flushed (docs/update/slots.md).
+                    if zone == Zone::Record {
+                        if offset != 0 || data.len() != RECORD as usize || node.size != RECORD { return Err(Error::Invalid); }
+                        let v = &mut self.volumes[volume].volume;
+                        v.overwrite(&node, 0, data).map_err(error)?;
+                        v.flush().map_err(error)?;
+                        return Ok(RECORD);
+                    }
                     self.writable(zone, volume)?;
                     let n = self.volumes[volume].volume.write(&mut node, offset, data, now()).map_err(error)?;
                     self.refresh(volume, node);
@@ -297,7 +290,7 @@ impl Server {
             Request::Remove { dir, path } => {
                 let result = (|| {
                     let (volume, parent, zone, name) = self.parent(dir, sender, badge, path.as_str())?;
-                    self.writable(zone.below(name, badge), volume)?;
+                    self.writable(zone.below(name, badge, self.inactive), volume)?;
                     let v = &mut self.volumes[volume].volume;
                     let entry = v.find(&parent, name).map_err(error)?;
                     v.remove(&parent, name).map_err(error)?;
@@ -318,8 +311,8 @@ impl Server {
                     let (volume, source, source_zone, name) = self.parent(dir, sender, badge, from.as_str())?;
                     let (target_volume, destination, target_zone, new_name) = self.parent(target, sender, badge, to.as_str())?;
                     if volume != target_volume { return Err(Error::Invalid); }
-                    self.writable(source_zone.below(name, badge), volume)?;
-                    self.writable(target_zone.below(new_name, badge), volume)?;
+                    self.writable(source_zone.below(name, badge, self.inactive), volume)?;
+                    self.writable(target_zone.below(new_name, badge, self.inactive), volume)?;
                     let v = &mut self.volumes[volume].volume;
                     let old = v.find(&source, name).map_err(error)?.node;
                     let moved = v.rename(&source, name, &destination, new_name).map_err(error)?;
@@ -528,7 +521,13 @@ fn main(info: &'static BootInfo) {
         }
     }
     let journal = start_journal(&mut volumes);
-    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST, journal };
+    // The update zone (351-UPD-0008): the slot that did not boot, on a volume booted from a slot.
+    let inactive = match info.boot_slot.slot { BOOT_SLOT_A => Some("B"), BOOT_SLOT_B => Some("A"), _ => None };
+    match inactive {
+        Some(slot) if !volumes.is_empty() => mind::println!("[VFS] UPDATE ZONE: MIND/{} AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE", slot),
+        _ => mind::println!("[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT"),
+    }
+    let mut server = Server { volumes, handles: (0..HANDLES).map(|_| None).collect(), scopes: (0..SCOPES).map(|_| None).collect(), next_badge: SCOPE_BADGE_FIRST, journal, inactive };
     // The private copy of each request (MC-2.11); the data of a write is decoded in place from it.
     let mut scratch: Box<[u8; vfs::REQUEST_MAX]> = alloc::vec![0u8; vfs::REQUEST_MAX].into_boxed_slice().try_into().unwrap();
     loop {

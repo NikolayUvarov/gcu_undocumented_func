@@ -29,6 +29,12 @@ pub const BADGE_USER: u16 = 1;
 /// the directory's badge may open, read or write `system/keystore` and `system/netpolicy`; nobody else may open them.
 pub const BADGE_KEYSTORE: u16 = 2;
 pub const BADGE_NETPOLICY: u16 = 3;
+/// Badge of the updater's client (351-UPD-0008): besides reading, it may fill the slot the system did not boot from
+/// (`MIND/A` or `MIND/B`) and write the boot records `MIND/BOOT0` and `MIND/BOOT1` whole, in place; nothing else.
+pub const BADGE_UPDATE: u16 = 4;
+/// Badge of the read-only clients init lends services, and through `loader` its programs: set by init, so no holder can
+/// set another on them (a badge is set once, MC-3.4) and reach a private directory or the update zone.
+pub const BADGE_READER: u16 = 5;
 
 /// Why a file operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
