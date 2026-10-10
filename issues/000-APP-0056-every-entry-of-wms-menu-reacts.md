@@ -39,6 +39,10 @@ An entry that does nothing on Enter or a click leaves the user guessing whether 
   - the pages to read begin with `To read:` and answer Enter and a click;
   - a background row that stays says why under the rows.
 - **Host tests** (`tests/wm_host.rs`) walk every entry of the menus, every item of the top bar and the window keys, and every page and row of Settings, with Enter and with a click.
+- **The first run of the walk** (x86 QEMU, 2026-10-10): all 49 entries reacted and every Settings row did. But `say`, `listen` and `files` were still running at the suite's end. They and the old demos `ping`, `pong`, `app` and `app2` drew on the screen `BootInfo` gives. Under `wm` there is none, so they ran unseen and could not be closed.
+  - Each now opens a pixel window under `wm` (`mind::windowed::pixels`) and keeps the full screen in the shell.
+  - `say`, `files` and `listen` draw again at a new size. `listen` writes in its window why it recorded or played nothing.
+  - The walk now requires a window for every program an entry starts.
 - **The `wm` suite's walks** are written:
   - `every_entry_reacts` starts each entry of the menu on the disk and closes its windows;
   - `settings_react` changes each background row and back, presses Enter on each page to read, and declines a clock set from the date page.

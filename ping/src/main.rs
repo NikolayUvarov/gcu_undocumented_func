@@ -13,7 +13,8 @@ const BACKGROUND: u32 = 0x00111111;
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("ping — IPC demo client: lends pong a page with a string for one call (pong starts it).\nUsage: run pong   (the shell's ping <host> is the network ping)");
-    let Some(screen) = Screen::new(info) else { return };
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen).
+    let Some(screen) = Screen::new(mind::windowed::pixels(info, 600, 240, "ping")) else { return };
     screen.clear(BACKGROUND);
     screen.text(40, 40, b"[ PING / CLIENT ]", 1, 0x00FF0000, None);
     let mut shared = Pages::new(4096).expect("ALLOC FAILED");

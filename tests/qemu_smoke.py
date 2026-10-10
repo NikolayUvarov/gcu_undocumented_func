@@ -6037,7 +6037,7 @@ def wm_suite(vm):
             if at() == first:
                 break
         close_menu()
-        started, said = [], []
+        started, said, unseen = [], [], []
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6052,11 +6052,13 @@ def wm_suite(vm):
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
-                # Its window (console's for a console program) comes, unless it ended at once.
-                deadline = time.monotonic() + 8
+                # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
+                deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
                     time.sleep(.1)
                     wait(lines=0)
+                if not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                    unseen.append(name)
             else:
                 said.append(f"{name}: {line}")
             close_menu()
@@ -6065,8 +6067,9 @@ def wm_suite(vm):
         wait(lines=0)
         tidy()
         assert len(started) >= 20, (started, said)
-        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs "
-              f"(each window closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
+        assert not unseen, f"started with no window: {unseen}"
+        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs, "
+              f"each in a window (closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
 
     def settings_react():
         # 000-APP-0056: each row of Settings' background page changes and is changed back (Left steps back, Enter ticks a
