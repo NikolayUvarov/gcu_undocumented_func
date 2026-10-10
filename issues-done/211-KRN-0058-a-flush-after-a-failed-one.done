@@ -1,0 +1,33 @@
+# 211-KRN-0058 — A flush after a failed one reports what it wrote — done
+
+**Type:** service (`vfs_server`) · **Owner:** `KRN` (done by the storage session at the maintainer's word, 2026-10-10) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track A · **Constitution:** MC-6.2, MC-12.1
+
+From the storage session's request in requests-KRN.md ("A failed flush's error reported again by the next flush that succeeds"). Its local gate was blocked by this bug, and the maintainer chose to have it fixed in that branch.
+
+## Problem
+
+`Disk::flush` (`vfs_server/src/disk.rs`) writes the dirty lines in runs. When a run's write failed, it set `failed` and returned false, and the lines stayed dirty. The next flush wrote them and still returned false, because `failed` was set: it reported the earlier failure although every line was then on the drive.
+
+[211-KRN-0050](../issues/211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md)'s check in `tests/usb_image_smoke.py` shows it. While the stick is out, the journal's save fails. Once the stick is back, the shell's `sync` answered `ERROR: SYNC: I/O ERROR`, unless a journal save happened to run first (every 30 s after a failure).
+
+Measured on x86 (`scripts/make_usb_image.py --no-build`, `tests/usb_image_smoke.py`):
+- `main` at 917838a passed 2 runs of 2;
+- the storage branch failed 3 of 3, its gate's run included. The outcome follows timing: every ELF differs because the branch changes `libmind`, and the branch failed with `main`'s `vfs_server` or `init` as well.
+
+## Plan
+
+A run that fails stays dirty and is written again by the next flush, so nothing is lost: the loop no longer marks the disk failed. `failed` stays for an eviction whose write fails (`write_line`), where the line is reused and its data is lost, and the next flush reports that.
+
+## Acceptance criteria
+
+The USB image check passes on the branch, its unplug and replug included. An eviction that failed is still reported by the next flush.
+
+## Resolution
+
+One line in `Disk::flush` (`vfs_server/src/disk.rs`): a failed run returns false without setting `failed`. `write_line` is unchanged.
+
+With the fix, the USB image check (x86) passed 2 of 2 on the storage branch, where it had failed 3 of 3: `run memmap` refused in 4.1 s with the stick out, programs starting again once it was back, and `sync` answering `OK`.
+
+## Related
+
+[211-KRN-0050](../issues/211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [175-KRN-0049](175-KRN-0049-fat-clean-only-after-a-good-flush.done) (a volume reads clean only after a good flush).
