@@ -2,10 +2,12 @@
 //! fields; a reply has the status in bits 0..8 of word 0 and the result from bit 16. Buffer calls (v0.2): word 0 =
 //! method | major << 8 | request length << 16, the client's buffer travels as the memory capability, the reply is
 //! status | reply length << 16 and its payload is in the same buffer.
-use crate::abi::CAP_KIND_MEMORY;
+use crate::abi::{CAP_BADGE, CAP_KIND_MEMORY};
 use crate::ipc::{self, Endpoint, Message, Received};
 use crate::mem::{Mapping, Pages};
 use crate::sys::{Error, Result};
+// Rights a capability keeps on the wire: all but the right to badge it (000-KRN-0073).
+const PASSED: u8 = !CAP_BADGE;
 
 pub const STATUS_OK: usize = 0;
 pub const STATUS_NONE: usize = 1; // option result: none
@@ -38,8 +40,8 @@ pub fn with_timeout<T>(ms: u32, calls: impl FnOnce() -> T) -> T {
 pub fn call(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>) -> Result<[usize; 2]> {
     let message = match cap {
         None => Message::new(words[0], words[1]),
-        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, u8::MAX),
-        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, u8::MAX),
+        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, PASSED),
+        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, PASSED),
     };
     endpoint.call_timeout(&message, 0, TIMEOUT.load(core::sync::atomic::Ordering::Relaxed)).map(|reply| reply.data)
 }
@@ -96,8 +98,8 @@ pub fn enum_error(reply: &[usize; 2]) -> Result<Option<usize>> {
 pub fn call_receiving(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>, receive: usize) -> Result<([usize; 2], bool)> {
     let message = match cap {
         None => Message::new(words[0], words[1]),
-        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, u8::MAX),
-        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, u8::MAX),
+        Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, PASSED),
+        Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, PASSED),
     };
     endpoint.call(&message, receive).map(|reply| (reply.data, reply.cap_received))
 }
@@ -153,7 +155,7 @@ pub fn finish(call: Call, words: [usize; 2]) -> Result<()> { finish_message(call
 
 /// Answers a capability result with the capability `handle` (copied, or moved when `moved`).
 pub fn finish_cap(call: Call, handle: usize, moved: bool) -> Result<()> {
-    let message = if moved { Message::new(STATUS_OK, 0).with_cap_moved(handle, u8::MAX) } else { Message::new(STATUS_OK, 0).with_cap(handle, u8::MAX) };
+    let message = if moved { Message::new(STATUS_OK, 0).with_cap_moved(handle, PASSED) } else { Message::new(STATUS_OK, 0).with_cap(handle, PASSED) };
     finish_message(call, message)
 }
 

@@ -1,6 +1,6 @@
-# 251-KRN-0071 — A memory quota for `blockstore` that fits its index
+# 251-KRN-0071 — A memory quota for `blockstore` that fits its index — done
 
-**Type:** kernel (`init`'s policy) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and tested in QEMU; the gate left) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-6.5
+**Type:** kernel (`init`'s policy) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-6.5
 
 ## Problem
 
@@ -23,6 +23,13 @@ The storage session's request, for [251-STO-0013](../issues-done/251-STO-0013-an
 ## Progress
 
 **2026-10-10.** Done in `init/src/main.rs`. The boot suite passes on x86 with the new check: `[BLOCKSTORE] INDEX: 1048576 SLOTS (57344 KiB) FOR 16777216 SECTORS`.
+
+## Resolution
+
+- **What was done.** `init` gives `blockstore` a memory quota of 64 MiB (`BLOCKSTORE_MEMORY_MIB` in `init/src/main.rs`), enough for an index of 2^20 slots.
+- **Evidence.**
+  - `store_disk_check` boots with a sparse 8 GiB store disk and requires `[BLOCKSTORE] INDEX: 1048576 SLOTS (57344 KiB) FOR 16777216 SECTORS`.
+  - It passed in the gate of e2f2b1c. x86 ran locally. aarch64 ran on PCU through Effector, except the boot group, which ran locally (000-KRN-0067).
 
 ## Related
 
