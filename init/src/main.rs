@@ -410,6 +410,8 @@ impl Init {
                 self.lend(&mut grants, SLOT_RTC, "rtc")?;
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT);
                 if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
+                // The parser reads the channels and manifests it fetches: it parses none itself (351-UPD-0007).
+                if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 match self.flow(&mut minted, "updater") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
                     None => mind::println!("[INIT] updater: NO NETWORK GRANT (THE POLICY NAMES NOTHING FOR IT)"),

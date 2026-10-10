@@ -1,8 +1,8 @@
 # Publishing releases
 
-**Version:** 0.2 (2026-10-10): `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.3 (2026-10-10): the device side is built: the updater (351-UPD-0007); 0.2: `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
-How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side, the updater, is not built yet ([351-UPD-0007](../../issues/351-UPD-0007-updater-service.md)). Until it is, a release is checked on the host only.
+How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side is the updater ([updater.md](updater.md)): it checks a channel and stages its release in a slot with the same checks as `check` below.
 
 ## What a release is
 
@@ -52,7 +52,7 @@ python3 scripts/release.py check /srv/mind --channel stable   # on the server, o
 | Release key | channel files | whoever publishes | only the **test** key (`scripts/release.py`) |
 | SSH login | nothing: it lets the uploader write the server | the uploader's own SSH key | none |
 
-- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY` and `$MIND_RELEASE_KEY`, and the bootloader is built with the boot key's public half (`$MIND_BOOT_PUBLIC_KEY`).
+- A real key is a file of 64 hex digits (a 32-byte seed) outside the repository. It is named by `$MIND_BOOT_SIGNING_KEY` and `$MIND_RELEASE_KEY`. The bootloader is built with the boot key's public half (`$MIND_BOOT_PUBLIC_KEY`), and the updater with both public halves (`$MIND_BOOT_PUBLIC_KEY`, `$MIND_RELEASE_PUBLIC_KEY`; `release.py --public` prints the release key's).
 - The test keys are public. A release signed with them is checked for accidents, not against an attacker, and the tools say `THE TEST KEY` / `THE TEST RELEASE KEY`.
 - Rotation, revocation and the compromise protocol are not defined yet ([351-UPD-0009](../../issues/351-UPD-0009-rollback-policy-and-key-roles.md)).
 
@@ -62,6 +62,6 @@ Any static web server over the directory serves a channel over HTTPS. The SSH ac
 
 ## Not provided yet
 
-- the updater on the device (351-UPD-0007) and its SSH client (351-NET-0004). Downloads with resume over HTTP (351-NET-0001) and HTTPS, the server trusted by its pinned key or the roots (351-NET-0002), are `download`'s ([docs/network/downloads.md](../network/downloads.md));
-- a check of the channel's minimum and expiry by a device (351-UPD-0009);
+- the updater's SSH client (351-NET-0004);
+- a policy for the channel's minimum on the device beyond reporting it, and key rotation (351-UPD-0009);
 - an SSH test server in CI (OpenSSH's server is not on the runners; the SSH path of `publish` is not tested).

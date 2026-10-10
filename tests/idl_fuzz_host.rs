@@ -93,6 +93,7 @@ mod idl {
     #[path = "../../libmind/src/idl/tls.rs"] pub mod tls;
     #[path = "../../libmind/src/idl/tpm.rs"] pub mod tpm;
     #[path = "../../libmind/src/idl/tts.rs"] pub mod tts;
+    #[path = "../../libmind/src/idl/update.rs"] pub mod update;
     #[path = "../../libmind/src/idl/usb.rs"] pub mod usb;
     #[path = "../../libmind/src/idl/vfs.rs"] pub mod vfs;
     #[path = "../../libmind/src/idl/video.rs"] pub mod video;
@@ -345,7 +346,7 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(usb), borrowed!(vfs),
+        borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(window),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -424,6 +425,7 @@ types! {
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load;
     tls: Error Peer;
     tpm: Error Info;
+    update: Error Offer State;
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;

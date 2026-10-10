@@ -1,0 +1,19 @@
+# 351-KRN-0073 — The updater gets a client of the parser service — done
+
+**Type:** kernel (init grants) · **Owner:** `KRN` (done by the update track for 351-UPD-0007, as TRACKS.md allows for a grant line) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-11.11, MC-3.11
+
+## Problem
+
+The updater holds the update zone, so it parses no metadata from the network itself: the channel and the manifests go through the parser service `parse` (351-NET-0011, [351-UPD-0007](../issues/351-UPD-0007-updater-service.md)). `init` gave it no client of `parse`.
+
+## Plan
+
+In `init`'s `updater` arm, lend the keeper of `parse` in `SLOT_PARSE` when `parse` runs, as for `tls`.
+
+## Acceptance criteria
+
+The `updater` suite's stand-in reports slot 28 among what it holds, and the updater reads channels and manifests through it.
+
+## Resolution
+
+One grant line in `init/src/main.rs` (the `updater` arm), done in the commit of 351-UPD-0007. The `updater` suite now expects `28:1` in the stand-in's `HOLDS` line, and the `update` check reads every channel and manifest through the parser (x86, aarch64). The kernel track may revise it.

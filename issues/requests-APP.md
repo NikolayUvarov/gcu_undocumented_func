@@ -31,6 +31,8 @@ The RTC service's load does not grow by 10 calls a second with each clock.
 
 The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will have an interface (`idl/update.wit`) but no command.
 
+Update from the update track (`UPD`), 2026-10-10: the service and `idl/update.wit` 1.0 are built (`check`, `fetch`, `apply` with the tries, `rollback`, `status`; [docs/update/updater.md](../docs/update/updater.md)). It runs today only through its automatic policy in `update.txt`. The shell holds no client of it yet: the slot and `init`'s grant are asked of the kernel track ([requests-KRN.md](requests-KRN.md), "A client of the updater for the shell").
+
 ### Plan (a proposal; the tools track decides)
 
 - `update check | fetch | apply | status | rollback` in the shell, and the same in `msh` under `requires: lifecycle`.
