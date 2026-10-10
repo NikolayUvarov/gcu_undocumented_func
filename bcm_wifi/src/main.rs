@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
 // Ring 3 driver for the MacBook Pro's Broadcom BCM4331 Wi-Fi (550-DRV-0006). Stage 1 (550-DRV-0020) reads the chip
-// behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) writes twice:
-// it holds the 802.11 core the firmware left running in reset, and frees the SPROM's pins while the SPROM is read.
+// behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) holds the
+// 802.11 core the firmware left running in reset, and frees the SPROM's pins while the SPROM is read. Stage 2
+// (550-DRV-0023) loads the microcode from the disk, starts it, reads its revision and puts the core back into reset.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::{device_config, Mmio};
@@ -27,6 +28,24 @@ const SPROM_WORDS: usize = 220; // revision 8 and later: 440 bytes
 // Wrapper (agent) registers of an AI backplane core.
 const AI_IOCONTROL: usize = 0x408; const AI_IOSTATUS: usize = 0x500; const AI_RESET_CONTROL: usize = 0x800; const AI_RESET_STATUS: usize = 0x804;
 const RESET: u32 = 1;
+
+// Wrapper I/O control bits of the 802.11 core.
+const IO_CLOCK: u32 = 1 << 0; const IO_FORCE_GATED: u32 = 1 << 1; const IO_PHY_CLOCK: u32 = 1 << 2; const IO_PHY_RESET: u32 = 1 << 3;
+const IO_MAC_PHY_CLOCK: u32 = 1 << 4; const IO_PHY_20MHZ: u32 = 1 << 6; const IO_GMODE: u32 = 1 << 13;
+// 802.11 core registers (window 1).
+const D11_MAC_CONTROL: usize = 0x120; const D11_IRQ_REASON: usize = 0x128; const D11_SHM_CONTROL: usize = 0x160; const D11_SHM_DATA: usize = 0x164;
+const D11_CLOCK: usize = 0x1E0; const D11_RADIO_CONTROL: usize = 0x3D8; const D11_RADIO_DATA: usize = 0x3DA; const D11_PHY_VERSION: usize = 0x3E0;
+// Clock control: high throughput forced and present; the 802.11 and PHY PLLs requested and running.
+const CLOCK_FORCE_HT: u32 = 1 << 1; const CLOCK_HAVE_HT: u32 = 1 << 17; const CLOCK_PLL_REQUEST: u32 = 3 << 8; const CLOCK_PLL_RUNNING: u32 = 3 << 24;
+// MAC control: the microcode processor running or held at 0, shared memory and internal registers on, G-mode, a station.
+const MAC_PSM_RUN: u32 = 1 << 1; const MAC_PSM_JUMP0: u32 = 1 << 2; const MAC_SHM: u32 = 1 << 8; const MAC_IHR: u32 = 1 << 10;
+const MAC_INFRA: u32 = 1 << 17; const MAC_GMODE: u32 = 1 << 31;
+const IRQ_MAC_SUSPENDED: u32 = 1;
+// Shared memory routing (high half of the control word): microcode memory, shared words, scratch registers; auto-increment.
+const SHM_UCODE: u32 = 0; const SHM_SHARED: u32 = 1; const SHM_SCRATCH: u32 = 2; const SHM_AUTOINC_WRITE: u32 = 0x100;
+// The microcode for core revision 29 that scripts/proprietary.sh puts on the disk; a b43 firmware file of type 'u'.
+const MICROCODE: &str = "data/firmware/b43/ucode29_mimo.fw";
+const MICROCODE_MAX: usize = 64 * 1024;
 // The BCM4331's 802.11 core is core 1 (ChipCommon 0, 802.11 1, PCIe 2).
 const CORE_80211: u32 = 1;
 
@@ -92,7 +111,14 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[BCM] PCIE CORE: {:08X} {:08X} {:08X} {:08X}", bar.read32(PCIE), bar.read32(PCIE + 4), bar.read32(PCIE + 8), bar.read32(PCIE + 12));
     let _ = WINDOW;
 
-    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return idle(); }
+    sprom(&bar, capabilities);
+    if index == CORE_80211 { microcode(&bar); }
+    idle()
+}
+
+// The SPROM, read where it may appear, its revision, CRC and MAC address logged.
+fn sprom(bar: &Mmio, capabilities: u32) {
+    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return; }
     // The SPROM's pins are shared with the external amplifier lines; they are given back as they were after the read.
     let chip_control = bar.read32(CC + CC_CHIP_CONTROL);
     if chip_control & CHIPCTL_EXTPA != 0 {
@@ -121,8 +147,98 @@ fn main(_info: &'static BootInfo) {
         mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
     }
     if !found { mind::println!("[BCM] NO VALID SPROM"); }
-    idle()
 }
 
-// Stage 1 serves nothing yet: it stays, so init does not restart it.
+// About `n` microseconds: one read of a wrapper register over PCIe takes about one.
+fn pause(bar: &Mmio, n: usize) { for _ in 0..n { let _ = bar.read32(WRAPPER + AI_IOSTATUS); } }
+
+// Polls `register` until `done` holds, for up to `ms` milliseconds; the last value read.
+fn wait(bar: &Mmio, register: usize, ms: u32, done: impl Fn(u32) -> bool) -> Result<u32, u32> {
+    for _ in 0..ms { let v = bar.read32(register); if done(v) { return Ok(v); } mind::time::sleep(1); }
+    let v = bar.read32(register);
+    if done(v) { Ok(v) } else { Err(v) }
+}
+
+fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTROL, routing << 16 | offset); }
+
+// Stage 2 (550-DRV-0023): the microcode read from the disk, the core enabled, the microcode loaded and started; its
+// revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
+fn microcode(bar: &Mmio) {
+    let Ok(file) = mind::fs::File::open(MICROCODE) else { mind::println!("[BCM] NO MICROCODE AT {} (FILE ACCESS OR scripts/proprietary.sh copy): STAGE 2 SKIPPED", MICROCODE); return };
+    let Some(mut pages) = mind::mem::Pages::new(MICROCODE_MAX) else { mind::println!("[BCM] NO MEMORY FOR THE MICROCODE"); return };
+    let buffer = pages.as_mut_slice();
+    let size = match file.read_at(0, &mut buffer[..MICROCODE_MAX]) { Ok(n) if n == file.size() && n < MICROCODE_MAX => n, _ => { mind::println!("[BCM] MICROCODE UNREADABLE OR OVER {} BYTES", MICROCODE_MAX); return } };
+    let image = &buffer[..size];
+    let digest = mind::sha256::digest(image);
+    mind::println!("[BCM] MICROCODE {}: {} BYTES, SHA-256 {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}...", MICROCODE, size,
+                   digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]);
+    // The header: type, version, two bytes of padding, a big-endian size; then big-endian 32-bit words.
+    if size < 12 || image[0] != b'u' || image[1] != 1 || (size - 8) % 4 != 0 { mind::println!("[BCM] NOT A MICROCODE FILE OF VERSION 1 (TYPE {:02X}, VERSION {})", image.first().copied().unwrap_or(0), image.get(1).copied().unwrap_or(0)); return; }
+    let words = image[8..].chunks_exact(4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
+
+    // The core out of reset with its clock forced, then running on its own clock, in G-mode.
+    let flags = IO_GMODE;
+    bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | IO_FORCE_GATED | flags); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_RESET_CONTROL, 0); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
+    pause(bar, 2);
+    bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | flags); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
+    pause(bar, 2);
+    // From here the core's registers answer.
+    let clock = bar.read32(D11_CLOCK);
+    bar.write32(D11_CLOCK, clock | CLOCK_FORCE_HT);
+    if let Err(v) = wait(bar, D11_CLOCK, 10, |v| v & CLOCK_HAVE_HT != 0) { mind::println!("[BCM] NO HIGH-THROUGHPUT CLOCK (CLOCK CONTROL {:08X})", v); return stop(bar); }
+    // The PHY reset at 20 MHz, then out of reset with its clock forced for a moment.
+    let io = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_IOCONTROL, io | IO_PHY_RESET | IO_PHY_20MHZ); pause(bar, 3);
+    let io = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_IOCONTROL, (io & !(IO_PHY_RESET | IO_PHY_CLOCK)) | IO_FORCE_GATED); pause(bar, 2);
+    let io = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_IOCONTROL, (io & !IO_FORCE_GATED) | IO_PHY_CLOCK); pause(bar, 2);
+    let clock = bar.read32(D11_CLOCK);
+    bar.write32(D11_CLOCK, clock | CLOCK_PLL_REQUEST);
+    if let Err(v) = wait(bar, D11_CLOCK, 100, |v| v & CLOCK_PLL_RUNNING == CLOCK_PLL_RUNNING) { mind::println!("[BCM] THE 802.11 AND PHY PLLS DO NOT RUN (CLOCK CONTROL {:08X})", v); return stop(bar); }
+    let io = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_IOCONTROL, io | IO_MAC_PHY_CLOCK);
+    let phy = bar.read16(D11_PHY_VERSION);
+    let mut radio = [0u16; 3];
+    for (i, r) in radio.iter_mut().enumerate() { bar.write16(D11_RADIO_CONTROL, i as u16); *r = bar.read16(D11_RADIO_DATA); }
+    // The radio: its ID from words 2 and 1, its revision in word 0's low nibble.
+    mind::println!("[BCM] CORE ENABLED: IO CONTROL {:08X}, CLOCK CONTROL {:08X}; PHY {:04X} (TYPE {}, REVISION {}, ANALOG {}); RADIO {:04X} REVISION {} ({:04X} {:04X} {:04X})",
+                   bar.read32(WRAPPER + AI_IOCONTROL), bar.read32(D11_CLOCK), phy, phy >> 8 & 0xF, phy & 0xFF, phy >> 12,
+                   radio[2] << 8 | radio[1] & 0xFF, radio[0] & 0xF, radio[0], radio[1], radio[2]);
+
+    // The processor held at address 0; scratch registers and shared memory cleared; the words written with auto-increment.
+    bar.write32(D11_MAC_CONTROL, MAC_IHR | MAC_SHM | MAC_GMODE | MAC_INFRA);
+    bar.write32(D11_MAC_CONTROL, bar.read32(D11_MAC_CONTROL) | MAC_PSM_JUMP0);
+    for i in 0..64 { shm_select(bar, SHM_SCRATCH, i); bar.write16(D11_SHM_DATA, 0); }
+    for i in 0..1024 { shm_select(bar, SHM_SHARED, i); bar.write32(D11_SHM_DATA, 0); }
+    shm_select(bar, SHM_UCODE | SHM_AUTOINC_WRITE, 0);
+    let mut count = 0;
+    for word in words { bar.write32(D11_SHM_DATA, word); pause(bar, 10); count += 1; }
+    bar.write32(D11_IRQ_REASON, u32::MAX);
+    bar.write32(D11_MAC_CONTROL, (bar.read32(D11_MAC_CONTROL) & !MAC_PSM_JUMP0) | MAC_PSM_RUN);
+    // The running microcode answers by suspending the MAC, which is not enabled.
+    let answered = wait(bar, D11_IRQ_REASON, 1000, |v| v == IRQ_MAC_SUSPENDED);
+    let shared = |offset: u32| { shm_select(bar, SHM_SHARED, offset / 4); bar.read16(D11_SHM_DATA + (offset % 4) as usize) };
+    match answered {
+        Ok(_) => {
+            let (revision, patch, date, time) = (shared(0), shared(2), shared(4), shared(6));
+            mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
+        }
+        Err(v) => mind::println!("[BCM] MICROCODE DOES NOT ANSWER: {} WORDS LOADED; IRQ REASON {:08X}, MAC CONTROL {:08X}", count, v, bar.read32(D11_MAC_CONTROL)),
+    }
+    bar.write32(D11_MAC_CONTROL, bar.read32(D11_MAC_CONTROL) & !MAC_PSM_RUN);
+    stop(bar)
+}
+
+// The core back into reset, with its clock off: nothing runs until a later stage sets it up.
+fn stop(bar: &Mmio) {
+    bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | IO_FORCE_GATED | IO_GMODE); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
+    bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
+    pause(bar, 2);
+    bar.write32(WRAPPER + AI_IOCONTROL, IO_GMODE);
+    mind::println!("[BCM] THE 802.11 CORE IS BACK IN RESET (RESET {:08X}, IO CONTROL {:08X})", bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
+}
+
+// Nothing is served yet: it stays, so init does not restart it.
 fn idle() { loop { mind::time::sleep(60_000); } }
