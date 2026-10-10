@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-10; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-10; QEMU's vvfat crash in the aarch64 boot suite became 000-KRN-0067; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -56,34 +56,6 @@ Its quota is the default 16 MiB (`HEAP_MAX_BYTES`), so the index stays under abo
 ### Acceptance criteria
 
 On a store disk of 8 GiB, `[BLOCKSTORE] INDEX:` reports the slots `slots_for` asks for, not a halved number.
-
-## QEMU's vvfat crashes in the aarch64 boot suite on `main` at 661147f
-
-**Recorded by:** the storage session, 2026-10-09, from its local gate and runs of `tests/aarch64_smoke.py` on plain `main`.
-
-### Problem
-
-The group "aarch64: boot and fault containment" (`tests/aarch64_smoke.py`) fails because QEMU itself stops:
-
-```
-qemu-system-aarch64: block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion `j < s->mapping.next' failed.
-```
-
-The test boots from a directory served as `fat:rw:` (vvfat), and the crash comes after `[INIT] READY`. That is when services write to the boot volume (`keystore` makes `system/keystore` and its key on a fresh disk), and in the fault cases while `rtc` restarts.
-
-Measured on this machine, with the build of each tree:
-- `main` at 661147f: fails 2 runs in 3.
-- `main` at 661147f with `vfs_server/src/fat.rs` as it was before b8b172f (175-KRN-0047…0049): fails 2 runs in 4. So it is not the FAT audit fix.
-- The same group passed in the storage branch's gate merged with `main` at a9ac93f, before the kernel branch's 32 commits came in. That was one run, so it does not prove the group was reliable before.
-
-### Plan (a proposal; the kernel track decides)
-
-- Find which of the commits between a9ac93f and 661147f changes the writes vvfat sees, or the timing.
-- Either way, QEMU documents vvfat with `rw` as unreliable. The boot suite could boot from a raw FAT image made with mtools, as `tests/boot_slots_check.py` does, and keep vvfat for read-only directories.
-
-### Acceptance criteria
-
-The group passes in repeated runs (say 5 of 5) on `main`.
 
 ## Free clusters counted a FAT sector at a time
 
