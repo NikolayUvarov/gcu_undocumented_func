@@ -6107,16 +6107,17 @@ def wm_suite(vm):
         # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
         # ends it.
         assert "shell" in re.findall(r"\[WM\] STARTED console PID \d+ WITH ([^\n ]*)", "".join(seen))[-1].split(","), "wm lends the shell's commands"
-        def console_has(text):
+        def console_has(text, pattern=None):
+            # `text` in console's window, or a row matching `pattern`.
             for _ in range(30):
                 time.sleep(.3)
                 rows = inside(console)
-                if any(canon(text) in row for row in rows):
+                if any(re.match(pattern, row) if pattern else canon(text) in row for row in rows):
                     return rows
-            raise AssertionError((text, rows))
+            raise AssertionError((text or pattern, rows))
         # console's own lines go to its log, not to the serial line; the shell notes each request there.
         vm.send_bytes(b"quotas\r")
-        console_has("PID NAME TASKS ENDPOINTS")
+        console_has(None, r"\d+ console \d+/\d+ \d+/\d+")  # console's own row, among the last (the header scrolls away)
         until('THE SHELL RAN "quotas"')
         vm.send_bytes(b"fg 1\r")
         console_has("fg: the shell does not take it from console")
