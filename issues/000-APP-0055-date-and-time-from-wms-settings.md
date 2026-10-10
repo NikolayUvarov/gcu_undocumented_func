@@ -1,6 +1,6 @@
 # 000-APP-0055 — The date and the time set from `wm`'s Settings
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (written; its check in the `wm` suite next) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (done in QEMU; the maintainer's run on the MacBook Pro left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -40,6 +40,14 @@ The Settings page "Date and time" (000-APP-0048, `wm/src/settings.rs`) only show
 - **Checks:**
   - host tests: the day count and the months' lengths; the page's fields, digits, refusal of 2027-02-30, the button's action, and the case without the shell;
   - the `wm` suite sets the year one on and back, agreed in the shell's window, and reads it on the page.
+- **Fixes found by the `wm` suite:**
+  - `console`'s match on the shell's errors lacked `invalid`;
+  - the page showed the background's clock, which reads the RTC once a minute and the date only after midnight. The page now reads the RTC each second. For two minutes after a set, the background reads it each second too.
+- **Checked:**
+  - the `wm` suite sets the year one on and back, and the shell's `date` and the page show it;
+  - Enter on each of the six fields asks the shell, and no keeps the clock (000-APP-0056);
+  - the local gate's host tests and every x86 QEMU group passed (2026-10-10).
+- **Left:** the maintainer sets the clock from `wm` on the MacBook Pro.
 
 ## Related
 

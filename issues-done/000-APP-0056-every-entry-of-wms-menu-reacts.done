@@ -1,6 +1,6 @@
-# 000-APP-0056 — Every entry of `wm`'s menu and Settings reacts
+# 000-APP-0056 — Every entry of `wm`'s menu and Settings reacts — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (written; its checks in the `wm` suite next) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -45,8 +45,32 @@ An entry that does nothing on Enter or a click leaves the user guessing whether 
   - The walk now requires a window for every program an entry starts.
 - **The `wm` suite's walks** are written:
   - `every_entry_reacts` starts each entry of the menu on the disk and closes its windows;
-  - `settings_react` changes each background row and back, presses Enter on each page to read, and declines a clock set from the date page.
+  - `settings_react` changes each background row and back, presses Enter on each page to read, and on each of the date page's six fields, declining the clock set each asks for.
+
+## Resolution
+
+Every entry reacts, and the `wm` suite checks it:
+- **The menu.** The walk starts each of the 49 entries on the QEMU disk. 48 programs each open a window, their own or `console`'s, which is closed again; `Shell` opens the shell's window. Entries that start nothing say why on the status line.
+- **The top bar and the window keys.** With no window they say so; Alt+Tab with one window names it.
+- **Settings:**
+  - each background row changes and changes back, or says why it cannot;
+  - each page to read says so on Enter;
+  - Enter on each of the date page's six fields asks the shell to set the clock.
+
+**Silent entries found by the walk:**
+- programs that drew on a screen `wm` does not give, and ran unseen: `say`, `listen`, `files`, `ping`, `pong`, `app`, `app2`;
+- `view` with no file, which ended with status 0 before opening a window;
+- `ping`, left running after `pong` was closed.
+
+Each now opens a window, ends with a status `wm` keeps on view, or ends when its server is gone.
+
+**Where:**
+- code: `wm/src/{menu,desk,settings,main}.rs`, the programs above;
+- host tests: `tests/wm_host.rs`;
+- the `wm` suite: `every_entry_reacts`, `settings_react` in `tests/qemu_smoke.py`.
+
+The local gate's host tests and every x86 QEMU group (2026-10-10) passed with the walk.
 
 ## Related
 
-[requests-APP.md](requests-APP.md) (where it was recorded).
+[requests-APP.md](../issues/requests-APP.md) (where it was recorded).

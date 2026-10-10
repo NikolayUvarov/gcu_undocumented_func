@@ -20,7 +20,7 @@ The kernel saves AVX-512's and AMX's state components where the processor has th
 ## Progress
 
 - `cpus` adds `+AVX512` when XCR0's bits `0xE0` are all set, and `+AMX` for `0x60000`, after `XSAVE+AVX`.
-- The `smp` suite with `--cpu-model max` is the check here: QEMU's TCG has no AVX-512, so the line stays `XSAVE+AVX`.
+- The `smp` suite with `--cpu-model max` is the check here: QEMU's TCG has no AVX-512, so the line stays `XSAVE+AVX`. The local gate's "AVX state" groups passed (2026-10-10).
 - `+AVX512` waits for a run on a machine that has it.
 
 ## Related
