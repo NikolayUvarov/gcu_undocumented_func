@@ -1,5 +1,7 @@
 // The shell's console: a scrollback of text lines drawn with the 8x16 font through mind::tui, mirrored to the serial line (COM1 or the PL011).
 // The shell keeps one per virtual console (issue 155): the one shown holds the screen, only the first the serial line.
+// The lines themselves are a `ring::Ring`; the console in the shell's window follows the window's size (211-APP-0040).
+use crate::ring::{Ring, LINES};
 use alloc::vec::Vec;
 use core::fmt::Write;
 use mind::dev::Uart;
@@ -7,44 +9,68 @@ use mind::gfx::Screen;
 use mind::mem::Pages;
 use mind::tui::{Style, Terminal};
 
+pub use crate::ring::Position;
+
 const BACKGROUND: u32 = 0x001E1E2E;
 const FOREGROUND: u32 = 0x00A6E3A1;
-const SCROLLBACK: usize = 400; // lines kept for Shift+PgUp
 const MAX_COLS: usize = 256;
 
-/// A position in the console: an absolute line number (it keeps counting as old lines drop out) and a column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Position { pub line: u64, pub col: usize }
+/// A ring's characters in pages of their own (none when there was no memory for them).
+pub struct Text(Option<Pages>);
+
+impl Text {
+    fn new(stride: usize) -> Self { Self(Pages::new(LINES * stride * 4)) }
+}
+impl core::ops::Deref for Text {
+    type Target = [u32];
+    fn deref(&self) -> &[u32] { self.0.as_ref().map_or(&[], |pages| unsafe { core::slice::from_raw_parts(pages.as_slice().as_ptr() as *const u32, pages.as_slice().len() / 4) }) }
+}
+impl core::ops::DerefMut for Text {
+    fn deref_mut(&mut self) -> &mut [u32] { self.0.as_mut().map_or(&mut [], |pages| { let len = pages.as_slice().len() / 4; unsafe { core::slice::from_raw_parts_mut(pages.as_mut_slice().as_mut_ptr() as *mut u32, len) } }) }
+}
 
 pub struct Console {
-    term: Option<Terminal>, cols: usize, rows: usize,
-    text: Option<Pages>, // SCROLLBACK lines of `cols` characters (u32), a ring
-    first: u64, total: u64, // absolute numbers: oldest kept line, lines so far (the last one is being written)
-    cx: usize, back: usize, dirty: bool,
+    term: Option<Terminal>,
+    text: Ring<Text>,
+    dirty: bool,
     utf8: u32, need: u8, // UTF-8 being decoded for the screen
     pub serial: Option<Uart>,
     /// Shown at the top right while more than one console is open: which one this is.
     pub label: &'static str,
     /// While a script captures a command's output (`capture`, issue 094): the bytes it printed, kept off the screen.
     pub capture: Option<Vec<u8>>,
+    /// Drawn in a window: its lines and rows follow the window's size, last seen as `seen` (211-APP-0040).
+    follows: bool, seen: (usize, usize),
 }
 
 impl Console {
+    fn with(term: Option<Terminal>, text: Ring<Text>, serial: Option<Uart>, follows: bool) -> Self {
+        let seen = (text.cols, text.rows);
+        Self { term, text, dirty: true, utf8: 0, need: 0, serial, label: "", capture: None, follows, seen }
+    }
+
     pub fn new(screen: Option<Screen>, serial: Option<Uart>) -> Self {
         let term = screen.and_then(Terminal::new);
         let (cols, rows) = term.as_ref().map_or((80, 25), |t| (t.cols().min(MAX_COLS), t.rows()));
-        let text = Pages::new(SCROLLBACK * cols * 4);
-        let mut console = Self { term, cols, rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial, label: "", capture: None };
-        console.clear_line(0);
-        console
+        Self::with(term, Ring::new(Text::new(cols), cols, cols, rows), serial, false)
+    }
+
+    /// A console drawn in a window (the shell's window in `wm`, 211-APP-0040): its lines are as wide as the window can
+    /// be (`room` cells), and wrap and show at the window's size.
+    pub fn in_window(term: Terminal, room: usize) -> Option<Self> {
+        let stride = room.clamp(1, MAX_COLS);
+        let text = Text::new(stride);
+        text.0.as_ref()?;
+        let ring = Ring::new(text, stride, term.cols(), term.rows());
+        Some(Self::with(Some(term), ring, None, true))
     }
 
     /// An empty console of the same size, without the screen or the serial line (None: no memory for its lines).
     pub fn sibling(&self) -> Option<Self> {
-        let text = Some(Pages::new(SCROLLBACK * self.cols * 4)?);
-        let mut console = Self { term: None, cols: self.cols, rows: self.rows, text, first: 0, total: 1, cx: 0, back: 0, dirty: true, utf8: 0, need: 0, serial: None, label: "", capture: None };
-        console.clear_line(0);
-        Some(console)
+        let cols = self.text.cols;
+        let text = Text::new(cols);
+        text.0.as_ref()?;
+        Some(Self::with(None, Ring::new(text, cols, cols, self.text.rows), None, false))
     }
     /// The screen goes to the console shown.
     pub fn take_screen(&mut self) -> Option<Terminal> { self.term.take() }
@@ -53,43 +79,13 @@ impl Console {
     pub fn serial(&self, byte: u8) { if let Some(uart) = &self.serial { uart.write(byte); } }
     pub fn serial_str(&self, text: &str) { for byte in text.bytes() { if byte == b'\n' { self.serial(b'\r'); } self.serial(byte); } }
 
-    fn row(&mut self, line: u64) -> &mut [u32] {
-        let cols = self.cols;
-        let start = (line as usize % SCROLLBACK) * cols;
-        match self.text.as_mut() {
-            Some(pages) => unsafe { core::slice::from_raw_parts_mut((pages.as_mut_slice().as_mut_ptr() as *mut u32).add(start), cols) },
-            None => &mut [],
-        }
-    }
-    fn clear_line(&mut self, line: u64) { for ch in self.row(line).iter_mut() { *ch = ' ' as u32; } }
-    fn last(&self) -> u64 { self.total - 1 }
-
-    pub fn position(&self) -> Position { Position { line: self.last(), col: self.cx } }
+    pub fn position(&self) -> Position { self.text.position() }
     /// Characters per line (80 without a screen).
-    pub fn cols(&self) -> usize { self.cols }
+    pub fn cols(&self) -> usize { self.text.cols }
 
-    fn newline(&mut self) {
-        self.total += 1;
-        if self.total - self.first > SCROLLBACK as u64 { self.first += 1; }
-        let last = self.last();
-        self.clear_line(last);
-        self.cx = 0; self.dirty = true;
-    }
-    /// A character on the screen only (no UART).
-    pub fn put(&mut self, ch: char) {
-        match ch {
-            '\n' => self.newline(),
-            // The start of the line again: what comes next overwrites it (`clock --line`, issue u016).
-            '\r' => { self.cx = 0; self.dirty = true; }
-            '\x08' => { if self.cx > 0 { self.cx -= 1; let (last, cx) = (self.last(), self.cx); self.row(last)[cx] = ' ' as u32; self.dirty = true; } }
-            _ => {
-                if self.cx >= self.cols { self.newline(); }
-                let (last, cx) = (self.last(), self.cx);
-                self.row(last)[cx] = if ch.is_control() { 0xFFFD } else { ch as u32 };
-                self.cx += 1; self.dirty = true;
-            }
-        }
-    }
+    /// A character on the screen only (no UART); `\r` goes back to the start of the line, and what comes next
+    /// overwrites it (`clock --line`, issue u016).
+    pub fn put(&mut self, ch: char) { self.text.put(ch); self.dirty = true; }
     pub fn put_str(&mut self, text: &str) { for ch in text.chars() { self.put(ch); } }
 
     /// A byte of output: to the serial line as is (LF as CRLF), to the screen decoded as UTF-8.
@@ -97,7 +93,7 @@ impl Console {
         if let Some(captured) = self.capture.as_mut() { if captured.len() < 64 * 1024 { captured.push(byte); } return; }
         if byte == b'\n' { self.serial(b'\r'); }
         self.serial(byte);
-        self.back = 0;
+        self.text.follow();
         match byte {
             0x80..=0xBF if self.need > 0 => {
                 self.utf8 = self.utf8 << 6 | (byte & 0x3F) as u32; self.need -= 1;
@@ -112,64 +108,44 @@ impl Console {
     }
 
     /// Drops everything after `at` on the screen (the input line is redrawn from there).
-    pub fn truncate(&mut self, at: Position) {
-        if at.line < self.first || at.line > self.last() { return; }
-        while self.total - 1 > at.line { let last = self.last(); self.clear_line(last); self.total -= 1; }
-        let cols = self.cols;
-        let row = self.row(at.line);
-        for ch in row[at.col.min(cols)..].iter_mut() { *ch = ' ' as u32; }
-        self.cx = at.col; self.dirty = true;
-    }
+    pub fn truncate(&mut self, at: Position) { self.text.truncate(at); self.dirty = true; }
 
     /// Where the character `index` of text written from `start` lands.
-    pub fn offset(&self, start: Position, index: usize) -> Position {
-        let col = start.col + index;
-        // A full line wraps only when the next character is written, so the cursor may sit on column `cols`.
-        let (extra, col) = if col > 0 && col % self.cols == 0 && col >= self.cols { (col / self.cols - 1, self.cols) } else { (col / self.cols, col % self.cols) };
-        Position { line: start.line + extra as u64, col }
-    }
+    pub fn offset(&self, start: Position, index: usize) -> Position { self.text.offset(start, index) }
 
-    pub fn clear(&mut self) {
-        self.first = self.total - 1;
-        let last = self.last();
-        self.clear_line(last);
-        self.cx = 0; self.back = 0; self.dirty = true;
-    }
+    pub fn clear(&mut self) { self.text.clear(); self.dirty = true; }
 
     /// Shift+PgUp / Shift+PgDn: moves the view by a page.
-    pub fn scroll(&mut self, up: bool) {
-        let kept = (self.total - self.first) as usize;
-        let page = self.rows.saturating_sub(1).max(1);
-        let limit = kept.saturating_sub(self.rows);
-        self.back = if up { (self.back + page).min(limit) } else { self.back.saturating_sub(page) };
-        self.dirty = true;
-    }
-    pub fn unscroll(&mut self) { if self.back != 0 { self.back = 0; self.dirty = true; } }
+    pub fn scroll(&mut self, up: bool) { self.text.scroll(up); self.dirty = true; }
+    pub fn unscroll(&mut self) { if self.text.unscroll() { self.dirty = true; } }
 
     /// Draws the visible lines; `cursor` is where the input cursor is.
     pub fn render(&mut self, cursor: Option<Position>) {
+        if self.follows {
+            let size = self.term.as_mut().map(|term| { let grid = term.grid(); (grid.cols, grid.rows) });
+            if let Some((cols, rows)) = size.filter(|&size| size != self.seen) { self.seen = (cols, rows); self.text.resize(cols, rows); self.dirty = true; }
+        }
         if !self.dirty { return; }
         self.dirty = false;
-        let (rows, cols) = (self.rows, self.cols);
-        let bottom = self.last().saturating_sub(self.back as u64);
-        let top = (bottom + 1).saturating_sub(rows as u64).max(self.first);
+        let (cols, back) = (self.text.cols, self.text.back());
+        let (top, bottom) = self.text.view();
         let style = Style::new(FOREGROUND, BACKGROUND);
         let Some(mut term) = self.term.take() else { return };
         {
             let mut grid = term.grid();
             grid.clear(style);
             for (y, line) in (top..=bottom).enumerate() {
-                let row = self.row(line);
-                for x in 0..cols.min(grid.cols) { grid.put(x, y, char::from_u32(row[x]).unwrap_or(' '), style); }
+                let row = self.text.row(line);
+                for x in 0..cols.min(grid.cols).min(row.len()) { grid.put(x, y, char::from_u32(row[x]).unwrap_or(' '), style); }
             }
-            if self.back != 0 || !self.label.is_empty() {
+            if back != 0 || !self.label.is_empty() {
                 let mut note = mind::util::FixedBuf::<48>::new();
-                if self.back != 0 { let _ = write!(note, " ↑ {} ", self.back); }
+                if back != 0 { let _ = write!(note, " ↑ {} ", back); }
                 let _ = write!(note, "{}", self.label);
                 grid.text_right(cols, 0, core::str::from_utf8(note.as_bytes()).unwrap_or(""), style.inverse());
             }
         }
-        let shown = cursor.filter(|_| self.back == 0).and_then(|c| (c.line >= top && c.line <= bottom).then(|| ((c.col).min(cols - 1), (c.line - top) as usize)));
+        let shown = cursor.filter(|_| back == 0).and_then(|c| (c.line >= top && c.line <= bottom).then(|| ((c.col).min(cols - 1), (c.line - top) as usize)));
         term.set_cursor(shown);
         term.present();
         self.term = Some(term);

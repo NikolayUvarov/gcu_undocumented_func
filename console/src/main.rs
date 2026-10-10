@@ -29,7 +29,8 @@ A console program prints here; one with a screen opens a window of its own. run 
 command has its name (run ping: the IPC demo).\n\
 Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
 clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
-kill, fg, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them there.";
+kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them in the shell's\n\
+window (titled shell: the shell opens it when it starts wm) or on its screen.";
 
 struct Job { pid: u64, name: String, console: bool, printed: bool, front: bool }
 
@@ -116,7 +117,7 @@ fn main(info: &'static BootInfo) {
                 Command::Exit => break,
                 Command::List => list(&mut screen),
                 Command::Builtin { name, args } => builtins::run(&mut screen, name, args),
-                Command::Shell(name) => screen.say(&format!("{}: a command of the shell (it needs what only the shell holds); type it in the shell", name), Kind::Error),
+                Command::Shell(name) => screen.say(&format!("{}: a command of the shell (it needs what only the shell holds); type it in the shell's {}", name, if name == "fg" { "screen (Ctrl+Alt+F1…F4)" } else { "window" }), Kind::Error),
                 Command::Run { name: "", .. } => screen.say("run <program> [arguments]", Kind::Error),
                 Command::Run { name, args } => match run(name, args, output) {
                     Ok(job) => {

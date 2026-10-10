@@ -94,7 +94,7 @@ impl ShellHost<'_> {
 fn interrupted(shell: &mut Shell) -> bool {
     let mut stop = false;
     while let Some(byte) = shell.term.serial.as_ref().and_then(mind::dev::Uart::read) { if matches!(byte, 0x1A | 0x03 | 0x1B) { stop = true; } }
-    while let Some(key) = mind::input::read_key() { if key.is_escape() || key.is_ctrl('c') || key.is_ctrl('z') { stop = true; } }
+    while let Some(key) = shell.next_key() { if key.is_escape() || key.is_ctrl('c') || key.is_ctrl('z') { stop = true; } }
     stop
 }
 
@@ -208,7 +208,7 @@ pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
     let until = mind::time::uptime_ms() + 60_000;
     while mind::time::uptime_ms() < until {
         let byte = shell.term.serial.as_ref().and_then(mind::dev::Uart::read).map(|b| b as char)
-            .or_else(|| mind::input::read_key().and_then(|k| if k.is_escape() { Some('n') } else { k.char() }));
+            .or_else(|| shell.next_key().and_then(|k| if k.is_escape() { Some('n') } else { k.char() }));
         match byte.map(|c| c.to_ascii_lowercase()) {
             Some('y') => { let _ = writeln!(shell.term, "Y"); return true; }
             Some('n') => { let _ = writeln!(shell.term, "N"); return false; }
