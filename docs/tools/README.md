@@ -256,13 +256,13 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab com
 - The console shown is named at the top right of the screen; `ps` ends the row of each program the shell started with `CONSOLE=n`.
 - Not Alt+F1…F4: `fm` keeps Alt+F1/F2 for its volume dialogs, as Midnight Commander does.
 
-**The shell's window in `wm`** (211-APP-0040): when the shell starts a window manager it opens a text window of its own, titled `shell`, through its client of the window broker (`SLOT_WINDOWS`), before the manager runs, so the manager places it first.
+**The shell's window in `wm`** (211-APP-0040): Ctrl+Alt+F5, which the shell takes as it takes F1…F4 whatever program has the keyboard, opens a text window of the shell's own, titled `shell`, through its client of the window broker (`SLOT_WINDOWS`). It opens only when asked: `wm` starts without it (211-APP-0045, the maintainer's report).
 - It is a fifth session of the same shell beside the four consoles: its own text, line, history, Tab, scrollback and `msh` statements, and every command, run on the shell's own authority. `wm` only shows it and passes it the keys of the window in front, as for any window; nothing is lent to anyone. `ps` ends the row of a program started there with `CONSOLE=5`.
 - A program started there that is not a console program gets the shell's broker client and opens a window of its own in `wm` (`STARTED PID=n NAME=x IN A WINDOW`), with what the shell would give it on its screen; the session goes on. A console program prints into the window, as on the screen.
 - Its lines follow the window's size: they are kept as wide as the screen's cells and wrap and show at the frame's width and height; a narrower window keeps the characters it does not show (`shell/src/ring.rs`).
 - `reboot` and `stop` ask first there, since its keys come through the window manager. `fg` is refused (the window has no screen to give a program), and so is a window manager.
-- Closed (`[×]`, Alt+W), the window goes with its session. Ctrl+Alt+F5, which the shell takes as it takes F1…F4, opens it again; so does the next window manager the shell starts. Leaving `wm` keeps it hidden, as every window, and the next `wm` shows it where it was.
-- Not yet: `console` joined to the shell and a `shell` item in `wm`'s menu wait for a slot from the kernel track (211-APP-0044).
+- Closed (`[×]`, Alt+W), the window goes with its session, and `wm` goes on; Ctrl+Alt+F5 opens it again. Leaving `wm` keeps it hidden, as every window, and the next `wm` shows it where it was.
+- Not yet: a `shell` item in `wm`'s menu and `console` joined to the shell wait for `SLOT_SHELL` from the kernel track (211-APP-0044, 211-KRN-0058).
 
 **Scripts** (issue 094): `msh` is the shell's script language ([docs/msh.md](../msh.md)). Scripts are files run with `msh file` or by a name ending in `.msh`; statements (`let`, `if`, `for`, …) also work at the prompt. Results follow Marain: `ok`/`err`, `?`, `or`, `try`. A script gets no more authority than its `requires:` line declares.
 

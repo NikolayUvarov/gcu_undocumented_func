@@ -31,7 +31,7 @@ command has its name (run ping: the IPC demo).\n\
 Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
 clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
 kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: type them in the shell's\n\
-window (titled shell: the shell opens it when it starts wm) or on its screen.";
+window (titled shell: Ctrl+Alt+F5 opens it in wm) or on its screen.";
 
 struct Job { pid: u64, name: String, console: bool, printed: bool, front: bool }
 
