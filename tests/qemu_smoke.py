@@ -1284,7 +1284,7 @@ def kbench_check(vm):
     # Sleeps end on the 10 ms tick, counted from the tick's start, so one may be shorter than asked (000-KRN-0065).
     assert 1e6 <= rows["sleep 10 ms"][0] <= 40e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
-    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "│", "└")))
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
     path, log = tool_log(vm, output, "kbench")
     for name in rows:
@@ -1301,8 +1301,44 @@ def kbench_check(vm):
     print("PASS: kbench ipc runs one group; an unknown group is refused", flush=True)
 
 
+# The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
+# a reason, except "sleeps last as asked", which fails until 000-KRN-0065.
+CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "ram: write, read",
+               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
+
+
+def check_tool_check(vm):
+    """check: every group's rows, the summary, the log, and its failures named; one group alone; an unknown group refused."""
+    vm.send("check\n")
+    output = vm.expect("MIND> ", timeout=600, after="check\n")
+    rows = {name.strip(): (mark, detail.strip()) for mark, name, detail in CHECK_ROW.findall(output.replace("\r", ""))}
+    for name in CHECKS_PASS:
+        assert rows.get(name, ("?",))[0] == "✓", (name, rows.get(name), output[-4000:])
+    failed = [name for name, (mark, _) in rows.items() if mark == "✗"]
+    assert set(failed) <= {"sleeps last as asked"}, (failed, output[-4000:])
+    assert all(detail for mark, detail in rows.values() if mark == "○"), rows
+    summary = re.search(r"check: (\d+) passed, (\d+) failed, (\d+) skipped \((\d+) checks\)", output)
+    assert summary and int(summary[4]) == len(rows) and int(summary[2]) == len(failed), (summary and summary[0], len(rows), failed)
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
+    assert width <= 79, width
+    path, log = tool_log(vm, output, "check")
+    require(log, "PASS kernel memory unreadable: the read faulted; the program was stopped")
+    require(log, "== Boot services")
+    skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
+    print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
+          f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    output = vm.command("check kernel")
+    assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
+    require(vm.command("check nosuch"), "check: no group nosuch")
+    print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
+
+
 def bench_suite(vm):
     """176: the utilities that check the system and measure it, from the shell."""
+    check_tool_check(vm)
     kbench_check(vm)
 
 

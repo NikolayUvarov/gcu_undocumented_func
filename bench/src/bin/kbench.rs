@@ -10,10 +10,10 @@ use alloc::vec::Vec;
 use bench::out::{self, Log};
 use bench::report::{self, Align, Stats, Table};
 use core::hint::black_box;
-use mind::abi::{CAP_GRANT, CAP_READ, CAP_WRITE, ERR_LIMIT, SLOT_INIT};
-use mind::idl::loader;
+use bench::child::{self, ECHO, EXIT};
+use mind::abi::{CAP_READ, CAP_WRITE, ERR_LIMIT};
 use mind::ipc::{self, Endpoint, Message};
-use mind::mem::{Mapping, Pages};
+use mind::mem::Pages;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO);
 
@@ -22,10 +22,6 @@ const GROUPS: [(&str, &str); 6] = [
     ("memory", "Memory"), ("timer", "The timer"), ("process", "Processes"),
 ];
 const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]";
-const RECEIVED: usize = 9; // the child's fixed slot for a lent page (it has no console)
-const HELLO: usize = 1;
-const ECHO: usize = 2;
-const EXIT: usize = 3;
 const MIB: usize = 1024 * 1024;
 const PAGE: usize = 4096;
 
@@ -70,34 +66,6 @@ impl Run {
     fn note(&mut self, text: String) { self.notes.push(text); }
 }
 
-// Starts `kbench --child` holding `endpoint` (receive and send) in its SLOT_INIT.
-fn start_child(endpoint: Endpoint) -> Result<u64, String> {
-    let session = loader::begin(Endpoint::LOADER, "kbench", "--child").map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))?;
-    let lent = ipc::mint(endpoint.0, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0).and_then(|client| {
-        let granted = loader::grant(Endpoint::LOADER, session, SLOT_INIT as u8, client);
-        let _ = ipc::drop_cap(client);
-        granted?.map_err(|_| mind::Error::Invalid)
-    });
-    if let Err(e) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("grant: {:?}", e)); }
-    loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
-}
-
-// Waits for a started child's hello.
-fn hello(endpoint: Endpoint) -> Result<(), String> {
-    match endpoint.recv_timeout(0, 10_000) {
-        Ok(m) if m.data[0] == HELLO => Ok(()),
-        Ok(m) => Err(format!("the child said {}", m.data[0])),
-        Err(e) => Err(format!("no hello from the child: {:?}", e)),
-    }
-}
-
-// Tells the child to exit and waits until it is gone (up to 2 s).
-fn stop(endpoint: Endpoint, pid: u64) {
-    let _ = endpoint.call_timeout(&Message::new(EXIT, 0), 0, 2000);
-    let t = now();
-    while mind::process::alive(pid) && now() - t < 2_000_000_000 { mind::time::sleep(10); }
-}
-
 fn syscalls(run: &mut Run) {
     let n = run.reps(1000);
     run.row("uptime (empty call)", &mut batches(n, 32, || { black_box(mind::time::uptime_ms()); }), 32);
@@ -107,7 +75,7 @@ fn syscalls(run: &mut Run) {
 
 fn ipc(run: &mut Run) {
     let Ok(endpoint) = Endpoint::create() else { return run.fail("call and reply", "no endpoint") };
-    let child = match start_child(endpoint).and_then(|pid| hello(endpoint).map(|()| pid)) {
+    let child = match child::start("kbench", "--child", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)) {
         Ok(pid) => pid,
         Err(why) => { let _ = ipc::drop_cap(endpoint.0); return run.fail("call and reply", &why); }
     };
@@ -141,7 +109,7 @@ fn ipc(run: &mut Run) {
             let _ = ipc::drop_cap(cap);
         }
     }
-    stop(endpoint, child);
+    child::stop(endpoint, child);
     let _ = ipc::drop_cap(endpoint.0);
 }
 
@@ -210,9 +178,9 @@ fn processes(run: &mut Run) {
     let (mut launch, mut running, mut exit) = (Vec::new(), Vec::new(), Vec::new());
     for _ in 0..n {
         let t0 = now();
-        let pid = match start_child(endpoint) { Ok(pid) => pid, Err(why) => { run.fail("start (the loader)", &why); break; } };
+        let pid = match child::start("kbench", "--child", endpoint) { Ok(pid) => pid, Err(why) => { run.fail("start (the loader)", &why); break; } };
         let t1 = now();
-        if let Err(why) = hello(endpoint) { run.fail("start to running", &why); break; }
+        if let Err(why) = child::hello(endpoint) { run.fail("start to running", &why); break; }
         let t2 = now();
         let _ = endpoint.call_timeout(&Message::new(EXIT, 0), 0, 2000);
         let t3 = now();
@@ -229,25 +197,11 @@ fn processes(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
 }
 
-// The copy that answers: says hello, echoes calls (mapping a lent page), exits when told or after 30 s alone.
-fn child() {
-    let parent = Endpoint::INIT;
-    if parent.send_timeout(&Message::new(HELLO, 0), 10_000).is_err() { return; }
-    while let Ok(request) = parent.recv_timeout(RECEIVED, 30_000) {
-        if request.cap_received {
-            if let Ok(page) = Mapping::new(RECEIVED) { black_box(unsafe { core::ptr::read_volatile(page.address() as *const u8) }); }
-            let _ = ipc::drop_cap(RECEIVED);
-        }
-        if request.is_call { let _ = ipc::reply(&Message::new(request.data[0], request.data[1])); }
-        if request.data[0] == EXIT { return; }
-    }
-}
-
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
     mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, the timer, processes.\nUsage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
     let args = mind::process::args_str().trim();
-    if args == "--child" { return child(); }
+    if args == "--child" { return child::serve(); }
     let words: Vec<&str> = args.split_whitespace().collect();
     let quick = words.contains(&"--quick");
     let chosen: Vec<&str> = words.iter().copied().filter(|w| *w != "--quick").collect();
