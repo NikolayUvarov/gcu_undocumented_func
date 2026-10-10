@@ -113,11 +113,11 @@ pub fn caps(out: &mut impl Write, pid: u64) {
     let mut buffer = [0u8; 4096];
     let records: Records = match stat::read(STAT_CAPS, pid, &mut buffer) { Ok(r) => r, Err(_) => { let _ = writeln!(out, "ERROR: NO SUCH PID"); return } };
     for c in records.iter::<StatCap>() {
-        let rights = [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k')].map(|(bit, ch)| if c.rights as u8 & bit != 0 { ch } else { '-' });
+        let rights = [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k'), (CAP_BADGE, 'b')].map(|(bit, ch)| if c.rights as u8 & bit != 0 { ch } else { '-' });
         let _ = write!(out, "SLOT={} GEN={} {} NODE={} PARENT={}", c.slot, c.generation, stat::cap_name(c.kind), c.node, c.parent);
         match c.kind as usize {
             CAP_KIND_ENDPOINT => {
-                let _ = write!(out, " EP={} RIGHTS={}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3]);
+                let _ = write!(out, " EP={} RIGHTS={}{}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3], rights[4]);
                 if c.badge != 0 { let _ = write!(out, " BADGE={:#x}", c.badge); }
             }
             CAP_KIND_MEMORY => { let _ = write!(out, " BYTES={} RIGHTS={}{}{}", c.size, rights[0], rights[1], rights[2]); }

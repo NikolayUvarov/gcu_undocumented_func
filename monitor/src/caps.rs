@@ -113,7 +113,7 @@ impl Caps {
             _ => String::new(),
         };
         let badge = if e.badge == 0 { String::from("—") } else { format!("{:#x}", e.badge) };
-        format!("slot {:>2}  {:<8} {:<4}  badge {:<6} {}", e.slot, text::cap_kind(e.kind), if escrow { String::from("----") } else { rights(e.rights) }, badge, what)
+        format!("slot {:>2}  {:<8} {:<5}  badge {:<6} {}", e.slot, text::cap_kind(e.kind), if escrow { String::from("-----") } else { rights(e.rights) }, badge, what)
     }
 
     fn step_task(&mut self, forward: bool) {

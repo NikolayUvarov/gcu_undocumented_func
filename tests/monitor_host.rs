@@ -612,8 +612,11 @@ fn ipc_endpoints_and_holders() {
     assert_eq!(source.holder_requests, [2]);
     let screen = draw(&mut view, 120, 20);
     assert!(screen.iter().any(|l| l.contains("Endpoint 2: 2 holders")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("loader (PID 5)                1  rwg-    —")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("shell (PID 7)                 5  -wg-    0x2")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("loader (PID 5)                1  rwg--   —")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("shell (PID 7)                 5  -wg--   0x2")), "{:#?}", screen);
+    // The fifth right, b: may set a badge (ABI 6, 000-KRN-0073).
+    assert_eq!(ipc::rights((CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP | CAP_BADGE) as u32), "rwgkb");
+    assert_eq!(ipc::rights((CAP_WRITE | CAP_BADGE) as u32), "-w--b");
     assert_eq!(view.key(code(KEY_ESC), &mut source), Flow::Redraw);
     assert!(view.holders.is_none());
     view.key(chr('2'), &mut source);
@@ -654,7 +657,7 @@ fn caps_tree_and_revoke() {
     assert!(tool.status().starts_with("VIEW=TASK PID=7 SLOTS=2 ENTRIES=8 ROOTS=5 SELECTED=7:10 KIND=endpoint REVOKE=- DENIED=0"), "{}", tool.status());
     let screen = draw(&mut tool, 120, 20);
     assert!(screen.iter().any(|l| l.contains("shell (PID 7): 2 capabilities")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg-  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg--  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("slot 11") && l.contains("kernel")), "a parent that is gone: {:#?}", screen);
     // Enter: what a revoke of the shell's copy removes (top's copy).
     assert_eq!(tool.key(code(KEY_ENTER), &mut source), Flow::Redraw);

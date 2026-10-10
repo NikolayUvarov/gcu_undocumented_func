@@ -1,0 +1,24 @@
+# 000-APP-0059 — `caps` and `monitor` show the badge right
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.4, MC-10.2
+
+Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, for [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done).
+
+## Problem
+
+Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MINT` sets a badge only from a capability that has it (000-KRN-0073). The shell's `caps` (`shell/src/observe.rs`) and `monitor`'s views (`monitor/src/ipc.rs`, `monitor/src/caps.rs`) print four letters, `rwgk`, so they do not show it.
+
+## Plan
+
+- A fifth letter, `b`, after `k` in the shell's `caps` and in `monitor`'s holders and capability views.
+- The services suite's check of a client's rights (`RIGHTS=-wg-` in `tests/qemu_smoke.py`) gets the fifth place, and a check that `init`'s own endpoint shows `rwgkb`.
+
+## Acceptance criteria
+
+`caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
+
+## Related
+
+[requests-APP.md](requests-APP.md) (where it was recorded).

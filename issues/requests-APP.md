@@ -54,20 +54,3 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
-## `caps` and `monitor` show the badge right (000-KRN-0073)
-
-**Recorded by:** the kernel track (KRN), 2026-10-10.
-
-### Problem
-
-Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MINT` sets a badge only from a capability that has it (000-KRN-0073). The shell's `caps` (`shell/src/observe.rs`) and `monitor`'s IPC view (`monitor/src/ipc.rs`) print four letters, `rwgk`, so they do not show it.
-
-### Plan (a proposal; the tools track decides)
-
-- A fifth letter, `b`, after `k` in both.
-- The shell suite's check of a client's rights (`RIGHTS=-wg-` in `tests/qemu_smoke.py`) gets the fifth place.
-
-### Acceptance criteria
-
-`caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
