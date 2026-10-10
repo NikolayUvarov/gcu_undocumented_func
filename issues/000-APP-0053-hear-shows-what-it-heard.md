@@ -1,6 +1,6 @@
 # 000-APP-0053 — `hear` shows what it heard, for the operator
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-10.2
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; its QEMU check in the `listen` suite next) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-10.2
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -31,6 +31,25 @@ When the microphone gives silence or noise, every one of these reads as an error
 
 - In QEMU, `hear --wav` of the test recordings prints the level, the length and three candidates for each utterance. With no input it prints the noise floor.
 - On the MacBook Pro, the operator can see whether the microphone gives sound (551-DRV-0010 logs the capture's peak on the driver's side).
+
+## Progress
+
+- **`mind::voice`:**
+  - `meter` gives a piece's peak and RMS in dBFS;
+  - `Detector::threshold_dbfs` gives the level that starts speech;
+  - `Grammar::rank_where` and `best` rank the phrases;
+  - `Recognizer::recognize_ranked` gives the decoding and the best phrases with their confidence;
+  - `Recognizer::refusal` says why a decoding is refused.
+- **`hear`:**
+  - a meter line every 250 ms while it listens;
+  - `UTTERANCE AT … S: … MS, LEVEL … DBFS` and `CANDIDATES:` with three phrases for each utterance;
+  - the refusal's reason after `NOT UNDERSTOOD (…)`;
+  - `NOTHING HEARD:` with the noise floor and the peak, or digital silence;
+  - `--save FILE`.
+- **Authority.** `hear` asks for the user's files for `--save`. It drops them at start without it, and with it once the file is written, before recognizing.
+- **`voice`** logs `[VOICE] <ms> MS <level> DBFS: "<phrase>" <confidence>, …` for each utterance.
+- **Host tests** (`tests/voice_host.rs`) check the meter, the threshold and the ranked candidates.
+- **The `listen` suite** is to check the lines, `--save` and the noise floor.
 
 ## Related
 

@@ -4395,16 +4395,28 @@ def listen_suite(vm, starts):
     vm.command("kill 8")
     # hear (issue 078): commands recognized in a WAV file, the phrase outside the grammar refused; the microphone's
     # silence holds nothing.
-    vm.send("hear --wav commands.wav\n")
-    heard = vm.expect("MIND> ", timeout=180, after="hear --wav commands.wav\n")
+    vm.send("hear --wav commands.wav --save ram:first.wav\n")
+    heard = vm.expect("MIND> ", timeout=180, after="hear --wav commands.wav --save ram:first.wav\n")
     require(heard, 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
     require(heard, 'HEARD "what time is it" INTENT=time CONFIDENCE=')
     require(heard, "NOT UNDERSTOOD (CLOSEST")
     assert heard.count("HEARD") == 2 and heard.count("NOT UNDERSTOOD") == 1, heard
+    # 000-APP-0053: each utterance with its time, length and level and the three closest phrases; a refusal says why.
+    utterances = re.findall(r"UTTERANCE AT \d+\.\d\d S: (\d+) MS, LEVEL (-\d+) DBFS\s+CANDIDATES: (\"[^\"]+\" \d\.\d\d), (\"[^\"]+\" \d\.\d\d), (\"[^\"]+\" \d\.\d\d)", heard)
+    assert len(utterances) == 3 and all(200 <= int(u[0]) <= 8000 and -60 <= int(u[1]) < 0 for u in utterances), heard
+    assert utterances[0][2].startswith('"открой файлы" '), utterances
+    assert re.search(r"NOT UNDERSTOOD \(CLOSEST \"[^\"]+\", CONFIDENCE=\d\.\d\d\): (FAR FROM EVERY PHRASE|TOO CLOSE TO ANOTHER MEANING)", heard), heard
+    # --save kept the first utterance, which hear takes back.
+    require(heard, "SAVED THE FIRST UTTERANCE TO ram:first.wav: ")
+    vm.send("hear --wav ram:first.wav\n")
+    require(vm.expect("MIND> ", timeout=180, after="hear --wav ram:first.wav\n"), 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
+    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing".
     vm.send("hear 1\n")
-    require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "NOTHING HEARD")
+    quiet = vm.expect("MIND> ", timeout=60, after="hear 1\n")
+    require(quiet, "LEVEL: PEAK ")
+    assert re.search(r"NOTHING HEARD: (DIGITAL SILENCE FOR \d+ S|NOISE FLOOR -\d+ DBFS, PEAK -\d+ DBFS OVER \d+ S; SPEECH STARTS AT -\d+ DBFS)", quiet), quiet
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
-    require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] | HEAR --wav FILE")
+    require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] [--save FILE] | HEAR --wav FILE [--save FILE]")
     # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does.
     pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen 10 &"))[1]
     vm.send("hear 1\n")
@@ -4490,6 +4502,8 @@ def voice_control(vm):
                  "[VOICE] SAY Останавливаю службу rtc", "[VOICE] SAY Строка 1: съешь же ещё этих мягких французских булок, да выпей чаю. Line 1.\n",
                  "[VOICE] SAY Не понял", '[VOICE] HEARD "да" INTENT=yes', "[VOICE] NOTHING HEARD"):
         require(log, line)
+    # The same per-utterance lines as hear's (000-APP-0053): length, level and the closest phrases.
+    assert re.search(r'\[VOICE\] \d+ MS -\d+ DBFS: "да" \d+, "[^"]+" \d+', log), log
     # Push-to-talk over a focused program (issue 154): F12 reaches the shell and not the program; other keys the program.
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")

@@ -278,6 +278,14 @@ pub fn decibels(energy: u64) -> i32 {
 /// Decibels relative to full scale (rounded, negative) of a level in tenths.
 pub fn dbfs(level: i32) -> i32 { let tenths = level - FULL_SCALE; (tenths + if tenths < 0 { -5 } else { 5 }) / 10 }
 
+/// The peak and the RMS of samples in dBFS, as a level meter shows them (000-APP-0053); digital silence is -90.
+pub fn meter(samples: &[i16]) -> (i32, i32) {
+    if samples.is_empty() { return (dbfs(0), dbfs(0)); }
+    let peak = samples.iter().map(|&s| (s as i32).unsigned_abs() as u64).max().unwrap_or(0);
+    let square = samples.iter().map(|&s| (s as i64 * s as i64) as u64).sum::<u64>() / samples.len() as u64;
+    (dbfs(decibels(peak * peak)), dbfs(decibels(square)))
+}
+
 /// A stretch of speech: where it starts in the stream, its 16 kHz mono samples and its level (dBFS of the mean square
 /// of its voiced frames).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,6 +336,10 @@ impl Detector {
 
     /// The current noise floor in dBFS.
     pub fn floor_dbfs(&self) -> i32 { dbfs((self.floor.unwrap_or(0) / FLOOR_SCALE) as i32) }
+
+    /// The level that starts speech now, in dBFS: 9 dB above the noise floor, and never below -50 dBFS (a quieter
+    /// frame that hisses counts from 4 dB above the floor).
+    pub fn threshold_dbfs(&self) -> i32 { dbfs((self.floor.unwrap_or(0) / FLOOR_SCALE + VOICED_ABOVE).max(QUIETEST) as i32) }
 
     /// An utterance is in progress.
     pub fn speaking(&self) -> bool { self.speaking }

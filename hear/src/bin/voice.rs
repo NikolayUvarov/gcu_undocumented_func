@@ -30,8 +30,15 @@ struct Report { heard: bool, understood: bool, text: String, intent: String, slo
 
 fn recognize(recognizer: &Recognizer, utterance: &Utterance, yes_no: bool) -> Report {
     let closed = |p: &mind::voice::grammar::Phrase| matches!(p.intent.as_str(), "yes" | "no" | "cancel");
-    let heard = if yes_no { recognizer.recognize_where(&utterance.samples, &closed) } else { recognizer.recognize(&utterance.samples) };
-    let Some(heard) = heard else { return Report { heard: true, ..Report::default() } };
+    let all = |_: &mind::voice::grammar::Phrase| true;
+    let keep: &dyn Fn(&mind::voice::grammar::Phrase) -> bool = if yes_no { &closed } else { &all };
+    // The same lines as hear's for each utterance (000-APP-0053): its length, level and the closest phrases.
+    let Some((heard, candidates)) = recognizer.recognize_ranked(&utterance.samples, keep, 3) else {
+        mind::println!("[VOICE] {} MS {} DBFS: TOO SHORT", utterance.length_ms(), utterance.level);
+        return Report { heard: true, ..Report::default() };
+    };
+    let list: Vec<String> = candidates.iter().map(|&(i, c)| alloc::format!("\"{}\" {}", recognizer.grammar.phrases[i].text, c)).collect();
+    mind::println!("[VOICE] {} MS {} DBFS: {}", utterance.length_ms(), utterance.level, list.join(", "));
     let phrase = &recognizer.grammar.phrases[heard.decoded.phrase];
     let slots = phrase.slots.iter().map(|(name, value)| alloc::format!("{}={}", name, value)).collect::<Vec<_>>().join(" ");
     let confidence = heard.decoded.confidence().min(1000) as u16;
@@ -43,7 +50,7 @@ fn recognize(recognizer: &Recognizer, utterance: &Utterance, yes_no: bool) -> Re
 
 fn listen(input: &mut Input) -> Result<Option<Utterance>, String> {
     match input {
-        Input::Microphone(seconds) => hear::listen_once(*seconds),
+        Input::Microphone(seconds) => hear::listen_once(*seconds, &mut |_, _| {}),
         Input::Wav(queue) => Ok(queue.pop_front()),
     }
 }
@@ -63,7 +70,7 @@ fn main(_info: &'static mind::BootInfo) {
     };
     let recognizer = match hear::load() { Ok(r) => r, Err(error) => { mind::println!("VOICE: {}", error); return; } };
     let mut input = match wav {
-        Some(path) => match hear::wav_utterances(path) { Ok(all) => Input::Wav(all.into()), Err(error) => { mind::println!("VOICE: {}", error); return; } },
+        Some(path) => match hear::wav_utterances(path, &mut |_, _| {}) { Ok(all) => Input::Wav(all.into()), Err(error) => { mind::println!("VOICE: {}", error); return; } },
         None => Input::Microphone(seconds),
     };
     mind::println!("[VOICE] READY: {} PHRASES, {}", recognizer.grammar.phrases.len(), match &input { Input::Wav(q) => alloc::format!("{} UTTERANCES FROM {}", q.len(), wav.unwrap_or("")), Input::Microphone(s) => alloc::format!("MICROPHONE, {} S", s) });

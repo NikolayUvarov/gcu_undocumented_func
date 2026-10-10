@@ -160,6 +160,12 @@ fn decibels() {
     assert_eq!(front::dbfs(903 - 64), -6);
     assert_eq!(front::dbfs(903 - 65), -7);
     assert_eq!(front::dbfs(0), -90);
+    // The level meter (000-APP-0053): a full-scale square is 0 dBFS at its peak and in RMS, a sine 3 dB less in RMS.
+    assert_eq!(front::meter(&[32_767, -32_767, 32_767, -32_767]), (0, 0));
+    let sine: Vec<i16> = (0..1600).map(|i| (16_384.0 * (i as f64 * 2.0 * std::f64::consts::PI / 32.0).sin()) as i16).collect();
+    assert_eq!(front::meter(&sine), (-6, -9));
+    assert_eq!(front::meter(&[0; 160]), (-90, -90));
+    assert_eq!(front::meter(&[]), (-90, -90));
 }
 
 // ---- Speech ----
@@ -411,6 +417,30 @@ fn rejects_phrases_outside_the_grammar() {
     let accepted: Vec<_> = results.iter().filter(|(_, p)| p.is_some()).collect();
     println!("accepted {} of {}: {:?}", accepted.len(), results.len(), accepted);
     assert!(accepted.len() * 10 <= OUTSIDE.len(), "at most 10 % accepted: {:?}", accepted);
+}
+
+#[test]
+fn the_closest_phrases_for_the_operator() {
+    // 000-APP-0053: hear shows the three best phrases with their confidence, the best first and the decoded one at the
+    // head; a refusal says why, and the detector's threshold stands 9 dB above its noise floor (never below -50 dBFS).
+    let r = recognizer();
+    let samples = noisy("открой файлы", 122, 100, 7);
+    let (heard, candidates) = r.recognize_ranked(&samples, &|_| true, 3).unwrap();
+    assert_eq!(candidates.len(), 3);
+    assert_eq!(candidates[0], (heard.decoded.phrase, heard.decoded.confidence()));
+    assert!(candidates.windows(2).all(|pair| pair[0].1 >= pair[1].1), "{:?}", candidates);
+    assert_eq!(r.grammar.phrases[candidates[0].0].text, "открой файлы");
+    assert!(heard.accepted && r.refusal(&heard.decoded).is_none());
+    assert_eq!(r.recognize(&samples), Some(heard), "recognize decides as recognize_ranked does");
+    let outside = r.recognize_ranked(&noisy("сегодня хорошая погода", 122, 100, 8), &|_| true, 3).unwrap().0;
+    assert_eq!(outside.accepted, r.refusal(&outside.decoded).is_none());
+    let mut detector = Detector::new();
+    detector.push(&vec![0i16; 16_000], &mut |_| {});
+    assert_eq!((detector.floor_dbfs(), detector.threshold_dbfs()), (-90, -50), "digital silence: the -50 dBFS bound");
+    let quiet: Vec<i16> = (0..16_000).map(|i| if i % 2 == 0 { 300 } else { -300 }).collect();
+    let mut detector = Detector::new();
+    detector.push(&quiet, &mut |_| {});
+    assert_eq!(detector.threshold_dbfs() - detector.floor_dbfs(), 9, "{} {}", detector.floor_dbfs(), detector.threshold_dbfs());
 }
 
 #[test]
