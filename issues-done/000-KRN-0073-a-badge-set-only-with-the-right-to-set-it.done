@@ -1,6 +1,6 @@
-# 000-KRN-0073 — A badge set only by a holder with the right to set it (ABI 6)
+# 000-KRN-0073 — A badge set only by a holder with the right to set it (ABI 6) — done
 
-**Type:** kernel, ABI · **Owner:** kernel session · **Priority:** P0 · **Status:** in progress (made; the gate left) · **Blocked by:** — · **Roadmap:** A, C · **Constitution:** MC-3.4, MC-3.5, MC-12.4, MC-12.7
+**Type:** kernel, ABI · **Owner:** kernel session · **Priority:** P0 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** A, C · **Constitution:** MC-3.4, MC-3.5, MC-12.4, MC-12.7
 
 ## Problem
 
@@ -33,6 +33,17 @@ The update track's request (`requests-KRN.md`, from [351-KRN-0022](../issues-don
 
 - The `isolation` suite's case `a` passes: a program holding an unbadged client without the right gets `ERR_INVALID` when it sets a badge.
 - The suites pass as before, on x86 and aarch64.
+
+## Resolution
+
+- **What was done.**
+  - **The ABI (version 6).** `CAP_BADGE` (16) is a fifth endpoint right (`common/abi.rs`). `CAP_MINT` sets a badge only on an unbadged capability that has it, and returns `ERR_INVALID` otherwise. A badged capability never has it, whatever the mask (`mint` in `kernel/src/scheduler.rs`). A new endpoint has it.
+  - **`init`.** Its keepers have the right. Of what it hands out, only `vfs_server`'s endpoint and `netpolicy`'s `netstack` client in slot 2 have it: both set badges on the clients they hand out.
+  - **`libmind`.** The IDL runtime (`idl::wire`) passes every capability without the right.
+- **Evidence.**
+  - The `isolation` suite's case `a` (x86) passes: a client minted without the right is refused a badge, in the program and in a child started through the loader, and a badged child lacks the right even when the mask names it.
+  - All suites passed in the gate of 9418e10. Host and x86 ran locally. aarch64 ran on PCU through Effector, except the boot group, which ran locally (000-KRN-0067).
+- **What is left elsewhere.** `caps` and `monitor` do not yet show the fifth right (a request in `requests-APP.md`).
 
 ## Related
 
