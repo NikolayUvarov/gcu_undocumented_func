@@ -1,0 +1,41 @@
+# 000-KRN-0073 — A badge set only by a holder with the right to set it (ABI 6)
+
+**Type:** kernel, ABI · **Owner:** kernel session · **Priority:** P0 · **Status:** in progress (made; the gate left) · **Blocked by:** — · **Roadmap:** A, C · **Constitution:** MC-3.4, MC-3.5, MC-12.4, MC-12.7
+
+## Problem
+
+The update track's request (`requests-KRN.md`, from [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) and [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done)):
+
+- `CAP_MINT` set a badge on any unbadged endpoint capability, whoever held it (`mint` in `kernel/src/scheduler.rs`).
+- A server that grants authority by badge was therefore only as safe as `init`'s care never to hand out an unbadged client of it. 351-KRN-0022 badged the clients of `init` and `vfs_server` one by one for this reason (`BADGE_LIFECYCLE`, `BADGE_READER`). Every other badge-checking server depended on the same care, and a new grant could break it silently.
+- Which clients were affected was reported privately, as [SECURITY.md](../SECURITY.md) asks.
+
+## Plan
+
+- **The ABI** (`common/abi.rs`, version 6):
+  - a fifth endpoint right, `CAP_BADGE` (16).
+  - `CAP_MINT` sets a badge only on an unbadged capability that has the right, and returns `ERR_INVALID` without it.
+  - A badged capability never has the right, whatever the mask.
+  - A new endpoint (`ENDPOINT_CREATE`, `init`'s own) has it. A copy or child keeps it only when the mask does.
+- **`init`:**
+  - its keepers have it. Every client it hands out lacks it, unless the grant names it.
+  - Two grants name it. `vfs_server`'s endpoint (it badges the file clients it hands out) and `netpolicy`'s unbadged `netstack` client in slot 2, which it mints flow grants from.
+- **`libmind`.** The IDL runtime (`idl::wire`) never passes the right with a capability (`PASSED`).
+- **The test.** A new `isolation` case `a`:
+  - a new endpoint has the right;
+  - a client minted without it is refused a badge, in the program and in a child started through the loader;
+  - a badged child lacks it, even when the mask names it.
+  - Case `k` expects the fifth right on a new endpoint.
+- **The docs.** `docs/api` and the profile (`README.md` MC-3.4–3.6, `bootstrap.md`, `kernel-objects.md`, `evidence.md`).
+- **The tools track.** A request for `caps` and `monitor` to show the right (`requests-APP.md`).
+
+## Acceptance criteria
+
+- The `isolation` suite's case `a` passes: a program holding an unbadged client without the right gets `ERR_INVALID` when it sets a badge.
+- The suites pass as before, on x86 and aarch64.
+
+## Related
+
+- [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done)
+- [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done)
+- [300-STO-0004](../issues-done/300-STO-0004-rights-by-badge.done) (rights by badge)
