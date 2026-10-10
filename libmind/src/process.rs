@@ -190,8 +190,15 @@ pub const fn about_note<const N: usize>(text: &str) -> [u8; N] {
     out
 }
 
+/// The arguments every program takes as a request for its help (000-KRN-0066): the same keys everywhere.
+pub const HELP_KEYS: [&str; 7] = ["--help", "-help", "-h", "/help", "/h", "/?", "-?"];
+
+/// Whether `args` (a program's whole argument text) asks for its help.
+pub fn asks_help(args: &str) -> bool { HELP_KEYS.iter().any(|key| args.trim().eq_ignore_ascii_case(key)) }
+
 /// What the program does: the first line `name — what it does` (`list -l` shows it), then how to run it and its keys.
-/// The first statement of `main`: with the argument `--help` the program prints the text and exits. The text is also
+/// The first statement of `main`: with a help key alone (`HELP_KEYS`: --help, -h, /?, …) the program prints the text and
+/// exits. The text is also
 /// kept in the program file (`.mind_about`; the linker script keeps it), where the shell's `help <program>` reads it
 /// without starting the program (`section`).
 #[macro_export]
@@ -201,7 +208,7 @@ macro_rules! about {
         #[used]
         #[link_section = ".mind_about"]
         static MIND_ABOUT: [u8; MIND_ABOUT_TEXT.len()] = $crate::process::about_note::<{ MIND_ABOUT_TEXT.len() }>(MIND_ABOUT_TEXT);
-        if $crate::process::args_str().trim() == "--help" { $crate::println!("{}", MIND_ABOUT_TEXT); $crate::process::exit(); }
+        if $crate::process::asks_help($crate::process::args_str()) { $crate::println!("{}", MIND_ABOUT_TEXT); $crate::process::exit(); }
     }};
 }
 

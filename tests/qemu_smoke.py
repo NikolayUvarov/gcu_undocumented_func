@@ -3253,6 +3253,9 @@ def services_suite(vm):
     output = vm.command("uptime --help")
     require(output, "NAME=uptime FOREGROUND")
     require(output, "uptime — uptime, load averages")
+    # Every help key gives the same text (000-KRN-0066).
+    for key in ("-h", "-help", "/help", "/h", "/?", "-?", "--HELP"):
+        require(vm.command(f"uptime {key}"), "uptime — uptime, load averages")
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
