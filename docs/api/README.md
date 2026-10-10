@@ -168,6 +168,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | `models` | a model disk's `MANIFEST.json` (251-STO-0014): `read` gives the number of models and one model's id, entry bounds and files with sizes and SHA-256 |
 | `release` | release metadata (351-UPD-0013, [docs/update/publishing.md](../update/publishing.md)): `parse_channel` and `Manifest::parse` read a channel file and a boot manifest in their one encoding only; `encode_channel`, `encode_file`, `channel_is` and `Rebuild` encode them again for the check of a parser's answer; `expires_unix` |
 | `window` | window surfaces (issue 157): the layout the window broker lends to a program and its manager — header, title, input events, cells or pixels, the changed rectangle (`Surface`) |
+| `windowed` | a program in a window (issue 088): `Terminal::open` and `pixels` draw into the window its launcher's broker client gives it; `Window` opens another window through a broker client the program names (the shell's window in `wm`, 211-APP-0040), and `tui::Terminal::in_window` draws into it at the sizes its manager asks for |
 | `random` | random bytes from RDRAND (`available`, `u64`, `fill`); no fallback: callers fail closed |
 | `log` | the system log: every `println!` line of a process holding a `logd` client goes there; `write`, `read`, `state` |
 | `stat` | `STAT` records as typed slices (`read`, `one`) and their names |

@@ -20,8 +20,9 @@ use mind::ipc::{self, Endpoint};
 use mind::tui::Terminal;
 use screen::{parse, Command, Kind, Screen};
 
-// The network only for its own `ping`: a flow grant the policy names for console, when the shell starts it.
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO);
+// The network only for its own `ping`: a flow grant the policy names for console, when the shell starts it. The camera
+// to pass on to camera (158-APP-0043).
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_NETWORK | REQUEST_GPIO | REQUEST_CAMERA);
 
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const HELP: &str = "Type a program and its arguments: uptime, df, find ram: -name *.txt, grep -i word docs/notes.txt, fm, …\n\
@@ -62,6 +63,8 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
     if needs.sysinfo && requests & mind::process::REQUEST_AUTHORITY == 0 && holds(SLOT_SYSINFO) { grant(SLOT_SYSINFO, SLOT_SYSINFO); }
     // The pin controller's client where the board has one: pins and pinmap (issue u017).
     if requests & mind::process::REQUEST_GPIO != 0 && holds(SLOT_GPIO) { grant(SLOT_GPIO, SLOT_GPIO); }
+    // The video gateway's client: camera (158-APP-0043).
+    if requests & mind::process::REQUEST_CAMERA != 0 && holds(SLOT_CAMERA) { grant(SLOT_CAMERA, SLOT_CAMERA); }
     // The window wm lent console to see, for the recorder console was started with (issue u014): passed on once.
     if requests & mind::process::REQUEST_DISPLAY != 0 && mind::dev::cap_info(SLOT_DISPLAY).0 == CAP_KIND_MEMORY {
         let _ = loader::grant_memory(Endpoint::LOADER, session, SLOT_DISPLAY as u8, SLOT_DISPLAY);
