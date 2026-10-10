@@ -64,7 +64,7 @@ Their terms forbid redistribution. A script fetches each from the source named h
 
 | Files | Needed by | Source | Script |
 |---|---|---|---|
-| Broadcom's 802.11 microcode for the BCM4331: `ucode29_mimo`, `ht0initvals29`, `ht0bsinitvals29` | `bcm_wifi` from its stage 2 ([550-DRV-0006](issues/550-DRV-0006-broadcom-wifi.md)) | Broadcom's `wl` driver archive, extracted as Linux's `b43` does | to be written with stage 2 |
+| Broadcom's 802.11 microcode for the BCM4331: `ucode29_mimo`, `ht0initvals29`, `ht0bsinitvals29` | `bcm_wifi` from its stage 2 ([550-DRV-0006](issues/550-DRV-0006-broadcom-wifi.md)) | Broadcom's `wl` 6.30.163.46 archive. Its first home (lwfinger.com) is gone, so it is fetched from the copy distributions use (github.com/minios-linux/b43-firmware) and checked against the SHA-256 nixpkgs publishes and the MD5 SlackBuilds publishes. `b43-fwcutter` extracts the files, and each is checked by its own SHA-256 | [`scripts/proprietary.sh`](scripts/proprietary.sh) `fetch`, then `copy` after the disk is written |
 
 ## Tools used at build or test time (not distributed)
 

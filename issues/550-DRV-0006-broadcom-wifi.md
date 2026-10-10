@@ -23,6 +23,7 @@ If it is a BCM4331, three things make it hard:
   - The microcode is fetched from Broadcom's driver archive and extracted at build time, on the maintainer's machine, by a script.
   - It never enters the repository. An image that holds it is for the maintainer's own use and is not given to others.
   - The script records the archive's source and SHA-256; THIRD_PARTY.md names the script and this rule, not the files.
+  - Written: [`scripts/proprietary.sh`](../scripts/proprietary.sh) `fetch` puts the three files in `proprietary/firmware/b43/`, checked, and `copy` puts them on the disk under `data/firmware/b43/` (AGENTS.md, section 3). Its copy onto a Windows volume is not tried yet.
 - **Code:** Linux's `b43` is GPL. Facts about the hardware (registers, sequences, values) are taken from it and from the b43 specifications; no code is copied or translated. The ISC-licensed `brcmsmac` may be ported with attribution where its PHY code covers this chip. Data tables of the radio are decided when stage 3 reaches them, and recorded here.
 - **Stages,** each checked by one boot on the MacBook Pro and its log:
   1. [550-DRV-0020](550-DRV-0020-bcm4331-read-only-probe.md): a read-only probe (the chip, the 802.11 core's state, the SPROM and its MAC address);
