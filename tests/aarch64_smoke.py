@@ -65,7 +65,8 @@ def boot_once(args, disk, until, timeout, decoy=None, raw=False):
 def disk_with(rtc=None):
     disk = Path(tempfile.mkdtemp()) / "root"
     atexit.register(shutil.rmtree, disk.parent, True)  # a copy of the build: removed when the test ends
-    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf"))
+    # Leftovers of an interrupted suite run (smoke-*, screen dumps) stay out: a big extra tree upsets QEMU 8.2.2's vvfat.
+    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf", "smoke-*", "*.ppm"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
     sign_manifest.sign_volume(disk)  # signed as the build signs it (350-UPD-0002)
