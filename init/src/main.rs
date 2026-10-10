@@ -39,6 +39,7 @@ const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
+const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
@@ -499,6 +500,8 @@ impl Init {
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
+            // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
+            "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
             // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
             // MacBook Pro's Retina panel, 211-PRT-0004).
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
