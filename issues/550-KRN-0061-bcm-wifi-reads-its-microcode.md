@@ -16,6 +16,7 @@ This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-
 - The client is unbadged, and `vfs_server` lets an unbadged client only read. Only `BADGE_USER` writes, and only the badge of a private directory under `system/` opens it.
 - The client is lent only when `vfs_server` runs, so stage 1 still starts without it.
 - `svc` lists it among what `bcm_wifi` holds.
+- **Note (the storage session, 2026-10-10):** when `main` reached its branch, the client became badged `BADGE_READER`, as every other reader's client of `vfs_server` is since [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done). An unbadged client can still be badged by whoever holds it, so the third criterion below needs the reader's badge.
 
 ## Acceptance criteria
 

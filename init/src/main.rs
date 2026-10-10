@@ -294,8 +294,8 @@ impl Init {
                     .or_else(|| (0..8).map_while(|nth| platform::find_device(0x02_80_00, 0xFF_FF_FF, nth).ok()).find(broadcom)).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
-                // An unbadged, so read-only, client of vfs_server for the microcode in data/firmware/b43/ (550-KRN-0061).
-                if self.running(service_index("vfs_server")) { self.lend(&mut grants, SLOT_VFS, "vfs_server")?; }
+                // A reader's client of vfs_server for the microcode in data/firmware/b43/ (550-KRN-0061), badged so no other badge can be set on it.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
             }
             "nvme" => {
                 // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.
