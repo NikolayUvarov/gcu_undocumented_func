@@ -1,6 +1,6 @@
 # 211-APP-0044 — `console` joined to the shell, and `shell` in `wm`'s menu
 
-**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** 211-KRN-0058 (`SLOT_SHELL` and `SLOT_CLIPBOARD`, ABI 5: in the kernel track's gate, 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-10: the shell's window from the right-click menu) · **Status:** open · **Blocked by:** 211-KRN-0058 (`SLOT_SHELL` and `SLOT_CLIPBOARD`, ABI 5: in the kernel track's gate, 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) on 2026-10-10, when that task took the shell's own window, which needs no new slot. Numbered with the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, the maintainer's request after the run on the MacBook Pro).
 
@@ -24,7 +24,7 @@ A second shell in every window is not the way: it would spread the authority to 
 - **The shell** serves it between keys, where it tends its consoles, and decides which commands it takes from a client: the observing ones (`ps`, `logs`, `stat`, `cpus`, `free`, `faults`, `quotas`, `heap`, `devices`, `irqs`, `endpoints`, `pmap`), the network diagnostics (`ip`, `net`, `nslookup`, `fetch`, `https`, `netgrants`), `sync`, `logger`, and with confirmation `kill`, `stop`, `boot`, `reboot`. Not `fg`, `voice`, `keymap`, `screenshot` or `msh`: they act on the shell's own screen.
 - **The endpoint reaches `console`** through the launchers: the shell lends it in `SLOT_SHELL` to a program that asks for it (`REQUEST_SHELL`); `wm` asks for it and passes it on to `console` (and to nothing else).
 - **`console`** sends a line it does not know, or one of the shell's commands, to the shell, shows what comes back, and asks in its window before a confirmed command (`reboot? y/n`). Without the endpoint it names the shell's commands as now.
-- **`wm`'s menu** gains `shell`, which asks the shell for its window.
+- **`wm`'s menus** gain `shell` (the right-click desktop menu, and the programs' menu Alt+P), which asks the shell for its window (the maintainer, 2026-10-10: from the right-click menu too, besides Ctrl+Alt+F5).
 - **Docs:** `docs/tools` (EN, RU), `idl/shell.wit`, the help of the shell and `console`.
 
 ## Acceptance criteria

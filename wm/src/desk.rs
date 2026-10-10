@@ -52,6 +52,10 @@ pub enum Hit { Desktop, Title(u32), Close(u32), Zoom(u32), Corner(u32), Border(u
 /// The cell under a pixel window's content: what is still this cell after everything is drawn shows the pixels.
 pub const PIXELS: Cell = Cell { ch: ' ', style: Style { fg: 0, bg: 0 } };
 
+/// A cell of the desktop that shows the background's pixels (000-APP-0047): what is still this cell after everything is
+/// drawn gets them.
+pub const BACKGROUND: Cell = Cell { ch: ' ', style: Style { fg: 0x10_1A_24, bg: 0x10_1A_24 } };
+
 /// Smallest frame, and how near an edge a moved window sticks to it (cells).
 pub const MIN: (usize, usize) = (16, 4);
 pub const SNAP: usize = 2;
@@ -62,12 +66,14 @@ pub struct Desk {
     /// Bottom to top: the last one is in front and has the focus.
     pub windows: Vec<Win>,
     changed: Vec<u32>,
+    /// The desktop shows the background's pixels rather than the `░` cells (000-APP-0047).
+    pub background: bool,
     /// The window the pointer holds by its title or corner: drawn marked until the button is released (211-APP-0037).
     pub held: Option<u32>,
 }
 
 impl Desk {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), held: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { cols, rows, windows: Vec::new(), changed: Vec::new(), background: false, held: None } }
 
     /// Where windows go: below the top bar, above the status line.
     pub fn area(&self) -> Rect { Rect::new(0, 1, self.cols, self.rows.saturating_sub(2)) }
@@ -304,7 +310,7 @@ impl Desk {
             }
             return owner;
         }
-        grid.fill(self.area(), '░', Style::new(0x30485C, 0x182430));
+        if self.background { grid.fill(self.area(), BACKGROUND.ch, BACKGROUND.style); } else { grid.fill(self.area(), '░', Style::new(0x30485C, 0x182430)); }
         let top = self.windows.len().saturating_sub(1);
         for (index, w) in self.windows.iter().enumerate() {
             let r = w.rect;

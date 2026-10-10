@@ -1,0 +1,32 @@
+# 000-APP-0048 — `wm`: Settings, one entry point in the top bar
+
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** open · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: a volume control in `audio.wit`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+
+The maintainer's request (2026-10-10): "Add a background switch to the top menu: we will put settings there, where the screen's parameters (network, sound and the rest that needs configuration) can be managed too, through one entry point."
+
+## Problem
+
+What can be configured is spread over shell commands (`keymap`, `date set`, `netpolicy`, `ip`, `voice`) and files; `wm` has no place for it, and the desktop background (000-APP-0047) needs a switch.
+
+## Plan
+
+- **The entry point:** a `Settings` item in `wm`'s top bar (and a key, Alt+S) opens a settings window of `wm`'s own: a list of pages on the left, the page on the right, keys and the mouse.
+- **Page 1, Background** (with 000-APP-0047): the kind (none, abstract, image and its file) and what is shown over it (date, time, CPU, network); a change shows at once and is kept in `data/wm.conf`.
+- **The system's pages** act through the shell, the one holder of the operator's authority (211-APP-0044's channel, `SLOT_SHELL`), and each change that touches the machine is confirmed:
+  - **Keyboard:** the layout and the layout switch (`keymap`);
+  - **Date and time:** `date set`;
+  - **Network:** the addresses (`ip`), the flow grants and the policy's lines (`netgrants`, `netpolicy`);
+  - **Sound:** the volume, once `audio.wit` has one (asked of the track that owns `audio_gw`);
+  - **Screen:** what the firmware's mode allows (shown; changed when a way to change it exists).
+- Until the shell's channel is in `main`, the system pages say where the setting is made today (the shell's command).
+- **Docs:** `docs/tools` (EN, RU), `wm`'s help and top bar.
+
+## Acceptance criteria
+
+- **The `wm` suite:** the top bar's `Settings` (a click, and Alt+S) opens the settings window; the background page switches between none, abstract and an image, the desktop follows at once, and the next `wm` starts with the choice (read back from `data/wm.conf`).
+- With 211-APP-0044: the keyboard page switches the layout through the shell; the network page lists the flow grants.
+- **Host tests:** the settings window's layout and its keys.
+
+## Related
+
+[000-APP-0047](000-APP-0047-wm-desktop-background.md), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md), [u008](../issues-done/u008-clickable-top-bar.done).

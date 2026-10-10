@@ -50,3 +50,20 @@ The kernel session has set the Cirrus codec's amplifier GPIOs for Apple's machin
 - On the MacBook Pro the SPROM reads valid (CRC good).
 - Its MAC address matches the one macOS shows for Wi-Fi.
 - Chip control reads back as it was before.
+
+## A volume in `audio.wit`, for `wm`'s Settings (000-APP-0048)
+
+**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0048](000-APP-0048-wm-settings.md) (the maintainer's request: one place for settings, the sound among them).
+
+### Problem
+
+`audio.wit` plays, records and makes tones, but has no volume: a program can only scale its own samples. Settings has nothing to set for the sound.
+
+### Plan (a proposal; the drivers track decides)
+
+- `audio.wit` 1.x: `volume: func() -> u8` and `set-volume: func(percent: u8)`, on the codec's mixer where it has one (AC'97 master volume, the HDA output amplifier) and by scaling in `audio_gw` otherwise; setting it only with a badge the shell holds.
+- The shell sets it for Settings (the tools track's part).
+
+### Acceptance criteria
+
+The `audio` suite sets the volume to 50 % and the recorded tone's level falls by about 6 dB; a client without the badge is refused.

@@ -390,6 +390,13 @@ def frames_free(vm):
     raise AssertionError("frame pool use did not settle")
 
 
+def test_bmp(width, height, pixel):
+    """A 24-bit BMP, rows from the bottom, of `pixel(x, y)` (0xRRGGBB)."""
+    stride = (width * 3 + 3) & ~3
+    rows = b"".join(b"".join(struct.pack("<I", pixel(x, y))[:3] for x in range(width)).ljust(stride, b"\0") for y in reversed(range(height)))
+    return b"BM" + struct.pack("<IHHI", 54 + len(rows), 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(rows), 2835, 2835, 0, 0) + rows
+
+
 def heap_used(vm):
     # IDL clients allocate a buffer per call (log lines of the services, for instance), so a reading can catch one in
     # flight: the value counts once two readings in a row agree.
@@ -5650,6 +5657,32 @@ def wm_suite(vm):
               "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
               "window to the front, Alt+W closes one and the list follows", flush=True)
 
+    # The desktop background (000-APP-0047): data/wm.conf says none (the ░ cells as before) or an image; without it
+    # the default, a slowly moving pattern with the time, the date and the CPU load over it (checked below).
+    def desktop_alone(conf):
+        require(vm.command(f"write data/wm.conf {conf}"), "WROTE")
+        vm.send("wm\n")
+        out = wait("[WM] READY", lines=0)
+        time.sleep(1.5)
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        require(wait("RESUMED.", lines=0).replace("\n", ""), "DETACHED: 0 WINDOWS KEPT")
+        width = int(size.split()[0])
+        colour = lambda px, py: pixels[(py * width + px) * 3:(py * width + px) * 3 + 3]
+        return out, screen, colour
+
+    out, screen, colour = desktop_alone("background = none")
+    require(out, "[WM] BACKGROUND background = none;")
+    assert all(screen[row].count(canon("░")) > 150 for row in (5, 25, 45)), screen[5]
+    out, screen, colour = desktop_alone("background = image data/sky.bmp")
+    require(out, "[WM] BACKGROUND background = image data/sky.bmp;")
+    left = sum(colour(px, py) == bytes((0xC0, 0x80, 0x40)) for py in range(48, 760, 8) for px in range(0, 1280, 8))
+    right = sum(colour(px, py) == bytes((0x40, 0x80, 0xC0)) for py in range(48, 760, 8) for px in range(0, 1280, 8))
+    assert left > 4000 and right > 3000, (left, right)  # the image's halves, but where the time and the date are drawn
+    require(vm.command("rm data/wm.conf"), "OK")
+    print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; an image covers the desktop", flush=True)
+
     vm.send("wm fm, clock, top\n")
     out = wait()
     while len(windows_re.findall("".join(seen))) < 3:
@@ -5685,6 +5718,17 @@ def wm_suite(vm):
                 for py in range((y + 1) * 16, (y + h - 1) * 16) for px in range((x + 1) * 8, (x + w - 1) * 8))
     assert green > 500, green  # the clock's digits, drawn by clock into its pixel window
     assert canon(" clock ") in screen[y][x:x + w], screen[y]
+    # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
+    # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
+    require(out, "[WM] BACKGROUND background = abstract; show = time, date, cpu; place = bottom-right")
+    time.sleep(1.2)
+    _, _, _, later = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    quarter = [(py * width + px) * 3 for py in range(26 * 16, 48 * 16, 4) for px in range(81 * 8, 160 * 8, 4) if not (rects[top][0] <= px // 8 < rects[top][0] + rects[top][2] and rects[top][1] <= py // 16 < rects[top][1] + rects[top][3])]
+    moved = sum(pixels[i:i + 3] != later[i:i + 3] for i in quarter)
+    text = sum(later[i:i + 3] == bytes((0x78, 0x90, 0xA8)) for i in quarter)
+    graph = sum(later[i:i + 3] == bytes((0x3A, 0x56, 0x70)) for i in quarter)
+    assert moved > len(quarter) // 10 and text > 50, (moved, len(quarter), text, graph)
     # Keys reach only the window in front: fm gets "cd docs", top nothing.
     mode, focus, rects = front(fm)
     assert focus == fm, (focus, rects)
@@ -6753,6 +6797,8 @@ def main():
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
                 # video/synthetic: the video gateway serves its test pattern, for camera in windows (158-APP-0043).
+                (disk / "data").mkdir(exist_ok=True)
+                (disk / "data/sky.bmp").write_bytes(test_bmp(64, 40, lambda x, y: 0xC08040 if x < 32 else 0x4080C0))
                 (disk / "video").mkdir()
                 (disk / "video/synthetic").write_text("the video gateway's test pattern stands in for a camera\n")
             if suite == "store":

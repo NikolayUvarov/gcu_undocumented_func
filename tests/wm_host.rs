@@ -15,6 +15,10 @@ mod tui;
 mod desk;
 #[path = "../wm/src/menu.rs"]
 mod menu;
+#[path = "../wm/src/background.rs"]
+mod background;
+#[path = "../common/font16.rs"]
+mod font16;
 
 use abi::*;
 use desk::{Action, Content, Desk, Hit, Mode, Win, Wm};
@@ -701,4 +705,147 @@ fn a_dragged_window_is_marked() {
     wm.pointer(50, 15, 1, 0);
     assert!(!wm.status().contains("DRAG="));
     wm.pointer(50, 15, 0, 0);
+}
+
+// The desktop background (000-APP-0047).
+use background::{bmp_cover, layout, overlay, pattern, Backdrop, Config, Info, Picture, Place};
+
+fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
+
+#[test]
+fn the_background_configuration_is_read_and_written() {
+    assert_eq!(Config::parse("").0, Config::default());
+    let d = Config::default();
+    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.net, d.place), (Picture::Abstract, true, true, true, false, Place::BottomRight));
+    let (c, problems) = Config::parse("# a comment\nbackground = image data/sky.bmp\nshow = cpu, time\nplace = top-left  # here\n");
+    assert!(problems.is_empty(), "{:?}", problems);
+    assert_eq!(c.picture, Picture::Image("data/sky.bmp".into()));
+    assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
+    assert_eq!(Config::parse("background = none").0.picture, Picture::None);
+    assert_eq!(Config::parse("show = none").0.time, false);
+    // A line not understood is named and leaves the default.
+    let (c, problems) = Config::parse("background = plasma\nshow = time, weather\nplace = left\ncolour = red\nnothing here");
+    assert_eq!(c, Config::default());
+    assert_eq!(problems.len(), 5, "{:?}", problems);
+    assert!(problems[0].starts_with("line 1:") && problems[4].contains("no '='"), "{:?}", problems);
+    // What `format` writes is read back the same.
+    for text in ["background = none", "background = image a b.bmp\nshow = net\nplace = center", "show = date, time"] {
+        let c = Config::parse(text).0;
+        let (again, problems) = Config::parse(&c.format());
+        assert!(problems.is_empty() && again == c, "{:?} {:?}", c, problems);
+    }
+}
+
+#[test]
+fn the_pattern_is_low_contrast_and_moves() {
+    let (w, h) = (160, 100);
+    let (mut a, mut b) = (vec![0u32; w * h], vec![0u32; w * h]);
+    pattern(&mut a, w, h, 0);
+    pattern(&mut b, w, h, 40);
+    let channel = |p: u32, s: u32| (p >> s) & 0xFF;
+    for &p in a.iter().chain(&b) {
+        for s in [16, 8, 0] { assert!(channel(p, s) >= channel(background::DARK, s) && channel(p, s) <= channel(background::LIGHT, s), "{:06x}", p); }
+    }
+    // It uses the range it has, and a later step is not the same picture.
+    let (lo, hi) = (a.iter().map(|&p| channel(p, 0)).min().unwrap(), a.iter().map(|&p| channel(p, 0)).max().unwrap());
+    assert!(hi - lo >= 0x0C, "{:x}..{:x}", lo, hi);
+    assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > w * h / 4);
+    // Neighbouring steps differ only a little: it moves slowly.
+    pattern(&mut b, w, h, 1);
+    let largest = a.iter().zip(&b).map(|(&x, &y)| channel(x, 0).abs_diff(channel(y, 0))).max().unwrap();
+    assert!(largest <= 3, "{}", largest);
+}
+
+// A BMP of `w` × `h` 24-bit pixels, rows from the bottom (`down` false) or from the top.
+fn bmp(w: usize, h: usize, down: bool, pixel: impl Fn(usize, usize) -> u32) -> Vec<u8> {
+    let stride = (w * 3 + 3) & !3;
+    let mut out = vec![0u8; 54 + stride * h];
+    out[..2].copy_from_slice(b"BM");
+    out[10..14].copy_from_slice(&54u32.to_le_bytes());
+    out[14..18].copy_from_slice(&40u32.to_le_bytes());
+    out[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+    out[22..26].copy_from_slice(&(if down { -(h as i32) } else { h as i32 }).to_le_bytes());
+    out[26..28].copy_from_slice(&1u16.to_le_bytes());
+    out[28..30].copy_from_slice(&24u16.to_le_bytes());
+    for y in 0..h {
+        let row = 54 + stride * if down { y } else { h - 1 - y };
+        for x in 0..w { let p = pixel(x, y); out[row + x * 3..row + x * 3 + 3].copy_from_slice(&[p as u8, (p >> 8) as u8, (p >> 16) as u8]); }
+    }
+    out
+}
+
+#[test]
+fn an_image_covers_the_desktop() {
+    // 4 × 2: red on the left half, blue on the right; a 2:1 frame takes it whole, scaled twice.
+    let image = |down| bmp(4, 2, down, |x, y| if x < 2 { 0xFF0000 } else { 0x0000FF + y as u32 * 0x100 });
+    for down in [false, true] {
+        let mut frame = vec![0u32; 8 * 4];
+        assert!(bmp_cover(&image(down), &mut frame, 8, 4).is_some());
+        assert_eq!(frame[0], 0xFF0000);
+        assert_eq!(frame[7], 0x0000FF);
+        assert_eq!(frame[3 * 8 + 7], 0x0001FF, "the bottom row is the image's second");
+    }
+    // A square frame cuts the sides: the middle two columns are left.
+    let mut frame = vec![0u32; 4 * 4];
+    bmp_cover(&image(false), &mut frame, 4, 4).unwrap();
+    assert_eq!((frame[0], frame[3]), (0xFF0000, 0x0000FF));
+    // Not a BMP, or one cut short: refused.
+    assert!(bmp_cover(b"GIF89a", &mut frame, 4, 4).is_none());
+    let short = image(false);
+    assert!(bmp_cover(&short[..short.len() - 4], &mut frame, 4, 4).is_none());
+}
+
+#[test]
+fn the_information_has_its_place() {
+    let c = Config::default();
+    // 1280 × 800: a block two cells from the right and the bottom edges.
+    let ((x, y, w, h), big, small) = layout(&c, 1280, 800, 1).unwrap();
+    assert_eq!((big, small), (6, 2));
+    assert_eq!((x + w, y + h), (1280 - 32, 800 - 32));
+    assert!(w >= 5 * 8 * 6 && h >= 16 * 6 + 32);
+    // Half the pixels each way (a 2560 × 1600 screen): the same block on the screen.
+    let ((x2, y2, w2, h2), big2, _) = layout(&c, 1280, 800, 2).unwrap();
+    assert_eq!(big2, 3);
+    assert!(x2 * 2 >= 1280 && w2 <= w && h2 <= h && y2 > 0);
+    for place in [Place::TopLeft, Place::Center] {
+        let ((x, y, _, _), _, _) = layout(&Config { place, ..c.clone() }, 1280, 800, 1).unwrap();
+        assert!(if place == Place::TopLeft { x == 32 && y == 32 } else { x > 300 && y > 200 });
+    }
+    // Nothing to show, or no room: no block.
+    assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1).is_none());
+    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1).is_none());
+    assert!(layout(&c, 200, 120, 1).is_none());
+    // The drawing stays inside the block and puts the text's colour there.
+    let (fw, fh) = (640, 400);
+    let mut frame = vec![background::DARK; fw * fh];
+    overlay(&mut frame, fw, fh, 1, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
+    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1).unwrap();
+    let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
+    assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
+    assert!(frame.iter().filter(|&&p| p == background::TEXT).count() > 500);
+    assert!(frame.contains(&background::GRAPH));
+}
+
+#[test]
+fn the_backdrop_keeps_its_frame() {
+    let read_nothing = &mut |_: &str| None;
+    let (b, problem) = Backdrop::new(Config::default(), (1280, 800), read_nothing);
+    assert!(problem.is_none() && b.shown() && b.moving());
+    assert_eq!((b.unit, b.width, b.height), (1, 1280, 800));
+    let (b, _) = Backdrop::new(Config::default(), (2560, 1600), read_nothing);
+    assert_eq!((b.unit, b.width, b.height), (2, 1280, 800));
+    // An image that cannot be read: the pattern, and a notice.
+    let (b, problem) = Backdrop::new(Config::parse("background = image data/missing.bmp").0, (640, 400), read_nothing);
+    assert!(problem.unwrap().contains("data/missing.bmp") && b.moving());
+    // An image that can: drawn, and still.
+    let file = bmp(2, 1, false, |x, _| if x == 0 { 0x203040 } else { 0x405060 });
+    let (mut b, problem) = Backdrop::new(Config::parse("background = image sky.bmp\nshow = none").0, (64, 32), &mut |_| Some(file.clone()));
+    assert!(problem.is_none() && !b.moving());
+    b.render(&Info::default(), &glyph);
+    assert_eq!((b.pixel(0, 0), b.pixel(63, 31)), (0x203040, 0x405060));
+    // None draws nothing; samples are kept for a minute.
+    let (mut b, _) = Backdrop::new(Config::parse("background = none").0, (64, 32), read_nothing);
+    assert!(!b.shown() && b.frame.is_empty());
+    for i in 0..100 { b.sample(i as u8 * 2); }
+    assert_eq!((b.cpu.len(), b.cpu[0], *b.cpu.last().unwrap()), (60, 80, 100));
 }
