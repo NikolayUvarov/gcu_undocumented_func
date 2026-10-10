@@ -29,7 +29,7 @@ The generated decoders in `libmind/src/idl/` are where every service meets untru
 ## Progress
 
 **2026-10-09:**
-- The test is written. It covers 24 interfaces and 82 types, with 50 000 inputs per target in about 4 s.
+- The test is written. It covers 25 interfaces and 85 types, with 50 000 inputs per target in about 4 s.
 - No finding at the fixed seed, nor at five other seeds with 200 000 inputs per target.
 - Three injected defects were caught: `bool` accepting 2; `header` keeping a refused capability; a `vfs` decoder skipping its end-of-request check.
 - docs/assurance/README.md 1.1 describes it.

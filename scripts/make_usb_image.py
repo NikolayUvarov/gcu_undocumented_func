@@ -48,7 +48,7 @@ LOG_README = (b"MIND CORE writes the system log of each boot here, as BOOTNNNN.L
 
 def listed(source):
     """The files the signed manifest in `source` lists, or None without one. A boot service it does not list may be
-    absent, as the bootloader allows: one not built yet, such as the updater (351-KRN-0022)."""
+    absent, as the bootloader allows: one of the other architecture, or one a build left out."""
     manifest = Path(source) / "MANIFEST"
     if not manifest.is_file():
         return None

@@ -4354,9 +4354,9 @@ def updater_suite(args, updater_elf):
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
             # Its own endpoint, the clock, the file system, init (badged for reboot), the log every service has, the
-            # flow grant, TLS, the firmware privilege; nothing else.
+            # flow grant, TLS, the firmware privilege, the parser; nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16", report
+            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16 28:1", report
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
@@ -4369,6 +4369,120 @@ def updater_suite(args, updater_elf):
         listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
         assert "kept" in listing and "reboot" in listing, listing
     print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+
+
+def update_suite(args):
+    """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
+    and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
+    20 s. Between runs the host changes what the server holds: an expired channel, one with a bad signature, one naming
+    an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
+    version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
+    booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
+    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
+    arch = args.arch
+    # The build as release 5; the same files signed again with other build inputs as release 6.
+    volume = temp / "release5"
+    (volume / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    sign_manifest.sign_volume(volume)
+    newer = temp / "release6"
+    shutil.copytree(volume, newer)
+    commit, toolchain, locks = sign_manifest.build_inputs()
+    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
+    server = temp / "server"
+    release_tool.publish(release_tool.stage(5, temp / "staged5", {arch: volume}), server)
+    kept = (server / "channels/stable").read_bytes()
+    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server)
+    good = (server / "channels/stable").read_bytes()
+    manifest6 = (newer / "MANIFEST").read_bytes()
+    boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
+    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+
+    def channel(version, minimum, expires):
+        body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
+        return body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    signature = good.index(b"ed25519 ") + 8
+    forged = good[:signature] + (b"1" if good[signature:signature + 1] == b"0" else b"0") + good[signature + 1:]
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_release.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+    # The image: release 5 in slot A, confirmed, with its channel; the policy's flow and update.txt at the root.
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout)
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic apply\nevery 20\ntries 3\n")
+    image = boot_slots.Image.create(temp / "update.img", layout)
+    first = boot_slots.records(image.path)
+    (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+
+    def logged(line, timeout):
+        # The updater's lines, read with dmesg: the shell holds the serial line.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            log = vm.command("dmesg -s updater", raw=True)
+            if line in log:
+                return log
+            time.sleep(2)
+        raise AssertionError((line, vm.command("dmesg -s updater", raw=True)[-3000:]))
+    try:
+        log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
+        require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        (server / "channels/stable").write_bytes(forged)
+        logged("[UPDATER] CHECK: REFUSED: Signature", 60)
+        (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
+        logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # Version 6 as published, but the first of its boot files changed on the server.
+        (server / "channels/stable").write_bytes(good)
+        blob = server / "blobs" / boot_files[0][1]
+        original = blob.read_bytes()
+        blob.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        log = logged("[UPDATER] FETCH: REFUSED: Digest", 300)
+        require(log, f"[UPDATER] FETCH: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT")
+        assert "[UPDATER] RECORD" not in log, log
+        # As published, the largest boot file cut midway: fetched, checked, applied, and the machine restarted. The
+        # updater's lines of this boot go with it: the serial line, the server and the records show what it did.
+        blob.write_bytes(original)
+        cut = (newer / largest[0]).stat().st_size // 2
+        https.cuts[f"/blobs/{largest[1]}"] = cut
+        vm.collect(); vm.output = ""
+        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
+                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+            require(out, line)
+        blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
+        assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
+        # Past the kernel's deadline (120 s) the trial outlived it: the updater confirms B, then finds nothing newer.
+        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK", 240)
+        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert first[0]["sequence"] == 1 and first[1] is None, first
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
+          "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
+          "restart and confirmed on the disk by the updater past the kernel's deadline; the file system is consistent", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -7373,6 +7487,10 @@ def main():
             continue
         if suite == "updater":
             updater_suite(args, args.updater_elf)
+            update_suite(args)
+            continue
+        if suite == "update":
+            update_suite(args)
             continue
         if suite == "ehci":
             ehci_suite(args)
