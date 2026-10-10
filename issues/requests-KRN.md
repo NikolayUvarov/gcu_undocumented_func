@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (7 requests waiting, 2026-10-10; QEMU's vvfat crash in the aarch64 boot suite became 000-KRN-0067; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (8 requests waiting, 2026-10-10; QEMU's vvfat crash in the aarch64 boot suite became 000-KRN-0067; the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done); the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -159,3 +159,21 @@ One of these:
 ### Acceptance criteria
 
 In QEMU, `kbench` started from wm's menu ends within one row after its window is closed, and the kernel's log shows it. The wm suite's walk then closes the window without waiting, and `RUN_TO_END` is empty.
+
+## A badge set only by a holder with the right to set it
+
+**Recorded by:** the update track (`UPD`), 2026-10-10, from [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) and [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done).
+
+### Problem
+
+`CAP_MINT` sets a badge on any unbadged endpoint capability, whoever holds it (`mint` in `kernel/src/scheduler.rs`, MC-3.4). A server that grants authority by badge is therefore only as safe as `init`'s care never to hand out an unbadged client of it: 351-KRN-0022 badged the clients of `init` and `vfs_server` one by one (`BADGE_LIFECYCLE`, `BADGE_READER`) for this reason. Every other badge-checking server depends on the same care, and a new grant can break it silently. Which clients are unbadged today was sent to the maintainer and the kernel session privately, as [SECURITY.md](../SECURITY.md) asks.
+
+### Plan (a proposal; the kernel track decides)
+
+- A right on endpoint capabilities, for example `CAP_BADGE`, that `CAP_MINT` requires to set a badge. A child never carries it unless the mask keeps it, and a badged child never does.
+- `init` keeps it on the clients it badges from, and every capability it hands out lacks it.
+- A new ABI version and an explicit transition (MC-12.4, 12.7).
+
+### Acceptance criteria
+
+A new `isolation` case: a program holding an unbadged client without the right gets `ERR_INVALID` when it sets a badge, and the suites pass as before.
