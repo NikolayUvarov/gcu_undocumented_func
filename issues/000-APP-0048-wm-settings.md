@@ -31,7 +31,8 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
 
 - **Done:** `wm/src/settings.rs` and `wm`: the top bar's last item `Alt+S settings` and Alt+S open the Settings window (pages on the left: Background, Keyboard, Date and time, Network, Sound, Screen). The Background page changes the picture (none, abstract, image and its typed file), what is shown over it and its place, with keys and clicks; each change is used at once and written to `data/wm.conf` (`[WM] SETTINGS … SAVED`), and the next `wm` starts with it. The system's pages say where each setting is made today.
 - **Checked:** host tests (the bar item and Alt+S, the picture cycling, a toggle, the place, a typed file, the system pages' text, clicks); the `wm` suite (Alt+S, the picture to an image's fallback and to none, the desktop's `░` cells at once, the next `wm` reading `none`).
-- **Left:** the system's pages acting through the shell (211-APP-0044, waiting for 211-KRN-0058); the sound's volume (requests-DRV.md).
+- **Added with [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done):** rows for the pattern's kind, speed, contrast and complexity and the information's brightness; ← → step them, Space and Enter go round.
+- **Left:** the system's pages acting through the shell (211-APP-0044's `run`, still to come; `SLOT_SHELL` is in `main`); the sound's volume (requests-DRV.md).
 
 ## Related
 
