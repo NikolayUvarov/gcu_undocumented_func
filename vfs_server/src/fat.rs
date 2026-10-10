@@ -343,8 +343,10 @@ impl<S: Sectors> Volume<S> {
     /// Free clusters (counted once, then kept up to date).
     pub fn free_clusters(&mut self) -> Result<u32> {
         if let Some(free) = self.free { return Ok(free); }
+        // Each FAT sector read once for all its entries, not once an entry (251-KRN-0072).
+        let mut window = FatWindow { lba: u32::MAX, data: [0; 2 * SECTOR] };
         let mut free = 0;
-        for cluster in 2..self.clusters + 2 { if self.fat(cluster)? == 0 { free += 1; } }
+        for cluster in 2..self.clusters + 2 { if self.entry_at(&mut window, cluster)? == 0 { free += 1; } }
         self.free = Some(free);
         Ok(free)
     }
@@ -885,7 +887,8 @@ impl<S: Sectors> Volume<S> {
         let offset = match self.bits { 12 => cluster + cluster / 2, 16 => cluster * 2, _ => cluster * 4 };
         let lba = self.fat_start + offset / 512;
         if window.lba != lba {
-            window.data[..SECTOR].copy_from_slice(&self.read_sector(lba)?);
+            // Walking on, the window's second sector becomes its first: one read a sector.
+            if window.lba != u32::MAX && window.lba + 1 == lba { window.data.copy_within(SECTOR.., 0); } else { window.data[..SECTOR].copy_from_slice(&self.read_sector(lba)?); }
             let next = if lba + 1 < self.fat_start + self.fat_size { self.read_sector(lba + 1)? } else { [0; SECTOR] };
             window.data[SECTOR..].copy_from_slice(&next);
             window.lba = lba;

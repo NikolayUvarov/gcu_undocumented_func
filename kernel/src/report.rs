@@ -155,7 +155,8 @@ fn pci_section(out: &mut String, devices: &[pci::Device]) {
         let kind = match device.class >> 16 { 0x03 => " [GPU]", 0x12 => " [NPU / accelerator]", 0x0B if device.class >> 8 == 0x0B40 => " [co-processor]", _ => "" };
         let _ = writeln!(out, "\n  {:02} {:02X}:{:02X}.{} {:04X}:{:04X} {} {}{}\n     class {:06X} revision {:02X} header {:02X} subsystem {:04X}:{:04X} IRQ line {} pin {} command {:04X} status {:04X}{}",
             index, location >> 8, (location >> 3) & 0x1F, location & 7, vendor, id, vendor_name(vendor), class_name(device.class), kind, device.class, config[8], config[14] & 0x7F,
-            u16_at(&config, 0x2C), u16_at(&config, 0x2E), config[0x3C], config[0x3D], u16_at(&config, 4), u16_at(&config, 6), if device.granted { " (granted to a driver)" } else { "" });
+            u16_at(&config, 0x2C), u16_at(&config, 0x2E), config[0x3C], config[0x3D], u16_at(&config, 4), u16_at(&config, 6), match (device.granted, device.mastered_at_boot) {
+                (true, _) => " (granted to a driver)", (false, true) => " (bus mastering, on at boot, turned off)", (false, false) => "" });
         for (number, bar) in device.bars.iter().enumerate().filter(|(_, b)| b.size != 0) {
             let raw = u32_at(&config, 0x10 + number * 4);
             let _ = writeln!(out, "     BAR{} {} {:#X} size {:#X}{}", number, if bar.io { "I/O" } else if (raw >> 1) & 3 == 2 { "mem64" } else { "mem32" }, bar.base, bar.size,
