@@ -1350,6 +1350,76 @@ def speak_check(vm):
     print(f"PASS: speak in the system: the Russian front end gives the host's {len(want)} phoneme ids; a damaged dictionary is refused", flush=True)
 
 
+# kbench's rows (176-KRN-0062), by group; `check` and `bench` follow the same table.
+KBENCH_ROWS = {"syscall": ["uptime (empty call)", "monotonic clock read", "task alive?"],
+               "ipc": ["call and reply", "… with a lent page"],
+               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop"],
+               "memory": ["a page: take and free", "1 MiB take+touch+free"],
+               "timer": ["sleep 1 ms", "sleep 10 ms"],
+               "process": ["start (the loader)", "start to running", "exit to gone"]}
+DURATION = re.compile(r"([\d.]+) (ns|µs|ms|s)")
+
+
+def nanoseconds(text):
+    value, unit = DURATION.fullmatch(text.strip()).groups()
+    return float(value) * {"ns": 1, "µs": 1e3, "ms": 1e6, "s": 1e9}[unit]
+
+
+def bench_rows(output, names):
+    """Each named row of a measuring table: (median, min, p99) in ns."""
+    rows = {}
+    for name in names:
+        row = re.search(r"│   " + re.escape(name) + r" *│ *([\d.]+ \S+) │[^│]*│ *([\d.]+ \S+) │ *([\d.]+ \S+) │", output)
+        assert row, f"no row {name!r}: {output[-3000:]}"
+        rows[name] = tuple(nanoseconds(row[k]) for k in (1, 2, 3))
+        assert rows[name][1] <= rows[name][0] <= rows[name][2], (name, rows[name])
+    return rows
+
+
+def tool_log(vm, output, tool):
+    """The path of the full log the tool named on its last line, and the log's text."""
+    path = re.search(rf"full log: ((?:log:{tool}\d{{4}}(?:-\d)?|ram:{tool}-\d{{3}})\.txt)", output)
+    assert path, output[-2000:]
+    vm.send(f"cat {path[1]}\n")
+    return path[1], vm.expect("MIND> ", timeout=60, after=f"cat {path[1]}\n")
+
+
+def kbench_check(vm):
+    """kbench: every group's rows with plausible orders of magnitude, its summary and its log; one group alone; an unknown
+    group refused."""
+    vm.send("kbench --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="kbench --quick\n")
+    assert "kbench — the kernel's performance" in output and re.search(r"[1-9]\d* of \d+ processors online", output), output[:2000]
+    rows = bench_rows(output, [name for names in KBENCH_ROWS.values() for name in names])
+    count = sum(map(len, KBENCH_ROWS.values()))
+    require(output, f"kbench: {count} measurements, 0 failed")
+    assert rows["uptime (empty call)"][0] < 10_000, rows
+    assert rows["call and reply"][0] < 1_000_000, rows
+    # Sleeps end on the 10 ms tick, counted from the tick's start, so one may be shorter than asked (000-KRN-0065).
+    assert 1e6 <= rows["sleep 10 ms"][0] <= 40e6, rows
+    assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "│", "└")))
+    assert width <= 79, width
+    path, log = tool_log(vm, output, "kbench")
+    for name in rows:
+        require(log, f"{name} (")
+    assert log.count("    min ") >= 2 * count and ".. " in log, log[-2000:]
+    print(f"PASS: kbench: {count} measurements in a table of {width} columns (system call {rows['uptime (empty call)'][0]:.0f} ns, "
+          f"IPC round trip {rows['call and reply'][0] / 1000:.1f} µs, sleep 10 ms {rows['sleep 10 ms'][0] / 1e6:.1f} ms, process start "
+          f"{rows['start to running'][0] / 1e6:.1f} ms), log {path}", flush=True)
+    output = vm.command("kbench ipc --quick")
+    bench_rows(output, KBENCH_ROWS["ipc"])
+    require(output, "kbench: 2 measurements, 0 failed")
+    assert "System calls" not in output, output
+    require(vm.command("kbench nosuch"), "kbench: no group nosuch")
+    print("PASS: kbench ipc runs one group; an unknown group is refused", flush=True)
+
+
+def bench_suite(vm):
+    """176: the utilities that check the system and measure it, from the shell."""
+    kbench_check(vm)
+
+
 def table_row(screen, pattern):
     return next((row for row in screen if re.search(pattern, row)), None)
 
@@ -6756,7 +6826,7 @@ def main():
         shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
         shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
         IMAGE = copy
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "bench", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -6766,7 +6836,7 @@ def main():
     if args.updater_elf:
         suites.append("updater")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "bench", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -6901,7 +6971,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"
