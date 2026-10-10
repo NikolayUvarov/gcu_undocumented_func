@@ -6106,7 +6106,7 @@ def wm_suite(vm):
         # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
         # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
         # ends it.
-        assert "shell" in re.findall(r"\[WM\] STARTED console PID \d+ WITH ([^\n]*)", "".join(seen))[-1].split(","), "wm lends the shell's commands"
+        assert "shell" in re.findall(r"\[WM\] STARTED console PID \d+ WITH ([^\n ]*)", "".join(seen))[-1].split(","), "wm lends the shell's commands"
         def console_has(text):
             for _ in range(30):
                 time.sleep(.3)
