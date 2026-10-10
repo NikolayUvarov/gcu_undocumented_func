@@ -112,6 +112,38 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 
+### The aarch64 part of a gate runs on a remote machine (the maintainer's decision, 2026-10-10)
+
+- **Where.** On a machine of section 1 that has the aarch64 tools: today `PCU_585240b00e8a`. The maintainer is adding more machines; each comes into section 1 with its configuration.
+- **Why.** On an agent's own machine the x86 part of the local gate takes about 70 minutes and the aarch64 part about 65 more. PCU runs the aarch64 groups 1.2–1.6 times slower, but **in parallel** with the x86 part. A gate then takes about as long as its longer half, and the agent's machine does only the x86 part.
+- **Measured on 2026-10-10** (the kernel track's tree 9c843b4, one group to an operation, seconds):
+
+| Group | The kernel session's machine | PCU |
+|---|---|---|
+| build (aarch64) | 214 s | 248 s |
+| aarch64: boot and fault containment | 90 s | 8 s, failed: QEMU aborts in `vvfat` |
+| aarch64: programs, shell and four CPUs | 339 s | 394 s |
+| aarch64: files, network and TLS | 1121 s | 1819 s |
+| aarch64: RAM, ACPI and PCI above 4 GiB | 826 s | 1063 s |
+| aarch64: GICv2 with GICv2m | 758 s | 922 s |
+| aarch64: NVMe boot disk | 132 s | 187 s |
+| aarch64: 16 CPUs | 340 s | 525 s |
+
+- **How.** Run it in your track's clone, `/home/un/mind-core/<TRK>/gcu_undocumented_func`, with one sequential operation (`"sequential": true`) per step, each well under the hour an operation may run:
+  1. **The tree.** Bring the clone to your branch merged with `main`, as `--ref` would:
+     - `git merge --abort; git reset -q --hard`;
+     - `git fetch origin`, `git checkout --detach origin/<your branch>`;
+     - `git merge --no-edit origin/main`.
+  2. **The build.** `scripts/ci_local.sh --only aarch64 --group "build (aarch64)"`.
+  3. **The groups.** Each group of the aarch64 part on that same tree, one operation each: `scripts/ci_local.sh --only aarch64 --group "aarch64: programs, shell and four CPUs"`, and so on. `scripts/ci_local.sh --list --only aarch64` names them.
+  4. **The logs.** Copy what you need into your track's directory in the same operation. The next run of anyone's `ci_local.sh` removes `/tmp/mind-core-*.log` and rewrites `/tmp/mind-ci-local`.
+- **The report** says where each part ran: "x86 part local; aarch64 part on PCU through Effector (Ubuntu 22.04, QEMU 8.2.x from qemu.org, AAVMF 2022.02)". Together they are one local gate in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of both parts passed on the same commit.
+- **In all, about 86 minutes on PCU** against 64 on the kernel session's machine, for the groups that pass.
+- **Known: "aarch64: boot and fault containment" fails on PCU.**
+  - QEMU's `vvfat` driver aborts as the guest writes its boot volume (`fat:rw:`), with `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - It does so with QEMU 8.2.2 and 8.2.10 from qemu.org alike. The same test passes on the kernel session's machine under Ubuntu's 8.2.2, which carries no `vvfat` patch.
+  - The cause is being looked for in [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Until it is fixed, run that one group on your own machine.
+
 ## 5. When something goes wrong
 
 - **A `timeout` with "agent did not acknowledge"** does not prove that nothing ran. Look at the operation's result and at the machine before you retry.
@@ -125,3 +157,4 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-09 | `PCU_585240b00e8a` | Build environment for `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup in `~un/.cargo`; the kernel track's clone | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 from the qemu.org release tarball, its signature verified (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), built for `x86_64` and `aarch64` with the tools, in `/opt/qemu-8.2.2`, links in `/usr/local/bin`. Its build dependencies from Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, at the maintainer's request (the same QEMU version as CI) |
+| 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 from the qemu.org release (the same signer) built in `~un/qemu-upstream/stage` to try the aarch64 boot test (000-KRN-0067), **not installed**; Ubuntu noble's QEMU patch list in `~un/qemu-noble-patches` (read only) | KRN |
