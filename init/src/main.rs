@@ -23,7 +23,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
+    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0; a read-only VFS client (its microcode)", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -294,6 +294,8 @@ impl Init {
                     .or_else(|| (0..8).map_while(|nth| platform::find_device(0x02_80_00, 0xFF_FF_FF, nth).ok()).find(broadcom)).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
+                // An unbadged, so read-only, client of vfs_server for the microcode in data/firmware/b43/ (550-KRN-0061).
+                if self.running(service_index("vfs_server")) { self.lend(&mut grants, SLOT_VFS, "vfs_server")?; }
             }
             "nvme" => {
                 // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.

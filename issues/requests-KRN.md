@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-10: the IDL fuzzer until `tests/idl_fuzz_host.rs` reaches main, and two from the drivers track; the toolchain installed once became [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), `bcm_wifi` as a boot service [550-KRN-0059](550-KRN-0059-bcm-wifi-at-boot.md), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-10; the microcode's VFS client became [550-KRN-0061](550-KRN-0061-bcm-wifi-reads-its-microcode.md); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), the toolchain installed once [000-KRN-0060](000-KRN-0060-toolchain-once-before-the-parallel-build.md), `bcm_wifi` as a boot service [550-KRN-0059](550-KRN-0059-bcm-wifi-at-boot.md), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -21,103 +21,6 @@ The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other 
 
 CI runs the test on every push, and a finding fails the host-test step.
 
-## The pinned toolchain installed once before the parallel build (000-KRN-0020)
-
-**Recorded by:** the assurance and drivers session (`ASR`, `DRV`), 2026-10-09, after the maintainer's build of `fast-test` failed.
-
-### Problem
-
-`rust-toolchain.toml` gained `components = ["rust-src"]` (e5a34c2, 250-APP-0020). On a machine with `nightly-2026-10-02` but without that component, `02_build.sh` starts every crate's cargo at once (000-KRN-0020). Each cargo asks rustup to add `rust-src`, and the downloads race on one file:
-
-```
-error: component download failed for rust-src: could not rename 'downloaded' file from
-'~/.rustup/downloads/7da4d…partial' to '…': No such file or directory (os error 2)
-```
-
-All 70 crates fail, and the build reports them as failures of the code. A single `rustup component add rust-src --toolchain nightly-2026-10-02` fixed it.
-
-### Plan (a proposal; the kernel track decides)
-
-- Before the parallel step, `02_build.sh` runs `rustup toolchain install` once in the repository. It reads `rust-toolchain.toml` and installs the channel, the components and the targets. A failure stops the build with that message.
-- `01_prepare_env.sh` does the same, so the two cannot disagree.
-
-### Acceptance criteria
-
-On a machine whose rustup lacks a component the toolchain file names, `02_build.sh` installs it once and the build succeeds. A failed install is reported as such, not as 70 failed crates.
-
-## `bcm_wifi` as a boot service (550-DRV-0020)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-09, for [550-DRV-0020](550-DRV-0020-bcm4331-read-only-probe.md), stage 1 of the MacBook Pro's Wi-Fi ([550-DRV-0006](550-DRV-0006-broadcom-wifi.md)). The maintainer put Wi-Fi first among the network tasks.
-
-### Problem
-
-`bcm_wifi/` is the driver for the MacBook Pro's Broadcom BCM4331 (`14E4:4331`, class `028000`). Its stage 1 is written and builds, and only reads the chip. Three things in the kernel track's files keep it from running:
-
-- it is not in `BOOT_SERVICES`/`BOOT_FILES`;
-- `init` does not start it;
-- `02_build.sh` does not build it.
-
-`BOOT_IMAGES` is 32 and sizes `BootInfo.programs`, so one more boot image is an ABI change.
-
-### Plan (a proposal; the kernel track decides)
-
-- **`common/abi.rs`:** `bcm_wifi` and `bcm_wifi.elf` in the boot lists, `BOOT_IMAGES` one larger, with the ABI version and its transition as the track does them.
-- **`02_build.sh`:** `"bcm_wifi:bcm_wifi:bcm_wifi.elf"` in the crate list (x86 only; there is no such chip on the aarch64 targets).
-- **`init`:**
-  - start `bcm_wifi` when `DEVICE_FIND` finds vendor `14E4` device `4331`, or class `02:80:00` from vendor `14E4`; otherwise `bcm_wifi NOT STARTED: NO DEVICE`, as for the other drivers;
-  - grant BAR0 (16 KiB MMIO) in `SLOT_DEV0`. Stage 1 needs nothing more.
-- **Later stages, for the same grant list when they come** (requests then):
-  - the MSI (or INTx) line;
-  - a DMA region for the transmit and receive rings (about 256 KiB);
-  - a read-only `vfs` client for the microcode file (`firmware/` on the boot volume, put there by the maintainer's build);
-  - a service endpoint for `NET`'s station.
-- **A configuration write limited to the BCMA window registers** (0x80, 0xAC, 0x84) of the driver's own function may be asked for later, if moving BAR0's windows turns out to be needed. Stage 1 does not move them.
-
-### Acceptance criteria
-
-On the MacBook Pro, `init` starts `bcm_wifi` with BAR0, and its stage-1 lines are in the boot log. On QEMU, which has no such chip, it is not started and says so.
-
-## A slot and a request flag for the system clipboard (000-APP-0032)
-
-**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0032](000-APP-0032-system-clipboard.md) (the tools plan's phase T4: the system clipboard).
-
-### Problem
-
-`edit` (Ctrl+C/X/V), `fm`'s command line and the shell's line each keep their own text, so nothing can be copied from one program to another. The tools track writes the clipboard: `idl/clipboard.wit` and a `clipboard` service that holds the text. It needs a way to reach the programs that ask for it.
-
-### Plan (a proposal; the kernel track decides)
-
-The same way as the parser service (109-KRN-0042):
-
-- `init` starts `clipboard` and gives the shell a client.
-- `SLOT_CLIPBOARD` and `REQUEST_CLIPBOARD` are added in `common/abi.rs` and `libmind::process`.
-- A launcher may fill the slot in a launch session.
-
-The shell lends its client only to a program that asks for it, and `msh` gets a `clipboard` word. What the service answers, and to whom, is in 000-APP-0032.
-
-### Acceptance criteria
-
-A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
-
-## A fixed slot for the shell's command endpoint (211-APP-0044)
-
-**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md) (`console` joined to the shell, split from 211-APP-0040 on 2026-10-10, when that task took the shell's own window, which needs no slot).
-
-### Problem
-
-The shell will serve `idl/shell.wit`: a client sends a command line and the shell runs it on its own authority. The endpoint goes from the shell to `wm` and from `wm` to `console` in a launch session, so both need a fixed slot to find it in. The application slots 1–29 are all named, and fixed slots end at `SLOT_DYNAMIC` (30), below which the kernel delivers capabilities into a receive slot.
-
-### Plan (a proposal; the kernel track decides)
-
-- `SLOT_SHELL` in `common/abi.rs` for applications, with `SLOT_DYNAMIC` moved up (the clipboard's `SLOT_CLIPBOARD`, asked for above, can come in the same change).
-- Nothing in `init`: the shell makes the endpoint and lends it itself. `REQUEST_SHELL` goes into `libmind::process` with the tools track's change.
-
-### Acceptance criteria
-
-A launcher fills `SLOT_SHELL` in a launch session and the program holds the endpoint there; the ABI version and the kernel's tests follow the move of `SLOT_DYNAMIC`.
-
-**Seen on the MacBook Pro (2026-10-10):** the kernel session's `fast-test` a00618b started `bcm_wifi` with BAR0, and its stage-1 lines are in the boot log ([550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done)). The acceptance criteria hold there; the request waits only for this to reach `main`.
-
 ## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
 
 **Recorded by:** the drivers track (`DRV`), 2026-10-10, from the MacBook Pro's run of [550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done).
@@ -134,71 +37,6 @@ The kernel turns bus mastering on when it grants a device's resource to a driver
 ### Acceptance criteria
 
 On QEMU and on the MacBook Pro, the hardware report shows bus mastering off for every function no driver was granted, and the drivers work as before.
-
-## A memory quota for `blockstore` that fits its disk's index
-
-**Recorded by:** the storage session, 2026-10-09, for [251-STO-0013](../issues-done/251-STO-0013-an-index-that-grows-with-the-medium.done) (the speech models of 251-STO-0010).
-
-### Problem
-
-The block store's index now grows with its medium: 56 bytes a slot, room for a block per 8 sectors (`slots_for` in `blockstore/src/store.rs`). `blockstore` allocates the slots at mount and halves them until its memory quota allows.
-
-Its quota is the default 16 MiB (`HEAP_MAX_BYTES`), so the index stays under about 14 MiB, roughly 230 000 blocks of 16 KiB: 3.5 GiB of objects. A model disk of several such models, or a store disk larger than that, would mount with an index too small to hold every block, and mounting refuses such a store whole.
-
-### Plan (a proposal; the kernel track decides)
-
-- In `init`'s quotas, `"blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() }`, next to `windows` and `compositor`, with 64 MiB. That is an index of 2^20 slots (56 MiB) and the rest of what it holds now.
-- Or a quota computed from the store disk's size, if `init` knows it when it starts `blockstore`.
-
-### Acceptance criteria
-
-On a store disk of 8 GiB, `[BLOCKSTORE] INDEX:` reports the slots `slots_for` asks for, not a halved number.
-
-## QEMU's vvfat crashes in the aarch64 boot suite on `main` at 661147f
-
-**Recorded by:** the storage session, 2026-10-09, from its local gate and runs of `tests/aarch64_smoke.py` on plain `main`.
-
-### Problem
-
-The group "aarch64: boot and fault containment" (`tests/aarch64_smoke.py`) fails because QEMU itself stops:
-
-```
-qemu-system-aarch64: block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion `j < s->mapping.next' failed.
-```
-
-The test boots from a directory served as `fat:rw:` (vvfat), and the crash comes after `[INIT] READY`. That is when services write to the boot volume (`keystore` makes `system/keystore` and its key on a fresh disk), and in the fault cases while `rtc` restarts.
-
-Measured on this machine, with the build of each tree:
-- `main` at 661147f: fails 2 runs in 3.
-- `main` at 661147f with `vfs_server/src/fat.rs` as it was before b8b172f (175-KRN-0047…0049): fails 2 runs in 4. So it is not the FAT audit fix.
-- The same group passed in the storage branch's gate merged with `main` at a9ac93f, before the kernel branch's 32 commits came in. That was one run, so it does not prove the group was reliable before.
-
-### Plan (a proposal; the kernel track decides)
-
-- Find which of the commits between a9ac93f and 661147f changes the writes vvfat sees, or the timing.
-- Either way, QEMU documents vvfat with `rw` as unreliable. The boot suite could boot from a raw FAT image made with mtools, as `tests/boot_slots_check.py` does, and keep vvfat for read-only directories.
-
-### Acceptance criteria
-
-The group passes in repeated runs (say 5 of 5) on `main`.
-
-## Free clusters counted a FAT sector at a time
-
-**Recorded by:** the storage session, 2026-10-10, from its local gate (the branch at 68d3b80 merged with `main` at 8f05728), for the `disks` check of 251-KRN-0031 and [251-STO-0014](../issues-done/251-STO-0014-importing-a-model-disk.done).
-
-### Problem
-
-`Volume::free_clusters` (`vfs_server/src/fat.rs`) calls `fat(cluster)` once per cluster, and each call reads its FAT sector through the cache: a zeroed 512-byte buffer, a search of 64 tags and a copy. A model disk's FAT32 volume of 256 MiB has 65 527 clusters, so the first `df` after it is mounted does that 65 527 times.
-
-Under TCG on aarch64 this took 2.2 s with `main`'s `vfs_server` and 9.0 to 9.6 s with the branch's, whose only difference in the call path is that a function was added elsewhere (`Volume::overwrite`). Every function on the path has the same size in both builds, so the time follows where the code lands. Over 8 s the `disks` check's `df` timed out in two groups ("aarch64: files, network and TLS", "aarch64: NVMe boot disk"). The second `df`, from the counted value, took 0.3 s. The branch gives that `df` 60 s for now.
-
-### Plan (a proposal; the kernel track decides)
-
-Count the free entries of each FAT sector read once: 512 sectors for that volume instead of 65 527 calls. A host test in `tests/fat_host.rs` can compare the count with the per-cluster one on FAT12, 16 and 32.
-
-### Acceptance criteria
-
-The first `df` of a 256 MiB FAT32 volume takes well under a second on aarch64 under TCG, and the counts match the per-cluster ones in the host test.
 
 ## A failed flush is reported again by the next one (211-DRV-0019)
 
@@ -226,26 +64,3 @@ In `main`'s run with the same debug lines, no flush write failed during the outa
 ### Acceptance criteria
 
 `tests/usb_image_smoke.py` passes with 211-DRV-0019's `usb_storage` (branch `claude/ASR-DRV`): the first `sync` after the disk is back says `OK`. A flush whose own write fails still reports it.
-
-## `bcm_wifi` reads its microcode: a read-only VFS client (550-DRV-0023)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, for [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), stage 2 of the MacBook Pro's Wi-Fi.
-
-### Problem
-
-Stage 2 of `bcm_wifi` loads Broadcom's microcode into the BCM4331's 802.11 core. The maintainer's build copies it onto the written disk under `data/firmware/b43/` (AGENTS.md section 3, `scripts/proprietary.sh`), never into the image. `init` gives `bcm_wifi` BAR0 only (550-KRN-0059 on `fast-test`), so it cannot read the file.
-
-### Plan (a proposal; the kernel track decides)
-
-In `init`'s `bcm_wifi` arm, the same read-only client `gpio` gets for `hwdocs/`:
-
-```rust
-grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
-```
-
-`vfs_server` starts before `bcm_wifi` (PIDs 12 and 18 on the MacBook Pro). Nothing else is needed for stage 2: the microcode goes through the core's registers, without DMA or an interrupt.
-
-### Acceptance criteria
-
-On the MacBook Pro, `bcm_wifi` opens `data/firmware/b43/ucode29_mimo.fw` and logs its size. Without the file it logs that it is missing and runs on. It cannot write anywhere or open a private directory.
-

@@ -8,6 +8,8 @@
 #   Branches are fetched and tested in temporary worktrees ($CI_LOCAL_WORK, default /tmp/mind-ci-work); this tree is not touched.
 #   --only  the parts to run (default: all three); --tap  also the netbench group over a tap interface (sudo);
 #   --no-merge  test branches as they are; --keep  keep the worktrees; --list  print the groups and exit.
+#   --group TEXT  only the groups whose name contains TEXT (repeatable); a part's build runs only when named, so the
+#     groups after it use the tree's earlier build: a long part in steps of its own (docs/effector.md).
 # Logs: $CI_LOCAL_LOGS (default /tmp/mind-ci-local), one file per group, one directory per branch.
 # Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm,
 # rustup; the toolchain comes from rust-toolchain.toml. Keep the groups in step with ci.yml.
@@ -25,9 +27,11 @@ KEEP=0
 TREE=""
 REFS=()
 ALL=0
+PICK=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --only) ONLY="$2"; shift 2 ;;
+        --group) PICK+=("$2"); shift 2 ;;
         --tap) TAP=1; shift ;;
         --list) LIST=1; shift ;;
         --main) REFS+=(main); shift ;;
@@ -99,17 +103,21 @@ tap_bench() {
         --suites netbench --tap mindtap0 --bench-runs 2
 }
 
+# With --group, a group runs only if its name contains one of the texts.
+selected() { local g; [[ ${#PICK[@]} == 0 ]] && return 0; for g in "${PICK[@]}"; do [[ $1 == *"$g"* ]] && return 0; done; return 1; }
 if [[ $LIST == 1 ]]; then
-    want host && printf '%s\n' "${HOST_GROUPS[@]%%|*}"
-    want x86 && printf '%s\n' "${X86_GROUPS[@]%%|*}"
-    want aarch64 && printf '%s\n' "${A64_GROUPS[@]%%|*}"
+    for entry in $(want host && printf '%s\n' "${HOST_GROUPS[@]%%|*}" | tr ' ' '\001'; want x86 && printf '%s\n' "${X86_GROUPS[@]%%|*}" | tr ' ' '\001';
+                   want aarch64 && printf '%s\n' "${A64_GROUPS[@]%%|*}" | tr ' ' '\001'); do
+        entry=$(tr '\001' ' ' <<<"$entry"); selected "$entry" && echo "$entry"
+    done
     exit 0
 fi
 
 cd "${TREE:-$ROOT}" || exit 2
 # Missing tools are reported up front, not as a failure in the middle of the run.
 missing=()
-for tool in cargo rustup python3 mcopy mkfs.fat qemu-img java swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+for tool in cargo rustup python3 mcopy mkfs.fat qemu-img swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+want host && { command -v java >/dev/null || missing+=(java); } # the models (TLC) only
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then
@@ -133,6 +141,7 @@ if [[ ${#REFS[@]} -gt 0 || $ALL == 1 ]]; then
     rm -rf "$LOGS"; mkdir -p "$LOGS" "$WORK"
     SUMMARY=(); FAILED=0
     opts=(--only "$ONLY"); [[ $TAP == 1 ]] && opts+=(--tap)
+    for g in "${PICK[@]}"; do opts+=(--group "$g"); done
     for ref in "${REFS[@]}"; do
         name=$(safe "$ref"); wt="$WORK/$name"
         if ! git rev-parse -q --verify "origin/$ref^{commit}" >/dev/null; then
@@ -168,6 +177,7 @@ run_part() {
     local entry name cmd log start status skip=0 n=${#NAMES[@]}
     for entry in "$@"; do
         name=${entry%%|*}; cmd=${entry#*|}
+        selected "$name" || continue
         n=$((n + 1)); log="$LOGS/$(printf '%02d' $n)-$(tr -c 'A-Za-z0-9\n' '_' <<<"$name").log"
         NAMES+=("$name")
         if [[ $skip == 1 ]]; then RESULTS+=(SKIP); TIMES+=(-); echo "SKIP  $name"; continue; fi
