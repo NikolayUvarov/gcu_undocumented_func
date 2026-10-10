@@ -4197,14 +4197,20 @@ def update_suite(args):
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
 
     def logged(line, timeout):
-        # The updater's lines, read with dmesg: the shell holds the serial line.
-        deadline = time.monotonic() + timeout
+        # The updater's lines, read with dmesg: the shell holds the serial line. A kernel line on the serial line can
+        # land inside the command's echo (the trial's confirmation does); that read is then made again.
+        deadline, log = time.monotonic() + timeout, ""
         while time.monotonic() < deadline:
-            log = vm.command("dmesg -s updater", raw=True)
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
             if line in log:
                 return log
             time.sleep(2)
-        raise AssertionError((line, vm.command("dmesg -s updater", raw=True)[-3000:]))
+        raise AssertionError((line, log[-3000:]))
     try:
         log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
