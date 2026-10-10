@@ -2,7 +2,7 @@
 
 **Type:** service (`vfs_server`) · **Owner:** `KRN` (done by the storage session at the maintainer's word, 2026-10-10) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track A · **Constitution:** MC-6.2, MC-12.1
 
-From the storage session's request in requests-KRN.md ("A failed flush's error reported again by the next flush that succeeds"). Its local gate was blocked by this bug, and the maintainer chose to have it fixed in that branch.
+From the storage session's request in requests-KRN.md ("A failed flush's error reported again by the next flush that succeeds"); the drivers track filed the same one for [211-DRV-0019](../issues/211-DRV-0019-usb-storage-refusals-and-resets.md), with the same fix proposed, and it is covered here too. Its local gate was blocked by this bug, and the maintainer chose to have it fixed in that branch.
 
 ## Problem
 
