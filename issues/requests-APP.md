@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -70,49 +70,3 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
-## The shell's window opens only when the user asks (211-APP-0040, 211-APP-0044)
-
-**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's report from the MacBook Pro (`fast-test` a00618b): "a program started by itself when `wm` started (the shell). It should not start by itself, only at the user's request from `wm`'s menu."
-
-### Problem
-
-211-APP-0040 opens the shell's window whenever the shell starts a window manager (`shell/src/main.rs`: "when the shell starts a program that asks for the window manager client, it first opens a text window titled `shell`"). So it appears at every start of `wm`, unasked.
-
-### Plan (a proposal; the tools track decides)
-
-- `wm` starts with no shell window.
-- The user opens it from `wm`'s menu (a `shell` item, under System or at the top), and by a key. Ctrl+Alt+F5 already opens it.
-- The menu item reaches the shell through its command endpoint, which is 211-APP-0044's: `SLOT_SHELL` comes from the kernel track in 211-KRN-0058, now in its gate on the way to `main`.
-- Until then, the item can be left out rather than the window opened at the start.
-
-### Acceptance criteria
-
-- The `wm` suite starts `wm` and finds no shell window.
-- The menu item opens one, and closing it with Alt+W leaves `wm` running.
-- On the MacBook Pro, `wm` starts with the desktop alone.
-
-## A window back to its content's size (158, 211)
-
-**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request after a run on the MacBook Pro: "the picture should stretch with the window, and the window should be able to take the size of its content, to get the original display back".
-
-### Problem
-
-- **The picture now follows the window.** `camera` scales its picture to whatever size `wm` gives its window (the kernel track's 158 change, f760714 on its branch).
-- **But nothing brings a window back to the size of its content.**
-  - For `camera` that is the stream's size, 320×240 by default, where the picture is drawn pixel for pixel.
-  - `wm` updates `Win::size` when the program takes a new size (`wm/src/main.rs`, the resize handling), so `Win::natural()` follows the current size, not the first.
-
-### Plan (a proposal; the tools track decides)
-
-- **Keep the first size.** `wm` keeps the size a pixel window opened at (the content size its program asked for), beside its current one.
-- **A "fit to content" command** sets the frame back to that size. It asks the program for it as a resize does, and keeps the frame on the screen.
-  - For example a key (`Alt+0`), a double click on the title, or a title-bar button beside zoom.
-  - The help screen and the top bar's key list name it.
-- **Text windows:** the same command can take the frame to the text's own size, if that is meaningful there.
-
-### Acceptance criteria
-
-- The `wm` suite opens `camera` (the synthetic source), resizes its window and sees the picture scaled.
-- The command brings the frame back to 320×240, and the picture is then the test pattern pixel for pixel.
-- On the MacBook Pro the FaceTime camera's window returns to its first size.

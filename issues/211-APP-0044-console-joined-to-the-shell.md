@@ -1,6 +1,6 @@
 # 211-APP-0044 — `console` joined to the shell, and `shell` in `wm`'s menu
 
-**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** `KRN`: `SLOT_SHELL` ([requests-KRN.md](requests-KRN.md); the kernel track takes it as a task of its own, 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** 211-KRN-0058 (`SLOT_SHELL` and `SLOT_CLIPBOARD`, ABI 5: in the kernel track's gate, 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) on 2026-10-10, when that task took the shell's own window, which needs no new slot. Numbered with the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, the maintainer's request after the run on the MacBook Pro).
 
@@ -9,7 +9,7 @@ Split from [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-con
 211-APP-0040 gives the shell a window of its own in `wm`. What it leaves needs a channel from `wm` and `console` to the shell:
 
 - `console` from the right-click menu still names the shell's commands and refuses them. The maintainer asks that it work fully, as the shell does.
-- `wm`'s menu cannot open the shell's window once it was closed (Ctrl+Alt+F5 and the next `wm` the shell starts do).
+- `wm`'s menu cannot open the shell's window: only Ctrl+Alt+F5 does (211-APP-0045: the shell no longer opens it as it starts `wm`). The maintainer wants it from the menu.
 - A program that needs what `wm` does not hold (the network, the log, the lifecycle client, the firmware's settings) runs without it when `wm` starts it. The shell could start it on its own authority and let it open its window in `wm`.
 
 A second shell in every window is not the way: it would spread the authority to reboot, kill, change the network policy and the firmware's boot order.
