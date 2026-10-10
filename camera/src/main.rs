@@ -63,11 +63,22 @@ impl Buffer {
     }
 }
 
-// A frame on the screen (or window), centred, clipped to it.
-fn show(screen: &Screen, pixels: &[u32], width: usize, height: usize) {
-    let (x0, y0) = (screen.width.saturating_sub(width) / 2, screen.height.saturating_sub(height) / 2);
-    for y in 0..height.min(screen.height) {
-        for x in 0..width.min(screen.width) { screen.pixel(x0 + x, y0 + y, pixels[y * width + x]); }
+// Where a frame goes: in a window scaled to fit it whole, its aspect kept; on a screen at its own size, clipped; centred
+// either way. The source column and row of each place are worked out once a size.
+struct Place { x0: usize, y0: usize, columns: Vec<usize>, rows: Vec<usize> }
+
+fn place(screen: &Screen, width: usize, height: usize, fit: bool) -> Place {
+    let (w, h) = if !fit { (width.min(screen.width), height.min(screen.height)) }
+                 else if screen.width * height <= screen.height * width { (screen.width, (screen.width * height / width).max(1)) }
+                 else { ((screen.height * width / height).max(1), screen.height) };
+    Place { x0: (screen.width - w) / 2, y0: (screen.height - h) / 2, columns: (0..w).map(|x| x * width / w).collect(), rows: (0..h).map(|y| y * height / h).collect() }
+}
+
+// A frame drawn at its place: the nearest source pixel for each one, so at its own size it is copied unchanged.
+fn show(screen: &Screen, place: &Place, pixels: &[u32], width: usize) {
+    for (y, &row) in place.rows.iter().enumerate() {
+        let line = &pixels[row * width..(row + 1) * width];
+        for (x, &column) in place.columns.iter().enumerate() { screen.pixel(place.x0 + x, place.y0 + y, line[column]); }
     }
 }
 
@@ -110,16 +121,19 @@ fn main(info: &'static BootInfo) {
     let Some(pages) = Pages::new(bytes) else { let _ = idl::close(CAMERA); fail("no memory for a frame") };
     let Ok(cap) = pages.share() else { let _ = idl::close(CAMERA); fail("cannot share the frame buffer") };
     let mut buffer = Buffer { pages, cap };
-    let screen = Screen::new(mind::windowed::pixels(info, width, height, "camera"));
+    let shown = mind::windowed::pixels(info, width, height, "camera");
+    let windowed = !core::ptr::eq(shown, info);
+    let screen = Screen::new(shown);
     if let Some(screen) = &screen { screen.clear(0); }
-    let result = run(&options, &mut buffer, screen.as_ref());
+    let result = run(&options, &mut buffer, screen, windowed);
     let _ = idl::close(CAMERA);
     match result { Ok(summary) => mind::println!("[CAMERA] {}", summary), Err(e) => fail(&e) }
 }
 
 // Shows frames until Esc, or takes the still, or records; returns what it did.
-fn run(options: &Options, buffer: &mut Buffer, screen: Option<&Screen>) -> Result<String, String> {
+fn run(options: &Options, buffer: &mut Buffer, mut screen: Option<Screen>, windowed: bool) -> Result<String, String> {
     let (width, height) = (options.width, options.height);
+    let mut at = screen.as_ref().map(|screen| place(screen, width, height, windowed));
     let bytes = width * height * 4;
     let mut recording = match &options.video {
         Some((seconds, path)) => {
@@ -137,8 +151,12 @@ fn run(options: &Options, buffer: &mut Buffer, screen: Option<&Screen>) -> Resul
     let (mut first, mut last, mut on_grid, mut frames, mut pictures) = (None::<idl::Frame>, None::<idl::Frame>, true, 0u32, 0u32);
     loop {
         let (frame, pixels) = buffer.read(bytes)?;
+        // A window the manager gave another size: the frame is scaled to it from now on (158).
+        if let Some(resized) = mind::windowed::pixels_resized() {
+            if let Some(new) = Screen::new(&resized) { new.clear(0); at = Some(place(&new, width, height, true)); screen = Some(new); }
+        }
         // In a window the frame is published at once, or wm shows it only when something else redraws (158).
-        if let Some(screen) = screen { show(screen, pixels, width, height); mind::windowed::flush(); }
+        if let (Some(screen), Some(at)) = (&screen, &at) { show(screen, at, pixels, width); mind::windowed::flush(); }
         let start = *first.get_or_insert(frame);
         on_grid &= last.is_none_or(|l| frame.sequence > l.sequence) && frame.timestamp_us - start.timestamp_us == (frame.sequence - start.sequence) as u64 * period_us;
         last = Some(frame);
