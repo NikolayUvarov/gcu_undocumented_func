@@ -28,8 +28,9 @@ pub const BACKGROUND: u32 = 0x101418;
 /// What a line typed asks for: console's own commands; a command of the shell, which console cannot do (it holds
 /// no process control and no network of the shell's); a program (`run` starts a program even where a command has
 /// its name, as `run ping` the IPC demo).
+/// `About`: what one of console's commands or the shell's does (`help <command>`, `<command> -h`; 000-APP-0054).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str, args: &'a str }, Shell(&'a str), Run { name: &'a str, args: &'a str } }
+pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str, args: &'a str }, Shell(&'a str), Run { name: &'a str, args: &'a str }, About(&'a str) }
 
 /// Commands console does itself, with what it holds (issue u006).
 pub const BUILTINS: [&str; 10] = ["ps", "ls", "cat", "date", "time", "ping", "mkdir", "rm", "mv", "write"];
@@ -41,6 +42,27 @@ pub const SHELL_ONLY: [&str; 32] = ["kill", "fg", "logs", "stop", "boot", "ip", 
     "reboot", "keymap", "screenshot"];
 /// Of those, the ones the shell runs in its own window after the user agrees there (shell/src/clients.rs).
 pub const ASKED: [&str; 14] = ["kill", "stop", "reboot", "budget", "netrevoke", "netpolicy", "logs", "stat", "pmap", "logger", "nslookup", "fetch", "https", "tpm"];
+/// Console's own commands, a line each, for `help <command>` and `<command> <help key>` (000-APP-0054).
+pub const LINES: [(&[&str], &str); 12] = [
+    (&["ps"], "ps: the tasks, from sysmon"),
+    (&["ls"], "ls [dir]: a directory's entries and sizes (ram:, log:, data/, docs/, …)"),
+    (&["cat"], "cat <file>: a file's text, up to 16 KiB"),
+    (&["date"], "date: the date and time from the RTC; date set YYYY-MM-DD HH:MM[:SS]: the shell sets the clock after you agree in its window"),
+    (&["time"], "time: the time of day and the uptime"),
+    (&["ping"], "ping <host>: the network ping, on console's flow grant (run ping: the IPC demo)"),
+    (&["mkdir", "rm", "mv", "write"], "mkdir <dir>, rm <path>, mv <from> <to>, write <file> <text>: change files on ram:, on log: and in data/"),
+    (&["list"], "list: the programs on the boot disk"),
+    (&["clear", "cls"], "clear, cls (Ctrl+L): clear the screen"),
+    (&["exit", "quit"], "exit, quit: close console"),
+    (&["run"], "run <program> [arguments]: start a program even where a command has its name"),
+    (&["help", "?"], "help, ? [command or program]: console's help; with a name, what it does (as <name> -h, /? or --help)"),
+];
+
+/// Console's line for its command `name`.
+pub fn line_of(name: &str) -> Option<&'static str> { LINES.iter().find(|(names, _)| names.contains(&name)).map(|(_, line)| *line) }
+
+// Whether `name` is a command, console's or the shell's, rather than a program.
+fn is_command(name: &str) -> bool { line_of(name).is_some() || SHELL_ONLY.contains(&name) }
 
 // The first word and the rest.
 fn split(line: &str) -> (&str, &str) { line.split_once(char::is_whitespace).map_or((line, ""), |(n, a)| (n, a.trim())) }
@@ -51,7 +73,10 @@ pub fn parse(line: &str) -> Command<'_> {
     let (name, args) = split(line.trim());
     match name {
         "" => Command::Nothing,
-        "help" | "?" => Command::Help,
+        // A help key after a command: its line; after a program, the program prints its own text (`run`).
+        _ if crate::process::asks_help(args) && is_command(name) => Command::About(name),
+        "help" | "?" if args.is_empty() => Command::Help,
+        "help" | "?" => { let (name, _) = split(args); if is_command(name) { Command::About(name) } else { Command::Run { name: program(name), args: "--help" } } }
         "clear" | "cls" => Command::Clear,
         "exit" | "quit" => Command::Exit,
         "list" if args.is_empty() => Command::List,

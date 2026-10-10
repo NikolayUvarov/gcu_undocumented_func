@@ -598,11 +598,11 @@ impl Shell {
         }
     }
 
-    // `<program> --help`: a console program prints its own text into the shell; one with a screen would print it out
-    // of sight — it exits before it is in front, and its output goes with it — so the shell shows the same text from
-    // the program's file instead of starting it.
+    // `<program> --help` (or another help key, 000-APP-0054): a console program prints its own text into the shell; one
+    // with a screen would print it out of sight — it exits before it is in front, and its output goes with it — so the
+    // shell shows the same text from the program's file instead of starting it.
     fn help_instead(&mut self, name: &[u8], args: &[u8]) -> bool {
-        if args != b"--help" { return false; }
+        if !mind::process::asks_help(core::str::from_utf8(args).unwrap_or("")) { return false; }
         let Ok(name) = core::str::from_utf8(name) else { return false };
         let console = loader::inspect_requests(Endpoint::LOADER, name).ok().and_then(Result::ok).is_some_and(|r| r & mind::process::REQUEST_CONSOLE != 0);
         !console && programs::show_about(&mut self.term, name)
@@ -636,6 +636,8 @@ impl Shell {
         if cmd.is_empty() { return; }
         // msh (issue 094): its statements at the prompt, `msh` and script files.
         if msh::is_statement(line) { return msh::statement(self, line); }
+        // `<command> <help key>` (000-APP-0054): the command's lines of `help`, as every program answers the same keys.
+        if mind::process::asks_help(core::str::from_utf8(args).unwrap_or("")) && programs::is_command(cmd, HELP) { return programs::help(&mut self.term, cmd, HELP); }
         if is(b"msh") { return msh::command(self, args); }
         if msh::is_script(cmd) { return msh::command(self, line); }
         if is(b"run") || is(b"boot") {

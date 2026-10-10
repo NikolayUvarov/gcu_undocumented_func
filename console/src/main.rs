@@ -9,7 +9,7 @@ extern crate alloc;
 
 mod builtins;
 mod screen;
-pub use mind::{keys, tui};
+pub use mind::{keys, process, tui};
 
 use alloc::format;
 use alloc::string::String;
@@ -31,6 +31,7 @@ A console program prints here; one with a screen opens a window of its own. run 
 command has its name (run ping: the IPC demo).\n\
 Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
 clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
+help <command or program>, or the name and -h, /? or --help: what it does (a program prints its own text).\n\
 kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: console sends them to the\n\
 shell, which runs them on its authority; for process control, the network, logs and the like it asks first in its own\n\
 window (titled shell). Without the shell's commands, type them in the shell's window or on its screen.";
@@ -47,7 +48,8 @@ fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{}: a window manager; start it from the shell", name)); }
-    let console = mind::process::console_run(requests, args); // `clock --line` too (issue u016)
+    // `clock --line` too (issue u016); a help key too, so a program with a screen prints its text here (000-APP-0054).
+    let console = mind::process::console_run(requests, args) || mind::process::asks_help(args);
     let session = loader::begin(Endpoint::LOADER, name, args).map_err(lost)?.map_err(failed)?;
     let grant = |slot: usize, cap: usize| matches!(loader::grant(Endpoint::LOADER, session, slot as u8, cap), Ok(Ok(())));
     if console { grant(SLOT_CONSOLE, output); } else if mind::windowed::active() { grant(SLOT_WINDOW, SLOT_WINDOW); }
@@ -149,6 +151,12 @@ fn main(info: &'static BootInfo) {
                 Command::Exit => break,
                 Command::List => list(&mut screen),
                 Command::Builtin { name, args } => builtins::run(&mut screen, name, args),
+                Command::About(name) => match screen::line_of(name) {
+                    Some(line) => screen.say(line, Kind::Output),
+                    // A command of the shell: its lines of `help`, from the shell (help is taken at once).
+                    None if holds(SLOT_SHELL) => to_shell = Some(format!("help {}", name)),
+                    None => screen.say(&format!("{}: a command of the shell; help {} there says what it does", name, name), Kind::Note),
+                },
                 Command::Shell(name) if holds(SLOT_SHELL) => {
                     // To the shell, once the line and a note are drawn: the shell may ask in its window first.
                     if screen::ASKED.contains(&name) || name == "date" { screen.say(&format!("{}: the shell asks you first in its own window, titled shell (Y or N there)", name), Kind::Note); }

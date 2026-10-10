@@ -32,17 +32,26 @@ fn summary<'a>(name: &str, out: &'a mut [u8]) -> &'a str {
     line.split_once(" — ").filter(|(first, _)| first.eq_ignore_ascii_case(name)).map_or(line, |(_, rest)| rest)
 }
 
+// Whether a line of the shell's `help` (`- ls [path], cat <file>: files`) names `name`.
+fn names(line: &str, name: &str) -> bool {
+    let part = line.strip_prefix("- ").map_or("", |rest| rest.split(": ").next().unwrap_or(""));
+    part.split(", ").filter_map(|item| item.split_whitespace().next()).any(|word| word.eq_ignore_ascii_case(name))
+}
+
+/// Whether `name` is one of the shell's `commands` (a line of `help` names it).
+pub fn is_command(name: &[u8], commands: &str) -> bool {
+    let name = core::str::from_utf8(name).unwrap_or("").trim();
+    !name.is_empty() && commands.lines().any(|line| names(line, name))
+}
+
 /// `help <name>`: the lines of the shell's `commands` that name it, and what the program of that name says about
 /// itself (or that it is a service).
 pub fn help(out: &mut Console, name: &[u8], commands: &str) {
     let name = core::str::from_utf8(name).unwrap_or("").trim();
     let mut found = false;
-    for line in commands.lines().filter(|line| line.starts_with("- ")) {
-        let part = line[2..].split(": ").next().unwrap_or("");
-        if part.split(", ").filter_map(|item| item.split_whitespace().next()).any(|word| word.eq_ignore_ascii_case(name)) {
-            let _ = writeln!(out, "{}", line);
-            found = true;
-        }
+    for line in commands.lines().filter(|line| names(line, name)) {
+        let _ = writeln!(out, "{}", line);
+        found = true;
     }
     let mut text = [0u8; 2048];
     if let Some(about) = about(name, &mut text) {
@@ -56,7 +65,7 @@ pub fn help(out: &mut Console, name: &[u8], commands: &str) {
     if !found { let _ = writeln!(out, "ERROR: NO COMMAND OR PROGRAM CALLED {}. HELP: THE SHELL'S COMMANDS. LIST: THE PROGRAMS.", name); }
 }
 
-/// `<program> --help` for a program with a screen: what it would print goes to its own screen and COM1, so the shell
+/// `<program> --help` (or another help key) for a program with a screen: what it would print goes to its own screen and COM1, so the shell
 /// shows the same text from its file instead of starting it. False if it has none.
 pub fn show_about(out: &mut Console, name: &str) -> bool {
     let mut text = [0u8; 2048];

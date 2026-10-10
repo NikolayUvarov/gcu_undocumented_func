@@ -14,6 +14,11 @@ mod tui;
 mod output;
 #[path = "../console/src/screen.rs"]
 mod screen;
+// libmind's help keys (000-KRN-0066) without its system calls; `help_keys_are_libminds` holds them to the source.
+mod process {
+    pub const HELP_KEYS: [&str; 7] = ["--help", "-help", "-h", "/help", "/h", "/?", "-?"];
+    pub fn asks_help(args: &str) -> bool { HELP_KEYS.iter().any(|key| args.trim().eq_ignore_ascii_case(key)) }
+}
 
 use abi::*;
 use keys::{event, Key};
@@ -136,6 +141,36 @@ fn the_command_line() {
     assert_eq!(parse("date"), Command::Builtin { name: "date", args: "" });
     assert_eq!(parse("netpolicy add x"), Command::Shell("netpolicy"));
     assert!(screen::ASKED.iter().all(|c| screen::SHELL_ONLY.contains(c)));
+}
+
+#[test]
+fn help_keys_are_libminds() {
+    let source = include_str!("../libmind/src/process.rs");
+    assert!(source.contains(&format!("pub const HELP_KEYS: [&str; 7] = {:?};", process::HELP_KEYS)));
+    assert!(source.contains("pub fn asks_help(args: &str) -> bool { HELP_KEYS.iter().any(|key| args.trim().eq_ignore_ascii_case(key)) }"));
+}
+
+#[test]
+fn a_help_key_after_a_command_says_what_it_does() {
+    // 000-APP-0054: console's commands answer the keys every program answers, with their line; the shell's commands
+    // with the shell's lines; a program prints its own text (console runs it with a help key as a console program).
+    for (line, name) in [("date -h", "date"), ("date /?", "date"), ("ls --help", "ls"), ("ps -help", "ps"), ("ps -HELP", "ps"), ("write /H", "write"),
+                         ("help ls", "ls"), ("help -h", "help"), ("exit -?", "exit"), ("run /help", "run"), ("kill -h", "kill"), ("help free", "free")] {
+        assert_eq!(parse(line), Command::About(name), "{}", line);
+    }
+    assert_eq!(parse("fm /?"), Command::Run { name: "fm", args: "/?" });
+    assert_eq!(parse("run fm -h"), Command::Run { name: "fm", args: "-h" });
+    assert_eq!(parse("help fm"), Command::Run { name: "fm", args: "--help" });
+    assert_eq!(parse("help"), Command::Help);
+    // Not a help key alone: the command as before.
+    assert_eq!(parse("ls -h docs"), Command::Builtin { name: "ls", args: "-h docs" });
+    assert_eq!(parse("date set -h"), Command::Shell("date"));
+    // Each of console's commands has its line, and the shell's commands are the shell's to explain.
+    for name in screen::BUILTINS.iter().chain(["list", "clear", "cls", "exit", "quit", "run", "help", "?"].iter()) {
+        let line = screen::line_of(name).unwrap_or_else(|| panic!("{}", name));
+        assert!(line.starts_with(name) || line.contains(&format!(", {}", name)) || line.contains(&format!(" {} ", name)), "{}: {}", name, line);
+    }
+    assert!(screen::SHELL_ONLY.iter().all(|c| screen::line_of(c).is_none()));
 }
 
 #[test]
