@@ -201,15 +201,19 @@ fn files(run: &mut Run) {
         };
         run.report(name, verdict);
     }
-    // Every program on the boot disk: its ELF accepted by the loader.
+    // Every program on the boot disk: its ELF accepted by the loader. The list gives at most 16 characters of a name, so
+    // a name that long may be cut: such a program is named in the log, not inspected.
     let verdict = match loader::list(Endpoint::LOADER) {
         Ok(list) => {
-            let bad: Vec<String> = list.as_slice().iter().filter(|p| !p.service).filter_map(|p| match loader::inspect(Endpoint::LOADER, p.name.as_str()) {
+            let (cut, whole): (Vec<&loader::Program>, Vec<&loader::Program>) = list.as_slice().iter().filter(|p| !p.service).partition(|p| p.name.as_str().len() >= 16);
+            let bad: Vec<String> = whole.iter().filter_map(|p| match loader::inspect(Endpoint::LOADER, p.name.as_str()) {
                 Ok(Ok(_)) => None,
                 other => Some(format!("{} ({:?})", p.name.as_str(), other.map(|r| r.err()))),
             }).collect();
             run.log.detail(&format!("programs: {}", list.as_slice().iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(" ")));
-            if bad.is_empty() { pass(format!("{} programs, each one's ELF accepted", list.len())) } else { fail(format!("refused: {}", bad.join(", "))) }
+            if !cut.is_empty() { run.log.detail(&format!("not inspected, the list cuts their names at 16 characters: {}", cut.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(" "))); }
+            let uncut = if cut.is_empty() { String::new() } else { format!("; {} long names not checked", cut.len()) };
+            if bad.is_empty() { pass(format!("{} programs accepted{}", whole.len(), uncut)) } else { fail(format!("refused: {}", bad.join(", "))) }
         }
         Err(e) => fail(format!("the loader did not answer: {:?}", e)),
     };
