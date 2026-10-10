@@ -28,13 +28,15 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("view — text and hex viewer.\nUsage: view <file>\n↑↓ PgUp PgDn Space Home End scroll, F2 wrap, F4 hex or text, F5 go to, F7 search, Shift+F7 next, F1 keys, Esc F3 F10 quit.");
     let path = mind::process::args_str().trim();
-    if path.is_empty() { mind::println!("[VIEW] USAGE: VIEW <FILE>"); return; }
+    // A status that is not 0 keeps what view said in a window in wm (211-APP-0039): from the menu, with no file, it
+    // is not silent (000-APP-0056).
+    if path.is_empty() { mind::println!("[VIEW] USAGE: VIEW <FILE>"); mind::process::exit_with(2); }
     let file = match File::open(path) {
         Ok(file) => file,
-        Err(error) => { mind::println!("[VIEW] CANNOT OPEN {}: {:?}", path, error); return; }
+        Err(error) => { mind::println!("[VIEW] CANNOT OPEN {}: {:?}", path, error); mind::process::exit_with(1); }
     };
     let Some(mut term) = Terminal::open(info, "view") else { return };
-    let Some(mut window) = Pages::new(64 * 1024) else { mind::println!("[VIEW] OUT OF MEMORY"); return };
+    let Some(mut window) = Pages::new(64 * 1024) else { mind::println!("[VIEW] OUT OF MEMORY"); mind::process::exit_with(1) };
     let size = file.size();
     let mut viewer = Viewer::new(Disk(file), window.as_mut_slice(), path);
     mind::println!("[VIEW] OPEN {} {} BYTES", path, size);
