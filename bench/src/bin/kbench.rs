@@ -7,10 +7,10 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::out::{self, Log};
-use bench::report::{self, Align, Stats, Table};
-use core::hint::black_box;
 use bench::child::{self, ECHO, EXIT};
+use bench::measure::{batches, now, Run};
+use bench::report;
+use core::hint::black_box;
 use mind::abi::{CAP_READ, CAP_WRITE, ERR_LIMIT};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Pages;
@@ -24,47 +24,6 @@ const GROUPS: [(&str, &str); 6] = [
 const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]";
 const MIB: usize = 1024 * 1024;
 const PAGE: usize = 4096;
-
-fn now() -> u64 { mind::time::monotonic_ns() }
-
-// `samples` samples, each the mean of `batch` runs of `op`.
-fn batches(samples: usize, batch: usize, mut op: impl FnMut()) -> Vec<u64> {
-    (0..samples).map(|_| { let t = now(); for _ in 0..batch { op(); } (now() - t) / batch as u64 }).collect()
-}
-
-struct Run { log: Log, table: Table, quick: bool, rows: usize, failed: usize, notes: Vec<String> }
-
-impl Run {
-    // The repetitions of a measurement: a tenth with --quick, at least 3.
-    fn reps(&self, full: usize) -> usize { if self.quick { (full / 10).max(3) } else { full } }
-
-    fn group(&mut self, title: &str) {
-        let line = self.table.row(&[title]);
-        self.log.both(&line);
-        self.log.detail(&format!("== {} (at {})", title, report::duration(self.log.elapsed())));
-    }
-
-    // A measured row: `samples` in ns, each the mean of `batch` operations.
-    fn row(&mut self, name: &str, samples: &mut [u64], batch: usize) -> Stats {
-        let stats = Stats::of(samples);
-        self.rows += 1;
-        let line = self.table.row(&[&format!("  {}", name), &report::duration(stats.median), &report::bar(stats.median, 15), &report::duration(stats.min), &report::duration(stats.p99)]);
-        self.log.both(&line);
-        let unit = if batch > 1 { format!("ns, each sample the mean of {} operations", batch) } else { String::from("ns") };
-        self.log.detail_all(&report::stats_lines(name, &unit, &stats));
-        stats
-    }
-
-    fn fail(&mut self, name: &str, why: &str) {
-        self.rows += 1;
-        self.failed += 1;
-        let line = self.table.row(&[&format!("  {}", name), "failed", why]);
-        self.log.both(&line);
-        self.log.detail(&format!("{}: FAILED: {}", name, why));
-    }
-
-    fn note(&mut self, text: String) { self.notes.push(text); }
-}
 
 fn syscalls(run: &mut Run) {
     let n = run.reps(1000);
@@ -206,16 +165,7 @@ fn main(info: &'static mind::BootInfo) {
     let quick = words.contains(&"--quick");
     let chosen: Vec<&str> = words.iter().copied().filter(|w| *w != "--quick").collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("kbench: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }
-    let table = Table::new(&[(24, Align::Left), (8, Align::Right), (15, Align::Left), (8, Align::Right), (8, Align::Right)]);
-    let mut run = Run { log: Log::new("kbench"), table, quick, rows: 0, failed: 0, notes: Vec::new() };
-    run.log.both("kbench — the kernel's performance (176-KRN-0062)");
-    for line in out::machine(info) { run.log.both(&line); }
-    run.log.both(if quick { "--quick: a tenth of the repetitions" } else { "full repetitions (--quick: a tenth)" });
-    run.log.log(&format!("arguments: {}", args));
-    let (top, header, middle, bottom) = (run.table.top(), run.table.row(&["measurement", "median", "8 ns  log  1 s", "min", "p99"]), run.table.middle(), run.table.bottom());
-    run.log.both(&top);
-    run.log.both(&header);
-    run.log.both(&middle);
+    let mut run = Run::start("kbench", "kbench — the kernel's performance (176-KRN-0062)", info, args, quick);
     for (name, title) in GROUPS {
         if !chosen.is_empty() && !chosen.contains(&name) { continue; }
         run.group(title);
@@ -228,14 +178,5 @@ fn main(info: &'static mind::BootInfo) {
             _ => processes(&mut run),
         }
     }
-    run.log.both(&bottom);
-    let notes = core::mem::take(&mut run.notes);
-    for note in notes { run.log.both(&format!("  • {}", note)); }
-    let summary = format!("kbench: {} measurements, {} failed, {}", run.rows, run.failed, report::duration(run.log.elapsed()));
-    run.log.log(&summary);
-    match run.log.save() {
-        Ok(path) => mind::println!("{}; full log: {}", summary, path),
-        Err(why) => mind::println!("{}; the log was not written ({})", summary, why),
-    }
-    if run.failed > 0 { mind::process::exit_with(1); }
+    run.finish("kbench");
 }

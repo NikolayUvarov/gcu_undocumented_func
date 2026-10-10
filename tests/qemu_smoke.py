@@ -1336,10 +1336,39 @@ def check_tool_check(vm):
     print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
 
 
+# bench's rows that every suite machine has (176-KRN-0064); data/ and log: are skipped where the disk has neither, the
+# camera is the gateway's synthetic source, audio_gw runs on x86 only.
+BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "vfs_server: attributes", "sysmon: memory figures",
+              "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
+
+
+def bench_tool_check(vm):
+    """bench: files, service round trips, hashing and the synthetic camera's frames; skipped rows name their reason."""
+    vm.send("bench --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="bench --quick\n")
+    rows = bench_rows(output, BENCH_ROWS)
+    frames = re.search(r"│   frame interval (\d+)x(\d+) +│ *([\d.]+ \S+) │", output)
+    assert frames and 1e6 < nanoseconds(frames[3]) < 2e9, output[-3000:]
+    skipped = re.findall(r"│   (.+?) +│  skipped │ (.+?) +│", output)
+    assert all(why for _, why in skipped), skipped
+    summary = re.search(r"bench: (\d+) measurements, 0 failed", output)
+    assert summary and int(summary[1]) >= len(BENCH_ROWS) + 1, output[-2000:]
+    rates = re.search(r"ram: write ([\d.]+ \S+/s), read ([\d.]+ \S+/s)", output)
+    sha = re.search(r"SHA-256 at ([\d.]+ \S+/s)", output)
+    assert rates and sha, output[-2000:]
+    path, log = tool_log(vm, output, "bench")
+    for name in BENCH_ROWS:
+        require(log, f"{name} (")
+    print(f"PASS: bench: {summary[1]} measurements (ram: write {rates[1]}, read {rates[2]}; SHA-256 {sha[1]}; synthetic camera "
+          f"{frames[1]}x{frames[2]}, frame interval {frames[3]}; skipped: {', '.join(f'{n} ({w})' for n, w in skipped)}), log {path}", flush=True)
+    require(vm.command("bench nosuch"), "bench: no group nosuch")
+
+
 def bench_suite(vm):
     """176: the utilities that check the system and measure it, from the shell."""
     check_tool_check(vm)
     kbench_check(vm)
+    bench_tool_check(vm)
 
 
 def table_row(screen, pattern):
@@ -6204,6 +6233,9 @@ def main():
                 (disk / "data").mkdir(exist_ok=True)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
+            if suite == "bench":
+                (disk / "video").mkdir()  # the video gateway's test pattern stands in for a camera (issue 158)
+                (disk / "video/synthetic").write_bytes(b"the video gateway's test pattern stands in for a camera\n")
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
