@@ -167,9 +167,9 @@ impl Launcher {
         // client, its window broker client, where its output goes (issue 162), sysinfo, lifecycle control, the system log,
         // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
         // surface of one window (issue u014), the pin controller's client (issue 207), the video gateway's (issue 158) or the
-        // TLS service's (351-KRN-0034).
+        // TLS service's (351-KRN-0034), the shell's command endpoint or the clipboard's (211-KRN-0058).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if !LAUNCH_SLOTS.contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         self.keep(owner, id, slot)
     }
 

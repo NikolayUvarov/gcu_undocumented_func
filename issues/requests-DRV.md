@@ -15,7 +15,7 @@ The kernel session has set the Cirrus codec's amplifier GPIOs for Apple's machin
 
 ## `bcm_wifi` stage 1 on the MacBook Pro: the chip is read, the SPROM is not (550-DRV-0020)
 
-**Recorded by:** the kernel track (KRN), 2026-10-10, from the maintainer's run of `fast-test` a00618b (`log:boot0001.log`). [550-KRN-0059](550-KRN-0059-bcm-wifi-at-boot.md) started the driver there.
+**Recorded by:** the kernel track (KRN), 2026-10-10, from the maintainer's run of `fast-test` a00618b (`log:boot0001.log`). [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done) started the driver there.
 
 ### What the log shows
 
