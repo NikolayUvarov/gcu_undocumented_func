@@ -87,6 +87,7 @@ USER_CRATES=(
     "tts:tts:tts.elf"
     "video_gw:video_gw:video_gw.elf"
     "virtio_net:virtio_net:virtio_net.elf"
+    "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
