@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Verify the packaged files, then boot the actual RAW image as a USB device (x86_64, or aarch64 with --arch aarch64)."""
 import argparse
+import datetime
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -12,7 +14,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, qemu_path, read_payloads
+from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, release_tool, sign_manifest, slots
 import qemu_smoke
 from qemu_smoke import MTOOLS_ENV, VM, files_check, fsck_volume, heap_used, require, task_rows
 
@@ -40,8 +42,33 @@ def main():
     shutil.copyfile(args.image, booted)
     try:
         run(args, booted)
+        slots_check(args, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def slots_check(args, work):
+    """351-UPD-0016: the same build packed as `make_usb_image.py --slots --channel` packs it, with a channel of release 1
+    naming its manifest, signed with the public test release key the updater is built with: it boots from slot A,
+    vfs_server's update zone is slot B, and the updater knows the running version."""
+    payloads = read_payloads(ROOT / ARCHES[args.arch]["root"], args.arch)
+    expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = release_tool.channel_bytes("stable", 1, 1, expires, {args.arch: hashlib.sha256(payloads["MANIFEST"]).hexdigest()})
+    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    image = work / "slots.img"
+    pack(slots(payloads, args.arch, channel), image, find_qemu_img(os.environ.get("QEMU_IMG")), args.arch)
+    vm = VM(args, qemu_path(image, args.qemu), usb=True, snapshot=False)
+    try:
+        require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
+        require(vm.service_logs("vfs_server", "UPDATE ZONE"), "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE")
+        require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 1; THE NEWER RECORD: SLOT A CONFIRMED")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        log = Path(tempfile.gettempdir()) / f"mind-core-usb-slots{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
+        log.write_text(vm.log)
+    print(f"PASS ({args.arch}): the image packed with slots boots from slot A; the update zone is slot B; the updater reads "
+          "the running version from the release channel kept in slot A", flush=True)
 
 
 def debug_mode(vm, name):
