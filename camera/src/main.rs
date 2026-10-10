@@ -137,7 +137,8 @@ fn run(options: &Options, buffer: &mut Buffer, screen: Option<&Screen>) -> Resul
     let (mut first, mut last, mut on_grid, mut frames, mut pictures) = (None::<idl::Frame>, None::<idl::Frame>, true, 0u32, 0u32);
     loop {
         let (frame, pixels) = buffer.read(bytes)?;
-        if let Some(screen) = screen { show(screen, pixels, width, height); }
+        // In a window the frame is published at once, or wm shows it only when something else redraws (158).
+        if let Some(screen) = screen { show(screen, pixels, width, height); mind::windowed::flush(); }
         let start = *first.get_or_insert(frame);
         on_grid &= last.is_none_or(|l| frame.sequence > l.sequence) && frame.timestamp_us - start.timestamp_us == (frame.sequence - start.sequence) as u64 * period_us;
         last = Some(frame);
