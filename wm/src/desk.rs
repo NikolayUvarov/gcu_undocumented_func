@@ -2,7 +2,9 @@
 //! corner — stacked bottom to top with the top one focused; moving and resizing by keys and by the mouse; snapping to
 //! halves, quarters and the whole screen; what each cell of the screen shows. No system calls: tests/wm_host.rs.
 use crate::keys::{Code, Key};
+use crate::background::Config;
 use crate::menu::{self, Menu};
+use crate::settings::{Outcome, Settings};
 use crate::tui::widgets::{message, Edit, InputLine};
 use crate::tui::{Cell, Grid, Line, Rect, Style, Theme};
 use alloc::format;
@@ -374,6 +376,8 @@ pub enum Action {
     /// A mouse event for the program of window `id` (issue u001): at cell (x, y) of its content, with the buttons
     /// held and the wheel's steps.
     Pointer { id: u32, x: usize, y: usize, buttons: u8, wheel: i32 },
+    /// Settings changed the desktop background (000-APP-0048): use it and keep it.
+    Settings(crate::background::Config),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,9 +389,10 @@ enum Drag {
 }
 
 /// `List`: the window list (211-APP-0014), the selected window and its place in the list (kept when it closes).
-pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize } }
+/// `Settings`: one window for what can be configured (000-APP-0048).
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings) }
 
-pub const HELP: [&str; 18] = [
+pub const HELP: [&str; 19] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+F — full screen for the window in front, without the frame or the bars; Alt+F again: its frame back",
@@ -398,6 +403,7 @@ pub const HELP: [&str; 18] = [
     "Alt+P or a right click on the desktop — the programs by category: a click or Enter starts one",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
+    "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU)",
     "The items of the top bar can be clicked instead of their keys (\"wm\": the programs)",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
     "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
@@ -411,11 +417,11 @@ pub const HELP: [&str; 18] = [
 /// What a click on an item of the top bar does (issue u008): the same as its key — for a host that keeps Alt+Tab and
 /// the like for itself. "wm" at the left opens the programs, as Alt+P does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full }
+pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full, Settings }
 
-pub const BAR: [(&str, Bar); 9] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
+pub const BAR: [(&str, Bar); 10] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
                                     ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave), ("Alt+L windows", Bar::List),
-                                    ("Alt+F full", Bar::Full)];
+                                    ("Alt+F full", Bar::Full), ("Alt+S settings", Bar::Settings)];
 
 /// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
 /// then `│ label ` for each item that fits.
@@ -444,10 +450,12 @@ pub struct Wm {
     grab: Option<u32>,
     /// The desktop menu's programs by category (issue u003), from the boot disk.
     pub programs: Vec<menu::Item>,
+    /// The desktop background's configuration, as Settings shows and changes it (000-APP-0048).
+    pub background: Config,
 }
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new() } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default() } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -486,6 +494,13 @@ impl Wm {
                 return Action::Redraw;
             }
             Mode::List { .. } => return self.list_key(key),
+            Mode::Settings(settings) => {
+                return match settings.key(key, &self.background) {
+                    Outcome::Stay => Action::Redraw,
+                    Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
+                    Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+                };
+            }
             Mode::Normal => {}
         }
         let focus = self.desk.focus();
@@ -509,6 +524,7 @@ impl Wm {
             (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
             (_, Some('f')) => { if let Some(id) = focus { self.desk.toggle_full(id); } Action::Redraw }
             (_, Some('l')) => { self.open_list(); Action::Redraw }
+            (_, Some('s')) => { self.open_settings(); Action::Redraw }
             (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
@@ -548,6 +564,15 @@ impl Wm {
         }
         // The keys' help closes on a click too.
         if pressed && matches!(self.mode, Mode::Help) { self.mode = Mode::Normal; return Action::Redraw; }
+        // Settings take the clicks while they are open (000-APP-0048).
+        if let Mode::Settings(settings) = &mut self.mode {
+            if !pressed { return Action::Redraw; }
+            return match settings.click(x, y, &self.background) {
+                Outcome::Stay => Action::Redraw,
+                Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
+                Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+            };
+        }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
         if let Mode::List { .. } = self.mode {
             if pressed || other_pressed {
@@ -626,6 +651,7 @@ impl Wm {
             Bar::Leave => Action::Detach,
             Bar::List => { if !matches!(before, Mode::List { .. }) { self.open_list(); } Action::Redraw }
             Bar::Full => { if let Some(id) = self.desk.focus() { self.desk.toggle_full(id); } Action::Redraw }
+            Bar::Settings => { if !matches!(before, Mode::Settings(_)) { self.open_settings(); } Action::Redraw }
         }
     }
 
@@ -693,7 +719,10 @@ impl Wm {
         Some(Action::Pointer { id, x, y, buttons, wheel })
     }
 
-    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST" } }
+    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS" } }
+
+    /// Settings (000-APP-0048), at the page of the background.
+    pub fn open_settings(&mut self) { self.mode = Mode::Settings(Settings::new(&self.background, (self.desk.cols, self.desk.rows))); }
 
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
@@ -727,6 +756,7 @@ impl Wm {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
             (Mode::Menu(_), _) => String::from("PROGRAMS: a click or Enter starts one in a window; arrows move; Esc or a click elsewhere: close"),
             (Mode::List { .. }, _) => String::from("WINDOWS: arrows and Enter or a click bring one to the front; Alt+W closes it; Esc: back"),
+            (Mode::Settings(_), _) => String::from("SETTINGS: changes show at once and are kept in data/wm.conf; Esc or Alt+S: close"),
             (_, Some(notice)) => notice.clone(),
             _ if self.desk.windows.is_empty() => String::from("No windows. Enter or Alt+R: run a program in a window; F1 or Alt+H: keys; Alt+Q: leave"),
             _ => format!("{} windows; keys go to \"{}\"", self.desk.windows.len(), self.desk.focused().map_or("", |w| w.title.as_str())),
@@ -759,6 +789,7 @@ impl Wm {
             Mode::Help => { message(grid, "wm — keys", &HELP[..HELP.len() - 1], &["OK"], 0, theme); *shown = None; }
             Mode::Run(line) => { *shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
             Mode::Menu(open) => { open.draw(&self.programs, grid, theme); *shown = None; }
+            Mode::Settings(settings) => { *shown = settings.draw(grid, theme, &self.background); }
             _ => {}
         }
     }
@@ -769,6 +800,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)
