@@ -406,3 +406,24 @@ What the kernel track would try (the tools track decides):
 - The `wm` suite starts `camera` from the menu and from `console` with the video gateway's synthetic source, and sees its window show the stream.
 - The `shell` item opens a window where `ps` lists the tasks, `reboot` asks and, once confirmed, resets the machine, and `camera` shows the stream.
 - On the MacBook Pro, `camera` shows the FaceTime camera in a `wm` window.
+
+## The shell's window opens only when the user asks (211-APP-0040, 211-APP-0044)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's report from the MacBook Pro (`fast-test` a00618b): "a program started by itself when `wm` started (the shell). It should not start by itself, only at the user's request from `wm`'s menu."
+
+### Problem
+
+211-APP-0040 opens the shell's window whenever the shell starts a window manager (`shell/src/main.rs`: "when the shell starts a program that asks for the window manager client, it first opens a text window titled `shell`"). So it appears at every start of `wm`, unasked.
+
+### Plan (a proposal; the tools track decides)
+
+- `wm` starts with no shell window.
+- The user opens it from `wm`'s menu (a `shell` item, under System or at the top), and by a key. Ctrl+Alt+F5 already opens it.
+- The menu item reaches the shell through its command endpoint, which is 211-APP-0044's: `SLOT_SHELL` comes from the kernel track in 211-KRN-0058, now in its gate on the way to `main`.
+- Until then, the item can be left out rather than the window opened at the start.
+
+### Acceptance criteria
+
+- The `wm` suite starts `wm` and finds no shell window.
+- The menu item opens one, and closing it with Alt+W leaves `wm` running.
+- On the MacBook Pro, `wm` starts with the desktop alone.
