@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm`'s `console` (211-APP-0040, waiting for a slot from `KRN`), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -70,40 +70,3 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
-## The camera from `wm`, and the shell in a window (158, 211)
-
-**Recorded by:** the kernel track (KRN), 2026-10-10, for main tasks [158](158-video-capture.md) and [211](211-intel-pc-from-a-sata-ssd.md), at the maintainer's request after a run on the MacBook Pro (`fast-test` bc681376b8d8). The maintainer chose that the tools track does it.
-
-### Problem
-
-- **The camera works from the shell's screen.** `camera` there streamed the FaceTime HD camera: 64 frames at 320×240, none broken (`log:boot0001.log`, `video_gw` and `usb_host` lines at 27.7–34.1 s).
-- **From `wm` it does not.** Started from the menu or from `wm`'s `console`, it ends with `camera: no camera was granted (start camera from the shell and allow it)`:
-  - `wm` does not ask the shell for the camera (`mind::request!` in `wm/src/main.rs` has no `REQUEST_CAMERA`), so it holds nothing in `SLOT_CAMERA`;
-  - `wm`'s `start()` and `console`'s `run()` do not handle `REQUEST_CAMERA`, so a program they start never gets it.
-- **The maintainer asks for more:**
-  - `camera` in `wm` shows its stream in its window, started from the menu and from `console`;
-  - `console` from the right-click menu works fully, as the shell does;
-  - the shell itself runs in a window in `wm`;
-  - the difference between `console` and the shell, and its reason, is explained to the user.
-
-### Plan (a proposal; the tools track decides)
-
-- **The camera.**
-  - `wm` asks for `REQUEST_CAMERA`. The shell lends it without a question, by the maintainer's rule "No question about a tool's own purpose".
-  - `wm` lends `SLOT_CAMERA` to a program that asks for it, and so does `console` to what it starts. `console` asks for it too.
-- **The shell in a window.**
-  - With [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md), `console` joined to the shell is the shell in a window. The menu can offer it as `shell`.
-  - A program that needs what `wm` does not hold (the network, the camera, the log, the lifecycle client) could be started by the shell on its own authority, through `shell.wit`. It then opens its window in `wm`, rather than being started by `console` with `wm`'s fewer grants.
-  - Either way only one shell holds the operator's authorities.
-- **The kernel track's part:** `SLOT_SHELL` (and `SLOT_CLIPBOARD`), asked for in `requests-KRN.md` for 211-APP-0040 and 000-APP-0032. The kernel track takes it now as a task of its own.
-- **The explanation:** a section in `docs/tools` (EN, RU) and in `console`'s help:
-  - the shell is the one holder of the operator's authorities;
-  - `console` is a terminal window that asks the shell for them;
-  - why a second full shell in every window is not made: it would spread the authority to reboot, kill, change the network policy and the firmware's boot order.
-
-### Acceptance criteria
-
-- The `wm` suite starts `camera` from the menu and from `console` with the video gateway's synthetic source, and sees its window show the stream.
-- The `shell` item opens a window where `ps` lists the tasks, `reboot` asks and, once confirmed, resets the machine, and `camera` shows the stream.
-- On the MacBook Pro, `camera` shows the FaceTime camera in a `wm` window.

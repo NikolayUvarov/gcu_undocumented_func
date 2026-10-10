@@ -99,9 +99,9 @@ The shell lends its client only to a program that asks for it, and `msh` gets a 
 
 A program that asks for `REQUEST_CLIPBOARD` holds an endpoint of `clipboard` in `SLOT_CLIPBOARD`; one that does not ask holds nothing there.
 
-## A fixed slot for the shell's command endpoint (211-APP-0040)
+## A fixed slot for the shell's command endpoint (211-APP-0044)
 
-**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0040](211-APP-0040-the-shells-commands-in-console.md) (the shell's commands in `wm`'s `console`, the kernel track's request for 211).
+**Recorded by:** the tools track (APP), 2026-10-09, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md) (`console` joined to the shell, split from 211-APP-0040 on 2026-10-10, when that task took the shell's own window, which needs no slot).
 
 ### Problem
 
