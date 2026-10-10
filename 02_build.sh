@@ -100,6 +100,9 @@ USER_CRATES=(
     "wintest:winmgr:winmgr.elf"
     "netbench:netbench:netbench.elf"
     "memtest:memtest:memtest.elf"
+    "bench:bench:bench.elf"
+    "bench:check:check.elf"
+    "bench:kbench:kbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
     "sysmon:sysmon:sysmon.elf"
@@ -141,6 +144,8 @@ USER_CRATES=(
 source "$BUILD_SCRIPT_DIR/scripts/build_jobs.sh"
 JOBS=$(build_jobs)
 JOB_LOGS="$LOG_DIR/build"
+STEP="installing the pinned toolchain (rust-toolchain.toml)"
+ensure_toolchain "$BUILD_SCRIPT_DIR"
 echo ">>> [1/2] Building the kernel, the services, the programs and the UEFI bootloader, $JOBS at a time (logs: $JOB_LOGS/)..."
 STEP="the cargo builds (the failed ones are named above; logs: $JOB_LOGS/)"
 declare -A SEEN=()
