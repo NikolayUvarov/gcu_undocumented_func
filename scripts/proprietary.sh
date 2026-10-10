@@ -2,7 +2,8 @@
 # Proprietary files (AGENTS.md, section 3): fetched into proprietary/ (ignored by git), checked by SHA-256, and copied
 # onto a written disk's boot volume under data/firmware/. Never committed, never in an image.
 # Usage: scripts/proprietary.sh fetch      download, check and extract into proprietary/firmware/
-#        scripts/proprietary.sh copy       copy proprietary/firmware/ onto the volume labelled MIND CORE (Windows, from WSL)
+#        scripts/proprietary.sh copy       copy proprietary/firmware/ onto the volume labelled MIND CORE that holds the
+#                                          image in usb_root/ (Windows, from WSL), and read it back
 #        scripts/proprietary.sh copy DIR   copy it under DIR/data/firmware/ (a mounted boot volume on Linux)
 set -euo pipefail
 
@@ -43,17 +44,48 @@ fetch() {
     echo "proprietary: ${#B43_FILES[@]} files in $STORE/firmware/b43, checked"
 }
 
+# Copies onto the volume of the image just built and reads each file back; Windows may show the disk's earlier volume,
+# with the same label, for a while after the writer ends, and files copied onto it are lost (2026-10-10).
+read -r -d '' PS_COPY <<'PS' || true
+$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "proprietary: $_"; exit 1 }
+$source = '__SOURCE__'; $manifest = '__MANIFEST__'; $files = @(__FILES__)
+for ($i = 0; $i -lt 30; $i++) {
+    $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
+    if ($v -and -not $manifest) { break }
+    if ($v -and (Test-Path "$($v.DriveLetter):\MANIFEST") -and (Get-FileHash "$($v.DriveLetter):\MANIFEST").Hash -eq $manifest) { break }
+    $v = $null; Start-Sleep 2
+}
+if (-not $v) { Write-Output 'proprietary: no volume MIND CORE holding the image just built (its MANIFEST) within 60 s'; exit 1 }
+$to = "$($v.DriveLetter):\data\firmware"
+for ($try = 1; $try -le 3; $try++) {
+    New-Item -ItemType Directory -Force $to | Out-Null
+    Copy-Item -Recurse -Force "$source\*" $to
+    Write-VolumeCache -DriveLetter $v.DriveLetter
+    Start-Sleep 2
+    $bad = @($files | Where-Object { $sum, $name = $_ -split ' ', 2; $path = Join-Path $to $name; -not (Test-Path $path) -or (Get-FileHash $path).Hash -ne $sum })
+    if ($bad.Count -eq 0) { Write-Output "proprietary: copied to $to, $($files.Count) files read back with their SHA-256"; exit 0 }
+    Write-Output "proprietary: try ${try}: $($bad.Count) files missing or different on $to"
+}
+exit 1
+PS
+
 copy() {
     [[ -d $STORE/firmware ]] || fail "nothing fetched: run $0 fetch first"
+    local names; mapfile -t names < <(cd "$STORE/firmware" && find . -type f | sed 's|^\./||' | sort)
     if [[ $# -ge 1 ]]; then
         mkdir -p "$1/data/firmware" && cp -r "$STORE/firmware/." "$1/data/firmware/"
-        echo "proprietary: copied under $1/data/firmware"
+        (cd "$STORE/firmware" && sha256sum "${names[@]}") | (cd "$1/data/firmware" && sha256sum --quiet -c -) || fail "the copies under $1/data/firmware differ"
+        echo "proprietary: copied under $1/data/firmware, ${#names[@]} files read back with their SHA-256"
         return
     fi
     command -v powershell.exe >/dev/null || fail "no PowerShell: give the mounted boot volume as an argument"
-    local source; source="$(wslpath -w "$STORE/firmware")"
-    # Windows mounts the written disk's volumes a few seconds after the writer ends: wait up to 30 s for MIND CORE.
-    powershell.exe -NoProfile -Command "for (\$i = 0; \$i -lt 15; \$i++) { \$v = Get-Volume | Where-Object FileSystemLabel -eq 'MIND CORE' | Where-Object DriveLetter | Select-Object -First 1; if (\$v) { break }; Start-Sleep 2 }; if (-not \$v) { Write-Error 'No volume labelled MIND CORE with a drive letter'; exit 1 }; \$to = \$v.DriveLetter + ':\\data\\firmware'; New-Item -ItemType Directory -Force \$to | Out-Null; Copy-Item -Recurse -Force '$source\\*' \$to; Write-Output ('proprietary: copied to ' + \$to)" | tr -d '\r'
+    local files="" name manifest=""
+    for name in "${names[@]}"; do files+="${files:+,}'$(sha256sum "$STORE/firmware/$name" | cut -d' ' -f1) ${name//\//\\}'"; done
+    [[ -f $ROOT/usb_root/MANIFEST ]] && manifest="$(sha256sum "$ROOT/usb_root/MANIFEST" | cut -d' ' -f1)"
+    local script="${PS_COPY//__SOURCE__/$(wslpath -w "$STORE/firmware")}"; script="${script//__MANIFEST__/$manifest}"; script="${script//__FILES__/$files}"
+    local status=0
+    powershell.exe -NoProfile -EncodedCommand "$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" | tr -d '\r' || status=$?
+    (( status == 0 )) || fail "the files are not on the disk: run $0 copy again before unplugging it"
 }
 
 case "${1:-}" in
