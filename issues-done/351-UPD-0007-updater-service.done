@@ -40,7 +40,7 @@ Something on the device has to turn a published release into a staged, verified 
 | [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) | `KRN` | `updater` as a boot service with its grants, the update zone's badge included | done (2026-10-10) |
 | this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | done (2026-10-10) |
 | [351-UPD-0016](../issues/351-UPD-0016-images-with-slots.md) | `UPD` | Images with slots: `make_usb_image.py` puts the build in slot A | open (split off) |
-| [351-KRN-0073](351-KRN-0073-the-updater-reads-through-the-parser.done) | `KRN` | `init` lends the updater the parser | done (2026-10-10) |
+| [351-KRN-0074](351-KRN-0074-the-updater-reads-through-the-parser.done) | `KRN` | `init` lends the updater the parser | done (2026-10-10) |
 | 351-APP-0029 (on the tools branch) | `APP` | The shell's `update` command | open |
 
 How the updater uses the parser: it verifies the signature over the raw bytes itself (the release key for the channel, the boot key for a manifest), asks `parse` for the fields, and accepts them only if `mind::release` encodes them again to exactly the signed bytes. It never parses network bytes.
@@ -70,7 +70,7 @@ Done on 2026-10-10 by the storage session for the update track.
   - **Confirmation.** On a trial boot it writes the confirmed record once the machine has outlived the kernel's deadline.
   - **`update.txt`** names the source, the channel and the automatic policy (`none`, `check`, `fetch`, `apply`, every N seconds).
 - **Records.** `updater/src/plan.rs` chooses each record with the bootloader's own encoding. Host tests: `tests/updater_host.rs`.
-- **Grant.** `init` lends the updater the parser ([351-KRN-0073](351-KRN-0073-the-updater-reads-through-the-parser.done)).
+- **Grant.** `init` lends the updater the parser ([351-KRN-0074](351-KRN-0074-the-updater-reads-through-the-parser.done)).
 - **Tested in QEMU, x86 and aarch64** (the `update` check in the `updater` suite, `tests/qemu_smoke.py`):
   - Each of these is refused with no boot record written:
     - an expired channel;

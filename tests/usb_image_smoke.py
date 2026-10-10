@@ -14,8 +14,11 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, release_tool, sign_manifest, slots
+from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, slots
 import qemu_smoke
+sys.path.insert(0, str(ROOT / "scripts"))
+import release as release_tool  # noqa: E402
+import sign_manifest  # noqa: E402
 from qemu_smoke import MTOOLS_ENV, VM, canon, files_check, fsck_volume, heap_used, require, screen_text, status_line, task_rows
 
 
