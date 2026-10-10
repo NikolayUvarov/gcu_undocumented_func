@@ -17,6 +17,8 @@ mod desk;
 mod menu;
 #[path = "../wm/src/background.rs"]
 mod background;
+#[path = "../wm/src/settings.rs"]
+mod settings;
 #[path = "../common/font16.rs"]
 mod font16;
 
@@ -341,7 +343,7 @@ fn the_top_bar_can_be_clicked() {
     wm.programs = catalogue(&programs(false));
     let items = desk::bar_items(160);
     assert_eq!(items[0], (0, 3, desk::Bar::Programs), "\"wm\" at the left");
-    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12)]);
+    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12), (132, 16)]);
     let mut cells = vec![Cell::BLANK; 160 * 50];
     let mut grid = Grid::new(&mut cells, 160, 50);
     let mut text = |_: u32, _: usize, _: usize| None;
@@ -849,4 +851,62 @@ fn the_backdrop_keeps_its_frame() {
     assert!(!b.shown() && b.frame.is_empty());
     for i in 0..100 { b.sample(i as u8 * 2); }
     assert_eq!((b.cpu.len(), b.cpu[0], *b.cpu.last().unwrap()), (60, 80, 100));
+}
+
+// Settings (000-APP-0048).
+fn draw_wm(wm: &mut Wm) -> Vec<String> {
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect()).collect()
+}
+
+#[test]
+fn settings_open_from_the_top_bar_and_change_the_background() {
+    let mut wm = Wm::new(160, 50);
+    // The top bar's last item, and Alt+S.
+    let (at, _, item) = *desk::bar_items(160).last().unwrap();
+    assert_eq!(item, desk::Bar::Settings);
+    assert_eq!(wm.pointer(at + 2, 0, 1, 0), Action::Redraw);
+    wm.pointer(at + 2, 0, 0, 0);
+    assert!(wm.status().starts_with("MODE=SETTINGS") && wm.status().ends_with("SETTINGS=Background"), "{}", wm.status());
+    let screen = draw_wm(&mut wm);
+    assert!(screen.iter().any(|row| row.contains("Settings")) && screen.iter().any(|row| row.contains("Picture") && row.contains("abstract")), "{:?}", &screen[15..35]);
+    assert_eq!(wm.key(key(KEY_ESC)), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    assert_eq!(wm.key(alt_char('s')), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=SETTINGS"));
+    // Into the page: the picture cycles abstract → image → none → abstract.
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().ends_with("SETTINGS=Background:Picture"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("data/background.bmp".into())), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::None), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert_eq!(c.picture, Picture::Abstract), other => panic!("{:?}", other) }
+    // The time off, the place moved, an image's file typed.
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu), other => panic!("{:?}", other) }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
+    for _ in 0..5 { wm.key(key(KEY_UP)); }
+    assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
+    for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
+    match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
+    assert_eq!(wm.background.picture, Picture::Image("sky.bmp".into()));
+    assert!((wm.background.time, wm.background.place) == (false, Place::BottomLeft));
+    // The system's pages say where the setting is made today; a click outside closes.
+    let mut s = settings::Settings::new(&wm.background, (160, 50));
+    let inner = s.area().inner();
+    assert_eq!(s.click(inner.x + 2, inner.y + 3, &wm.background), settings::Outcome::Stay);
+    assert_eq!(s.page, 3);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &wm.background);
+    let text: String = (inner.y..inner.bottom()).map(|y| (inner.x..inner.right()).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
+    assert!(text.contains("netpolicy") && text.contains("211-APP-0044"), "{}", text);
+    // A click on a row of the background page changes it.
+    let mut s = settings::Settings::new(&wm.background, (160, 50));
+    match s.click(inner.x + 20, inner.y + 1 + 3, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    assert_eq!(s.click(0, 0, &wm.background), settings::Outcome::Close);
 }

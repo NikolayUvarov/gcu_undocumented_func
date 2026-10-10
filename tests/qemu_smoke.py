@@ -5885,11 +5885,30 @@ def wm_suite(vm):
     assert any(canon("camera: cannot open") in row for row in screen), screen
     assert any(canon("ENDED (STATUS 1): PRESS A KEY") in row for row in screen), screen
     assert any(canon("camera ended") in row for row in screen), "the window's title"
-    assert ended in state()[2] and state()[1] == ended, state()
+    while ended not in state()[2]:
+        wait()  # the state line after the window came
+    assert state()[1] == ended, state()
     keys("spc")
     until(f"GONE {ended}")
     while ended in state()[2]:
         wait()
+    # Settings (000-APP-0048): Alt+S opens them at the background's page; the picture goes to an image (data/background.bmp
+    # is not there: the pattern, and a notice), then to none, and the desktop's free cells are the ░ cells at once; the
+    # choice is kept in data/wm.conf for the next wm (checked as it starts again below).
+    keys("alt-s", text="MODE=SETTINGS")
+    assert last_state().endswith("SETTINGS=Background"), last_state()
+    keys("ret")
+    keys("right", text="[WM] SETTINGS background = image data/background.bmp")
+    keys("right", text="[WM] SETTINGS background = none")
+    require("".join(seen), "background = none; show = time, date, cpu; place = bottom-right; SAVED")
+    keys("esc")
+    time.sleep(.5)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    free = [row[84:158] for row in screen[27:46]]
+    assert sum(row.count(canon("░")) for row in free) > 600, free
+    print("PASS: wm settings: Alt+S opens them; the background switched to an image's fallback and to none, the desktop "
+          "follows at once, and data/wm.conf keeps it", flush=True)
     full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
@@ -5904,6 +5923,7 @@ def wm_suite(vm):
         read[0] = len(vm.log)
         vm.send("wm\n")
         out = wait("[WM] READY", lines=0)
+        require(out, "[WM] BACKGROUND background = none")  # as Settings kept it
         restored = {int(m[0]): tuple(map(int, m[5:9])) for m in windows_re.findall(out)}
         assert restored == places, (restored, places)
         return int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])

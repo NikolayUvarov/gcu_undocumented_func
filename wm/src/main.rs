@@ -369,6 +369,12 @@ fn backdrop(screen: &Screen) -> (Backdrop, Option<String>) {
     Backdrop::new(config, (screen.width, screen.height), &mut |file| read_file(file, 32 << 20))
 }
 
+// The background's configuration into data/wm.conf, for the next wm too (000-APP-0048).
+fn save(config: &Config) -> bool {
+    let text = config.format();
+    mind::fs::File::create(background::FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len())
+}
+
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
 fn cpu_times() -> Option<(u64, u64)> {
     let list = mind::idl::sysinfo::cpus(Endpoint::SYSINFO, 0).ok()?.ok()?;
@@ -408,6 +414,7 @@ fn main(info: &'static BootInfo) {
     let (mut backdrop, problem) = backdrop(&screen);
     if let Some(problem) = problem { mind::println!("[WM] {}", problem); manager.wm.notice = Some(problem); }
     manager.wm.desk.background = backdrop.shown();
+    manager.wm.background = backdrop.config.clone();
     mind::println!("[WM] BACKGROUND {}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "));
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
@@ -474,6 +481,18 @@ fn main(info: &'static BootInfo) {
                     return;
                 }
                 Action::CloseAll => { manager.close_all(); mind::println!("[WM] DONE"); return; }
+                Action::Settings(config) => {
+                    // Settings changed the background (000-APP-0048): used at once and kept in data/wm.conf.
+                    let saved = save(&config);
+                    let (mut fresh, problem) = Backdrop::new(config, (screen.width, screen.height), &mut |file| read_file(file, 32 << 20));
+                    fresh.cpu = core::mem::take(&mut backdrop.cpu);
+                    backdrop = fresh;
+                    manager.wm.background = backdrop.config.clone();
+                    manager.wm.desk.background = backdrop.shown();
+                    (next_pattern, next_info) = (0, 0);
+                    mind::println!("[WM] SETTINGS {}{}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "), if saved { "; SAVED" } else { "; NOT SAVED" });
+                    manager.wm.notice = Some(problem.unwrap_or_else(|| String::from(if saved { "Settings: the background is kept in data/wm.conf" } else { "Settings: the background could not be written to data/wm.conf" })));
+                }
                 Action::Pointer { id, x, y, buttons, wheel } => {
                     manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel));
                     if log { mind::println!("[WM] POINTER {} AT {},{} BUTTONS={} WHEEL={}", id, x, y, buttons, wheel); }
