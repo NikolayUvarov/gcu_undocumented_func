@@ -5553,10 +5553,10 @@ def wm_suite(vm):
             time.sleep(.02)
         raise AssertionError(f"Timeout waiting for {text!r}: {vm.log[read[0]:][-3000:]}")
 
-    def until(text, timeout=12):
+    def until(text):
         # `text` was logged already, or comes.
         if text not in "".join(seen):
-            wait(text, lines=0, timeout=timeout)
+            wait(text, lines=0)
 
     def state():
         # The windows bottom to top as {id: (x, y, w, h)}, the focus and the mode, from the last state line.
@@ -6213,12 +6213,25 @@ def wm_suite(vm):
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
                     time.sleep(.1)
                     wait(lines=0)
-                if not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                ids = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == pid]
+                if not ids:
                     unseen.append(name)
+                # The state line that has the window, which may come after its own line: tidy() reads the state.
+                for _ in range(100):
+                    if not ids or ids[-1] in state()[2]:
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
                 # The self-test and the benchmarks go on after their console closes (libmind keeps a program whose
                 # launcher ended), so the walk lets them finish rather than run the rest of the suite beside them.
-                if name.split(">")[-1] in RUN_TO_END:
-                    until(f"[CONSOLE] ENDED {name.split('>')[-1]} PID", timeout=900)
+                # console's own lines stay off the serial line: its note in the window says when the program ended.
+                tool = name.split(">")[-1]
+                if tool in RUN_TO_END and ids:
+                    deadline = time.monotonic() + 900
+                    while not any(f"({tool} ended" in row for row in inside(ids[-1])):
+                        assert time.monotonic() < deadline, (tool, inside(ids[-1]))
+                        time.sleep(2)
+                        wait(lines=0)
             else:
                 said.append(f"{name}: {line}")
             close_menu()
@@ -6333,7 +6346,7 @@ def wm_suite(vm):
         until('THE SHELL RAN "help free"')
         vm.send_bytes(b"fm --help\r")
         console_has("fm — file manager")
-        until("[CONSOLE] ENDED fm PID")
+        console_has("(fm ended)")
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
