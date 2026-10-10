@@ -1,3 +1,4 @@
+// Sleeping holds the monotonic nanoseconds to wake at (000-KRN-0065).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Empty: a free slot in the host tests' lists
 pub enum State { Empty, Ready, Sleeping(u64), BlockedSend(usize), BlockedRecv(usize), BlockedReply(usize), BlockedIrq(u8), BlockedFlush, Exited }

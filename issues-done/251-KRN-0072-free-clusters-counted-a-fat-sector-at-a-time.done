@@ -1,6 +1,6 @@
-# 251-KRN-0072 — Free clusters counted a FAT sector at a time
+# 251-KRN-0072 — Free clusters counted a FAT sector at a time — done
 
-**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and tested on the host and in QEMU; the gate left) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.2
+**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.2
 
 ## Problem
 
@@ -27,6 +27,14 @@ The storage session's request, from its local gate, for the `disks` check of 251
 **2026-10-10.**
 - **The host tests.** `tests/fat_host.rs` passes, 16 tests.
 - **On aarch64.** The `vfs` suite on QEMU aarch64 (TCG, the kernel session's machine) printed "the first df … took 0.48 s".
+
+## Resolution
+
+- **What was done.** `free_clusters` in `vfs_server/src/fat.rs` reads the FAT a sector at a time through a `FatWindow`, which `entry_at` shifts by one sector when the next entry is in the next one.
+- **Evidence.**
+  - `tests/fat_host.rs` compares the count with the per-entry one on FAT12, FAT16 and FAT32 (16 tests).
+  - The first `df` of the 256 MiB FAT32 volume took 0.48 s on QEMU aarch64 (TCG, the kernel session's machine). The `vfs` suite prints that time.
+  - Both passed in the gate of e2f2b1c. Host and x86 ran locally. aarch64 ran on PCU through Effector, except the boot group, which ran locally.
 
 ## Related
 

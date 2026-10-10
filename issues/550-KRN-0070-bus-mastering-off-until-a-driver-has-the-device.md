@@ -1,6 +1,6 @@
 # 550-KRN-0070 — Bus mastering off at boot until a driver has the device
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and tested in QEMU; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** tracks A, D (main task [550](550-network-on-real-hardware.md)) · **Constitution:** MC-1.5, MC-6.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested in QEMU and gated; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** tracks A, D (main task [550](550-network-on-real-hardware.md)) · **Constitution:** MC-1.5, MC-6.3
 
 ## Problem
 
@@ -33,6 +33,8 @@ The drivers track's request, from the MacBook Pro's run of 550-DRV-0020:
 **2026-10-10: made, and run in QEMU x86 (`usb_image_smoke.py`).**
 - Bus mastering was turned off on three functions: the IDE controller, the e1000, which has no driver, and the xHCI controller, which `usb_host` then gets.
 - The report's check passes.
+
+**2026-10-10: gated.** In main with e2f2b1c. Host and x86 ran locally; aarch64 ran on PCU through Effector, except the boot group, which ran locally (000-KRN-0067).
 
 **Still exposed: display controllers.** Their bus mastering stays as the firmware left it, because turning it off could blank the boot screen. That is safe only once a display driver owns the device, or once the MacBook Pro shows the screen survives it.
 
