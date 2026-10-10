@@ -1,6 +1,6 @@
 # Publishing releases
 
-**Version:** 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
+**Version:** 0.2 (2026-10-10): `check` reads a channel's fields before trusting them (351-UPD-0014); 0.1 (2026-10-08) · **Track:** `UPD`, task [351-UPD-0005](../../issues-done/351-UPD-0005-release-and-publish.done) · **Constitution:** MC-9.2, 9.4, 9.6, 9.7 · Russian: [publishing_RU.md](publishing_RU.md)
 
 How a build becomes a release a device can fetch and check, how to publish it to a server, and who holds which key. The device side, the updater, is not built yet ([351-UPD-0007](../../issues/351-UPD-0007-updater-service.md)). Until it is, a release is checked on the host only.
 
@@ -40,7 +40,7 @@ python3 scripts/release.py check /srv/mind --channel stable   # on the server, o
   An upload cut at any point leaves the previous channel naming files that are all there.
 - The destination is a directory on this machine or `host:directory`, reached with the system's OpenSSH (`ssh`, `rsync -e ssh`). The SSH login belongs to the uploader and is never the release key.
 - `check` verifies:
-  - the channel's signature, encoding and expiry;
+  - the channel's signature; then its fields as the device reads them (UTF-8 JSON of `channel`, `version`, `minimum`, `expires` and `manifests`, each of its type and range: 1 ≤ minimum ≤ version < 2^64, `expires` a real time as `YYYY-MM-DDTHH:MM:SSZ`, 1 to 4 architectures with 64 lower-case hex digits each), its one encoding and its expiry. A body signed with the release key that is not a channel gets a reason, never an exception (351-UPD-0014);
   - every manifest it names: its hash and its boot signature;
   - every blob those manifests list: its size and hash.
 

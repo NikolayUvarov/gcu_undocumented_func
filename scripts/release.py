@@ -26,6 +26,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -94,6 +95,41 @@ def channel_bytes(channel, version, minimum, expires, manifests):
     return (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+# What a channel's fields may hold, as mind::release reads them on the device (libmind/src/release.rs).
+NAME_MAX, ARCH_MAX, ARCHES_MAX = 32, 16, 4
+WORD = re.compile(r"[A-Za-z0-9._-]+")
+STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def channel_from(body, name):
+    """The channel a signed body holds, or None and the reason (351-UPD-0014): UTF-8 JSON of the five fields, each of
+    its type and range, in the one encoding. It never raises, whatever the body."""
+    try:
+        c = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None, "not UTF-8 JSON"
+    if not isinstance(c, dict) or set(c) != {"channel", "version", "minimum", "expires", "manifests"}:
+        return None, "not the fields of a channel"
+    word = lambda v, most: isinstance(v, str) and len(v) <= most and WORD.fullmatch(v) is not None
+    if not word(c["channel"], NAME_MAX) or c["channel"] != name:
+        return None, "another channel"
+    if not all(type(c[k]) is int for k in ("version", "minimum")) or not 1 <= c["minimum"] <= c["version"] < 2**64:
+        return None, "version and minimum not with 1 <= minimum <= version"
+    try:
+        if not isinstance(c["expires"], str) or not STAMP.fullmatch(c["expires"]):
+            raise ValueError
+        datetime.datetime.strptime(c["expires"], "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None, "expires not a time as YYYY-MM-DDTHH:MM:SSZ"
+    m = c["manifests"]
+    if not isinstance(m, dict) or not 1 <= len(m) <= ARCHES_MAX or not all(word(a, ARCH_MAX) and isinstance(d, str) and DIGEST.fullmatch(d) for a, d in m.items()):
+        return None, f"manifests not 1 to {ARCHES_MAX} architectures with a SHA-256 each"
+    if body != channel_bytes(c["channel"], c["version"], c["minimum"], c["expires"], m):
+        return None, "not in its one encoding"
+    return c, None
+
+
 class Local:
     """A destination directory on this machine."""
     def __init__(self, root):
@@ -156,7 +192,12 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
     staged, target = Path(staged), upload or destination(dest)
     version = int((staged / "VERSION").read_text())
     current = target.read(f"channels/{channel}")
-    published = json.loads(current.split(b"\n")[0])["version"] if current is not None else 0
+    published = 0
+    if current is not None:
+        c, why = channel_from(current.split(b"\n")[0] + b"\n", channel)
+        if c is None:
+            raise ReleaseError(f"channels/{channel} on the server: {why}")
+        published = c["version"]
     if published >= version:
         raise ReleaseError(f"version {version} is not above the published {published}")
     if target.read(f"releases/{version}/x86_64/MANIFEST") or target.read(f"releases/{version}/aarch64/MANIFEST"):
@@ -191,9 +232,9 @@ def check(dest, channel="stable", release_public=None, boot_public=None, now=Non
         return f"channels/{channel}: not a signed channel"
     if not sm.verify(release_public, body, signature):
         return f"channels/{channel}: bad signature"
-    c = json.loads(body)
-    if body != channel_bytes(c["channel"], c["version"], c["minimum"], c["expires"], c["manifests"]) or c["channel"] != channel:
-        return f"channels/{channel}: not in its one encoding"
+    c, why = channel_from(body, channel)
+    if c is None:
+        return f"channels/{channel}: {why}"
     now = now or datetime.datetime.now(datetime.timezone.utc)
     if datetime.datetime.strptime(c["expires"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc) <= now:
         return f"channels/{channel}: expired at {c['expires']}"
