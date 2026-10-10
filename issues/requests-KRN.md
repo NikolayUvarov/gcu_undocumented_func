@@ -4,23 +4,6 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-## The IDL fuzzer in CI's host tests (500-ASR-0001)
-
-**Recorded by:** the assurance track (`ASR`), 2026-10-09, for [500-ASR-0001](500-ASR-0001-idl-decoder-fuzzing.md).
-
-### Problem
-
-`tests/idl_fuzz_host.rs` fuzzes every generated IDL decoder with a fixed seed: 24 receivers and 82 types, 50 000 inputs per target, about 4 s. It is not in CI's host tests yet, and the CI files are the kernel track's.
-
-### Plan (a proposal; the kernel track decides)
-
-- Add `idl_fuzz` to the list of host tests in `.github/workflows/ci.yml` (the step "Host tests") and in `scripts/ci_local.sh` (`host_tests`), built like the others: `rustc --edition=2021 --test tests/idl_fuzz_host.rs`.
-- If 175-KRN-0046 changes how the host tests fail, the line follows that.
-
-### Acceptance criteria
-
-CI runs the test on every push, and a finding fails the host-test step.
-
 ## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
 
 **Recorded by:** the drivers track (`DRV`), 2026-10-10, from the MacBook Pro's run of [550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done).
