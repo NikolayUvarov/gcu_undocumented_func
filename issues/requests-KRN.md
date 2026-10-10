@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (9 requests waiting, 2026-10-10; FP/SIMD for programs on aarch64 became [250-KRN-0056](../issues-done/250-KRN-0056-fp-simd-for-programs-on-aarch64.done); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md); the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done); on the kernel branch, the panic in `awaits_reply` became 171-KRN-0054 and the `devicetree` suite's pacing 210-KRN-0055) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (8 requests waiting, 2026-10-10; FP/SIMD for programs on aarch64 became [250-KRN-0056](../issues-done/250-KRN-0056-fp-simd-for-programs-on-aarch64.done); the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md); the updater's badged VFS client is done in [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done), a flush's stale failure in [211-KRN-0058](../issues-done/211-KRN-0058-a-flush-after-a-failed-one.done); on the kernel branch, the panic in `awaits_reply` became 171-KRN-0054 and the `devicetree` suite's pacing 210-KRN-0055) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -179,32 +179,3 @@ Count the free entries of each FAT sector read once: 512 sectors for that volume
 ### Acceptance criteria
 
 The first `df` of a 256 MiB FAT32 volume takes well under a second on aarch64 under TCG, and the counts match the per-cluster ones in the host test.
-
-## A failed flush's error reported again by the next flush that succeeds
-
-**Recorded by:** the storage session, 2026-10-10, from its local gate (the branch at 9200b2c merged with `main` at 917838a), for 211-KRN-0050's check in `tests/usb_image_smoke.py`.
-
-### Problem
-
-`Disk::flush` (`vfs_server/src/disk.rs`) writes the dirty lines in runs. When a run's write fails, it sets `self.failed = true` and returns false, and the lines stay dirty. The next flush writes them and then returns `!take(&mut self.failed) && …`, which is false: it reports the earlier failure although nothing was lost and every line is now on the drive.
-
-`unplugged` in the USB image check (211-KRN-0050) shows it. While the stick is out, the journal's save fails and leaves `failed` set. Once the stick is back and programs start again, the shell's `sync` answers `ERROR: SYNC: I/O ERROR`. Only a journal save that runs between the replug and the `sync` (every 30 s after a failure) clears it.
-
-Measured (x86, `scripts/make_usb_image.py --no-build` and `tests/usb_image_smoke.py`):
-- `main` at 917838a passed 2 runs of 2;
-- the branch failed 3 of 3, the gate's run included. Every ELF differs because the branch changes `libmind`. The branch's tests on `main`'s `usb_root` passed, and so did the branch with `main`'s `vfs_server` or `init`. So the outcome follows timing, not one service.
-- The branch with the patch below passed 2 of 2.
-
-### Plan (a proposal; the kernel track decides)
-
-A run that fails leaves its lines dirty, so they are written again and nothing is lost. The loop's failure should therefore not mark the disk failed; `failed` stays for an eviction whose write fails (`write_line`), which does lose the line:
-
-```diff
--            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { self.failed = true; return false; }
-+            if self.ask(|device| (device.write(lba, &run) == Ok(end - at)).then_some(())).is_none() { return false; }
-```
-
-### Acceptance criteria
-
-The USB image check passes on the branch and on `main`. A flush after a failed one reports success when it writes every dirty line, and an eviction that failed is still reported.
-
