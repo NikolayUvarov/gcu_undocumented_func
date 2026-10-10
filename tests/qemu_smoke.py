@@ -1932,7 +1932,7 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
+    print(f"PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
           f"without one the loop takes {share:.2f} of the time other tasks leave its CPU ({wall:.2f} of the wall clock)", flush=True)
 
 
@@ -1940,8 +1940,9 @@ def avx_expected(vm, fixture=None):
     """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
     cpus = vm.command("cpus")
     model = getattr(vm.args, "cpu_model", None)
-    if vm.arch == "aarch64":  # soft-float: no FP state is saved
-        assert len(re.findall(r"FPU=NONE", cpus)) == vm.cpus, cpus
+    if vm.arch == "aarch64":  # every task's V0-V31, FPCR and FPSR are saved (250-KRN-0056)
+        assert len(re.findall(r"FPU=FP/SIMD", cpus)) == vm.cpus, cpus
+        assert fixture is None or "CALLS, FP/SIMD" in fixture, fixture
     elif model == "max":
         assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
         assert fixture is None or "CALLS, AVX" in fixture, fixture
@@ -3455,17 +3456,12 @@ def video_pattern(sequence, x, y, width, height):
 
 
 def camera_check(vm):
-    """camera (issue 158) on the synthetic source: the shell asks before lending the camera, a refused program runs
-    without it; a still and 3 s of video; the camera mark while the stream is open, gone after it."""
-    def ask(command, answer):
-        vm.send(command + "\n")
-        vm.expect("CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)")
-        vm.send_bytes(answer)
-    ask("camera -s data/cam.bmp", b"n")
-    require(vm.expect("SHELL RESUMED."), "camera: no camera was granted")
-    time.sleep(.2); vm.collect(); vm.output = ""
-    ask("camera -s data/cam.bmp", b"y")
-    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", vm.expect("SHELL RESUMED.", timeout=30))
+    """camera (issue 158) on the synthetic source: the shell lends the camera without a question (the program's start is
+    the request); a still and 3 s of video; the camera mark while the stream is open, gone after it."""
+    vm.send("camera -s data/cam.bmp\n")
+    taken = vm.expect("SHELL RESUMED.", timeout=30)
+    assert "ALLOW?" not in taken, taken
+    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", taken)
     assert still, vm.log[-2000:]
     time.sleep(.2); vm.collect(); vm.output = ""
     def stalled(*report):
@@ -3480,7 +3476,7 @@ def camera_check(vm):
         path = r"camera|video_gw|vfs_server|compositor|nvme|ata|ahci|ramdisk|rtc|logd|sysmon"
         waits = [vm.command(f"stat {pid}", raw=True) for pid in re.findall(rf"^(\d+) (?:{path}) ", ps, re.M)]
         raise AssertionError(report + (ps, waits, vm.service_logs("video_gw")))
-    ask("camera -r 10 -t 3 data/cam.avi", b"y")
+    vm.send("camera -r 10 -t 3 data/cam.avi\n")
     vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
     opened = time.monotonic()
     time.sleep(1)
@@ -3514,7 +3510,7 @@ def camera_check(vm):
     require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
     assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: camera: the shell asks first and a refused program runs without the camera; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 
@@ -6104,7 +6100,9 @@ def devicetree_suite(args, disk):
     """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
     bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
     it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
-    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen."""
+    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen. The
+    steps go through QMP itself: through the monitor's typing pace each let the machine run 110 ms, and a slow runner
+    passed the line between two looks (210-KRN-0055)."""
     if args.arch != "aarch64":
         print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
         return
@@ -6115,16 +6113,16 @@ def devicetree_suite(args, disk):
         while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
             time.sleep(0.02)
             vm.collect()
-        vm.hmp("stop")
+        vm.qmp("stop")
         assert loader, vm.log[-3000:]
         kernel = None
         for _ in range(500):
             kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
             if kernel:
                 break
-            vm.hmp("cont")
+            vm.qmp("cont")
             time.sleep(0.01)
-            vm.hmp("stop")
+            vm.qmp("stop")
         assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
     finally:
         vm.close()

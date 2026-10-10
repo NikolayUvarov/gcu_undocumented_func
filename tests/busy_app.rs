@@ -111,27 +111,52 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailb
     }
 }
 
-// aarch64 (issue 203): no FP/SIMD state yet (soft-float), so the values kept across preemptions are in callee-saved
-// general registers; another task that ran in between would have changed them.
+// aarch64 (issue 203, 250-KRN-0056): the values kept across preemptions are in callee-saved general registers, in both
+// halves of V8 and V31, and in FPCR's rounding mode; another task that ran in between would have changed them (tasks
+// start with zeroed vector registers and FPCR).
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 #[link_section = ".text._start"]
 pub extern "C" fn _start(_: &abi::BootInfo, mailbox: *mut abi::SyscallMailbox) -> ! {
     unsafe {
-        let message: &[u8] = b"BUSY FIXTURE: NO WAIT/YIELD CALLS\r\n";
+        let message: &[u8] = b"BUSY FIXTURE: NO WAIT/YIELD CALLS, FP/SIMD\r\n";
         (*mailbox).syscall_num = abi::SYSCALL_LOG;
         (*mailbox).arg1 = message.as_ptr() as usize;
         (*mailbox).arg2 = message.len();
         asm!("svc #0");
         asm!(
+            ".arch_extension fp",
+            ".arch_extension simd",
             "mrs x19, cntvct_el0",
+            "orr x19, x19, #1",
             "mvn x20, x19",
             "mov x21, x19",
             "mov x22, x20",
+            "fmov d8, x19",
+            "mov v8.d[1], x20",
+            "fmov d31, x20",
+            "mov v31.d[1], x19",
+            "mov x24, #1 << 22",
+            "msr fpcr, x24",
             "2:",
             "cmp x19, x21",
             "b.ne 3f",
             "cmp x20, x22",
+            "b.ne 3f",
+            "fmov x25, d8",
+            "cmp x25, x19",
+            "b.ne 3f",
+            "mov x25, v8.d[1]",
+            "cmp x25, x20",
+            "b.ne 3f",
+            "fmov x25, d31",
+            "cmp x25, x20",
+            "b.ne 3f",
+            "mov x25, v31.d[1]",
+            "cmp x25, x19",
+            "b.ne 3f",
+            "mrs x25, fpcr",
+            "cmp x25, x24",
             "b.ne 3f",
             "add x23, x23, #1",
             "b 2b",

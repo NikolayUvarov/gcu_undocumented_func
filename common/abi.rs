@@ -542,7 +542,7 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
 // `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX, 0xE0 AVX-512, 0x60000 AMX), 0 with
-// FXSAVE (issue 153, 174-KRN-0037).
+// FXSAVE (issue 153, 174-KRN-0037). On aarch64: 1, FP/SIMD (V0-V31, FPCR, FPSR; 250-KRN-0056).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }
 // Task memory (bytes) by category, the kernel arena, the frame pool and the global limits. `largest_free` is searched for (trial allocations) only when
 // msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.

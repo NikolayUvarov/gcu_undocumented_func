@@ -42,6 +42,8 @@ mod codec;
 mod task_state;
 #[path = "../kernel/src/user_heap.rs"]
 mod user_heap;
+#[path = "../kernel/src/task_table.rs"]
+mod task_table;
 
 #[test]
 fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
@@ -188,4 +190,27 @@ fn round_robin_over_a_cpus_slots_picks_as_over_the_whole_table() {
         // A cursor past the table (it shrank since) starts from the first slot.
         assert_eq!(task_state::next_in(&mine, len + 5, on_cpu), mine.iter().copied().find(|&slot| on_cpu(slot)).unwrap_or(0));
     }
+}
+
+#[test]
+fn a_task_slot_kept_across_a_shrink_reads_as_empty() {
+    // A client waiting for a reply in the second chunk ends; its chunk goes; the server's reply then looks at its slot.
+    let mut table: task_table::Table<String> = task_table::Table::new();
+    assert!(table.grow());
+    let client = task_table::CHUNK + 2;
+    table[client] = Some("client".into());
+    assert_eq!(table.len(), 2 * task_table::CHUNK);
+    table.shrink();
+    assert_eq!(table.len(), 2 * task_table::CHUNK, "a chunk with a task stays");
+    table[client] = None;
+    table.shrink();
+    assert_eq!(table.len(), task_table::CHUNK, "the empty chunk at the end goes");
+    assert!(table[client].is_none(), "the slot past the end reads as empty, not a panic");
+    assert!(table[client].as_mut().is_none());
+    table[client] = Some("lost".into());
+    assert!(table[client].is_none(), "nothing written past the end stays");
+    assert!(table[1].is_none());
+    table[1] = Some("first".into());
+    table.shrink();
+    assert_eq!((table.len(), table[1].as_deref()), (task_table::CHUNK, Some("first")), "the first chunk is kept");
 }

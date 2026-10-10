@@ -43,7 +43,7 @@ Variants tested as stand-ins for boards (issue 205): `highmem=on` with 6 GiB (RA
 | PCI | ECAM from the MCFG, the same enumeration, BARs and MSI-X tables (`kernel/src/pci.rs`; the architecture gives configuration access, the legacy line and the MSI message) | ports `0xCF8`/`0xCFC` |
 | Platform devices | `PLATFORM_MMIO` hands out the board's UART and RTC by index (`PLATFORM_UART`, `PLATFORM_RTC`), `PLATFORM_IRQ` their lines (`arch/aarch64/platform.rs`); there are no I/O ports | ISA port ranges and lines 1–15 |
 | Tick and clock | EL1 virtual timer, 100 Hz; `CNTVCT_EL0` at `CNTFRQ_EL0` for the monotonic clock | PIT, TSC |
-| FP/SIMD | Disabled (`CPACR_EL1`): programs and kernel are soft-float, no FP state is saved yet | x87/SSE/AVX saved per task, with AVX-512 and AMX where the CPU has them (174-KRN-0037) |
+| FP/SIMD | Enabled for programs (`CPACR_EL1.FPEN`); V0–V31, FPCR and FPSR saved per task in its context record (250-KRN-0056); the kernel is soft-float | x87/SSE/AVX saved per task, with AVX-512 and AMX where the CPU has them (174-KRN-0037) |
 | Entropy | `RNDR` when `ID_AA64ISAR0_EL1` lists it; the kernel tells tasks in `BootInfo.cpu_features` (EL0 cannot read ID registers) | `RDRAND` |
 | CPUs | The boot CPU and the others the MADT lists (a table of 256; issue 171), started with PSCI `CPU_ON` into a trampoline that turns on the MMU with the boot CPU's MAIR, TCR, TTBR0 and SCTLR (its record and code cleaned to memory first); each has its exception stack and redistributor. The boot CPU's virtual timer ticks; the others get the tick as an SGI | INIT-SIPI-SIPI, local APIC timer IPIs |
 | TLB | `TLBI VMALLE1IS`: a change of an address space is broadcast to every CPU by the instruction itself, no IPIs | reload of CR3 on the next switch |
@@ -82,14 +82,14 @@ The same sources, built for `aarch64-unknown-none-softfloat` as static PIEs with
 | MC-10.5 side channels | not claimed | As on x86; no speculation barriers, no PAN (the kernel reaches task memory through its identity map only). |
 | Article 4 storage | partial | As on x86: the block store runs at boot over `ramdisk#1`, with names that keep their history and can be removed, commits of several names, pins, quotas per owner and collection by reachability. Evidence: `store` and `storefaults` suites on `virt`. |
 | Article 9 boot and update | partial | As on x86: `scripts/build_aarch64.sh` signs `aarch64_root/`, and `BOOTAA64.EFI` checks the manifest's signature and every image it loads (the services built for this platform) before loading. Evidence: every aarch64 suite and `aarch64_smoke.py` boot from signed volumes; the refusal cases run on x86 only. Slots A and B as on x86, tested by `aarch64_smoke.py` (a trial and its confirmation, an unconfirmed trial's fallback, a damaged slot, a torn record). The trust model and what is not met are x86's. |
-| FP/SIMD state | not provided | Programs are built soft-float; `CPACR_EL1` traps FP/SIMD, and no FP state is saved. |
+| FP/SIMD state | met (`virt`) | Every exception entry saves V0–V31, FPCR and FPSR after the frame's words and the exit loads them from the frame it resumes, so a task's vector registers are its own (250-KRN-0056). Evidence: the busy fixture keeps both halves of V8 and V31 and FPCR's rounding mode across preemption, with tasks on the same CPU (`busy` and `smp` suites); `cpus` reports `FPU=FP/SIMD`. Programs are still built soft-float, except those that use the registers themselves. |
 | Legacy devices | none | No port I/O, no ISA devices, no legacy VirtIO interface: `ata`, `ps2_kbd` and `audio_gw` are not built; `docs/legacy.md` lists nothing for this platform. |
 
 ## Not yet
 
 - Boards on hardware: Raspberry Pi 4/5 with the EDK2 port (its xHCI is a VL805 behind a non-standard PCIe root), servers with ACPI; QEMU `sbsa-ref` (its firmware is not packaged) — issue [205](../../../issues/205-aarch64-boards.md). CPUs beyond eight, CPU hotplug.
 - An SMMU, so the DMA drivers leave the TCB.
-- FP/SIMD state, so programs are soft-float; sound (virtio-snd); `virtio_rng` for machines without RNDR.
+- Programs built hard-float (`aarch64-unknown-none`): the kernel saves the state now (250-KRN-0056), the tools track builds its engines so; sound (virtio-snd); `virtio_rng` for machines without RNDR.
 - PAN (Privileged Access Never): not enabled yet; the kernel reaches task memory only through its identity map, never through user addresses.
 - Apple Silicon Macs. Natively: issue [210](../../../issues/210-apple-silicon-native.md), track `APL` (no UEFI or ACPI, the AIC, a spin table, DARTs). In a virtual machine under the Mac's hypervisor (`-accel hvf -cpu host`, [docs/apple-silicon.md](../../apple-silicon.md)): not tested, no evidence (issue [600](../../../issues/600-apple-silicon-mac-vm-host.md)); the evidence of this profile does not carry over to it.
 

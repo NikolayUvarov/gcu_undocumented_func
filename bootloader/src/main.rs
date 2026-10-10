@@ -382,6 +382,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
     show_text(&system_table);
     say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
+    // On a real machine, time to read what the firmware printed above this line before the loader's own lines push it
+    // out of the small text console (the MacBook Pro, 2026-10-09).
+    if bare_metal() {
+        say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", PHOTO_PAUSE_S));
+        system_table.boot_services().stall(PHOTO_PAUSE_S * 1_000_000);
+    }
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {

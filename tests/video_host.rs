@@ -48,3 +48,24 @@ fn yuy2_white_black_and_the_primaries() {
     assert!(near(out[4], (0, 0, 255)), "blue {:06x}", out[4]);
     assert_eq!(yuy2_to_rgb(&source[..6], &mut out), 2, "only whole pairs");
 }
+
+#[test]
+fn yuy2_scaled_to_the_size_asked_for() {
+    // 4 x 2 pixels, each a different grey: luma 16 + 20 n, neutral chroma.
+    let luma = |n: usize| (16 + 20 * n) as u8;
+    let source: Vec<u8> = (0..8).step_by(2).flat_map(|n| [luma(n), 128, luma(n + 1), 128]).collect();
+    let mut same = [0u32; 8];
+    let mut plain = [0u32; 8];
+    yuy2_scaled(&source, 4, 2, &mut same, 4, 2);
+    yuy2_to_rgb(&source, &mut plain);
+    assert_eq!(same, plain, "the same size is the plain conversion");
+    let mut half = [0u32; 2];
+    yuy2_scaled(&source, 4, 2, &mut half, 2, 1);
+    assert_eq!(half, [plain[0], plain[2]], "every other pixel of the first row");
+    let mut double = [0u32; 32];
+    yuy2_scaled(&source, 4, 2, &mut double, 8, 4);
+    assert_eq!((double[0], double[1], double[2], double[3 * 8 + 7]), (plain[0], plain[0], plain[1], plain[7]), "each pixel twice each way");
+    let mut beyond = [1u32; 4];
+    yuy2_scaled(&source[..4], 4, 2, &mut beyond, 2, 2);
+    assert_eq!(beyond[2..], [0, 0], "rows the source lacks are black");
+}

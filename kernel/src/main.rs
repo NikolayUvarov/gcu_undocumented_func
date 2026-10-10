@@ -46,6 +46,7 @@ mod pci;
 mod scheduler;
 mod screen;
 mod task_state;
+mod task_table;
 mod tpm2;
 mod trial;
 mod user_heap;
