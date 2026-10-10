@@ -16,6 +16,12 @@ On 2026-10-10 the maintainer decided that the aarch64 part of a gate runs on the
   - **The stale copy.** A suite run cut off that morning had left an old disk copy, `aarch64_root/smoke-*`, in the build, and the test copied it onto the disk. Without it, the test still fails.
 - **What differs.** The host: Ubuntu 22.04 on ext4, a faster boot (8 s against about 18 s), AAVMF 2022.02. The guest's writes may come in another order or at other times there, and `vvfat`'s bookkeeping of renames and new directories is known to be fragile.
 
+**Not PCU's alone (2026-10-10, the storage session's gate).**
+- **Elsewhere.** The same assertion fails "aarch64: boot and fault containment" on the storage session's machine too, under Ubuntu's QEMU 8.2.2: in 2 runs of 3, on `main` (661147f) as on its branch.
+- **Where in the test.** The failure comes after the checks of the boot slots and the update zone, in the fault cases.
+- **What follows.** It is a race in `vvfat`'s write-back that the guest's timing exposes. PCU's faster boot makes it certain.
+- **The gates meanwhile.** The maintainer let the storage session's gate pass with this one failure excepted. The kernel session runs the group on its own machine, where it passed in the gates of 2026-10-10.
+
 ## Plan
 
 1. Find which write breaks it. Run the test with QEMU's `-trace 'vvfat*'` on PCU, and compare with the kernel session's machine.
