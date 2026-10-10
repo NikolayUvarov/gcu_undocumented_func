@@ -16,6 +16,7 @@ pub mod net;
 pub mod netpolicy;
 pub mod parse;
 pub mod rtc;
+pub mod shell;
 pub mod socket;
 pub mod sysinfo;
 pub mod tls;

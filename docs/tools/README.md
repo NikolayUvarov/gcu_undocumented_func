@@ -262,7 +262,8 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab com
 - Its lines follow the window's size: they are kept as wide as the screen's cells and wrap and show at the frame's width and height; a narrower window keeps the characters it does not show (`shell/src/ring.rs`).
 - `reboot` and `stop` ask first there, since its keys come through the window manager. `fg` is refused (the window has no screen to give a program), and so is a window manager.
 - Closed (`[×]`, Alt+W), the window goes with its session, and `wm` goes on; Ctrl+Alt+F5 opens it again. Leaving `wm` keeps it hidden, as every window, and the next `wm` shows it where it was.
-- Not yet: a `shell` item in `wm`'s menu and `console` joined to the shell wait for `SLOT_SHELL` from the kernel track (211-APP-0044, 211-KRN-0058).
+- **From `wm`'s menu** (211-APP-0044): the first item of the menu a right click on the desktop opens (and of Alt+P's), `Shell (its window)`, opens it too. `wm` asks for the shell's commands (`REQUEST_SHELL`); the shell lends a client of `idl/shell.wit` 1.0 in `SLOT_SHELL`, whose one call, `window`, opens the shell's window (or answers the open one) and gives its id, which `wm` brings to the front. The call waits at most 2 s (`mind::idl::wire::with_timeout`): a shell busy with a command does not hold `wm` (`The shell does not answer`). The client opens the window and nothing else; the window's keys and what they run stay the shell's.
+- Not yet: `console` joined to the shell (its commands sent to the shell through the same interface) is the rest of 211-APP-0044.
 
 **Scripts** (issue 094): `msh` is the shell's script language ([docs/msh.md](../msh.md)). Scripts are files run with `msh file` or by a name ending in `.msh`; statements (`let`, `if`, `for`, …) also work at the prompt. Results follow Marain: `ok`/`err`, `?`, `or`, `try`. A script gets no more authority than its `requires:` line declares.
 

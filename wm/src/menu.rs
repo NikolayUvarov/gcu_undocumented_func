@@ -21,6 +21,15 @@ impl Item {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { Window, Console, Manager }
 
+/// The command of the menu's first item where `wm` holds the shell's commands (211-APP-0044): the shell's own window.
+pub const SHELL: &str = "shell";
+
+/// The menu's first item, the shell's window, before `catalogue`'s.
+pub fn with_shell(mut menu: Vec<Item>) -> Vec<Item> {
+    menu.insert(0, Item::program("Shell (its window)", SHELL));
+    menu
+}
+
 /// The categories, in this order; programs not named here go under "Other".
 pub const CATEGORIES: [(&str, &[&str]); 5] = [
     ("Files", &["fm", "edit", "view", "find", "grep", "df", "fsck", "format"]),
