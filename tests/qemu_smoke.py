@@ -3380,7 +3380,8 @@ def services_suite(vm):
     for slot in (2, 3, 4, 5, 6):
         assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg--(?:\s|$)", caps, re.M), (slot, caps)  # EP: issue 075
     # init's own endpoint carries every right, the badge right too (000-KRN-0073).
-    assert re.search(r" endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=rwgkb(?:\s|$)", vm.command("caps 1"), re.M), vm.command("caps 1")
+    init_caps = vm.command("caps 1", raw=True)
+    assert re.search(r" endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=rwgkb(?:\s|$)", init_caps, re.M), init_caps
     assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)

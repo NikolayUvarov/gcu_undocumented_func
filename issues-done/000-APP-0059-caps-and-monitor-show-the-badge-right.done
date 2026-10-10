@@ -1,6 +1,6 @@
-# 000-APP-0059 — `caps` and `monitor` show the badge right
+# 000-APP-0059 — `caps` and `monitor` show the badge right — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.4, MC-10.2
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.4, MC-10.2
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -19,6 +19,12 @@ Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MIN
 
 `caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
 
+## Resolution
+
+- **What was done.** The shell's `caps` (`shell/src/observe.rs`) and `monitor`'s holders of an endpoint (`monitor/src/ipc.rs`, `rights`) and capability view (`monitor/src/caps.rs`, a column of five) print `CAP_BADGE` as a fifth letter, `b`.
+- **Evidence (QEMU x86, the services suite on the branch at 1bea2d0 with this check).** `caps 4` shows `RIGHTS=-wg--` for each standard client in slots 2 to 6, and `caps 1` shows `RIGHTS=rwgkb` for `init`'s own endpoint.
+- **Host test.** `tests/monitor_host.rs` checks the letters (`rwgkb`, `-w--b`) and the views' rows.
+
 ## Related
 
-[requests-APP.md](requests-APP.md) (where it was recorded).
+[requests-APP.md](../issues/requests-APP.md) (where it was recorded).
