@@ -5968,6 +5968,16 @@ def wm_suite(vm):
                 time.sleep(.1)
             while state()[1] != asking[-1]:
                 wait()
+            # The shell's date shows it too: typed in the window the shell asked in.
+            vm.send_bytes(b"date\r")
+            wait(lines=5)
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(asking[-1])
+                if any(canon(f"{year + step:04}-") in row and canon("(RTC, NO TIME ZONE)") in row for row in rows):
+                    break
+            else:
+                raise AssertionError(rows)
             close_shell(asking[-1])
             assert page() == year + step
             keys("esc", text="MODE=NORMAL")
@@ -5975,7 +5985,7 @@ def wm_suite(vm):
 
         year = set_year(1)
         set_year(-1)
-        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window", flush=True)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window; the shell's date and the page show it", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
