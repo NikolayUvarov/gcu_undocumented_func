@@ -121,9 +121,9 @@ The check could wait for `[INIT] READY` and for keystore's line before closing t
 
 `python3 tests/aarch64_smoke.py` passes on main.
 
-## A read-only client of a card's counters, for `wm`'s background (000-APP-0047)
+## A read-only client of a card's counters, for `wm`'s background (000-APP-0049)
 
-**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0047](000-APP-0047-wm-desktop-background.md) (the maintainer's request: the network traffic on `wm`'s desktop background).
+**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md), split from 000-APP-0047 (the maintainer's request: the network traffic on `wm`'s desktop background).
 
 ### Problem
 
