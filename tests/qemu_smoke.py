@@ -5783,6 +5783,13 @@ def wm_suite(vm):
     vm.serial(enter=False)
     green = [px for py in range(2 * 16, 48 * 16) for px in range(8, 79 * 8) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
     assert green and max(green) > 8 + 400, (len(green), max(green, default=0))
+    # 211-APP-0046: Alt+0 gives the frame back to the content's first size, where it stands: the clock draws at
+    # 320 x 176 again. Alt+Left puts it back on the left half.
+    mode, focus, rects = keys("alt-0")
+    assert rects[clock] == (0, 1, 42, 13), rects
+    if f"[WM] PIXELS {clock} 320X176" not in seen[-1]:
+        wait(f"[WM] PIXELS {clock} 320X176", lines=0)
+    assert keys("alt-left")[2][clock] == (0, 1, 80, 48), state()
     # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
     # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
     # wheel moves fm's cursor.

@@ -472,6 +472,7 @@ fn main(info: &'static BootInfo) {
                 }
                 Input::Pointer(p) => {
                     if let Some((gx, gy)) = mind::input::pointer_pixel() { (px, py) = (x0 + gx, y0 + gy); }
+                    manager.wm.now = mind::time::uptime_ms(); // for a double click on a title (211-APP-0046)
                     manager.wm.pointer(p.x, p.y, p.buttons, p.wheel)
                 }
             };
