@@ -77,7 +77,7 @@ A new `isolation` case: a program holding an unbadged client without the right g
 
 ## A client of the updater for the shell
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md) and the tools track's `update` command (351-APP-0029, on its branch).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) and the tools track's `update` command (351-APP-0029, on its branch).
 
 ### Problem
 
@@ -95,7 +95,7 @@ The shell holds a client of `updater` (`caps` shows it), and `status` answers th
 
 ## init says whether it confirmed a trial boot
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 
 ### Problem
 

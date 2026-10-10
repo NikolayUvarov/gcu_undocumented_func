@@ -1,6 +1,6 @@
 # 351-ASR-0005 — Power loss at every step of an update
 
-**Type:** assurance (fault injection) · **Owner:** `ASR` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done); later [351-UPD-0007](351-UPD-0007-updater-service.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-12.2
+**Type:** assurance (fault injection) · **Owner:** `ASR` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done) (done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (all done) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.3, MC-12.2
 
 Numbered by the kernel session at the maintainer's request (2026-10-08); the track is open.
 

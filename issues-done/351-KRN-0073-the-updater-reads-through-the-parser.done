@@ -4,7 +4,7 @@
 
 ## Problem
 
-The updater holds the update zone, so it parses no metadata from the network itself: the channel and the manifests go through the parser service `parse` (351-NET-0011, [351-UPD-0007](../issues/351-UPD-0007-updater-service.md)). `init` gave it no client of `parse`.
+The updater holds the update zone, so it parses no metadata from the network itself: the channel and the manifests go through the parser service `parse` (351-NET-0011, [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)). `init` gave it no client of `parse`.
 
 ## Plan
 

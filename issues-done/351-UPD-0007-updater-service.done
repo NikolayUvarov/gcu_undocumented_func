@@ -1,0 +1,91 @@
+# 351-UPD-0007 — The `updater` service — done
+
+**Type:** update (service) · **Owner:** `UPD` track · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) (done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done), HTTPS downloads from `NET` (done: [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), with a pinned key for the server; the download with resume itself is [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)) · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-8.5, MC-9.2–9.4, MC-3.11
+
+Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
+
+## Problem
+
+Something on the device has to turn a published release into a staged, verified slot, and only that.
+
+## Plan
+
+- **A service started by `init`** with only what it needs:
+  - the update zone of `vfs_server`;
+  - HTTPS through `tls`, later SSH;
+  - a network grant for the update server;
+  - the right to ask for a restart.
+
+  It cannot write anything else (MC-3.11: the manifest it reads grants nothing).
+- **Interface `idl/update.wit`:** `check`, `fetch`, `apply`, `status`, `rollback`.
+  - `check` reads the channel, verifies its signature and expiry, and compares versions with the running one and the minimum.
+  - `fetch` downloads every blob the manifest names into the inactive slot, resuming a partial file, and checks every hash.
+  - `apply` writes the trial boot record and asks `init` to restart.
+  - `rollback` writes a record that points at the last confirmed slot.
+- **Parsing outside the updater** (MC-11.11, [109](../issues-done/109-session-parsers.done)): the updater holds the update zone, so it parses no metadata from the network itself. The channel and the manifests go through the parser service `parse` (new requests in `idl/parse.wit`), as `download`'s response heads do; the updater checks the signatures and the typed answers.
+- **Sources:** an HTTPS URL, an `ssh://` URL in phase 3, or a directory on a disk (for a USB stick). One verification path serves all three.
+- **Status** is visible to the shell and `sysinfo`: current, staged, trial and last-known-good versions, and the last error.
+- **Images with slots** (moved here from 351-UPD-0006, which left the images in the root layout until a slot can be staged):
+  - `scripts/make_usb_image.py` puts the build in slot A, confirmed, with an empty slot B, as `scripts/boot_slots.py layout` does;
+  - the programs and docs that name `kernel.elf` at the root (`files`, the disk-writing guides) follow.
+- **The slot's manifest** is the release's own. The bootloader checks the slot's kernel and services against it by name ([slots.md](../docs/update/slots.md)), so the updater writes the release's `MANIFEST` and `MANIFEST.SIG` into the slot as published and never signs on the device.
+
+## Decomposition (the storage session for the UPD track, 2026-10-09)
+
+| Task | Track | What | State |
+|---|---|---|---|
+| [351-UPD-0013](../issues-done/351-UPD-0013-release-metadata-in-libmind.done) | `UPD` | `mind::release`: the channel and the manifest read in their one encoding, and encoded again | done |
+| [351-NET-0011](../issues-done/351-NET-0011-parse-release-metadata.done) | `NET` | `parse` reads channels and manifests for the updater (`idl/parse.wit` 1.1) | done |
+| [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) | `UPD` | The update zone in `vfs_server` | done (2026-10-10) |
+| [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) | `KRN` | `updater` as a boot service with its grants, the update zone's badge included | done (2026-10-10) |
+| this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | done (2026-10-10) |
+| [351-UPD-0016](../issues/351-UPD-0016-images-with-slots.md) | `UPD` | Images with slots: `make_usb_image.py` puts the build in slot A | open (split off) |
+| [351-KRN-0073](351-KRN-0073-the-updater-reads-through-the-parser.done) | `KRN` | `init` lends the updater the parser | done (2026-10-10) |
+| 351-APP-0029 (on the tools branch) | `APP` | The shell's `update` command | open |
+
+How the updater uses the parser: it verifies the signature over the raw bytes itself (the release key for the channel, the boot key for a manifest), asks `parse` for the fields, and accepts them only if `mind::release` encodes them again to exactly the signed bytes. It never parses network bytes.
+
+## Acceptance criteria
+
+In QEMU against the test server of 351-UPD-0005:
+
+- `update check`, `fetch` and `apply` move a device from release N to N+1, which then confirms;
+- a changed blob, a bad signature, an older version and expired metadata are each refused, with nothing written to the boot records;
+- a download cut midway resumes.
+
+## Related
+
+[351](../issues/351-self-update.md).
+
+## Resolution
+
+Done on 2026-10-10 by the storage session for the update track.
+
+- **The service** `updater/` serves `idl/update.wit` 1.0 ([docs/update/updater.md](../docs/update/updater.md), EN and RU).
+  - **Channels.** It reads them through the parser and takes the fields only if they encode again to the signed bytes. It checks the release key (built in), the name, the expiry against the clock, and a version above the running one. The running version is the one the channel kept in the running slot shows for the manifest that booted.
+  - **Manifests.** Each must have the digest the channel names and the boot key's signature.
+  - **Boot files.** It fetches them into the slot that did not boot over HTTPS (a pinned key or the roots, over its flow grant) or from a directory, resuming partial files and cut connections, and checks each by size and SHA-256 on the disk. The manifest, its signature and the channel come last.
+  - **`apply`** checks that slot as the bootloader will, writes the trial record and asks `init` to restart.
+  - **`rollback`** boots the other slot on trial if its kept channel is not below the minimum.
+  - **Confirmation.** On a trial boot it writes the confirmed record once the machine has outlived the kernel's deadline.
+  - **`update.txt`** names the source, the channel and the automatic policy (`none`, `check`, `fetch`, `apply`, every N seconds).
+- **Records.** `updater/src/plan.rs` chooses each record with the bootloader's own encoding. Host tests: `tests/updater_host.rs`.
+- **Grant.** `init` lends the updater the parser ([351-KRN-0073](351-KRN-0073-the-updater-reads-through-the-parser.done)).
+- **Tested in QEMU, x86 and aarch64** (the `update` check in the `updater` suite, `tests/qemu_smoke.py`):
+  - Each of these is refused with no boot record written:
+    - an expired channel;
+    - a bad signature;
+    - an older version;
+    - a changed boot file.
+  - Release 6 is fetched over HTTPS from `scripts/serve_release.py`, its largest file cut and resumed with `Range`.
+  - It is booted on trial through `init`'s restart, and the bootloader loads its manifest.
+  - Past the kernel's deadline the updater confirms it on the disk. The records hold exactly the three writes of an update.
+  - `fsck.fat` finds the volume consistent.
+
+Against the acceptance criteria:
+- check, fetch and apply ran through the service's automatic policy, not a shell command. The shell's `update` is the tools track's 351-APP-0029; the shell's client of the updater is asked of the kernel track ([requests-KRN.md](../issues/requests-KRN.md)).
+- `rollback` and `status` have not run on the platform, and a directory source is not tested in QEMU.
+
+Split off:
+- images with slots: [351-UPD-0016](../issues/351-UPD-0016-images-with-slots.md);
+- `init` telling the updater of its confirmation: a request in [requests-KRN.md](../issues/requests-KRN.md).
