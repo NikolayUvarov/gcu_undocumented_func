@@ -3375,10 +3375,12 @@ def services_suite(vm):
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
     require(details, "CAPS=5/4095")
-    # The standard client endpoints in slots 2..6, write and grant only; no privilege.
+    # The standard client endpoints in slots 2..6, write and grant only, no badge right (ABI 6); no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):
-        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg-", caps), (slot, caps)  # EP: issue 075
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg--(?:\s|$)", caps, re.M), (slot, caps)  # EP: issue 075
+    # init's own endpoint carries every right, the badge right too (000-KRN-0073).
+    assert re.search(r" endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=rwgkb(?:\s|$)", vm.command("caps 1"), re.M), vm.command("caps 1")
     assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)
