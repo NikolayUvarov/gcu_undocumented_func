@@ -54,3 +54,6 @@ Thumbs.db
 .vscode/
 .idea/
 .lavish/
+
+# Proprietary files (firmware, microcode): fetched here by scripts, never committed; copied onto the written disk (AGENTS.md, section 3).
+/proprietary/
