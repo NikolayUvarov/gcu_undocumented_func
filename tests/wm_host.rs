@@ -837,6 +837,7 @@ fn the_backdrop_keeps_its_frame() {
     // An image that cannot be read: the pattern, and a notice.
     let (b, problem) = Backdrop::new(Config::parse("background = image data/missing.bmp").0, (640, 400), read_nothing);
     assert!(problem.unwrap().contains("data/missing.bmp") && b.moving());
+    assert_eq!(b.config.picture, Picture::Image("data/missing.bmp".into()), "the choice is kept");
     // An image that can: drawn, and still.
     let file = bmp(2, 1, false, |x, _| if x == 0 { 0x203040 } else { 0x405060 });
     let (mut b, problem) = Backdrop::new(Config::parse("background = image sky.bmp\nshow = none").0, (64, 32), &mut |_| Some(file.clone()));

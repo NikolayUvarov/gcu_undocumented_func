@@ -5592,6 +5592,8 @@ def wm_suite(vm):
     assert left > 4000 and right > 3000, (left, right)  # the image's halves, but where the time and the date are drawn
     require(vm.command("rm data/wm.conf"), "OK")
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; an image covers the desktop", flush=True)
+    seen.clear()  # the PIDs and windows below are the next wm's
+    read[0] = len(vm.log)
 
     vm.send("wm fm, clock, top\n")
     out = wait()

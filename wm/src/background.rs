@@ -250,18 +250,18 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, conf
 pub struct Backdrop { pub config: Config, pub width: usize, pub height: usize, pub unit: usize, pub frame: Vec<u32>, base: Option<Vec<u32>>, pub step: u32, pub cpu: Vec<u8> }
 
 impl Backdrop {
-    /// For a screen of `screen` pixels; `image` reads the file `image <file>` names (None: it falls back to the pattern).
+    /// For a screen of `screen` pixels; `image` reads the file `image <file>` names (None: the pattern is drawn instead,
+    /// and the configuration keeps the image).
     pub fn new(config: Config, screen: (usize, usize), image: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> (Self, Option<String>) {
         let unit = if screen.0 * screen.1 * 4 <= 4 << 20 { 1 } else { 2 };
         let (width, height) = (screen.0 / unit, screen.1 / unit);
-        let mut config = config;
         let mut problem = None;
         let base = match &config.picture {
             Picture::Image(file) => {
                 let mut base = vec![0u32; width * height];
                 match image(file).and_then(|data| bmp_cover(&data, &mut base, width, height)) {
                     Some(()) => Some(base),
-                    None => { problem = Some(format!("{}: not a BMP that can be read (24 or 32 bits, uncompressed); the pattern instead", file)); config.picture = Picture::Abstract; None }
+                    None => { problem = Some(format!("{}: not a BMP that can be read (24 or 32 bits, uncompressed); the pattern instead", file)); None }
                 }
             }
             _ => None,
@@ -293,6 +293,6 @@ impl Backdrop {
         if fx < self.width && fy < self.height { self.frame[fy * self.width + fx] } else { DARK }
     }
 
-    /// The pattern moves (an image does not).
-    pub fn moving(&self) -> bool { self.config.picture == Picture::Abstract }
+    /// The pattern moves (an image does not): `abstract`, or an image that could not be read.
+    pub fn moving(&self) -> bool { self.shown() && self.base.is_none() }
 }
