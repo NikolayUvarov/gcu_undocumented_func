@@ -8,7 +8,7 @@ This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-
 
 - Stage 2 of `bcm_wifi` loads Broadcom's microcode into the BCM4331's 802.11 core.
 - The maintainer's build copies the file onto the written disk under `data/firmware/b43/` (`scripts/proprietary.sh`), never into the image.
-- `init` gave `bcm_wifi` BAR0 only ([550-KRN-0059](550-KRN-0059-bcm-wifi-at-boot.md)), so the driver could not read the file. Stage 2 then logs that it is skipped, and the system runs on.
+- `init` gave `bcm_wifi` BAR0 only ([550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done)), so the driver could not read the file. Stage 2 then logs that it is skipped, and the system runs on.
 
 ## Plan
 
@@ -27,4 +27,4 @@ This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-
 
 ## Related
 
-[550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), [550-KRN-0059](550-KRN-0059-bcm-wifi-at-boot.md).
+[550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done).
