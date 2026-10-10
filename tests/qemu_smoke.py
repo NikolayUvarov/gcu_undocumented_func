@@ -6126,15 +6126,19 @@ def wm_suite(vm):
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
 
+        # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
+        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+
         def asking_window():
-            # The shell's window, open (the first time the shell opens it, in front as a new window is).
+            # The shell's window, open (where the broker kept the last one's place, when it had one).
             for _ in range(60):
-                shown = [int(w) for w in shell_re.findall("".join(seen)) if int(w) in state()[2]]
+                shown = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and int(m[0]) in state()[2]]
                 if shown:
                     return shown[-1]
                 time.sleep(.2)
                 wait(lines=0)
-            raise AssertionError(last_state())
+            raise AssertionError((last_state(), inside(console), vm.log[-3000:]))
 
         for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
             vm.send_bytes(f"kill {target + BASE}\r".encode())
