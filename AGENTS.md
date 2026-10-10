@@ -77,7 +77,7 @@ The registry of tracks — current owners, branches, statuses and starting tasks
      - [THIRD_PARTY.md](THIRD_PARTY.md) names the script and the source, not the files.
 
      A disk that holds them is for the maintainer's own use.
-4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups. `scripts/ci_local.sh` runs every CI group on your machine.
+4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups, on the maintainer's remote machines through Effector (today PCU), in parallel with the x86 part ([docs/effector.md](docs/effector.md), section 4). `scripts/ci_local.sh` runs every CI group on your machine.
 5. **Update the evidence.** If the change alters a statement in `docs/profile` (a guarantee, the TCB or evidence), update that statement in the same commit. Update the README and `docs/api` when behaviour or interfaces change.
 6. **Commit.** One task per commit where possible. The message says what changed and why, and cites the issue. An agent's commits carry a trailer naming the tool and, if there is one, a link to the session (for example `Co-Authored-By:` and a session URL). The person directing the agent is the author of record and accepts the [licence of contributions](CONTRIBUTING.md#licence-of-contributions).
 7. **Close the issue** when its acceptance criteria are met:
