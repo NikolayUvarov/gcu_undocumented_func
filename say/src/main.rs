@@ -35,18 +35,26 @@ fn main(info: &'static BootInfo) {
             Err(_) => GREETING,
         }
     };
-    if let Some(screen) = Screen::new(info) {
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen), drawn again at the size wm gives it.
+    let info = mind::windowed::pixels(info, 608, 336, "say");
+    let draw = |screen: &Screen| {
         screen.clear(0x00101018);
         screen.text(24, 24, b"SAY - TEXT TO SPEECH (ESC: EXIT)", 2, 0x0080FFC0, None);
-        show(&screen, text);
-    }
+        show(screen, text);
+    };
+    if let Some(screen) = Screen::new(info) { draw(&screen); }
     match mind::tts::say_with(text, pitch, rate) {
         Ok(ms) => mind::println!("[SAY] SPOKE {} MS", ms),
         Err(error) => mind::println!("[SAY] ERROR {:?}", error),
     }
     mind::println!("[SAY] DONE");
     // Text from the command line: done once spoken. The demo text keeps its screen until Esc.
-    if words.is_empty() { loop { mind::input::wait_or_exit(200); } }
+    if words.is_empty() {
+        loop {
+            if let Some(resized) = mind::windowed::pixels_resized() { if let Some(screen) = Screen::new(&resized) { draw(&screen); } }
+            mind::input::wait_or_exit(200);
+        }
+    }
 }
 
 // The text in the 8x16 font, which has Cyrillic, cut into rows at spaces to the screen's width (issue u010); when it

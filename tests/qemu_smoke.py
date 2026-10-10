@@ -6009,6 +6009,13 @@ def wm_suite(vm):
     vm.serial(enter=False)
     green = [px for py in range(2 * 16, 48 * 16) for px in range(8, 79 * 8) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
     assert green and max(green) > 8 + 400, (len(green), max(green, default=0))
+    # 211-APP-0046: Alt+0 gives the frame back to the content's first size, where it stands: the clock draws at
+    # 320 x 176 again. Alt+Left puts it back on the left half.
+    mode, focus, rects = keys("alt-0")
+    assert rects[clock] == (0, 1, 42, 13), rects
+    if f"[WM] PIXELS {clock} 320X176" not in seen[-1]:
+        wait(f"[WM] PIXELS {clock} 320X176", lines=0)
+    assert keys("alt-left")[2][clock] == (0, 1, 80, 48), state()
     # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
     # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
     # wheel moves fm's cursor.
@@ -6187,6 +6194,16 @@ def wm_suite(vm):
                 time.sleep(.1)
             while state()[1] != asking[-1]:
                 wait()
+            # The shell's date shows it too: typed in the window the shell asked in.
+            vm.send_bytes(b"date\r")
+            wait(lines=5)
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(asking[-1])
+                if any(canon(f"{year + step:04}-") in row and canon("(RTC, NO TIME ZONE)") in row for row in rows):
+                    break
+            else:
+                raise AssertionError(rows)
             close_shell(asking[-1])
             assert page() == year + step
             keys("esc", text="MODE=NORMAL")
@@ -6194,7 +6211,7 @@ def wm_suite(vm):
 
         year = set_year(1)
         set_year(-1)
-        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window", flush=True)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window; the shell's date and the page show it", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
@@ -6246,7 +6263,7 @@ def wm_suite(vm):
             if at() == first:
                 break
         close_menu()
-        started, said = [], []
+        started, said, unseen = [], [], []
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6261,11 +6278,13 @@ def wm_suite(vm):
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
-                # Its window (console's for a console program) comes, unless it ended at once.
-                deadline = time.monotonic() + 8
+                # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
+                deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
                     time.sleep(.1)
                     wait(lines=0)
+                if not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                    unseen.append(name)
             else:
                 said.append(f"{name}: {line}")
             close_menu()
@@ -6274,8 +6293,9 @@ def wm_suite(vm):
         wait(lines=0)
         tidy()
         assert len(started) >= 20, (started, said)
-        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs "
-              f"(each window closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
+        assert not unseen, f"started with no window: {unseen}"
+        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs, "
+              f"each in a window (closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
 
     def settings_react():
         # 000-APP-0056: each row of Settings' background page changes and is changed back (Left steps back, Enter ticks a

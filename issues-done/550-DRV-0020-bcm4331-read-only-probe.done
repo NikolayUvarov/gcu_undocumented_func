@@ -38,7 +38,7 @@ On the MacBook Pro, one boot logs the chip as `4331` on an AI backplane, the cor
 - the PCIe core at BAR0+0x2000 reads `FFFFFFFF`: not there on this chip;
 - the SPROM read zeros at both places: chip control's bits 4 and 7 give its pins to the external amplifier lines.
 
-The machine ran on: the boot went on for 340 s, with the camera streaming. This is evidence of reads on this machine only (MC-12.1). What the run found is acted on in [550-DRV-0022](../issues/550-DRV-0022-bcm4331-core-reset-and-sprom.md).
+The machine ran on: the boot went on for 340 s, with the camera streaming. This is evidence of reads on this machine only (MC-12.1). What the run found is acted on in [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done).
 
 ## Related
 

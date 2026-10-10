@@ -61,6 +61,8 @@ fn main(info: &'static BootInfo) {
         b"[APP2] BOUNCING SQUARE. CTRL+Z: SHELL, ESC: EXIT.\r\n",
     );
 
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen, with no screen to draw on).
+    let info = mind::windowed::pixels(info, 600, 240, "app2");
     // All state is local so every RUN APP2 starts a fresh animation and counter.
     let mut frame: usize = 0;
     let mut last_frame_ms = mind::time::uptime_ms().wrapping_sub(FRAME_INTERVAL_MS);

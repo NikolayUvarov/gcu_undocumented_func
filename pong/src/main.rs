@@ -23,7 +23,8 @@ fn line(screen: &Screen, y: usize, text: &str, color: u32) {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("pong — IPC demo server: starts ping, reads the string from the page ping lends and replies; the screen shows the last string and the calls.\nUsage: run pong &   (fg <pid> shows it)\nEsc: exit.");
-    let Some(screen) = Screen::new(info) else { return };
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen).
+    let Some(screen) = Screen::new(mind::windowed::pixels(info, 600, 240, "pong")) else { return };
     screen.clear(BACKGROUND);
     line(&screen, 48, "[ PONG / SUPERVISOR ]", 0x0000FF00);
     let endpoint = Endpoint::create().expect("EP CREATE FAILED");

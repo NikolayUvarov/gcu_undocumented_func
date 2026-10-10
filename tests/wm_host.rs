@@ -351,7 +351,7 @@ fn the_top_bar_can_be_clicked() {
     wm.programs = catalogue(&programs(false));
     let items = desk::bar_items(160);
     assert_eq!(items[0], (0, 3, desk::Bar::Programs), "\"wm\" at the left");
-    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12), (132, 16)]);
+    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12), (132, 11), (144, 16)]);
     let mut cells = vec![Cell::BLANK; 160 * 50];
     let mut grid = Grid::new(&mut cells, 160, 50);
     let mut text = |_: u32, _: usize, _: usize| None;
@@ -1312,4 +1312,50 @@ fn every_page_and_row_of_settings_reacts() {
             }
         }
     }
+}
+
+// 211-APP-0046: Alt+0, the top bar's item and a double click on the title give a window its content's first size back.
+#[test]
+fn a_window_back_to_its_contents_size() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk.add(pixels(1, "camera", 320, 240));
+    assert_eq!(rect(&wm.desk, 1), (0, 1, 42, 17), "a pixel window opens at its content's size");
+    // Resized by hand, the program draws at the new size: the frame's natural size follows, the first does not.
+    wm.desk.place(1, Rect::new(10, 5, 82, 32));
+    wm.desk.windows[0].size = (640, 480);
+    assert_eq!((wm.desk.get(1).unwrap().natural(), wm.desk.get(1).unwrap().fitted()), ((82, 32), (42, 17)));
+    assert_eq!(wm.key(alt_char('0')), Action::Redraw);
+    assert_eq!(rect(&wm.desk, 1), (10, 5, 42, 17), "back to 320 x 240, where it stands");
+    // Already that size: the status line says so.
+    wm.key(alt_char('0'));
+    assert_eq!(wm.notice.as_deref(), Some("Fit to content: \"camera\" has its content's first size already"));
+    // Maximized, it leaves that (the top bar's item does the same); full screen, it leaves that too.
+    wm.desk.maximize(1);
+    let (at, _, item) = desk::bar_items(160)[10];
+    assert_eq!(item, desk::Bar::Fit);
+    wm.pointer(at + 1, 0, 1, 0);
+    wm.pointer(at + 1, 0, 0, 0);
+    let w = wm.desk.get(1).unwrap();
+    assert!(w.restore.is_none() && (w.rect.w, w.rect.h) == (42, 17), "{:?}", w.rect);
+    wm.desk.toggle_full(1);
+    wm.key(alt_char('0'));
+    let w = wm.desk.get(1).unwrap();
+    assert!(!w.full && (w.rect.w, w.rect.h) == (42, 17), "{:?}", w.rect);
+    wm.desk.place(1, Rect::new(150, 40, 60, 20));
+    wm.desk.windows[0].size = (464, 288);
+    // A double click on the title: two presses on the same cell within DOUBLE_MS; slower ones are two clicks.
+    let r = wm.desk.get(1).unwrap().rect;
+    let click = |wm: &mut Wm, now: usize| { wm.now = now; wm.pointer(r.x + 2, r.y, 1, 0); wm.pointer(r.x + 2, r.y, 0, 0); };
+    click(&mut wm, 1000);
+    click(&mut wm, 1000 + desk::DOUBLE_MS + 1);
+    assert_eq!(rect(&wm.desk, 1), (r.x, r.y, r.w, r.h), "too slow: no double click");
+    click(&mut wm, 1000 + desk::DOUBLE_MS + 1 + desk::DOUBLE_MS);
+    let fitted = rect(&wm.desk, 1);
+    assert_eq!((fitted.2, fitted.3), (42, 17), "{:?}", fitted);
+    assert!(fitted.0 + 42 <= 160 && fitted.1 + 17 <= 49, "kept on the screen: {:?}", fitted);
+    // A text window: back to the 80 x 25 it opened with.
+    wm.desk.add(text(2, "fm"));
+    wm.desk.place(2, Rect::new(0, 1, 100, 40));
+    wm.key(alt_char('0'));
+    assert_eq!((rect(&wm.desk, 2).2, rect(&wm.desk, 2).3), (82, 27));
 }

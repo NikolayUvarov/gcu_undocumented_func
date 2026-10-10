@@ -4,7 +4,7 @@
 
 ## Problem
 
-Stages 1 and 1b ([550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done), [550-DRV-0022](550-DRV-0022-bcm4331-core-reset-and-sprom.md)) read the chip and its SPROM, and hold the 802.11 core in reset. The core does nothing until Broadcom's microcode runs in it. Whether ours can load it, start it and hear from it is the first thing every later stage needs.
+Stages 1 and 1b ([550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done)) read the chip and its SPROM, and hold the 802.11 core in reset. The core does nothing until Broadcom's microcode runs in it. Whether ours can load it, start it and hear from it is the first thing every later stage needs.
 
 ## Plan
 
@@ -24,4 +24,4 @@ On the MacBook Pro, one boot logs the microcode's size and SHA-256, the PHY and 
 
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](550-DRV-0022-bcm4331-core-reset-and-sprom.md), `bcm_wifi/`, `scripts/proprietary.sh`.
+[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), `bcm_wifi/`, `scripts/proprietary.sh`.

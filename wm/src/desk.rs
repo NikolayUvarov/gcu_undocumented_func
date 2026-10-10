@@ -35,15 +35,20 @@ pub struct Win {
     /// Alt+F (211-APP-0014): in front, its content covers the whole screen, without the frame or the bars; its frame
     /// stays as it was, for when it ends.
     pub full: bool,
+    /// The content's size when `wm` took the window: Alt+0 gives the frame back to it (211-APP-0046).
+    pub first: (usize, usize),
 }
 
 impl Win {
     pub fn new(id: u32, owner: u64, content: Content, size: (usize, usize), title: &str) -> Self {
-        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None, recording: false, full: false }
+        Self { id, owner, content, size, title: String::from(title), rect: Rect::default(), restore: None, before_max: None, recording: false, full: false, first: size }
     }
     /// The frame that shows all of the content.
-    pub fn natural(&self) -> (usize, usize) {
-        match self.content { Content::Text => (self.size.0 + 2, self.size.1 + 2), Content::Pixels => (self.size.0.div_ceil(8) + 2, self.size.1.div_ceil(16) + 2) }
+    pub fn natural(&self) -> (usize, usize) { self.frame_of(self.size) }
+    /// The frame that shows the content at the size it had when `wm` took the window.
+    pub fn fitted(&self) -> (usize, usize) { self.frame_of(self.first) }
+    fn frame_of(&self, size: (usize, usize)) -> (usize, usize) {
+        match self.content { Content::Text => (size.0 + 2, size.1 + 2), Content::Pixels => (size.0.div_ceil(8) + 2, size.1.div_ceil(16) + 2) }
     }
 }
 
@@ -241,6 +246,20 @@ impl Desk {
         }
     }
 
+    /// Alt+0 or a double click on the title (211-APP-0046): the frame back to the content's first size, where it stands
+    /// (moved only to stay on the screen); the program is asked to draw at that size, as for any frame. A camera's
+    /// picture is then pixel for pixel again.
+    /// False when the frame is that size already.
+    pub fn fit_content(&mut self, id: u32) -> bool {
+        let Some(w) = self.get(id) else { return false };
+        let ((width, height), r, full) = (w.fitted(), w.rect, w.full);
+        if (r.w, r.h) == (width, height) && !full { return false; }
+        self.leave_full(id);
+        self.forget_restore(id);
+        self.set(id, Rect::new(r.x, r.y, width, height));
+        true
+    }
+
     /// `[⇕]`: back to the frame before it was maximized or snapped (issue u002).
     pub fn restore(&mut self, id: u32) {
         let Some(index) = self.index(id) else { return };
@@ -394,10 +413,11 @@ enum Drag {
 /// `Settings`: one window for what can be configured (000-APP-0048).
 pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings) }
 
-pub const HELP: [&str; 19] = [
+pub const HELP: [&str; 20] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
     "Alt+← → ↑ ↓ — half the screen; Alt+1…4 — a quarter; Alt+Enter — maximize or restore",
     "Alt+F — full screen for the window in front, without the frame or the bars; Alt+F again: its frame back",
+    "Alt+0 or a double click on the title — the frame back to its content's first size (a camera's picture pixel for pixel)",
     "Alt+L — the list of windows: arrows and Enter or a click bring one to the front, Alt+W closes it",
     "Alt+M — move and resize: arrows move, Shift+arrows resize, Enter ends (at an edge it snaps), Esc goes back",
     "Alt+W or Alt+F4 — close the window (its program ends)",
@@ -419,11 +439,11 @@ pub const HELP: [&str; 19] = [
 /// What a click on an item of the top bar does (issue u008): the same as its key — for a host that keeps Alt+Tab and
 /// the like for itself. "wm" at the left opens the programs, as Alt+P does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full, Settings }
+pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full, Settings, Fit }
 
-pub const BAR: [(&str, Bar); 10] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
+pub const BAR: [(&str, Bar); 11] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
                                     ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave), ("Alt+L windows", Bar::List),
-                                    ("Alt+F full", Bar::Full), ("Alt+S settings", Bar::Settings)];
+                                    ("Alt+F full", Bar::Full), ("Alt+0 fit", Bar::Fit), ("Alt+S settings", Bar::Settings)];
 
 /// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
 /// then `│ label ` for each item that fits.
@@ -456,10 +476,17 @@ pub struct Wm {
     pub background: Config,
     /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
     pub shell: bool,
+    /// The time in ms, as the caller last gave it: two presses on a title within `DOUBLE_MS` are a double click.
+    pub now: usize,
+    // The last press on a title: the window, the cell and when.
+    title_press: Option<(u32, usize, usize, usize)>,
 }
 
+/// Two presses on the same cell of a title within this many ms are a double click.
+pub const DOUBLE_MS: usize = 400;
+
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, now: 0, title_press: None } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -541,6 +568,7 @@ impl Wm {
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
             (_, Some(n @ '1'..='4')) => { if let Some(id) = self.window_for("A quarter of the screen") { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
+            (_, Some('0')) => { self.fit(); Action::Redraw }
             _ => Action::Forward,
         }
     }
@@ -558,6 +586,15 @@ impl Wm {
             0 => self.notice = Some(String::from("Next window: there is no window. Alt+P or a right click on the desktop starts a program")),
             1 => self.notice = Some(format!("Next window: \"{}\" is the only one", self.desk.windows[0].title)),
             _ => self.desk.cycle(back),
+        }
+    }
+
+    // Alt+0: the window in front back to its content's first size, or why it stays.
+    fn fit(&mut self) {
+        let Some(id) = self.window_for("Fit to content") else { return };
+        if !self.desk.fit_content(id) {
+            let title = self.desk.get(id).map_or(String::new(), |w| w.title.clone());
+            self.notice = Some(format!("Fit to content: \"{}\" has its content's first size already", title));
         }
     }
 
@@ -628,6 +665,10 @@ impl Wm {
                 Hit::Zoom(id) if pressed => { self.desk.raise(id); self.desk.zoom(id); Action::Redraw }
                 Hit::Title(id) if pressed => {
                     self.desk.raise(id);
+                    // A double click: the frame back to the content's first size (211-APP-0046).
+                    let double = self.title_press.is_some_and(|(w, px, py, at)| (w, px, py) == (id, x, y) && self.now.saturating_sub(at) <= DOUBLE_MS);
+                    self.title_press = if double { None } else { Some((id, x, y, self.now)) };
+                    if double { self.fit(); return Action::Redraw; }
                     let w = self.desk.get(id).unwrap();
                     self.drag = Some(Drag::Move { id, dx: x - w.rect.x, dy: y - w.rect.y, from: Some((x, y)), unsnap: w.restore.is_some() });
                     Action::Redraw
@@ -683,6 +724,7 @@ impl Wm {
             Bar::List => { if !matches!(before, Mode::List { .. }) { self.open_list(); } Action::Redraw }
             Bar::Full => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             Bar::Settings => { if !matches!(before, Mode::Settings(_)) { self.open_settings(); } Action::Redraw }
+            Bar::Fit => { self.fit(); Action::Redraw }
         }
     }
 
