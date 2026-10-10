@@ -5733,9 +5733,72 @@ def wm_suite(vm):
     until(f"GONE {caps}")
     while caps in state()[2]:
         wait()  # the state line after the window went
-    # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera, to which wm lends
-    # no camera, says so in a window of its own with its status, until a key.
-    keys("alt-r", "c", "a", "m", "e", "r", "a", "ret", text="STARTED camera")
+    # The camera from wm (158-APP-0043): wm holds the shell's client of the video gateway and lends it; camera started
+    # from the run line, in console and in the shell's window shows the synthetic source's bars in its window.
+    def colours(window, wanted):
+        # How many pixels of each of `wanted` (RGB bytes) are inside `window`'s frame, every other one counted.
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        width = int(size.split()[0])
+        x, y, w, h = state()[2][window]
+        counts = dict.fromkeys(wanted, 0)
+        for py in range((y + 1) * 16, (y + h - 1) * 16, 2):
+            for px in range((x + 1) * 8, (x + w - 1) * 8, 2):
+                p = pixels[(py * width + px) * 3:(py * width + px) * 3 + 3]
+                if p in counts:
+                    counts[p] += 1
+        return counts
+
+    def camera_window(start):
+        # Starts camera with `start`; its window shows the bars (yellow, cyan, magenta); then it is closed.
+        known = {m[0] for m in windows_re.findall("".join(seen))}
+        start()
+        while not any(m[0] not in known and m[2] == "PIXELS" for m in windows_re.findall("".join(seen))):
+            wait("[WM] WINDOW", lines=0)
+        cam = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[0] not in known and m[2] == "PIXELS")
+        while state()[1] != cam:
+            wait()
+        for _ in range(20):
+            time.sleep(.3)
+            counts = colours(cam, (b"\xff\xff\x00", b"\x00\xff\xff", b"\xff\x00\xff"))
+            if all(n > 300 for n in counts.values()):
+                break
+        else:
+            raise AssertionError(counts)
+        keys("alt-w", text=f"CLOSE {cam}")
+        until(f"GONE {cam}")
+        while cam in state()[2]:
+            wait()
+        time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
+        return counts
+
+    def run_line(command, text):
+        names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
+        return keys("alt-r", *names, "ret", text=text)
+
+    camera_window(lambda: run_line("camera", "STARTED camera"))
+    assert re.findall(r"\[WM\] STARTED camera PID \d+ WITH ([^\n]*)", "".join(seen))[-1].split(",")[-1] == "camera", "wm lends the camera"
+    run_line("console", "STARTED console")
+    console_pid = re.findall(r"\[WM\] STARTED console PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
+    assert "camera" in console_pid[1], console_pid
+    while not any(m[1] == console_pid[0] for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    console = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == console_pid[0])
+    while state()[1] != console:
+        wait()
+    camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
+    assert state()[1] == console, state()
+    keys("alt-w", text=f"CLOSE {console}")
+    until(f"GONE {console}")
+    while console in state()[2]:
+        wait()
+    front(shell)
+    camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
+    print("PASS: wm: camera shows the synthetic source in its window, started from the run line (wm lends the camera), "
+          "in console (lent on by console) and in the shell's window", flush=True)
+    # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera at a size the source
+    # does not give says so in a window of its own with its status, until a key.
+    run_line("camera -z 100x100", "STARTED camera")
     camera_pid = re.findall(r"\[WM\] STARTED camera PID (\d+)", "".join(seen))[-1]
     while not any(m[1] == camera_pid for m in windows_re.findall("".join(seen))):
         wait("[WM] WINDOW", lines=0)
@@ -5744,14 +5807,14 @@ def wm_suite(vm):
         time.sleep(.3)
         screen = screen_text(vm)
         vm.serial(enter=False)
-        if any(canon("camera: no camera was granted") in row for row in screen):
+        if any(canon("camera: cannot open") in row for row in screen):
             break
     else:
         raise AssertionError(screen)
     time.sleep(1)  # it stays
     screen = screen_text(vm)
     vm.serial(enter=False)
-    assert any(canon("camera: no camera was granted") in row for row in screen), screen
+    assert any(canon("camera: cannot open") in row for row in screen), screen
     assert any(canon("ENDED (STATUS 1): PRESS A KEY") in row for row in screen), screen
     assert any(canon("camera ended") in row for row in screen), "the window's title"
     assert ended in state()[2] and state()[1] == ended, state()
@@ -6567,6 +6630,9 @@ def main():
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
+                # video/synthetic: the video gateway serves its test pattern, for camera in windows (158-APP-0043).
+                (disk / "video").mkdir()
+                (disk / "video/synthetic").write_text("the video gateway's test pattern stands in for a camera\n")
             if suite == "store":
                 # blocksro: blocks asking only to read (REQUEST_BLOCKSTORE_READ 32768 for REQUEST_BLOCKSTORE 16384).
                 elf = bytearray((disk / "blocks.elf").read_bytes())
