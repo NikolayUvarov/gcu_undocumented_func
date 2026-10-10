@@ -13,7 +13,7 @@ The bootloader can boot either of two copies of the system, slots A and B. Which
 | `EFI/BOOT/` | the bootloader, outside the slots (351-UPD-0010 updates it) |
 | the root | the applications, the licences and the voice model, shared by both slots |
 
-A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The USB images and the volumes of most QEMU suites keep that layout until images are built with slots ([351-UPD-0016](../../issues/351-UPD-0016-images-with-slots.md)). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), and slot A is confirmed.
+A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The volumes of most QEMU suites keep that layout, and so does a USB image unless it is made with `make_usb_image.py --slots` ([write-disk.md](../write-disk.md), 351-UPD-0016). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), and slot A is confirmed.
 
 ## The boot record
 

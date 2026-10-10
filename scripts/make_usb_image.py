@@ -14,6 +14,10 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import boot_slots  # noqa: E402
+import release as release_tool  # noqa: E402
+import sign_manifest  # noqa: E402
 # Services (BOOT_FILES in the ABI) are needed by the bootloader, those the signed manifest lists; apps are all other
 # *.elf built by 02_build.sh.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
@@ -115,6 +119,42 @@ def read_payloads(source, arch="x86_64"):
             raise ValueError(f"{file} is not a PE/EFI application.")
         payloads[name] = data
     return payloads
+
+
+def slots(payloads, arch, channel=None):
+    """The payloads laid out in slots (351-UPD-0016, docs/update/slots.md), as `boot_slots.py layout` lays out a volume:
+    the kernel, the boot services and the signed manifest in MIND/A, confirmed by MIND/BOOT0, with MIND/BOOT1 empty;
+    the applications, licences and voice stay at the root, shared. With `channel`, a release's signed channel file
+    kept in MIND/A/CHANNEL, so the updater knows the version: it must verify with the release key and name this
+    manifest for `arch`."""
+    boot = {"kernel.elf", *BOOT_FILES, *SIGNED}
+    out = {(f"MIND/A/{name}" if name in boot else name): data for name, data in payloads.items()}
+    out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
+    out["MIND/BOOT1"] = bytes(boot_slots.RECORD)
+    if channel is not None:
+        lines = channel.split(b"\n")
+        if len(lines) != 3 or lines[2] or not lines[1].startswith(b"ed25519 "):
+            raise ValueError("the channel file is not a signed channel")
+        body = lines[0] + b"\n"
+        try:
+            signature = bytes.fromhex(lines[1][8:].decode())
+        except ValueError:
+            raise ValueError("the channel file is not a signed channel") from None
+        # The key the updater is built with (updater/build.rs).
+        key = Path(os.environ.get("MIND_RELEASE_PUBLIC_KEY") or ROOT / "updater/keys/release-test.pub")
+        if not sign_manifest.verify(bytes.fromhex(key.read_text().strip()), body, signature):
+            raise ValueError(f"the channel file is not signed with the release key the updater is built with ({key})")
+        try:
+            name = json.loads(body)["channel"]
+        except (ValueError, TypeError, KeyError):
+            name = ""
+        fields, why = release_tool.channel_from(body, name)
+        if fields is None:
+            raise ValueError(f"the channel file: {why}")
+        if fields["manifests"].get(arch) != hashlib.sha256(payloads["MANIFEST"]).hexdigest():
+            raise ValueError(f"the channel does not name this build's {arch} manifest")
+        out["MIND/A/CHANNEL"] = channel
+    return out
 
 
 def fat_time(when):
@@ -293,6 +333,46 @@ def check_image(image, payloads, mark_esp=False):
             os.fsync(disk.fileno())
 
 
+def pack(payloads, output, qemu_img, arch, force=False):
+    """The payloads packed into a raw image at `output` (MBR, FAT16 marked as the ESP, the log partition), checked
+    against them before it replaces anything; returns the image's SHA-256."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Stage ONLY boot files. Never include old test disks, image files or local
+    # firmware variables from usb_root. Conversion never touches the live tree.
+    with tempfile.TemporaryDirectory(prefix=".mind-usb-", dir=output.parent) as work:
+        work = Path(work)
+        source = work / "files"
+        for name, data in payloads.items():
+            target = source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        # The writable directory: files written there (`write data/…`) can be read on any computer afterwards.
+        (source / "data").mkdir(exist_ok=True)
+        temporary = work / "disk.img"
+        descriptor = {"driver": "raw", "file": {
+            "driver": "vvfat", "dir": qemu_path(source, qemu_img),
+            "fat-type": 16, "floppy": False, "rw": False, "label": "MIND CORE",
+        }}
+        print(f">>> Creating RAW USB image (MBR, FAT16, UEFI {arch})...", flush=True)
+        subprocess.run([qemu_img, "convert", "-O", "raw", "json:" + json.dumps(descriptor),
+                        qemu_path(temporary, qemu_img)], check=True)
+        check_image(temporary, payloads, mark_esp=True)
+        add_log_partition(temporary, time.localtime())
+        check_image(temporary, payloads)
+        digest = hashlib.sha256()
+        with temporary.open("rb") as disk:
+            for chunk in iter(lambda: disk.read(1024 * 1024), b""):
+                digest.update(chunk)
+        # Failed conversion/verification leaves any prior image untouched.
+        if force:
+            os.replace(temporary, output)
+        else:
+            # Atomic no-clobber publication also detects a competing build.
+            os.link(temporary, output)
+            temporary.unlink()
+    return digest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64", help="the architecture of the image (default: x86_64)")
@@ -302,7 +382,12 @@ def main():
     parser.add_argument("--force", action="store_true", help="overwrite an existing image file")
     parser.add_argument("--qemu-img", default=os.environ.get("QEMU_IMG"), help="path to qemu-img[.exe]")
     parser.add_argument("--hwdocs", action="store_true", help="also put the hardware tables of hwdocs/ in /hwdocs (gpio and pins read them)")
+    parser.add_argument("--slots", action="store_true", help="the build in slot A, confirmed, so the updater can fill slot B (docs/update/slots.md)")
+    parser.add_argument("--channel", type=Path, help="with --slots: the release's signed channel file, kept in slot A (its manifest must be this build's)")
+    parser.add_argument("--update", type=Path, help="with --slots: an update.txt for the updater, at the root (docs/update/updater.md)")
     args = parser.parse_args()
+    if (args.channel or args.update) and not args.slots:
+        raise ValueError("--channel and --update go with --slots.")
     spec = ARCHES[args.arch]
     output = (args.output or ROOT / spec["image"]).absolute()
     if output.suffix.lower() != ".img":
@@ -321,45 +406,16 @@ def main():
         for file in sorted((ROOT / "hwdocs").rglob("*")):
             if file.is_file() and file.name != "README.md":
                 payloads[file.relative_to(ROOT).as_posix()] = file.read_bytes()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    # Stage ONLY boot files. Never include old test disks, image files or local
-    # firmware variables from usb_root. Conversion never touches the live tree.
-    with tempfile.TemporaryDirectory(prefix=".mind-usb-", dir=output.parent) as work:
-        work = Path(work)
-        source = work / "files"
-        for name, data in payloads.items():
-            target = source / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        # The writable directory: files written there (`write data/…`) can be read on any computer afterwards.
-        (source / "data").mkdir(exist_ok=True)
-        temporary = work / "disk.img"
-        descriptor = {"driver": "raw", "file": {
-            "driver": "vvfat", "dir": qemu_path(source, qemu_img),
-            "fat-type": 16, "floppy": False, "rw": False, "label": "MIND CORE",
-        }}
-        print(f">>> Creating RAW USB image (MBR, FAT16, UEFI {args.arch})...", flush=True)
-        subprocess.run([qemu_img, "convert", "-O", "raw", "json:" + json.dumps(descriptor),
-                        qemu_path(temporary, qemu_img)], check=True)
-        check_image(temporary, payloads, mark_esp=True)
-        add_log_partition(temporary, time.localtime())
-        check_image(temporary, payloads)
-        digest = hashlib.sha256()
-        with temporary.open("rb") as disk:
-            for chunk in iter(lambda: disk.read(1024 * 1024), b""):
-                digest.update(chunk)
-        # Failed conversion/verification leaves any prior image untouched.
-        if args.force:
-            os.replace(temporary, output)
-        else:
-            # Atomic no-clobber publication also detects a competing build.
-            os.link(temporary, output)
-            temporary.unlink()
-        print(f">>> Done: {output}\nSize: {output.stat().st_size} bytes\n"
-              f"SHA256: {digest.hexdigest()}\n"
-              "Write the .img to the whole USB drive in RAW/DD mode"
-              f"{'' if args.arch == 'x86_64' else ' (./05_write_usb_linux.sh --image ' + str(output.relative_to(ROOT) if output.is_relative_to(ROOT) else output) + ')'}.\n"
-              f"Boot: {spec['boot']}")
+    if args.slots:
+        payloads = slots(payloads, args.arch, args.channel.read_bytes() if args.channel else None)
+        if args.update:
+            payloads["update.txt"] = args.update.read_bytes()
+    digest = pack(payloads, output, qemu_img, args.arch, args.force)
+    print(f">>> Done: {output}\nSize: {output.stat().st_size} bytes\n"
+          f"SHA256: {digest.hexdigest()}\n"
+          "Write the .img to the whole USB drive in RAW/DD mode"
+          f"{'' if args.arch == 'x86_64' else ' (./05_write_usb_linux.sh --image ' + str(output.relative_to(ROOT) if output.is_relative_to(ROOT) else output) + ')'}.\n"
+          f"Boot: {spec['boot']}")
 
 
 if __name__ == "__main__":
