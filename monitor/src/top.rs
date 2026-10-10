@@ -203,16 +203,25 @@ impl Top {
             grid.text_max(1, 2 + rows - 1, &format!("CPU{}–{}: {}%, the busiest CPU{} {}%", shown, n - 1, text::permille(mean), shown + busiest, text::permille(most as u32)),
                           w.saturating_sub(2), theme.header);
         }
+        // The machine's memory the kernel gives programs (the frame pool), then the kernel's own arena (211-APP-0057).
         let y = 2 + rows;
         let m = &self.memory;
-        grid.text(1, y, "Mem", theme.header);
         let bar = (w / 3).max(10);
+        let marked = Style::new(theme.marked.fg, theme.panel.bg);
+        grid.text(1, y, "Mem", theme.header);
         grid.put(6, y, '[', theme.dim);
-        grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
+        grid.bar(7, y, bar, m.frames - m.frames_free.min(m.frames), m.frames.max(1), marked, empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
-                                         m.tasks, m.endpoints), theme.panel);
-        y + 2
+        let memory = if m.frames == 0 { String::from("not known: sysmon gives no frame pool (sysinfo before 4.1)") }
+            else { format!("{}/{} used, {} free: programs, their screens, heaps and objects", text::size(m.frames - m.frames_free.min(m.frames)), text::size(m.frames), text::size(m.frames_free)) };
+        grid.text(9 + bar, y, &memory, theme.panel);
+        grid.text(1, y + 1, "Kern", theme.header);
+        grid.put(6, y + 1, '[', theme.dim);
+        grid.bar(7, y + 1, bar, m.used, m.arena.max(1), marked, empty);
+        grid.put(7 + bar, y + 1, ']', theme.dim);
+        grid.text(9 + bar, y + 1, &format!("kernel arena {}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
+                                             m.tasks, m.endpoints), theme.panel);
+        y + 3
     }
 
     /// Columns that fit in `width` cells: name, width, right-aligned. Lower-priority columns are dropped first.

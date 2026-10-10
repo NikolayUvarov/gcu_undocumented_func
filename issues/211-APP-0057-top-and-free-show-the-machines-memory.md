@@ -1,6 +1,6 @@
 # 211-APP-0057 — `top` and `free` show the machine's memory, not only the kernel's arena
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-10.2
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (written; its QEMU check next) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-10.2
 
 Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
 
@@ -26,6 +26,20 @@ Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded i
 
 - On QEMU with 512 MiB, `top` and `free` show about 400 MiB of memory with what is in use, and the arena separately.
 - On the MacBook Pro they show about 7.6 GiB.
+
+## Progress
+
+- **`idl/sysinfo.wit` 4.1** adds `pool`, the frame pool (`frames`, `frames-free`), as a new function. Appending the fields to `memory` would have changed its layout, and the decoders refuse trailing bytes. `sysmon` serves it.
+- **`top`'s header** has two memory lines:
+  - `Mem`: the frame pool, used of all and free;
+  - `Kern`: the kernel arena, its largest free block, tasks and endpoints.
+
+  A `sysmon` before 4.1 leaves `Mem` saying it is not known.
+- **The shell's `free`** begins with `MEMORY: <n> MIB, <n> MIB IN USE, <n> MIB FREE (THE FRAME POOL PROGRAMS RUN IN)` and `FRAMES=… FRAMES_FREE=…`. The kernel arena follows as `KERNEL ARENA: ARENA=…`, with its categories as before. The help line says so.
+- **`load` and `memmap`** keep their names: "kernel arena" there is the arena.
+- **Docs:** `docs/tools` (EN, RU) and `docs/idl` describe it.
+- **Host tests:** `tests/monitor_host.rs` checks both lines of `top` (7768 MiB, 89 MiB in use, as the MacBook Pro's pool was).
+- **The boot suite's frame-pool check** compares `free`'s first line and `top`'s `Mem` bar with the pool's size.
 
 ## Related
 

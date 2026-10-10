@@ -50,7 +50,7 @@ Priority: **P0** — requested, or needed by a requested tool; **P1** — next; 
 | `ipc` | Endpoints, who serves and who holds them, queue depth, blocked tasks, wait-for graph with cycles highlighted | `sysinfo` | P1 |
 | `caps` | Capabilities of a task (kind, rights, generation, range, derivation parent); derivation tree; what a revoke would remove | `sysinfo` with a stronger right (the authority graph is sensitive) | P1 |
 | `dmesg` | System log: boot, init, services, faults, with source and time | `logd` (F10) | P1 |
-| `uptime`, `free`, `date` | One-line console summaries; `date set YYYY-MM-DD HH:MM[:SS]` sets the clock through the shell's setting client (`rtc.wit` 1.2, 211-APP-0042; the clock keeps no time zone) | `sysinfo`, `rtc` | P2 |
+| `uptime`, `free`, `date` | One-line console summaries (`free`: the machine's memory, the frame pool programs run in, first, then the kernel arena; 211-APP-0057); `date set YYYY-MM-DD HH:MM[:SS]` sets the clock through the shell's setting client (`rtc.wit` 1.2, 211-APP-0042; the clock keeps no time zone) | `sysinfo`, `rtc` | P2 |
 
 ### 2.3 Services and control
 
@@ -215,7 +215,9 @@ Text (wrap on/off, search, go to offset, UTF-8) and hex (offset, 16 bytes per li
 
 ### 4.4 `top`
 
-- **Header:** uptime; tasks running / ready / sleeping / blocked; a busy bar per CPU; load averages; kernel memory used/free; IPC per second; faults since boot.
+- **Header:** uptime; tasks running / ready / sleeping / blocked; a busy bar per CPU; load averages; IPC per second; faults since boot; then two memory lines (211-APP-0057):
+  - `Mem`: the machine's memory, the kernel's **frame pool**: the pages it gives programs' images, stacks, screens, heaps and memory objects, used of all and free (`sysinfo.wit` 4.1 `pool`);
+  - `Kern`: the **kernel arena**, apart from it: 64 MiB of the kernel's own structures (tasks, endpoints, capability tables), its largest free block, the tasks and the endpoints.
 - **Table:** PID, PPID, NAME, STATE (RUN, READY, SLEEP, SEND, RECV, CALL, IRQ, EXIT), CPU, %CPU, TIME, SYSC/s, HEAP, SHARED, CAPS, EP, BUDGET (the CPU budget the shell's `budget` sets, as ms per period, `*` while the task waits for its next period; 000-APP-0034); services marked. A task's details name its budget and band.
 - **Keys:** P/M/N/T sort by CPU, memory, PID, time; S hide services; t tree by spawner; Enter — details of a task (address-space summary, capabilities, what it waits for); k kill and r restart through `init`'s lifecycle interface (C6) — before C6 the key shows "use KILL in the shell"; `+`/`-` refresh interval; q or Esc quit.
 - %CPU comes from run-time deltas in ns (F5); without them from tick deltas, with the 10 ms resolution stated on screen.

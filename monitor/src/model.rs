@@ -35,12 +35,14 @@ impl Task {
 pub struct Cpu { pub busy_ns: u64, pub idle_ns: u64, pub ticks: u64, pub switches: u64, pub interrupts: u64, pub current: u64, pub apic: u32, pub online: bool }
 
 /// The kernel arena by use (StatMemory, bytes), the largest block it can still allocate, the live tasks and endpoints
-/// and the kernel's limits for them.
+/// and the kernel's limits for them; and the machine's memory the kernel gives programs, the frame pool (`frames`,
+/// `frames_free`; 0 from a sysmon before sysinfo 4.1, 211-APP-0057).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Memory {
     pub arena: u64, pub used: u64, pub free: u64, pub images: u64, pub stacks: u64, pub task_pages: u64, pub screens: u64, pub heaps: u64,
     pub objects: u64, pub objects_limit: u64, pub dma: u64, pub dma_limit: u64, pub tasks: u32, pub endpoints: u32,
     pub largest_free: u64, pub page_tables: u64, pub shared: u64, pub tasks_limit: u32, pub endpoints_limit: u32,
+    pub frames: u64, pub frames_free: u64,
 }
 impl Memory {
     /// Used arena bytes not in a category of their own (kernel structures).

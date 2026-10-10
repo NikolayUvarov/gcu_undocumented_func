@@ -62,7 +62,8 @@ impl Source for Fake {
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
         Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
-                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535, ..Memory::default() })
+                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535,
+                    frames: 7768 << 20, frames_free: 7679 << 20, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
     fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(self.endpoints.clone()) }
@@ -218,6 +219,10 @@ fn sorting_filter_and_tree_keep_the_selection() {
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("  └ busy")), "{:#?}", screen);
     assert!(top.status().contains("TREE=1"), "{}", top.status());
+    // The machine's memory first, the frame pool the programs use; then the kernel's arena (211-APP-0057).
+    let mem = screen.iter().position(|l| l.starts_with(" Mem  [")).expect("the memory line");
+    assert!(screen[mem].contains("89.0M/7.5G used, 7.4G free"), "{}", screen[mem]);
+    assert!(screen[mem + 1].starts_with(" Kern [") && screen[mem + 1].contains("kernel arena 16.0M/64.0M used, largest free 40.0M"), "{}", screen[mem + 1]);
 }
 
 #[test]
@@ -488,7 +493,7 @@ fn every_cpu() {
     for cpu in 0..16 { assert!(screen.iter().any(|l| l.contains(&format!("CPU{} ", cpu))), "CPU{}: {:#?}", cpu, screen); }
     assert!(screen.iter().any(|l| l.contains("CPU15 [") && l.contains("15.0%")), "{:#?}", screen);
     let header = screen.iter().position(|l| l.contains("PID") && l.contains("NAME")).unwrap();
-    assert!(header <= 2 + 8 + 2, "8 rows of two bars: {:#?}", screen);
+    assert!(header <= 2 + 8 + 3, "8 rows of two bars, the memory's two lines: {:#?}", screen);
     // 64 CPUs on 100 columns: four to a row, 8 rows; the last row sums up the CPUs that do not fit.
     source.cpus = cpus(64, |i| if i == 63 { 900 } else { 100 }, |i| if i == 63 { 100 } else { 900 });
     let mut top = top::Top::new();

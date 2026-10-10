@@ -592,9 +592,35 @@ def pool_covers_free_ram(vm):
         for a, b in pieces:
             if b > a and b - a >= 2 << 20:
                 expected, ranges = expected + b - a, ranges + 1
-    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", vm.command("free"))[1])
+    free = vm.command("free")
+    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", free)[1])
     assert total == expected, (total, expected, ranges)
-    print(f"PASS: the frame pool is every free range of the firmware map ({ranges} ranges, {total >> 20} MiB)", flush=True)
+    # 211-APP-0057: free names the machine's memory, the frame pool, first; the kernel arena after it.
+    mib, used, unused = map(int, re.search(r"^MEMORY: (\d+) MIB, (\d+) MIB IN USE, (\d+) MIB FREE", free, re.M).groups())
+    pool_free = int(re.search(r"FRAMES_FREE=(\d+)", free)[1])
+    assert (mib, used, unused) == (total >> 20, (total - pool_free) >> 20, pool_free >> 20), free
+    assert free.index("MEMORY:") < free.index("KERNEL ARENA: ARENA="), free
+    # top's first memory bar is the frame pool too, of the size free gives; the arena has the second.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    def size(n):
+        for unit, letter in ((1 << 30, "G"), (1 << 20, "M"), (1 << 10, "K")):
+            if n >= unit:
+                tenths = n * 10 // unit
+                return f"{tenths // 10}{letter}" if tenths >= 1000 else f"{tenths // 10}.{tenths % 10}{letter}"
+        return f"{n}B"
+    mem = next((row for row in screen if row.startswith(" Mem  [")), None)
+    kern = next((row for row in screen if row.startswith(" Kern [")), None)
+    assert mem and re.search(rf"\d+(\.\d)?[KMG]/{re.escape(size(total))} used, ", mem), (size(total), screen[:14])
+    assert kern and "kernel arena " in kern and "/64.0M used" in kern, screen[:14]
+    print(f"PASS: the frame pool is every free range of the firmware map ({ranges} ranges, {total >> 20} MiB); free and "
+          f"top show it as the machine's memory ({used} MiB in use), the kernel arena apart", flush=True)
     return ranges
 
 

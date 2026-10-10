@@ -3,13 +3,14 @@
 /// request rate. 2.0: the fields of STAT version 2 (issues 075, 076) at the end of the records; 2.1: `holders`; 3.0:
 /// `authority`, and who holds what needs the authority badge (issue 081); 4.0: `tasks`, `endpoints` and `caps` from a
 /// position on, since the kernel has no fixed count of them, `cpus` too, and a sample with the busy share of every CPU in
-/// its mean and maximum (171-APP-0002, 171-APP-0007).
+/// its mean and maximum (171-APP-0002, 171-APP-0007); 4.1: `pool`, the machine's memory the kernel gives programs
+/// (211-APP-0057).
 ///
 /// Who holds what is the authority graph (MC-3.4–3.6): `authority` and `holders` answer only a client whose capability
 /// carries the authority badge (`mind::stat::BADGE_AUTHORITY`, the shell's SLOT_AUTHORITY client, lent to programs
 /// that ask for `REQUEST_AUTHORITY`); other clients get `denied`, and `caps` gives them no derivation links (`node`
 /// and `parent` are 0).
-package mind:sysinfo@4.0.0;
+package mind:sysinfo@4.1.0;
 
 interface sysinfo {
     /// Why a request failed.
@@ -57,6 +58,9 @@ interface sysinfo {
     /// One sample of the load history: busy per mille of CPUs 0..15 (as many as are online; a graph each is what one
     /// screen holds), the mean over every online CPU and the busiest one, and counts during the interval.
     record sample { busy: list<u16, 16>, busy-total: u16, busy-max: u16, interrupts: u32, syscalls: u32, messages: u32, switches: u32, used-kib: u32, tasks: u32, runnable: u32 }
+    /// The frame pool (StatMemory `frames`, `frames_free`, bytes): the machine's memory the kernel gives programs' images,
+    /// stacks, screens, heaps and memory objects; `memory` is the kernel arena, apart from it.
+    record pool { frames: u64, frames-free: u64 }
     /// Load averages (runnable tasks x 100) over 1, 5 and 15 minutes, uptime and sampling periods.
     record load { one: u32, five: u32, fifteen: u32, uptime-ms: u64, fast-ms: u32, slow-ms: u32, fast-count: u32, slow-count: u32 }
 
@@ -84,4 +88,6 @@ interface sysinfo {
     /// The capabilities of all tasks in PID and slot order, from entry `start` on, at most 128 (call again with a larger
     /// `start` for the rest); needs the authority badge (3.0).
     authority: func(start: u32) -> result<list<authority-entry, 128>, error>;
+    /// The frame pool (4.1).
+    pool: func() -> result<pool, error>;
 }
