@@ -427,3 +427,28 @@ What the kernel track would try (the tools track decides):
 - The `wm` suite starts `wm` and finds no shell window.
 - The menu item opens one, and closing it with Alt+W leaves `wm` running.
 - On the MacBook Pro, `wm` starts with the desktop alone.
+
+## A window back to its content's size (158, 211)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request after a run on the MacBook Pro: "the picture should stretch with the window, and the window should be able to take the size of its content, to get the original display back".
+
+### Problem
+
+- **The picture now follows the window.** `camera` scales its picture to whatever size `wm` gives its window (the kernel track's 158 change, f760714 on its branch).
+- **But nothing brings a window back to the size of its content.**
+  - For `camera` that is the stream's size, 320×240 by default, where the picture is drawn pixel for pixel.
+  - `wm` updates `Win::size` when the program takes a new size (`wm/src/main.rs`, the resize handling), so `Win::natural()` follows the current size, not the first.
+
+### Plan (a proposal; the tools track decides)
+
+- **Keep the first size.** `wm` keeps the size a pixel window opened at (the content size its program asked for), beside its current one.
+- **A "fit to content" command** sets the frame back to that size. It asks the program for it as a resize does, and keeps the frame on the screen.
+  - For example a key (`Alt+0`), a double click on the title, or a title-bar button beside zoom.
+  - The help screen and the top bar's key list name it.
+- **Text windows:** the same command can take the frame to the text's own size, if that is meaningful there.
+
+### Acceptance criteria
+
+- The `wm` suite opens `camera` (the synthetic source), resizes its window and sees the picture scaled.
+- The command brings the frame back to 320×240, and the picture is then the test pattern pixel for pixel.
+- On the MacBook Pro the FaceTime camera's window returns to its first size.
