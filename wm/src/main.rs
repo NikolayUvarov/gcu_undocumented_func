@@ -27,13 +27,17 @@ use wm::menu::{self, Kind as ProgramKind};
 
 // REQUEST_GPIO: the pin controller's client where the board has one, passed on to pins and pinmap (issue u017).
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
-// 48 MiB: the desktop background's frame and image (000-APP-0047), up to 4 MiB each, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA, memory: 64);
+// REQUEST_SHELL: the shell's commands, for the menu's Shell item, the shell's own window (211-APP-0044).
+// 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
+// file of up to 32 MiB as it is decoded, beside the rest.
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
+// How long wm waits for the shell to answer its menu's Shell item.
+const SHELL_MS: u32 = 2000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
 
@@ -430,12 +434,14 @@ fn main(info: &'static BootInfo) {
     }
     let mut programs = Some(Programs::new());
     manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
+    if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
     let mut shown_pointer: Option<(usize, usize)> = None;
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
+    let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
     let mut first = true;
     loop {
         let mut relayout = first;
@@ -467,6 +473,18 @@ fn main(info: &'static BootInfo) {
                 Action::Forward => { if let Input::Key(event) = input { manager.forward(event.to_word()); } }
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
+                Action::Run(command) if command == menu::SHELL && holds(SLOT_SHELL) => {
+                    // The shell opens its own window (211-APP-0044); it may be busy with a command for a while.
+                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL)));
+                    let text = match answer {
+                        Ok(Ok(id)) => { shell_window = Some(id); format!("The shell's window ({})", id) }
+                        Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
+                        Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
+                    };
+                    mind::println!("[WM] SHELL WINDOW: {}", text);
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
                 Action::Run(command) => {
                     let result = launch(&command, manager.wm.desk.focus());
                     if let Err(error) = &result { mind::println!("[WM] {}", error); }
@@ -503,6 +521,7 @@ fn main(info: &'static BootInfo) {
             if let Some(p) = programs.as_mut() {
                 if p.step(2) {
                     manager.wm.programs = menu::catalogue(&p.found);
+                    if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
                     mind::println!("[WM] PROGRAMS: {} IN {} CATEGORIES IN {} MS", p.found.len(), manager.wm.programs.len(), mind::time::uptime_ms() - p.since);
                     programs = None;
                 }
@@ -511,6 +530,12 @@ fn main(info: &'static BootInfo) {
         manager.modifiers(mind::input::modifiers());
         let now = mind::time::uptime_ms();
         if now - last_sync >= SYNC_MS { last_sync = now; if manager.sync() { relayout = true; mind::println!("[WM] {}", manager.wm.status()); } }
+        if let Some(id) = shell_window.filter(|&id| manager.wm.desk.get(id).is_some()) {
+            manager.wm.desk.raise(id);
+            shell_window = None;
+            relayout = true;
+            mind::println!("[WM] {}", manager.wm.status());
+        }
         let (changed, mut pixels) = manager.follow();
         if !manager.wm.desk.take_changed().is_empty() { relayout = true; }
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when

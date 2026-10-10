@@ -1,0 +1,12 @@
+/// What a window manager asks of the shell (211-APP-0044). The shell alone holds the operator's authorities (MC-3.11);
+/// it lends a client of this interface in SLOT_SHELL to a program that asks for it (REQUEST_SHELL), and a client gets
+/// only what the interface offers.
+package mind:shell@1.0.0;
+
+interface shell {
+    /// Why the shell could not do it: it has no window broker client, or no memory for the window.
+    enum error { unavailable, no-memory }
+    /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
+    /// the manager to bring it to the front.
+    window: func() -> result<u32, error>;
+}

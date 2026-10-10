@@ -22,13 +22,26 @@ pub fn field(words: &[usize; 2], word: usize, shift: u32, bits: u32) -> usize {
     (words[word] >> shift) & mask
 }
 
+// How long a word call waits for its reply in ms (0: no limit), set around calls with `with_timeout`.
+static TIMEOUT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Runs `calls` with each word call in it giving up after `ms` milliseconds: for a server that may be busy with the
+/// user, as the shell is (211-APP-0044). A reply that comes later is discarded.
+pub fn with_timeout<T>(ms: u32, calls: impl FnOnce() -> T) -> T {
+    use core::sync::atomic::Ordering::Relaxed;
+    let before = TIMEOUT.swap(ms, Relaxed);
+    let result = calls();
+    TIMEOUT.store(before, Relaxed);
+    result
+}
+
 pub fn call(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize, bool)>) -> Result<[usize; 2]> {
     let message = match cap {
         None => Message::new(words[0], words[1]),
         Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, u8::MAX),
         Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, u8::MAX),
     };
-    endpoint.call(&message, 0).map(|reply| reply.data)
+    endpoint.call_timeout(&message, 0, TIMEOUT.load(core::sync::atomic::Ordering::Relaxed)).map(|reply| reply.data)
 }
 
 /// Validates a reply; returns true for an empty option result.

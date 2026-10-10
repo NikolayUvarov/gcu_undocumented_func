@@ -43,6 +43,8 @@ A function whose parameters and result are integers only (and at most one capabi
 
 Fields are placed in declaration order. A field never straddles a word boundary, so the size limit of a word call is 48 + 64 bits.
 
+A word call waits for its reply. A client that calls a server which may be busy with the user, as `wm` calls the shell, runs the calls inside `mind::idl::wire::with_timeout(ms, ...)`: each gives up after `ms` with the system's timeout error, and a reply that comes later is discarded (211-APP-0044).
+
 A function with a string, list or record anywhere is a **buffer call**:
 - The client encodes the parameters into a buffer of its own, at least as large as the declared maxima of request and reply. It sends `method | major << 8 | request length << 16` in word 0 and 0 in word 1, with the buffer as a (copied) memory capability.
 - The server writes the result into the same buffer and replies `status | reply length << 16`.
@@ -91,6 +93,7 @@ A change that alters the meaning or layout of an existing function increments th
 | [`idl/rtc.wit`](../../idl/rtc.wit) | `rtc` (1.1 adds `date`, needed for file times; 1.2 `set`, for the client with the setting badge, 211-KRN-0051) | 1.2.0 |
 | [`idl/tts.wit`](../../idl/tts.wit) | `tts` | 1.0.0 |
 | [`idl/audio.wit`](../../idl/audio.wit) | `audio_gw` (`wait` is answered later, from the playback interrupt: `Call::defer`; 1.1: the microphone has one owner at a time, others get `busy`) | 1.1.0 |
+| [`idl/shell.wit`](../../idl/shell.wit) | the shell, for a window manager that asks for it (`REQUEST_SHELL`, lent in `SLOT_SHELL`): `window` opens the shell's own window and answers its id; 211-APP-0044 | 1.0.0 |
 | [`idl/voice.wit`](../../idl/voice.wit) | the shell, for the `voice` program it starts (voice control: `next` reports what was heard and is answered with the next order — at once, or at push-to-talk: `Call::defer`) | 1.0.0 |
 | [`idl/net.wit`](../../idl/net.wit) | `virtio_net` (raw Ethernet frames; `wait` is answered from the receive interrupt; 1.1 adds transmit checksum offload: `offloads`, `send-partial`; 1.2 a frame ring shared with the stack: `attach` takes a memory capability, `kick`) | 1.2.0 |
 | [`idl/socket.wit`](../../idl/socket.wit) | `netstack` (`ping`, `resolve` and `tcp-connect` are answered when the network answers: `Call::defer`; what a client may reach comes from its badge; 2.1 adds `interfaces`, one per card; 2.2 `offload`, operator only; 2.3 lets the policy badge `resolve` the policy's host names, 351-NET-0003) | 2.3.0 |

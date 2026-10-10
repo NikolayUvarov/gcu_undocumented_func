@@ -266,6 +266,8 @@ impl Window {
         Some(Self { broker, id, surface, mapping: Some(mapping) })
     }
     pub fn surface(&self) -> Surface { self.surface }
+    /// Its id in the broker, as the manager knows it.
+    pub fn id(&self) -> u32 { self.id }
     /// The next input event the manager queued (a `common/abi.rs` word).
     pub fn event(&self) -> Option<usize> { self.surface.event() }
     /// The manager closed it.

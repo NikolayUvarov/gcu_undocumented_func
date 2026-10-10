@@ -1,8 +1,8 @@
-# 000-APP-0050 — `wm`'s background: PNG and JPEG pictures, the pattern's kind, speed, contrast and complexity, a paler clock
+# 000-APP-0050 — `wm`'s background: PNG and JPEG pictures, the pattern's kind, speed, contrast and complexity, a paler clock — done
 
-**Type:** tools (`wm`, `libmind`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `libmind`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
-The maintainer's requests (2026-10-10), after [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done) and [000-APP-0048](000-APP-0048-wm-settings.md):
+The maintainer's requests (2026-10-10), after [000-APP-0047](000-APP-0047-wm-desktop-background.done) and [000-APP-0048](../issues/000-APP-0048-wm-settings.md):
 
 - "Add PNG and JPEG for the background picture."
 - "Add a setting for how fast the background changes (it is very slow now: right for work, but a demo needs it faster) and contrast settings."
@@ -51,8 +51,29 @@ The background's picture is a BMP only. Its one pattern moves at one pace with o
   - `pattern = aurora; speed = 20; …` on one line is read, and the pattern moves far in half a second;
   - the default's text is drawn in the paler colour.
 
+## Resolution
+
+Done on the tools branch (7e5087e), on the requests of 2026-10-10:
+
+- **Decoders** in `libmind`, with no system calls:
+  - `libmind/src/inflate.rs`: DEFLATE and zlib, streamed over several pieces;
+  - `libmind/src/png.rs`: PNG, row by row;
+  - `libmind/src/jpegdec.rs`: baseline JPEG, a row of blocks at a time.
+- **The cover:** `wm/src/background.rs` (`cover`, `Cover`) scales a picture as its rows come; shrinking averages, growing repeats.
+- **The pattern:** four kinds (`waves`, `rings`, `aurora`, `blobs`); `speed`, `contrast`, `complexity` and `info` in `data/wm.conf` and on Settings' Background page. `wm` draws the pattern as often as the speed asks, and a change that keeps the picture does not read it again.
+- **The clock** is paler by default: `info = 30`.
+- **Tests:**
+  - host: `tests/image_host.rs` (4 tests, on `tests/data/images/make.py`'s pictures) and `tests/wm_host.rs` (25 tests); both are in `scripts/host_tests.sh`.
+  - QEMU: the x86 `wm` suite on ccbf377 (the branch with main's ABI 5) passed, with the `windows`, `tablet`, `shell`, `keys` and `tools` suites. It checked:
+    - a BMP, a PNG and a JPEG of two halves covering the desktop;
+    - the aurora pattern at speed 20 moving far in half a second;
+    - the default's paler text.
+- **Docs:** `docs/tools` (EN, RU).
+
+Not done here: the network traffic ([000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md)), and progressive JPEG, which is refused by name.
+
 ## Related
 
-- [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done): the background.
-- [000-APP-0048](000-APP-0048-wm-settings.md): Settings.
-- [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md): the network traffic.
+- [000-APP-0047](000-APP-0047-wm-desktop-background.done): the background.
+- [000-APP-0048](../issues/000-APP-0048-wm-settings.md): Settings.
+- [000-APP-0049](../issues/000-APP-0049-network-traffic-on-wms-background.md): the network traffic.

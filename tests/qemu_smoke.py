@@ -5710,9 +5710,29 @@ def wm_suite(vm):
         assert again != shell
         shows(again, "THE SHELL'S WINDOW:")
         close_shell(again)
+        # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
+        # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
+        before = set(shell_re.findall("".join(seen)))
+        keys("alt-p", text="MODE=MENU")
+        keys("down", text="MENU=Shell (its window)")
+        keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
+        while not set(shell_re.findall("".join(seen))) - before:
+            wait('"shell"', lines=0)
+        menu_shell = int((set(shell_re.findall("".join(seen))) - before).pop())
+        until(f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
+        while menu_shell not in state()[2] or state()[1] != menu_shell:
+            wait()
+        shows(menu_shell, "THE SHELL'S WINDOW:")
+        front(next(w for w in state()[2] if w != menu_shell))
+        keys("alt-p", text="MODE=MENU")
+        keys("down")
+        keys("ret", text=f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
+        while state()[1] != menu_shell:
+            wait()
+        close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
-              "and opened again with Ctrl+Alt+F5", flush=True)
+              "and opened again with Ctrl+Alt+F5 and from the menu's first item, which brings it to the front when open", flush=True)
 
     def full_screen_and_list(fm, clock, top):
         # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
@@ -6345,13 +6365,14 @@ def tablet_suite(vm, wav):
     require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
     logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
-    # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
-    # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
+    # The desktop menu (issue u003): a right click on the desktop lists the shell's window first (211-APP-0044), then the
+    # programs by category; the mouse on Clocks opens its programs beside it (the categories are 20 cells wide: "Sound
+    # and voice"); a click starts clock.
     logged(vm, 0, "[WM] PROGRAMS: ")
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
-    vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
+    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    require(click(121, 39, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
     # The top bar's items can be clicked (issue u008): help opens and a click closes it; the run line opens.
     assert "MODE=HELP" in click(80, 0, "MODE=HELP")
     assert "MODE=NORMAL" in click(80, 30, "MODE=NORMAL")
@@ -6374,9 +6395,9 @@ def tablet_suite(vm, wav):
     # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, in the
     # bottom right quarter, which shows beep's lines; its tones reach the sound card (checked in the WAV below).
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
-    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
+    vm.tablet_at(103 * 8 + 4, 40 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 39, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    require(click(121, 40, "[WM] STARTED console PID"), "[WM] STARTED console PID")
     for _ in range(30):
         time.sleep(.3)
         screen = screen_text(vm)
