@@ -31,6 +31,7 @@ RECORD = 512
 MAGIC = b"MINDBOOT"
 FORMAT = 1
 FILES = ("MIND/BOOT0", "MIND/BOOT1")
+SEQUENCE_LAST = 2**64 - 3  # the largest sequence a record may hold, as bootloader/src/slots.rs
 # The kernel and the services the bootloader loads (BOOT_FILES in the ABI), and the manifest it checks them against.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 SIGNED = ("MANIFEST", "MANIFEST.SIG")
@@ -49,6 +50,8 @@ def parse(data):
         return None
     _, version, sequence, slot, fallback, tries, flags = struct.unpack_from("<8sIQ4B", data)
     if version != FORMAT or chr(slot) not in "AB" or (fallback and chr(fallback) not in "AB") or flags & ~1 or any(data[24:RECORD - 4]):
+        return None
+    if sequence > SEQUENCE_LAST:  # a trial writes one more, and its failure one more again (351-UPD-0015)
         return None
     return {"sequence": sequence, "slot": chr(slot), "fallback": chr(fallback) if fallback else None, "tries": tries, "confirmed": bool(flags & 1)}
 
