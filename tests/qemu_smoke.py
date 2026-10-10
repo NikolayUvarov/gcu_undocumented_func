@@ -5908,6 +5908,23 @@ def store_disk_check(args, disk):
         finally:
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+    # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
+    with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
+        big = Path(temp) / "store.img"
+        with big.open("wb") as f:
+            f.truncate(8 << 30)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=("-drive", f"format=raw,file={big},if=none,id=store", "-device", "virtio-blk-pci,drive=store"))
+        try:
+            index = ""
+            for _ in range(60):
+                index = vm.command("dmesg -s blockstore", raw=True)
+                if "INDEX:" in index:
+                    break
+                time.sleep(.5)
+            require(index, "[BLOCKSTORE] INDEX: 1048576 SLOTS (57344 KiB) FOR 16777216 SECTORS")
+        finally:
+            vm.close()
+    print("PASS: the block store's index on an 8 GiB disk has its 2^20 slots (its memory quota fits them)", flush=True)
 
 
 def efivar_check(args, disk):
