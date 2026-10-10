@@ -214,3 +214,24 @@ fn a_task_slot_kept_across_a_shrink_reads_as_empty() {
     table.shrink();
     assert_eq!((table.len(), table[1].as_deref()), (task_table::CHUNK, Some("first")), "the first chunk is kept");
 }
+
+#[test]
+fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
+    // 211-KRN-0058: SLOT_SHELL and SLOT_CLIPBOARD below SLOT_DYNAMIC, each named slot once, the loader's own kept.
+    use abi::*;
+    let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
+        SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
+        SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD];
+    let mut seen = std::collections::BTreeSet::new();
+    for slot in named {
+        assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
+        assert!(seen.insert(slot), "slot {} is named twice", slot);
+    }
+    assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 5));
+    for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
+    for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
+    assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));
+    assert!(CAP_SLOTS - SLOT_DYNAMIC >= 64, "dynamic slots left in the initial capability space");
+}
