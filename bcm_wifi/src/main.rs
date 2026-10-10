@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
-// Ring 3 driver for the MacBook Pro's Broadcom BCM4331 Wi-Fi (550-DRV-0006). Stage 1 (550-DRV-0020) only reads: the
-// chip behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM; it writes nothing to the chip.
+// Ring 3 driver for the MacBook Pro's Broadcom BCM4331 Wi-Fi (550-DRV-0006). Stage 1 (550-DRV-0020) reads the chip
+// behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) writes twice:
+// it holds the 802.11 core the firmware left running in reset, and frees the SPROM's pins while the SPROM is read.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::{device_config, Mmio};
@@ -17,12 +18,17 @@ const BASE: u32 = 0x1800_0000; const WRAPPERS: u32 = 0x1810_0000;
 const CC_CHIP_ID: usize = 0x000; const CC_CAPABILITIES: usize = 0x004; const CC_CHIP_CONTROL: usize = 0x028;
 const CC_CHIP_STATUS: usize = 0x02C; const CC_SROM_CONTROL: usize = 0x190; const CC_EROM: usize = 0x0FC;
 const CAP_SPROM: u32 = 1 << 30; // a serial SPROM is fitted
+// Chip control bits that give the SPROM's pins to the external amplifier lines (BCM4331): cleared while it is read.
+const CHIPCTL_EXTPA: u32 = 1 << 4 | 1 << 7 | 1 << 12;
 // Where the SPROM's contents appear in ChipCommon; which one depends on revisions, so both are tried.
 const SPROM_AT: [usize; 2] = [0x800, 0x830];
 const SPROM_WORDS: usize = 220; // revision 8 and later: 440 bytes
 
 // Wrapper (agent) registers of an AI backplane core.
 const AI_IOCONTROL: usize = 0x408; const AI_IOSTATUS: usize = 0x500; const AI_RESET_CONTROL: usize = 0x800; const AI_RESET_STATUS: usize = 0x804;
+const RESET: u32 = 1;
+// The BCM4331's 802.11 core is core 1 (ChipCommon 0, 802.11 1, PCIe 2).
+const CORE_80211: u32 = 1;
 
 // The CRC-8 a Broadcom SPROM ends with (polynomial x^8 + x^7 + x^6 + x^4 + x^2 + 1, reflected 0xAB, initial 0xFF).
 fn crc8(bytes: &[u8]) -> u8 {
@@ -75,10 +81,25 @@ fn main(_info: &'static BootInfo) {
                                                  bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_RESET_STATUS));
     mind::println!("[BCM] CORE {} (WINDOW 1): IO CONTROL {:08X} (CLOCK {}), IO STATUS {:08X}, RESET {:08X} ({}), RESET STATUS {:08X}",
                    index, control, if control & 1 != 0 { "ON" } else { "OFF" }, status, reset, if reset & 1 != 0 { "IN RESET" } else { "RUNNING" }, reset_status);
+    // The firmware may leave the 802.11 core running, receiving into memory it no longer owns: held in reset until set up.
+    if index == CORE_80211 && reset & RESET == 0 {
+        bar.write32(WRAPPER + AI_RESET_CONTROL, RESET);
+        mind::time::sleep(1);
+        let (now, io) = (bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
+        mind::println!("[BCM] THE 802.11 CORE WAS LEFT RUNNING BY THE FIRMWARE: {} (RESET {:08X}, IO CONTROL {:08X})",
+                       if now & RESET != 0 { "NOW HELD IN RESET" } else { "RESET DID NOT TAKE" }, now, io);
+    }
     mind::println!("[BCM] PCIE CORE: {:08X} {:08X} {:08X} {:08X}", bar.read32(PCIE), bar.read32(PCIE + 4), bar.read32(PCIE + 8), bar.read32(PCIE + 12));
     let _ = WINDOW;
 
     if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return idle(); }
+    // The SPROM's pins are shared with the external amplifier lines; they are given back as they were after the read.
+    let chip_control = bar.read32(CC + CC_CHIP_CONTROL);
+    if chip_control & CHIPCTL_EXTPA != 0 {
+        bar.write32(CC + CC_CHIP_CONTROL, chip_control & !CHIPCTL_EXTPA);
+        mind::time::sleep(1);
+        mind::println!("[BCM] SPROM PINS TAKEN FROM THE AMPLIFIER LINES: CHIP CONTROL {:08X} -> {:08X}", chip_control, bar.read32(CC + CC_CHIP_CONTROL));
+    }
     let mut found = false;
     for at in SPROM_AT {
         let mut words = [0u16; SPROM_WORDS];
@@ -95,7 +116,11 @@ fn main(_info: &'static BootInfo) {
                                    at, words[0], words[1], words[2], words[3], words[SPROM_WORDS - 1], sprom_crc(&words)),
         }
     }
-    if !found { mind::println!("[BCM] NO VALID SPROM: ITS PINS MAY BE SHARED WITH THE EXTERNAL AMPLIFIER LINES"); }
+    if chip_control & CHIPCTL_EXTPA != 0 {
+        bar.write32(CC + CC_CHIP_CONTROL, chip_control);
+        mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
+    }
+    if !found { mind::println!("[BCM] NO VALID SPROM"); }
     idle()
 }
 
