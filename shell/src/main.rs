@@ -206,7 +206,7 @@ impl Shell {
     // time; the caller lends the client and drops it.
     fn commands_client(&mut self) -> Result<usize, Error> {
         let endpoint = match self.commands { Some(endpoint) => endpoint, None => { let endpoint = Endpoint::create()?; self.commands = Some(endpoint); endpoint } };
-        mind::ipc::mint(endpoint.0, CAP_WRITE, 0, 0)
+        mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) // grant: `run`'s buffer travels with the call
     }
 
     // The requests to the shell's commands that came (idl/shell.wit 1.0: the window), answered at once.
@@ -215,7 +215,7 @@ impl Shell {
         let mut wait = wait_ms;
         while let Ok(message) = endpoint.recv_timeout(COMMANDS_RECEIVE, wait.max(1)) {
             wait = 1;
-            let Ok((request, call)) = commands::decode(&message, COMMANDS_RECEIVE) else { continue };
+            let (request, call) = match commands::decode(&message, COMMANDS_RECEIVE) { Ok(decoded) => decoded, Err(reason) => { let _ = mind::idl::wire::reject(reason); continue; } };
             match request {
                 commands::Request::Window => {
                     let result = self.open_window();
