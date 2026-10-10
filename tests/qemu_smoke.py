@@ -6102,6 +6102,203 @@ def wm_suite(vm):
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
         return counts
 
+    def clock_from_settings():
+        # The date and time page (000-APP-0055): the year one on, set through the shell once agreed in its window, shown
+        # on the page; then back. The shell waits for the answer in its window, so the question is read on the screen.
+        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+
+        def page():
+            keys("alt-s", text="MODE=SETTINGS")
+            keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
+            for _ in range(20):
+                time.sleep(.3)
+                shown = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen_text(vm)))
+                vm.serial(enter=False)
+                if shown:
+                    return int(shown[1])
+            raise AssertionError(screen_text(vm))
+
+        def set_year(step):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            year = page()
+            keys("right" if step > 0 else "left")
+            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            vm.hmp("sendkey ret")
+            vm.serial(enter=False)
+            screen = []
+            for _ in range(40):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
+                    break
+            else:
+                raise AssertionError(screen)
+            assert any(canon(f"date set {year + step:04}-") in row for row in screen), screen
+            vm.hmp("sendkey y")
+            vm.serial(enter=False)
+            until(f'THE SHELL RAN "date set {year + step:04}-')
+            for _ in range(100):
+                wait(lines=0)
+                asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if asking:
+                    break
+                time.sleep(.1)
+            while state()[1] != asking[-1]:
+                wait()
+            close_shell(asking[-1])
+            assert page() == year + step
+            keys("esc", text="MODE=NORMAL")
+            return year
+
+        year = set_year(1)
+        set_year(-1)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window", flush=True)
+
+    def every_entry_reacts():
+        # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
+        # own, or in console's for a console program) or says why not; every window that opens is closed again.
+        until("[WM] PROGRAMS:")
+        base = set(state()[2])
+        reaction_re = re.compile(r"\[WM\] (STARTED (\S+) PID (\d+)[^\n]*|SHELL WINDOW: [^\n]*|cannot start [^\n]*|[^\n]* is a console program[^\n]*|[^\n]* is a window manager|the window broker gives no client)\n")
+
+        def at():
+            # The highlighted entries, as wm logs them: Files>fm.
+            return re.search(r"MENU=(.*)$", last_state())[1]
+
+        def close_menu():
+            while last_state().startswith("MODE=MENU"):
+                keys("esc")
+
+        def tidy():
+            # The windows the entry opened, closed (a program that ended keeps its window until then).
+            for _ in range(30):
+                extra = [w for w in state()[2] if w not in base]
+                if not extra:
+                    return
+                window = extra[-1]
+                if state()[1] != window:
+                    front(window)
+                keys("alt-w", text=f"CLOSE {window}")
+                until(f"GONE {window}")
+                while window in state()[2]:
+                    wait()
+            raise AssertionError(state())
+
+        # The tree, walked once with the keys: → opens a category at its first program, ↓ wraps at the end.
+        keys("alt-p", "down", text="MODE=MENU")
+        first, tree = at(), []
+        while True:
+            label = at()
+            keys("right")
+            if at() == label:
+                tree.append(([len({p[0][0] for p in tree})], label))
+            else:
+                top, start = len({p[0][0] for p in tree}), at()
+                while True:
+                    tree.append(([top, len([p for p in tree if p[0][0] == top])], at()))
+                    keys("down")
+                    if at() == start:
+                        break
+                keys("left")
+            keys("down")
+            if at() == first:
+                break
+        close_menu()
+        started, said = [], []
+        for path, name in tree:
+            keys("alt-p", text="MODE=MENU")
+            for level, index in enumerate(path):
+                if level:
+                    keys("right")
+                if index + (level == 0):
+                    keys(*["down"] * (index + (level == 0)))
+            assert at() == name, (at(), name)
+            keys("ret")
+            found = reaction_re.findall(seen[-1])
+            assert found, (name, seen[-1][-1500:])
+            line, program, pid = found[-1]
+            if program:
+                started.append(name.split(">")[-1])
+                # Its window (console's for a console program) comes, unless it ended at once.
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                    time.sleep(.1)
+                    wait(lines=0)
+            else:
+                said.append(f"{name}: {line}")
+            close_menu()
+            tidy()
+        time.sleep(2)  # a window that comes late
+        wait(lines=0)
+        tidy()
+        assert len(started) >= 20, (started, said)
+        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs "
+              f"(each window closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
+
+    def settings_react():
+        # 000-APP-0056: each row of Settings' background page changes and is changed back (Left steps back, Enter ticks a
+        # box again), and the image's file with nothing typed says what to do; each page to read says so on Enter; Enter
+        # on a field of the date page asks the shell to set the clock, and no keeps it.
+        def screen_has(text):
+            for _ in range(20):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon(text) in row for row in screen):
+                    return screen
+            raise AssertionError((text, screen))
+
+        kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
+        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"]
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("ret", text="SETTINGS=Background:Picture")
+        changed = 0
+        for index, row in enumerate(rows):
+            if index:
+                keys("down", text=f"SETTINGS=Background:{row}")
+            if row == "Image file":
+                keys("ret")
+                screen_has("Type the image's file here (BMP, PNG or JPEG), then Enter")
+                continue
+            keys("ret", text="[WM] SETTINGS ")
+            assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
+            keys("ret" if row in ("Time", "Date", "CPU load", "Network") else "left", text="[WM] SETTINGS ")
+            assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
+            changed += 1
+        keys("tab", text="SETTINGS=Background")
+        for page in ("Keyboard", "Network", "Sound", "Screen"):
+            keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
+            keys("ret")
+            screen_has(f"{page}: a page to read; nothing is set here yet")
+        keys("up", "up", "up", text="SETTINGS=Date and time")
+        keys("ret", text="SETTINGS=Date and time:Year")
+        # Enter on a field sets the clock to the fields too: the shell asks in its window, and no keeps the clock.
+        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+        known = {m[0] for m in windows_re.findall("".join(seen))}
+        vm.hmp("sendkey ret")
+        vm.serial(enter=False)
+        screen = screen_has("RUN IT? (Y/N)")
+        assert any(canon("date set ") in row for row in screen), screen
+        vm.hmp("sendkey n")
+        vm.serial(enter=False)
+        until('THE SHELL DECLINED "date set ')
+        asking = []
+        for _ in range(100):
+            wait(lines=0)
+            asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+            if asking:
+                break
+            time.sleep(.1)
+        while state()[1] != asking[-1]:
+            wait()
+        close_shell(asking[-1])
+        print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
+              "file with nothing typed says what to do, each page to read says so, and Enter on the date page's year asked "
+              "the shell, where no kept the clock", flush=True)
+
     def console_joined(console):
         # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
         # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
@@ -6235,6 +6432,9 @@ def wm_suite(vm):
     assert sum(row.count(canon("░")) for row in free) > 600, free
     print("PASS: wm settings: Alt+S opens them; the background switched to an image's fallback and to none, the desktop "
           "follows at once, and data/wm.conf keeps it", flush=True)
+    clock_from_settings()
+    every_entry_reacts()
+    settings_react()
     full_screen_and_list(fm, clock, top)
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]

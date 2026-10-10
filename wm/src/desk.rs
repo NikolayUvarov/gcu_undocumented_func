@@ -378,6 +378,8 @@ pub enum Action {
     Pointer { id: u32, x: usize, y: usize, buttons: u8, wheel: i32 },
     /// Settings changed the desktop background (000-APP-0048): use it and keep it.
     Settings(crate::background::Config),
+    /// Settings asks for the clock to be set (000-APP-0055): through the shell, which asks the user in its window.
+    SetClock { date: u32, seconds: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,10 +454,12 @@ pub struct Wm {
     pub programs: Vec<menu::Item>,
     /// The desktop background's configuration, as Settings shows and changes it (000-APP-0048).
     pub background: Config,
+    /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
+    pub shell: bool,
 }
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default() } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false } }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -473,6 +477,7 @@ impl Wm {
                     menu::Outcome::Stay => Action::Redraw,
                     menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                     menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
+                    menu::Outcome::Say(text) => { self.mode = Mode::Normal; self.notice = Some(text); Action::Redraw }
                 };
             }
             Mode::Move { id, before, restore } => {
@@ -499,6 +504,8 @@ impl Wm {
                     Outcome::Stay => Action::Redraw,
                     Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+                    // Settings closes: the keys go to the shell's window, where the shell asks.
+                    Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
                 };
             }
             Mode::Normal => {}
@@ -515,27 +522,49 @@ impl Wm {
         }
         let letter = key.letter();
         match (key.code(), letter) {
-            (Code::Tab, _) => { self.desk.cycle(key.shift()); Action::Redraw }
+            (Code::Tab, _) => { self.next(key.shift()); Action::Redraw }
             (Code::Left | Code::Right | Code::Up | Code::Down, _) => {
                 let side = match key.code() { Code::Left => 0, Code::Right => 1, Code::Up => 2, _ => 3 };
-                if let Some(id) = focus { self.desk.half(id, side); }
+                if let Some(id) = self.window_for("Half the screen") { self.desk.half(id, side); }
                 Action::Redraw
             }
-            (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
-            (_, Some('f')) => { if let Some(id) = focus { self.desk.toggle_full(id); } Action::Redraw }
+            (Code::Enter, _) => { if let Some(id) = self.window_for("Maximize") { self.desk.maximize(id); } Action::Redraw }
+            (_, Some('f')) => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             (_, Some('l')) => { self.open_list(); Action::Redraw }
             (_, Some('s')) => { self.open_settings(); Action::Redraw }
-            (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
+            (Code::F(4), _) | (_, Some('w')) => self.window_for("Close").map_or(Action::Redraw, Action::Close),
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
-            (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
+            (_, Some('m')) => { self.start_move(); Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
             (_, Some('p')) => { self.mode = Mode::Menu(Menu::new(0, 1)); Action::Redraw }
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
-            (_, Some(n @ '1'..='4')) => { if let Some(id) = focus { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
+            (_, Some(n @ '1'..='4')) => { if let Some(id) = self.window_for("A quarter of the screen") { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
             _ => Action::Forward,
         }
+    }
+
+    // The window in front for `what`; with none, the status line says so (000-APP-0056: nothing is silent).
+    fn window_for(&mut self, what: &str) -> Option<u32> {
+        let focus = self.desk.focus();
+        if focus.is_none() { self.notice = Some(format!("{}: there is no window. Alt+P or a right click on the desktop starts a program", what)); }
+        focus
+    }
+
+    // Alt+Tab: the next window, or why there is none.
+    fn next(&mut self, back: bool) {
+        match self.desk.windows.len() {
+            0 => self.notice = Some(String::from("Next window: there is no window. Alt+P or a right click on the desktop starts a program")),
+            1 => self.notice = Some(format!("Next window: \"{}\" is the only one", self.desk.windows[0].title)),
+            _ => self.desk.cycle(back),
+        }
+    }
+
+    // Alt+M: moving the window in front.
+    fn start_move(&mut self) {
+        if self.window_for("Move").is_none() { return; }
+        if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; }
     }
 
     /// The mouse went to cell (x, y) with `buttons` held (bit 0: left) and the wheel turned `wheel` steps. A press on
@@ -571,6 +600,7 @@ impl Wm {
                 Outcome::Stay => Action::Redraw,
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
+                Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
             };
         }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
@@ -588,6 +618,7 @@ impl Wm {
                 menu::Outcome::Stay => Action::Redraw,
                 menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
+                menu::Outcome::Say(text) => { self.mode = Mode::Normal; self.notice = Some(text); Action::Redraw }
             };
         }
         if (pressed || other_pressed || wheel != 0) && !matches!(self.mode, Mode::Normal) { return Action::Redraw; }
@@ -643,14 +674,14 @@ impl Wm {
         let before = core::mem::replace(&mut self.mode, Mode::Normal);
         match item {
             Bar::Programs => { if !matches!(before, Mode::Menu(_)) { self.mode = Mode::Menu(Menu::new(at, 1)); } Action::Redraw }
-            Bar::Next => { self.desk.cycle(false); Action::Redraw }
+            Bar::Next => { self.next(false); Action::Redraw }
             Bar::Run => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
-            Bar::Move => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
-            Bar::Close => self.desk.focus().map_or(Action::Redraw, Action::Close),
+            Bar::Move => { self.start_move(); Action::Redraw }
+            Bar::Close => self.window_for("Close").map_or(Action::Redraw, Action::Close),
             Bar::Help => { if !matches!(before, Mode::Help) { self.mode = Mode::Help; } Action::Redraw }
             Bar::Leave => Action::Detach,
             Bar::List => { if !matches!(before, Mode::List { .. }) { self.open_list(); } Action::Redraw }
-            Bar::Full => { if let Some(id) = self.desk.focus() { self.desk.toggle_full(id); } Action::Redraw }
+            Bar::Full => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             Bar::Settings => { if !matches!(before, Mode::Settings(_)) { self.open_settings(); } Action::Redraw }
         }
     }
@@ -722,7 +753,11 @@ impl Wm {
     fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS" } }
 
     /// Settings (000-APP-0048), at the page of the background.
-    pub fn open_settings(&mut self) { self.mode = Mode::Settings(Settings::new(&self.background, (self.desk.cols, self.desk.rows))); }
+    pub fn open_settings(&mut self) {
+        let mut settings = Settings::new(&self.background, (self.desk.cols, self.desk.rows));
+        settings.shell = self.shell;
+        self.mode = Mode::Settings(settings);
+    }
 
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
@@ -800,7 +835,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)

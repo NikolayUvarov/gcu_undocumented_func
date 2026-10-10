@@ -36,4 +36,4 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
 
 ## Related
 
-[000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md), [u008](../issues-done/u008-clickable-top-bar.done).
+[000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done), [u008](../issues-done/u008-clickable-top-bar.done).

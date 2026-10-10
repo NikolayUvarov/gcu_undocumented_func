@@ -1070,7 +1070,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     let mut grid = Grid::new(&mut cells, 160, 50);
     s.draw(&mut grid, &DARK, &wm.background);
     let text: String = (inner.y..inner.bottom()).map(|y| (inner.x..inner.right()).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
-    assert!(text.contains("netpolicy") && text.contains("211-APP-0044"), "{}", text);
+    assert!(text.contains("netpolicy") && text.contains("To read: the network is set in the shell") && text.contains("Shell in the menu"), "{}", text);
     // A click on a row of the background page changes it.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
     match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
@@ -1084,4 +1084,225 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
         assert!(row.contains(&format!("{:<11} {}", name, value)), "{:?}", row);
     }
     assert_eq!(s.click(0, 0, &wm.background), settings::Outcome::Close);
+}
+
+// The date and time page (000-APP-0055).
+#[test]
+fn days_count_from_2000_and_refuse_days_a_month_does_not_have() {
+    use settings::days;
+    assert_eq!((days(2000, 1, 1), days(2000, 3, 1), days(2026, 10, 10), days(2027, 2, 28), days(2099, 12, 31)), (Some(0), Some(60), Some(9779), Some(9920), Some(36524)));
+    assert_eq!((days(2026, 2, 29), days(2024, 2, 29).is_some(), days(2026, 4, 31), days(2026, 13, 1), days(1999, 12, 31), days(2100, 1, 1)), (None, true, None, None, None, None));
+}
+
+#[test]
+fn the_date_page_sets_the_clock_through_the_shell() {
+    let mut wm = Wm::new(160, 50);
+    wm.shell = true;
+    wm.key(alt_char('s'));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(wm.status().ends_with("SETTINGS=Date and time:Year"), "{}", wm.status());
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    // The fields follow the clock until one is changed.
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 31));
+    assert_eq!(s.fields, [2026, 10, 10, 14, 5, 31]);
+    let screen = draw_wm(&mut wm);
+    assert!(screen.iter().any(|row| row.contains("2026-10-10 14:05:31")) && screen.iter().any(|row| row.contains("Set the clock")), "{:?}", &screen[15..35]);
+    // → steps the year; digits replace the month and the day; a day February does not have is refused on the page.
+    wm.key(key(KEY_RIGHT));
+    wm.key(key(KEY_DOWN));
+    for ch in "02".chars() { wm.key(chr(ch)); }
+    wm.key(key(KEY_DOWN));
+    for ch in "30".chars() { wm.key(chr(ch)); }
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 32));
+    assert_eq!(s.fields, [2027, 2, 30, 14, 5, 31], "changed fields stay");
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("2027-02-30 14:05:31 is not a time the clock takes")));
+    // Day 28, then the button: the clock is asked for, and Settings closes (the shell asks in its window).
+    for ch in "28".chars() { wm.key(chr(ch)); }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().ends_with(":Set the clock"), "{}", wm.status());
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::SetClock { date: 9920, seconds: 14 * 3600 + 5 * 60 + 31 });
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    // Without the shell's commands it says so instead.
+    let mut alone = Wm::new(160, 50);
+    alone.key(alt_char('s'));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_ENTER));
+    assert_eq!(alone.key(chr(' ')), Action::Redraw);
+    assert!(draw_wm(&mut alone).iter().any(|row| row.contains("wm holds no shell's commands")));
+}
+
+// 000-APP-0056: every entry reacts. Enter and a click on each entry of the menu, each item of the top bar, each page
+// and row of Settings: a program started, a submenu or dialog opened, a setting changed, or a line saying why not.
+#[test]
+fn every_entry_of_the_menu_reacts() {
+    // The path of highlighted items in the open menu.
+    let path = |wm: &Wm| match &wm.mode { Mode::Menu(open) => open.path(&wm.programs), _ => String::new() };
+    // Opens the menu and goes to the entry at `at` (an index per level) with the keys.
+    fn to(wm: &mut Wm, at: &[usize]) {
+        wm.mode = Mode::Normal;
+        wm.key(alt_char('p'));
+        for (level, &index) in at.iter().enumerate() {
+            // → opens a category at its first program; the first level has none highlighted yet.
+            if level > 0 { wm.key(key(KEY_RIGHT)); }
+            for _ in 0..index + usize::from(level == 0) { wm.key(key(KEY_DOWN)); }
+            let Mode::Menu(open) = &wm.mode else { panic!() };
+            assert_eq!(open.levels[level], index);
+        }
+    }
+    // Every entry under `items`, by its indices.
+    fn entries(items: &[Item], at: Vec<usize>, all: &mut Vec<(Vec<usize>, Item)>) {
+        for (i, item) in items.iter().enumerate() {
+            let mut here = at.clone();
+            here.push(i);
+            all.push((here.clone(), item.clone()));
+            entries(&item.children, here, all);
+        }
+    }
+    let menus = [menu::with_shell(catalogue(&programs(true))), catalogue(&programs(false)), catalogue(&[]),
+                 vec![Item::note("Looking for programs…", "wm is still reading the programs on the boot disk")]];
+    let mut count = 0;
+    for programs in menus {
+        let mut all = Vec::new();
+        entries(&programs, Vec::new(), &mut all);
+        for (at, item) in all {
+            let mut wm = Wm::new(160, 50);
+            wm.programs = programs.clone();
+            // Enter.
+            to(&mut wm, &at);
+            let before = path(&wm);
+            let action = wm.key(key(KEY_ENTER));
+            match (&item.command, item.children.is_empty()) {
+                (Some(command), _) => assert_eq!(action, Action::Run(command.clone())),
+                (None, false) => assert!(path(&wm).len() > before.len() && path(&wm).starts_with(&before), "{} → {}", before, path(&wm)),
+                (None, true) => {
+                    assert!(wm.status().starts_with("MODE=NORMAL") && wm.notice.is_some(), "{:?}: {}", item.label, wm.status());
+                    assert!(draw_wm(&mut wm)[49].contains(wm.notice.as_deref().unwrap()));
+                }
+            }
+            // A click on it.
+            to(&mut wm, &at);
+            let Mode::Menu(open) = &wm.mode else { panic!() };
+            let r = open.rects(&wm.programs, 160, 50)[at.len() - 1].inner();
+            let (x, y) = (r.x + 1, r.y + at[at.len() - 1]);
+            wm.notice = None;
+            let action = wm.pointer(x, y, 1, 0);
+            wm.pointer(x, y, 0, 0);
+            match (&item.command, item.children.is_empty()) {
+                (Some(command), _) => assert_eq!(action, Action::Run(command.clone())),
+                (None, false) => assert!(path(&wm).ends_with(&item.label) && matches!(&wm.mode, Mode::Menu(open) if open.levels.len() == at.len() + 1)),
+                (None, true) => assert!(wm.status().starts_with("MODE=NORMAL") && wm.notice.is_some(), "{:?}: {}", item.label, wm.status()),
+            }
+            count += 1;
+        }
+    }
+    assert!(count >= 15, "{}", count);
+}
+
+#[test]
+fn every_item_of_the_top_bar_and_every_alt_key_reacts() {
+    // What a click did: an action for main, a dialog or mode of wm, the windows changed, or a line on the status line.
+    for windows in [0, 1, 4] {
+        for (at, _, item) in desk::bar_items(160) {
+            let mut wm = Wm::new(160, 50);
+            if windows == 4 { wm.desk = desk_of_four(); }
+            if windows == 1 { wm.desk.add(text(1, "fm")); }
+            let before = wm.desk.status();
+            let action = wm.pointer(at + 1, 0, 1, 0);
+            wm.pointer(at + 1, 0, 0, 0);
+            let reacted = action != Action::Redraw || !wm.status().starts_with("MODE=NORMAL") || wm.notice.is_some() || wm.desk.status() != before;
+            assert!(reacted, "{:?} with {} windows: {}", item, windows, wm.status());
+            if windows == 0 && matches!(item, desk::Bar::Next | desk::Bar::Move | desk::Bar::Close | desk::Bar::Full) {
+                assert!(wm.notice.as_deref().is_some_and(|n| n.contains("there is no window")), "{:?}: {:?}", item, wm.notice);
+            }
+        }
+    }
+    // The keys that act on the window in front say there is none; Alt+Tab with one window names it.
+    let keys = [alt(KEY_TAB, '\t'), alt(KEY_LEFT, '\0'), alt(KEY_ENTER, '\r'), alt_char('f'), alt_char('w'), alt_char('m'), alt_char('1')];
+    for k in keys {
+        let mut wm = Wm::new(160, 50);
+        assert_eq!(wm.key(k), Action::Redraw);
+        assert!(wm.notice.as_deref().is_some_and(|n| n.contains("there is no window")), "{:?}: {:?}", k, wm.notice);
+        assert!(draw_wm(&mut wm)[49].contains("there is no window"));
+    }
+    let mut wm = Wm::new(160, 50);
+    wm.desk.add(text(1, "fm"));
+    wm.key(alt(KEY_TAB, '\t'));
+    assert_eq!(wm.notice.as_deref(), Some("Next window: \"fm\" is the only one"));
+}
+
+#[test]
+fn every_page_and_row_of_settings_reacts() {
+    use settings::{Outcome, Settings, CLOCK_ROWS, DATE, PAGES, ROWS};
+    let config = background::Config::default();
+    let screen = |s: &Settings| {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        s.draw(&mut grid, &DARK, &config);
+        (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n")
+    };
+    // Each page: Enter on its name goes into it, or a page to read says so (and says so in its first line).
+    for page in 0..PAGES.len() {
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..page { s.key(key(KEY_DOWN), &config); }
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+        if page == 0 || page == DATE { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
+        assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
+        assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
+        // A click on its text says so too; another page's name takes the line away.
+        let inner = s.area().inner();
+        s.message = None;
+        assert_eq!(s.click(inner.x + 30, inner.y + 2, &config), Outcome::Stay);
+        assert!(s.message.is_some(), "{}", PAGES[page]);
+        s.click(inner.x + 2, inner.y, &config);
+        assert!(s.message.is_none() && s.page == 0);
+        // Every line of the page fits its column.
+        for line in s.page_text() { assert!(line.chars().count() <= 63, "{:?}", line); }
+    }
+    // Each row of the background page: Enter changes it, or a line says why not.
+    for row in 0..ROWS.len() {
+        let mut s = Settings::new(&config, (160, 50));
+        s.key(key(KEY_ENTER), &config);
+        for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+        match s.key(key(KEY_ENTER), &config) {
+            Outcome::Changed(c) => assert_ne!(c, config, "{}", ROWS[row]),
+            Outcome::Stay => assert!(s.message.is_some() && screen(&s).contains(s.message.as_deref().unwrap()), "{}", ROWS[row]),
+            other => panic!("{}: {:?}", ROWS[row], other),
+        }
+    }
+    // The image's file not typed yet; a value at its end.
+    let mut s = Settings::new(&config, (160, 50));
+    s.key(key(KEY_ENTER), &config);
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    assert_eq!(s.message.as_deref(), Some("Type the image's file here (BMP, PNG or JPEG), then Enter"));
+    s.key(key(KEY_DOWN), &config);
+    s.key(key(KEY_DOWN), &config);
+    assert!(s.message.is_none(), "moved: the line goes");
+    assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::Stay, "speed 1 is the slowest");
+    assert_eq!(s.message.as_deref(), Some("Speed is at its lowest already: 1"));
+    assert!(matches!(s.key(key(KEY_RIGHT), &config), Outcome::Changed(_)));
+    assert!(s.message.is_none());
+    // Each row of the date page: Enter tries to set the clock, which says what came of it.
+    for shell in [false, true] {
+        for row in 0..CLOCK_ROWS.len() {
+            let mut s = Settings::new(&config, (160, 50));
+            s.shell = shell;
+            s.set_now(Some((2026, 10, 10)), Some(3600));
+            s.key(key(KEY_DOWN), &config);
+            s.key(key(KEY_DOWN), &config);
+            s.key(key(KEY_ENTER), &config);
+            for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+            match s.key(key(KEY_ENTER), &config) {
+                Outcome::SetClock { date, seconds } => assert!(shell && (date, seconds) == (9779, 3600)),
+                Outcome::Stay => assert!(!shell && s.message.as_deref().is_some_and(|m| m.contains("wm holds no shell's commands"))),
+                other => panic!("{:?}", other),
+            }
+        }
+    }
 }

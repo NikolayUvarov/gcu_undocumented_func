@@ -67,9 +67,7 @@ In `main`'s run with the same debug lines, no flush write failed during the outa
 
 ## A launch session holds as many grants as there are launch slots (211-APP-0044)
 
-## QEMU's vvfat crashes in the aarch64 boot suite on `main` at 661147f
-
-**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md).
+**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done).
 
 ### Problem
 
@@ -94,8 +92,6 @@ The `wm` suite's `record -w` lost its window lease to the limit. The tools track
 ### Acceptance criteria
 
 A launcher grants each of `LAUNCH_SLOTS` in one session and the program holds them all. `console` from `wm` gets the shell's commands beside the window lease of `record -w`.
-
-The group passes in repeated runs (say 5 of 5) on `main`.
 
 ## Free clusters counted a FAT sector at a time
 

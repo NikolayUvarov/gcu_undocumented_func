@@ -12,18 +12,18 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
 /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
-/// with a program.
+/// with a program; (1.2) a time the clock does not take.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] Unavailable = 0, NoMemory = 1, Refused = 2, Declined = 3, Busy = 4 }
+pub enum Error { #[default] Unavailable = 0, NoMemory = 1, Refused = 2, Declined = 3, Busy = 4, Invalid = 5 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Unavailable), 1 => Some(Self::NoMemory), 2 => Some(Self::Refused), 3 => Some(Self::Declined), 4 => Some(Self::Busy), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Unavailable), 1 => Some(Self::NoMemory), 2 => Some(Self::Refused), 3 => Some(Self::Declined), 4 => Some(Self::Busy), 5 => Some(Self::Invalid), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;
@@ -60,11 +60,23 @@ pub fn run(endpoint: Endpoint, line: &str, out: &mut [u8]) -> Result<core::resul
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<7000>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
+/// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
+/// does, once the user agrees in the shell's window (1.2, 000-APP-0055: wm's Settings). A word call, so a caller
+/// may stop waiting while the shell asks (`mind::idl::wire::with_timeout`) and see the clock change.
+pub fn set_clock(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::result::Result<(), Error>> {
+    let words = [3 | MAJOR << 8 | ((date) as usize) << 16, ((seconds) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Window,
     Run { line: Text<240> },
+    SetClock { date: u32, seconds: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -86,6 +98,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Run { line }, call))
         }
+        3 => {
+            wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::SetClock { date: wire::field(&words, 0, 16, 32) as u32, seconds: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -97,4 +113,8 @@ pub fn reply_window(call: Call, value: core::result::Result<u32, Error>) -> Resu
 pub fn reply_run(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_bytes::<7000>(value, w))
+}
+pub fn reply_set_clock(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }
