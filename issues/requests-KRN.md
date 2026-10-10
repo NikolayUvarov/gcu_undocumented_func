@@ -77,7 +77,7 @@ The first `df` of a 256 MiB FAT32 volume takes well under a second on aarch64 un
 
 ## A badge set only by a holder with the right to set it
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, from [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) and [351-UPD-0008](../issues-done/351-UPD-0008-update-zone.done).
+**Recorded by:** the update track (`UPD`), 2026-10-10, from [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) and [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done).
 
 ### Problem
 
