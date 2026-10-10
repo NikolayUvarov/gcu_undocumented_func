@@ -58,6 +58,14 @@ Any free model may be used (the maintainer, 2026-10-08), so these licences diffe
 - some models were trained on data licensed for non-commercial use only (for example GigaSpeech), and their `terms` say so;
 - a distribution of a model disk or of an image that includes models must keep each model's licence and terms.
 
+## Proprietary files (neither in this repository nor in any image)
+
+Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. It keeps them in `proprietary/`, the separate store for all such components in the working tree, which `.gitignore` excludes. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume. A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
+
+| Files | Needed by | Source | Script |
+|---|---|---|---|
+| Broadcom's 802.11 microcode for the BCM4331: `ucode29_mimo`, `ht0initvals29`, `ht0bsinitvals29` | `bcm_wifi` from its stage 2 ([550-DRV-0006](issues/550-DRV-0006-broadcom-wifi.md)) | Broadcom's `wl` driver archive, extracted as Linux's `b43` does | to be written with stage 2 |
+
 ## Tools used at build or test time (not distributed)
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.
