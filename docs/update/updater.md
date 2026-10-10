@@ -82,7 +82,7 @@ tries 3                                   # tries of a trial boot for an automat
 
 ## Not provided yet
 
-- **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command and the slot for its client are asked of the tools and kernel tracks ([requests-APP.md](../../issues/requests-APP.md), [requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback` and `status` run only through the automatic policy in the tests, and `rollback` and `status` have not run on the platform.
+- **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback` and `status` run only through the automatic policy in the tests, and `rollback` and `status` have not run on the platform.
 - **A directory source** is built but not tested in QEMU.
 - **SSH** (351-NET-0004).
 - **A knowing confirmation.** The updater infers the kernel's confirmation from the deadline. Asking `init` would take seconds instead of the 2 minutes the deadline takes ([requests-KRN.md](../../issues/requests-KRN.md)).

@@ -77,7 +77,7 @@ A new `isolation` case: a program holding an unbadged client without the right g
 
 ## A client of the updater for the shell
 
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md) and the tools track's `update` command ([requests-APP.md](requests-APP.md)).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](351-UPD-0007-updater-service.md) and the tools track's `update` command (351-APP-0029, on its branch).
 
 ### Problem
 
