@@ -35,10 +35,11 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
 // ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
 // BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058) and bcm_wifi is a 33rd boot image
-// (550-KRN-0059). The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
-// into every task's BootInfo, and libmind refuses to run a program built for another one. Fields up to abi_version
-// keep their places across versions, so each side finds the other's version where it expects it.
-pub const ABI_VERSION: u32 = 5;
+// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073). The bootloader writes it into BootInfo, the
+// kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
+// for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
+// where it expects it.
+pub const ABI_VERSION: u32 = 6;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, }
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
@@ -139,6 +140,8 @@ pub const SYSCALL_HALT: usize = 43;
 pub const SYSCALL_CLOCK: usize = 44;
 // Endpoint badges: CAP_MINT with msg[2] = badge (1..=BADGE_MAX) labels an endpoint capability once; its children keep
 // the badge and another one is refused. A receiver gets the badge of the capability the sender used in arg2 (0: none).
+// Setting a badge needs CAP_BADGE on the unbadged capability (ERR_INVALID without it, ABI 6, 000-KRN-0073); a badged
+// capability never carries it.
 pub const BADGE_MAX: usize = 0xFFFF;
 // CAP_MINT: arg1 = handle, arg2 = rights mask (endpoints and memory), msg[0] = offset, msg[1] = length (0: to the end) for port and
 // memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
@@ -217,6 +220,9 @@ pub const RTC_UNAVAILABLE: usize = usize::MAX;
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
+// Badger: CAP_MINT may set a badge on a child (000-KRN-0073). A new endpoint carries it; a copy or child keeps it only
+// when the mask does, and a badged one never.
+pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
 pub const CAP_SLOTS: usize = 96;

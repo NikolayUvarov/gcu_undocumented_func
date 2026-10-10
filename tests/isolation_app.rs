@@ -70,6 +70,11 @@ unsafe fn child(mb: *mut SyscallMailbox) {
         // Whether a capability came with the reply (a refused move delivers none).
         7 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 100 + got_cap, 0]) != 0 { fail(); },
         4 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [abi::SLOT_INIT, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 5, 0]) != 0 { fail(); },
+        // Badging the unbadged client we were given without the right to (000-KRN-0073): 8 when refused.
+        8 => {
+            let refused = ipc(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_INIT, abi::CAP_WRITE as usize, [0, 0, 0x44, 0]) == abi::ERR_INVALID;
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if refused { 8 } else { 9 }, 0]) != 0 { fail(); }
+        }
         _ => fail(),
     }
 }
@@ -351,7 +356,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 // A keeper (no read right) cannot receive but can mint a receiver of the same endpoint.
                 let keeper = mint(endpoints[0], (abi::CAP_KEEP | abi::CAP_WRITE) as usize, 0, 0);
                 let reader = mint(keeper, abi::CAP_READ as usize, 0, 0);
-                if rights(endpoints[0]) != (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_KEEP) as usize
+                if rights(endpoints[0]) != (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_KEEP | abi::CAP_BADGE) as usize
                     || rights(keeper) != (abi::CAP_KEEP | abi::CAP_WRITE) as usize || rights(reader) != abi::CAP_READ as usize
                     || call(mb, abi::SYSCALL_IPC_RECV, keeper, 0) != abi::ERR_RIGHTS {
                     asm!("ud2", options(noreturn));
@@ -473,6 +478,25 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).arg2 != 0x42 { fail(); }
                 if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 6, 0]) != 0 { fail(); }
                 print(mb, b"BADGE OK\r\n");
+                return;
+            }
+            b'a' => {
+                // The right to badge (000-KRN-0073): a new endpoint has it; a client minted or granted without it cannot
+                // be badged, here or in a child; a badged child never carries it, whatever the mask.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let mint = |handle: usize, mask: u8, badge: usize| ipc(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge, 0]);
+                let rights = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0); (*mb).msg[2] };
+                let client = mint(endpoint, abi::CAP_WRITE | abi::CAP_GRANT, 0);
+                let badger = mint(endpoint, abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_BADGE, 0);
+                let badged = mint(badger, abi::CAP_WRITE | abi::CAP_BADGE, 0x44);
+                if rights(endpoint) & abi::CAP_BADGE as usize == 0 || rights(client) != (abi::CAP_WRITE | abi::CAP_GRANT) as usize
+                    || mint(client, abi::CAP_WRITE, 0x44) != abi::ERR_INVALID || badged >= abi::ERR_FIRST || rights(badged) != abi::CAP_WRITE as usize {
+                    fail();
+                }
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 8, 0, 0);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 8 { fail(); }
+                print(mb, b"BADGE RIGHT OK\r\n");
                 return;
             }
             b'b' => {

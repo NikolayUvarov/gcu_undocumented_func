@@ -626,3 +626,20 @@ An entry that does nothing on Enter or a click leaves the user guessing whether 
 
 - The `wm` suite opens each menu entry and each Settings row and finds its reaction.
 - No entry is silent.
+
+## `caps` and `monitor` show the badge right (000-KRN-0073)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10.
+
+### Problem
+
+Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MINT` sets a badge only from a capability that has it (000-KRN-0073). The shell's `caps` (`shell/src/observe.rs`) and `monitor`'s IPC view (`monitor/src/ipc.rs`) print four letters, `rwgk`, so they do not show it.
+
+### Plan (a proposal; the tools track decides)
+
+- A fifth letter, `b`, after `k` in both.
+- The shell suite's check of a client's rights (`RIGHTS=-wg-` in `tests/qemu_smoke.py`) gets the fifth place.
+
+### Acceptance criteria
+
+`caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.

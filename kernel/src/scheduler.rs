@@ -12,7 +12,7 @@ mod stat;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 128; // the endpoint table's first size; it grows on demand (issue 171)
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
-const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
+const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP | CAP_BADGE;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
@@ -839,8 +839,12 @@ impl Scheduler {
             (offset % align == 0 && length % align == 0 && length > 0 && offset.checked_add(length)? <= size).then_some((base + offset, length))
         };
         match cap {
-            // A badge is set once (MC-3.4): a child of a badged capability keeps it.
-            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old == 0 || old as usize == badge)).then(|| Capability::Endpoint(id, (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8, if old != 0 { old } else { badge as u16 })),
+            // A badge is set once (MC-3.4), only with CAP_BADGE (000-KRN-0073): a child of a badged capability keeps it.
+            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old as usize == badge || (old == 0 && rights & CAP_BADGE != 0))).then(|| {
+                let badge = if old != 0 { old } else { badge as u16 };
+                let rights = (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8;
+                Capability::Endpoint(id, if badge != 0 { rights & !CAP_BADGE } else { rights }, badge)
+            }),
             Capability::IoPorts(base, count) => range(base as usize, count as usize, 1).map(|(b, c)| Capability::IoPorts(b as u16, c as u16)),
             Capability::Memory(base, size, rights) => {
                 // Without grant only a read-only child: the writable owner stays unique.
