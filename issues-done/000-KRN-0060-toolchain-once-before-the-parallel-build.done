@@ -1,6 +1,6 @@
-# 000-KRN-0060 — The pinned toolchain installed once before the parallel build
+# 000-KRN-0060 — The pinned toolchain installed once before the parallel build — done
 
-**Type:** CI / build · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** — (the build) · **Constitution:** MC-12.2 (a failure reported for what it is)
+**Type:** CI / build · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** — (the build) · **Constitution:** MC-12.2 (a failure reported for what it is)
 
 ## Problem
 
@@ -32,6 +32,16 @@ All 70 crates then fail, and the build reports them as failures of the code.
    - a test of the function with a stand-in `rustup` (the four cases above, and the real toolchain all there);
    - the x86 and aarch64 builds, which run the function.
 
+## Resolution
+
+- **What was done.** `ensure_toolchain` (`scripts/build_jobs.sh`) runs before the parallel build. `02_build.sh` and `scripts/build_aarch64.sh` call it.
+  - It compares the components and targets in `rust-toolchain.toml` with `rustup component list --installed`; nothing is fetched for this.
+  - Only when something is missing does it run one `rustup toolchain install` that names exactly that.
+  - A failure stops the build at its own step, "installing the pinned toolchain".
+- **Evidence.**
+  - A stand-in `rustup` covered five cases: a component missing, a target missing, the toolchain absent, the install failing, and everything there. This was run by hand, not kept as a test.
+  - The real toolchain was silent in every build since: the local gate's x86 and aarch64 builds of 7222bed on the kernel session's machine, and the aarch64 build on PCU through Effector.
+
 ## Related
 
-[000-KRN-0020](000-KRN-0020-parallel-build.md) (the parallel build), [requests-KRN.md](requests-KRN.md).
+[000-KRN-0020](../issues/000-KRN-0020-parallel-build.md) (the parallel build), [requests-KRN.md](../issues/requests-KRN.md).

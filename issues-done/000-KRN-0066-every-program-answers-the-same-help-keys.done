@@ -1,6 +1,6 @@
-# 000-KRN-0066 — Every program answers the same help keys
+# 000-KRN-0066 — Every program answers the same help keys — done
 
-**Type:** kernel (the core of `libmind`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and tested in QEMU; the gate left) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-12.3
+**Type:** kernel (the core of `libmind`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** track G · **Constitution:** MC-12.3
 
 ## Problem
 
@@ -25,6 +25,14 @@ For programs, `mind::about!` printed the program's text only for `--help` exactl
 ## Progress
 
 **2026-10-10.** Done in `libmind/src/process.rs`; the services suite passes on x86 with the new checks.
+
+## Resolution
+
+- **What was done.** `mind::process::HELP_KEYS` holds `--help`, `-help`, `-h`, `/help`, `/h`, `/?` and `-?`, matched in any case. `asks_help()` checks the whole argument text against them, and `about!` uses it, so every program built with `libmind` answers them alike.
+- **Evidence.**
+  - The services suite checks `uptime` with each key and `--HELP` (QEMU x86). It passed in the local gate of 7222bed.
+  - No program's arguments use these keys.
+- **What is left elsewhere.** The shell's own commands, and its check for programs with a screen (`help_instead`), are the tools track's (`requests-APP.md`).
 
 ## Related
 
