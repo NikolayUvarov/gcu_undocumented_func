@@ -27,11 +27,15 @@ fn main(info: &'static BootInfo) {
         let bytes = shared.as_mut_slice(); bytes[..text.as_bytes().len()].copy_from_slice(text.as_bytes()); bytes[text.as_bytes().len()] = 0;
         screen.text(40, 100, b"CALLING SERVER WITH MEMORY CAP", 1, 0x00FFFFFF, None);
         let lent = mind::ipc::mint(cap, mind::abi::CAP_READ, 0, 0).expect("MEM MINT FAILED");
-        let reply = server.call(&Message::new(counter, 0).with_cap(lent, 0), 0);
+        // The first call waits 2 s: without pong (ping from wm's menu) nothing answers.
+        let message = Message::new(counter, 0).with_cap(lent, 0);
+        let reply = if counter == 1000 { server.call_timeout(&message, 0, 2000) } else { server.call(&message, 0) };
         let _ = mind::ipc::revoke(cap);
         match reply {
             Ok(reply) if reply.data[0] == counter => { screen.text(40, 160, b"SERVER CONFIRMED RECEIPT!", 1, 0x0000FF00, None); mind::println!("[PING] ACK {}", counter); }
-            _ => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
+            Ok(_) => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
+            // No server, or pong ended: ping ends too, saying why (000-APP-0056: not left running unseen).
+            Err(error) => { mind::println!("[PING] NO SERVER ({:?}): ping is started by pong (run pong)", error); mind::process::exit_with(1); }
         }
         mind::input::wait_or_exit(1500);
     }
