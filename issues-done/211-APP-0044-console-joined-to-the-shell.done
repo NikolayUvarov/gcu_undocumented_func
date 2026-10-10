@@ -1,8 +1,8 @@
-# 211-APP-0044 — `console` joined to the shell, and `shell` in `wm`'s menu
+# 211-APP-0044 — `console` joined to the shell, and `shell` in `wm`'s menu — done
 
-**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-10: the shell's window from the right-click menu) · **Status:** in progress (the menu's `shell` done; `console` joined to the shell written, its check in the `wm` suite next) · **Blocked by:** — (211-KRN-0058, `SLOT_SHELL`, reached `main` on 2026-10-10) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `console`, `wm`, `idl`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer, 2026-10-10: the shell's window from the right-click menu) · **Status:** done (2026-10-10) · **Blocked by:** — (211-KRN-0058, `SLOT_SHELL`, reached `main` on 2026-10-10) · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
-Split from [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) on 2026-10-10, when that task took the shell's own window, which needs no new slot. Numbered with the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, the maintainer's request after the run on the MacBook Pro).
+Split from [211-APP-0040](211-APP-0040-the-shells-commands-in-console.done) on 2026-10-10, when that task took the shell's own window, which needs no new slot. Numbered with the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, the maintainer's request after the run on the MacBook Pro).
 
 ## Problem
 
@@ -50,9 +50,41 @@ A second shell in every window is not the way: it would spread the authority to 
   - `console` sends the shell's commands it does not do itself, and says first when the shell will ask in its window.
   - `docs/profile` (MC-10.2) names what a client of the shell's commands can read.
   - Checks: host tests of the choice (`tests/shell_host.rs`) and of `console`'s routing (`tests/console_host.rs`). In the `wm` suite, `console` runs `quotas` through the shell, `fg` is refused, and `kill` is declined and then agreed in the shell's window.
-- **A launch session holds 5 grants** (`loader`). `console` started by `wm` for `record -w` needs six with the shell's commands. `wm` and the shell now grant `SLOT_SHELL` last and start the program without it when the session is full; the limit is asked of the kernel track ([requests-KRN.md](requests-KRN.md), "A launch session holds as many grants as there are launch slots").
+- **A launch session holds 5 grants** (`loader`). `console` started by `wm` for `record -w` needs six with the shell's commands. `wm` and the shell now grant `SLOT_SHELL` last and start the program without it when the session is full; the limit is asked of the kernel track ([requests-KRN.md](../issues/requests-KRN.md), "A launch session holds as many grants as there are launch slots").
 - **Not done:** `start(program, args)`, the shell starting a program on its authority in a window of its own. The shell's window already does it.
+
+## Resolution
+
+Done on the tools branch, 2026-10-10:
+
+- **The menu's `Shell`.** The commits are b1f862c and 8a0d6d4.
+  - `idl/shell.wit` 1.0 `window`. The shell makes the endpoint at the first lend and lends it in `SLOT_SHELL` for `REQUEST_SHELL`.
+  - `wm` puts `Shell` first in its menus. It calls `window` with a 2 s timeout (`mind::idl::wire::with_timeout`) and brings the window to the front.
+- **`console` joined to the shell.** The commits are 8a0d6d4 to af53ca9.
+  - `shell.wit` 1.1 `run(line)`, answered with what the line printed.
+  - The shell's choice is in `shell/src/clients.rs`:
+    - at once, what `sysmon` gives any program;
+    - in its own window after the user agrees there, what changes the machine or reaches beyond it;
+    - refused, the screen's commands, scripts and programs.
+  - The plan's `confirmed` flag was dropped: a client could set it without asking anyone.
+  - The shell lends the client to a window manager and to what its window starts. `wm` passes it on to programs that ask (`console`), last of their grants.
+  - The client carries `CAP_GRANT`, so `run`'s buffer travels with the call; a request that fails the check is answered.
+  - `wm` adopts a window it could not lend at one sync at the next.
+- **Checked** in the x86 `wm` suite (with `tablet`, `tools`, `shell` and `windows`):
+  - the menu's `Shell` opens the window after Ctrl+Alt+F5's was closed, and brings it to the front from behind another;
+  - `console` runs `quotas` through the shell, and `fg 1` is refused;
+  - `kill` is declined and then agreed in the shell's window;
+  - `reboot` typed in `console` (started by `wm console`) is agreed in the shell's window and restarts the machine; QEMU exits under `-no-reboot`. This step was run locally before its commit.
+- **Host tests:** `tests/shell_host.rs` (the choice), `tests/console_host.rs` (the routing), `tests/wm_host.rs` (the menu's first item), `tests/idl_host.rs` (the call timeout).
+- **Docs:** `docs/tools` (EN, RU), `docs/idl`, `docs/api`; `docs/profile` (MC-10.2) names what a client of the shell's commands can read.
+
+Not done here:
+
+- `console` from the right-click menu was not started in the check: the menu runs it through the same `wm` launch as the run line and `wm console`.
+- `start(program, args)` in `shell.wit`: the shell's window already starts programs on the shell's authority in windows of their own, and nothing waits for it.
+- While the shell waits for an answer in its window, it does not pass the focused program's output to the serial line. The answer is asked for as `reboot` in the window always was.
+- A launch session's 5 grants are asked of the kernel track ([requests-KRN.md](../issues/requests-KRN.md)).
 
 ## Related
 
-[211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done), [158-APP-0043](158-APP-0043-the-camera-from-wm-and-console.md), [u004](../issues-done/u004-console.done), [u006](../issues-done/u006-console-commands.done), [000-APP-0032](000-APP-0032-system-clipboard.md) (the other slot asked for).
+[211-APP-0040](211-APP-0040-the-shells-commands-in-console.done), [158-APP-0043](../issues/158-APP-0043-the-camera-from-wm-and-console.md), [u004](u004-console.done), [u006](u006-console-commands.done), [000-APP-0032](../issues/000-APP-0032-system-clipboard.md) (the other slot asked for).

@@ -2,7 +2,7 @@
 
 **Type:** tools (`wm`, `console`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer's run on the MacBook Pro, 2026-10-10) · **Status:** in progress (done in QEMU; waits for the maintainer's run on the MacBook Pro) · **Blocked by:** — · **Main task:** [158](158-video-capture.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
-Numbered from the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, at the maintainer's request after the run of `fast-test` bc681376b8d8 on the MacBook Pro). The request's other parts are [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) (the shell in a window) and [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md) (`console` joined to the shell).
+Numbered from the kernel track's request in `requests-APP.md` ("The camera from `wm`, and the shell in a window", 2026-10-10, at the maintainer's request after the run of `fast-test` bc681376b8d8 on the MacBook Pro). The request's other parts are [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) (the shell in a window) and [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (`console` joined to the shell).
 
 ## Problem
 
@@ -34,4 +34,4 @@ Numbered from the kernel track's request in `requests-APP.md` ("The camera from 
 
 ## Related
 
-[158](158-video-capture.md), [211-APP-0039](../issues-done/211-APP-0039-an-ended-program-leaves-its-message-in-its-window.done), [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md).
+[158](158-video-capture.md), [211-APP-0039](../issues-done/211-APP-0039-an-ended-program-leaves-its-message-in-its-window.done), [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done).

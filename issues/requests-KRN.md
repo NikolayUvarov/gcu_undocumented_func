@@ -114,7 +114,7 @@ On the MacBook Pro, `bcm_wifi` opens `data/firmware/b43/ucode29_mimo.fw` and log
 
 ## A launch session holds as many grants as there are launch slots (211-APP-0044)
 
-**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](211-APP-0044-console-joined-to-the-shell.md).
+**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done).
 
 ### Problem
 

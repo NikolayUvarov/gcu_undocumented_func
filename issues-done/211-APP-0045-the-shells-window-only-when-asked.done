@@ -11,7 +11,7 @@ Numbered from the kernel track's request in `requests-APP.md` ("The shell's wind
 ## Plan
 
 - The shell opens its window only when asked: Ctrl+Alt+F5 (the shell takes the key whatever program has the keyboard). Starting a window manager opens nothing.
-- `wm`'s menu item `shell` asks the shell for its window through `SLOT_SHELL`: that is [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), waiting for 211-KRN-0058. Until then the menu has no such item.
+- `wm`'s menu item `shell` asks the shell for its window through `SLOT_SHELL`: that is [211-APP-0044](211-APP-0044-console-joined-to-the-shell.done), waiting for 211-KRN-0058. Until then the menu has no such item.
 - The shell's help and `docs/tools` (EN, RU) say so.
 
 ## Acceptance criteria
@@ -22,10 +22,10 @@ Numbered from the kernel track's request in `requests-APP.md` ("The shell's wind
 
 ## Related
 
-[211-APP-0040](211-APP-0040-the-shells-commands-in-console.done), [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md).
+[211-APP-0040](211-APP-0040-the-shells-commands-in-console.done), [211-APP-0044](211-APP-0044-console-joined-to-the-shell.done).
 
 ## Resolution
 
 - `shell/src/main.rs`: the shell no longer opens its window when it starts a window manager; Ctrl+Alt+F5 opens it, whatever program has the keyboard. The shell's and `console`'s help and `docs/tools` (EN, RU) say so.
 - **The `wm` suite (x86, on the branch, 2026-10-10):** `wm fm, clock, top` starts with the three programs' windows and no shell window (no `[SHELL] THE SHELL'S WINDOW OPENED` either); Ctrl+Alt+F5 opens it for the shell's checks (`ps`, `date`, `logs`, `top` in a window, resize, `reboot`'s question, `fg` refused); closed with Alt+W it goes and `wm` goes on in its normal mode; Ctrl+Alt+F5 opens it again; it opens once more for `camera` in the shell's window. The rest of the suite is as before 211-APP-0040 (three windows). The `windows` suite passes again (`winmgr` finds its two test windows alone), and so does the `tablet` suite, back to its form before 211-APP-0040.
-- **Left:** the item in `wm`'s right-click menu (the maintainer, 2026-10-10) needs the channel to the shell: [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), raised to P1, waiting for 211-KRN-0058 (`SLOT_SHELL`) in `main`. The maintainer's check on the MacBook Pro: `fast-test` from b0d00e3.
+- **Left:** the item in `wm`'s right-click menu (the maintainer, 2026-10-10) needs the channel to the shell: [211-APP-0044](211-APP-0044-console-joined-to-the-shell.done), raised to P1, waiting for 211-KRN-0058 (`SLOT_SHELL`) in `main`. The maintainer's check on the MacBook Pro: `fast-test` from b0d00e3.

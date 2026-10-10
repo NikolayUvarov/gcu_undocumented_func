@@ -2,7 +2,7 @@
 
 **Type:** tools (`shell`, `console`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (raised by the maintainer, 2026-10-10: without a proper console `wm` is hard to work in) · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
-Numbered from the kernel track's request in `requests-APP.md` (2026-10-09, at the maintainer's request after a run on the MacBook Pro). Its second request ("The camera from `wm`, and the shell in a window", 2026-10-10) asks for the same: the shell in a window, and the difference between `console` and the shell explained. What needs a channel from `wm` and `console` to the shell went to [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md).
+Numbered from the kernel track's request in `requests-APP.md` (2026-10-09, at the maintainer's request after a run on the MacBook Pro). Its second request ("The camera from `wm`, and the shell in a window", 2026-10-10) asks for the same: the shell in a window, and the difference between `console` and the shell explained. What needs a channel from `wm` and `console` to the shell went to [211-APP-0044](211-APP-0044-console-joined-to-the-shell.done).
 
 ## Problem
 
@@ -29,7 +29,7 @@ The request offered two ways: `console` sends lines to the shell over a lent end
 
 ## Related
 
-[211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), [158-APP-0043](../issues/158-APP-0043-the-camera-from-wm-and-console.md), [u004](u004-console.done), [u006](u006-console-commands.done), [088](088-text-window-manager.done).
+[211-APP-0044](211-APP-0044-console-joined-to-the-shell.done), [158-APP-0043](../issues/158-APP-0043-the-camera-from-wm-and-console.md), [u004](u004-console.done), [u006](u006-console-commands.done), [088](088-text-window-manager.done).
 
 ## Resolution
 
@@ -42,4 +42,4 @@ The request offered two ways: `console` sends lines to the shell over a lent end
 - **`console`:** its help and its answer to a shell's command point to the shell's window (`fg` to the shell's screen).
 - **The `wm` suite (x86):** `wm` started from the shell shows the shell's window; typed there through `wm`, `ps`, `date` and `logs <clock>` answer; `top` started there opens a window of its own; maximized, a line of 113 characters is on one row of the window, and back at its quarter; `reboot` asks and `n` keeps the machine running; `fg 1` is refused; closed with Alt+W it goes (`[SHELL] THE SHELL'S WINDOW CLOSED`), and Ctrl+Alt+F5 opens it again; leaving `wm`, killing it and closing all keep counting it among the windows, and the kernel heap returns to its baseline. The `tablet` suite places it too. Both passed on the branch (2026-10-10).
 - **Docs:** `docs/tools` (EN, RU): the shell's window in §4.8 and why `console` is not a second shell in §4.10; `docs/api`: `windowed`; the shell's help.
-- **Not done here:** `console` joined to the shell and a `shell` item in `wm`'s menu: [211-APP-0044](../issues/211-APP-0044-console-joined-to-the-shell.md), waiting for `SLOT_SHELL` from the kernel track. Keys typed on the serial line reach the window only while the shell's loop runs (it passes them to `wm`), so a question asked there is answered with the keyboard.
+- **Not done here:** `console` joined to the shell and a `shell` item in `wm`'s menu: [211-APP-0044](211-APP-0044-console-joined-to-the-shell.done), waiting for `SLOT_SHELL` from the kernel track. Keys typed on the serial line reach the window only while the shell's loop runs (it passes them to `wm`), so a question asked there is answered with the keyboard.
