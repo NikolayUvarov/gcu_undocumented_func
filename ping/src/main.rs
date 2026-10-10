@@ -34,8 +34,15 @@ fn main(info: &'static BootInfo) {
         match reply {
             Ok(reply) if reply.data[0] == counter => { screen.text(40, 160, b"SERVER CONFIRMED RECEIPT!", 1, 0x0000FF00, None); mind::println!("[PING] ACK {}", counter); }
             Ok(_) => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
-            // No server, or pong ended: ping ends too, saying why (000-APP-0056: not left running unseen).
-            Err(error) => { mind::println!("[PING] NO SERVER ({:?}): ping is started by pong (run pong)", error); mind::process::exit_with(1); }
+            // No server at all (ping from wm's menu): ping ends, saying why (000-APP-0056: not left running unseen).
+            Err(error) if counter == 1000 => { mind::println!("[PING] NO SERVER ({:?}): ping is started by pong (run pong)", error); mind::process::exit_with(1); }
+            // The server ended: ping, woken with the error, says so for 5 s on its screen and then ends too.
+            Err(error) => {
+                screen.text(40, 160, b"SERVER GONE: PING ENDS IN 5 S", 1, 0x00FF0000, None);
+                mind::println!("[PING] SERVER GONE ({:?}): ping ends in 5 s", error);
+                mind::input::wait_or_exit(5000);
+                mind::process::exit_with(1);
+            }
         }
         mind::input::wait_or_exit(1500);
     }
