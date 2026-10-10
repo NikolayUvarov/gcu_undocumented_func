@@ -441,7 +441,7 @@ fn main(info: &'static BootInfo) {
         manager.wm.notice = Some(result.map_or_else(|e| e, |s| s.message));
     }
     let mut programs = Some(Programs::new());
-    manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
+    manager.wm.programs = vec![menu::Item::note("Looking for programs…", "wm is still reading the programs on the boot disk: open the menu again in a moment")];
     manager.wm.shell = holds(SLOT_SHELL);
     if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
     mind::input::pointer(true);

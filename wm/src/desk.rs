@@ -477,6 +477,7 @@ impl Wm {
                     menu::Outcome::Stay => Action::Redraw,
                     menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                     menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
+                    menu::Outcome::Say(text) => { self.mode = Mode::Normal; self.notice = Some(text); Action::Redraw }
                 };
             }
             Mode::Move { id, before, restore } => {
@@ -521,27 +522,49 @@ impl Wm {
         }
         let letter = key.letter();
         match (key.code(), letter) {
-            (Code::Tab, _) => { self.desk.cycle(key.shift()); Action::Redraw }
+            (Code::Tab, _) => { self.next(key.shift()); Action::Redraw }
             (Code::Left | Code::Right | Code::Up | Code::Down, _) => {
                 let side = match key.code() { Code::Left => 0, Code::Right => 1, Code::Up => 2, _ => 3 };
-                if let Some(id) = focus { self.desk.half(id, side); }
+                if let Some(id) = self.window_for("Half the screen") { self.desk.half(id, side); }
                 Action::Redraw
             }
-            (Code::Enter, _) => { if let Some(id) = focus { self.desk.maximize(id); } Action::Redraw }
-            (_, Some('f')) => { if let Some(id) = focus { self.desk.toggle_full(id); } Action::Redraw }
+            (Code::Enter, _) => { if let Some(id) = self.window_for("Maximize") { self.desk.maximize(id); } Action::Redraw }
+            (_, Some('f')) => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             (_, Some('l')) => { self.open_list(); Action::Redraw }
             (_, Some('s')) => { self.open_settings(); Action::Redraw }
-            (Code::F(4), _) | (_, Some('w')) => focus.map_or(Action::Redraw, Action::Close),
+            (Code::F(4), _) | (_, Some('w')) => self.window_for("Close").map_or(Action::Redraw, Action::Close),
             // Not Alt+F1: fm chooses the left panel's volume with it.
             (_, Some('h')) => { self.mode = Mode::Help; Action::Redraw }
-            (_, Some('m')) => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
+            (_, Some('m')) => { self.start_move(); Action::Redraw }
             (_, Some('r')) => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
             (_, Some('p')) => { self.mode = Mode::Menu(Menu::new(0, 1)); Action::Redraw }
             (_, Some('q')) => Action::Detach,
             (_, Some('x')) => Action::CloseAll,
-            (_, Some(n @ '1'..='4')) => { if let Some(id) = focus { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
+            (_, Some(n @ '1'..='4')) => { if let Some(id) = self.window_for("A quarter of the screen") { self.desk.quarter(id, n as usize - '0' as usize); } Action::Redraw }
             _ => Action::Forward,
         }
+    }
+
+    // The window in front for `what`; with none, the status line says so (000-APP-0056: nothing is silent).
+    fn window_for(&mut self, what: &str) -> Option<u32> {
+        let focus = self.desk.focus();
+        if focus.is_none() { self.notice = Some(format!("{}: there is no window. Alt+P or a right click on the desktop starts a program", what)); }
+        focus
+    }
+
+    // Alt+Tab: the next window, or why there is none.
+    fn next(&mut self, back: bool) {
+        match self.desk.windows.len() {
+            0 => self.notice = Some(String::from("Next window: there is no window. Alt+P or a right click on the desktop starts a program")),
+            1 => self.notice = Some(format!("Next window: \"{}\" is the only one", self.desk.windows[0].title)),
+            _ => self.desk.cycle(back),
+        }
+    }
+
+    // Alt+M: moving the window in front.
+    fn start_move(&mut self) {
+        if self.window_for("Move").is_none() { return; }
+        if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; }
     }
 
     /// The mouse went to cell (x, y) with `buttons` held (bit 0: left) and the wheel turned `wheel` steps. A press on
@@ -595,6 +618,7 @@ impl Wm {
                 menu::Outcome::Stay => Action::Redraw,
                 menu::Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 menu::Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
+                menu::Outcome::Say(text) => { self.mode = Mode::Normal; self.notice = Some(text); Action::Redraw }
             };
         }
         if (pressed || other_pressed || wheel != 0) && !matches!(self.mode, Mode::Normal) { return Action::Redraw; }
@@ -650,14 +674,14 @@ impl Wm {
         let before = core::mem::replace(&mut self.mode, Mode::Normal);
         match item {
             Bar::Programs => { if !matches!(before, Mode::Menu(_)) { self.mode = Mode::Menu(Menu::new(at, 1)); } Action::Redraw }
-            Bar::Next => { self.desk.cycle(false); Action::Redraw }
+            Bar::Next => { self.next(false); Action::Redraw }
             Bar::Run => { self.mode = Mode::Run(InputLine::new()); Action::Redraw }
-            Bar::Move => { if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; } Action::Redraw }
-            Bar::Close => self.desk.focus().map_or(Action::Redraw, Action::Close),
+            Bar::Move => { self.start_move(); Action::Redraw }
+            Bar::Close => self.window_for("Close").map_or(Action::Redraw, Action::Close),
             Bar::Help => { if !matches!(before, Mode::Help) { self.mode = Mode::Help; } Action::Redraw }
             Bar::Leave => Action::Detach,
             Bar::List => { if !matches!(before, Mode::List { .. }) { self.open_list(); } Action::Redraw }
-            Bar::Full => { if let Some(id) = self.desk.focus() { self.desk.toggle_full(id); } Action::Redraw }
+            Bar::Full => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             Bar::Settings => { if !matches!(before, Mode::Settings(_)) { self.open_settings(); } Action::Redraw }
         }
     }

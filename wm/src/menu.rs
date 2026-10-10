@@ -8,13 +8,16 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// An entry: a program to start (`command`) or a submenu (`children`).
+/// An entry: a program to start (`command`), a submenu (`children`), or neither, with what Enter or a click on it
+/// tells the user (`why`, 000-APP-0056).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Item { pub label: String, pub command: Option<String>, pub children: Vec<Item> }
+pub struct Item { pub label: String, pub command: Option<String>, pub children: Vec<Item>, pub why: Option<String> }
 
 impl Item {
-    pub fn program(label: &str, command: &str) -> Self { Self { label: String::from(label), command: Some(String::from(command)), children: Vec::new() } }
-    pub fn submenu(label: &str, children: Vec<Item>) -> Self { Self { label: String::from(label), command: None, children } }
+    pub fn program(label: &str, command: &str) -> Self { Self { label: String::from(label), command: Some(String::from(command)), children: Vec::new(), why: None } }
+    pub fn submenu(label: &str, children: Vec<Item>) -> Self { Self { label: String::from(label), command: None, children, why: None } }
+    /// An entry that starts nothing: Enter or a click on it says `why`.
+    pub fn note(label: &str, why: &str) -> Self { Self { label: String::from(label), command: None, children: Vec::new(), why: Some(String::from(why)) } }
 }
 
 /// How a program runs, from what it asks its launcher for.
@@ -66,16 +69,19 @@ pub fn catalogue(programs: &[(String, Kind)]) -> Vec<Item> {
     other.sort_by(|a, b| a.0.cmp(&b.0));
     let others: Vec<Item> = other.iter().filter_map(|(name, kind)| entry(name, *kind)).collect();
     if !others.is_empty() { menu.push(Item::submenu("Other", others)); }
-    if menu.is_empty() { menu.push(Item { label: String::from("No programs found"), command: None, children: Vec::new() }); }
+    if menu.is_empty() { menu.push(Item::note("No programs found", "No program on the boot disk opens in a window here: run one with Alt+R, or in the shell")); }
     menu
 }
+
+// What an entry that starts nothing tells the user.
+fn say(item: &Item) -> Outcome { Outcome::Say(item.why.clone().unwrap_or_else(|| format!("\"{}\" starts nothing", item.label))) }
 
 /// No item of a level is highlighted.
 pub const NONE: usize = usize::MAX;
 
-/// What the menu did with an event.
+/// What the menu did with an event: `Say` closes it with a line for the status line (an entry that starts nothing).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Run(String) }
+pub enum Outcome { Stay, Close, Run(String), Say(String) }
 
 /// An open menu: where it was opened and the highlighted item of each open level; level k + 1 lists the children of
 /// level k's highlighted item.
@@ -132,19 +138,21 @@ impl Menu {
     }
 
     /// The mouse at cell (x, y), `pressed` if a button went down: the item under it is highlighted; a press on a
-    /// program starts it, one outside the menu closes it.
+    /// program starts it, one on an entry that starts nothing says why, one outside the menu closes it.
     pub fn pointer(&mut self, root: &[Item], cols: usize, rows: usize, x: usize, y: usize, pressed: bool) -> Outcome {
         match self.hit(root, cols, rows, x, y) {
             Some((level, index)) => {
                 self.highlight(root, level, index);
-                match &self.items(root, level)[index].command { Some(command) if pressed => Outcome::Run(command.clone()), _ => Outcome::Stay }
+                let item = &self.items(root, level)[index];
+                match &item.command { Some(command) if pressed => Outcome::Run(command.clone()), None if pressed && item.children.is_empty() => say(item), _ => Outcome::Stay }
             }
             None if pressed && !self.rects(root, cols, rows).iter().any(|r| r.contains(x, y)) => Outcome::Close,
             None => Outcome::Stay,
         }
     }
 
-    /// ↑ ↓ move in the deepest level, → or Enter opens a category, Enter starts a program, ← or Esc goes back.
+    /// ↑ ↓ move in the deepest level, → or Enter opens a category, Enter starts a program (or says why an entry starts
+    /// nothing), ← or Esc goes back.
     pub fn key(&mut self, root: &[Item], key: Key) -> Outcome {
         let level = self.levels.len() - 1;
         let count = self.items(root, level).len();
@@ -158,6 +166,7 @@ impl Menu {
                 let item = &self.items(root, level)[current];
                 if let (Some(command), Code::Enter) = (&item.command, key.code()) { return Outcome::Run(command.clone()); }
                 if !item.children.is_empty() { self.levels.push(0); }
+                else if item.command.is_none() && key.code() == Code::Enter { return say(item); }
             }
             Code::Left | Code::Esc => {
                 if level == 0 { return Outcome::Close; }

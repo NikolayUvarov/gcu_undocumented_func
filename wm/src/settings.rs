@@ -1,7 +1,8 @@
 //! `wm`'s Settings (000-APP-0048): one window for what can be configured, opened from the top bar or with Alt+S. Its
 //! first page is the desktop background (000-APP-0047, 000-APP-0050), kept in `data/wm.conf`. The date and time page
 //! sets the clock through the shell, which asks the user in its own window first (000-APP-0055). The other system pages
-//! say where each setting is made. Host-tested in tests/wm_host.rs.
+//! are to read and say where each setting is made. Every row and page answers Enter and a click: it changes, or a line
+//! says why not (000-APP-0056). Host-tested in tests/wm_host.rs.
 use crate::background::{Config, Picture, Place, COMPLEXITY, PATTERNS};
 use crate::keys::{Code, Key};
 use crate::tui::widgets::{dialog, Edit, InputLine};
@@ -29,8 +30,8 @@ const LIST: usize = 17; // the pages' column
 
 /// The window's state: the page, the row on it, whether the keys move in the pages' list, and the image's file as typed.
 /// On the date and time page: the clock as last read (`now`: year, month, day; seconds since midnight), the fields
-/// being set, whether the user changed them, digits being typed, its row, a line about the last try, and whether `wm`
-/// holds the shell's commands (`shell`), through which the clock is set.
+/// being set, whether the user changed them, digits being typed, its row, and whether `wm` holds the shell's commands
+/// (`shell`), through which the clock is set. `message`: a line about the last try on any page.
 pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
     pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize,
@@ -150,48 +151,87 @@ impl Settings {
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
         if self.on_pages {
             match key.code() {
-                Code::Up => self.page = self.page.saturating_sub(1),
-                Code::Down => self.page = (self.page + 1).min(PAGES.len() - 1),
+                Code::Up => self.open(self.page.saturating_sub(1)),
+                Code::Down => self.open((self.page + 1).min(PAGES.len() - 1)),
                 Code::Right | Code::Enter if enterable => self.on_pages = false,
+                Code::Right | Code::Enter => self.to_read(),
                 _ => {}
             }
             return Outcome::Stay;
         }
         if self.page == DATE { return self.clock_key(key); }
         match key.code() {
-            Code::Up => { self.row = self.row.saturating_sub(1); Outcome::Stay }
-            Code::Down => { self.row = (self.row + 1).min(ROWS.len() - 1); Outcome::Stay }
+            Code::Up => { (self.row, self.message) = (self.row.saturating_sub(1), None); Outcome::Stay }
+            Code::Down => { (self.row, self.message) = ((self.row + 1).min(ROWS.len() - 1), None); Outcome::Stay }
             _ if self.row == FILE => match self.file.key(key) {
-                Edit::Submit => self.change(config, FILE, 0).map_or(Outcome::Stay, Outcome::Changed),
+                Edit::Submit => self.changed(config, FILE, 0),
                 _ => Outcome::Stay,
             },
-            Code::Left if STEPPED.contains(&self.row) => self.change(config, self.row, -1).map_or(Outcome::Stay, Outcome::Changed),
+            Code::Left if STEPPED.contains(&self.row) => self.changed(config, self.row, -1),
             Code::Left => { self.on_pages = true; Outcome::Stay }
-            Code::Right => self.change(config, self.row, 1).map_or(Outcome::Stay, Outcome::Changed),
-            Code::Enter => self.change(config, self.row, 0).map_or(Outcome::Stay, Outcome::Changed),
-            Code::Char if key.char() == Some(' ') => self.change(config, self.row, 0).map_or(Outcome::Stay, Outcome::Changed),
+            Code::Right => self.changed(config, self.row, 1),
+            Code::Enter => self.changed(config, self.row, 0),
+            Code::Char if key.char() == Some(' ') => self.changed(config, self.row, 0),
             _ => Outcome::Stay,
+        }
+    }
+
+    // Page `page` shown, its line about the last try gone.
+    fn open(&mut self, page: usize) {
+        if page != self.page { self.message = None; }
+        self.page = page;
+    }
+
+    // Enter or a click on a page that is only to read: it says so.
+    fn to_read(&mut self) {
+        self.message = Some(format!("{}: a page to read; nothing is set here yet", PAGES[self.page]));
+    }
+
+    // Row `row` changed by `step`, or a line saying why it stays.
+    fn changed(&mut self, config: &Config, row: usize, step: i32) -> Outcome {
+        match self.change(config, row, step) {
+            Some(c) => { self.message = None; Outcome::Changed(c) }
+            None => { self.message = Some(self.why(config, row, step)); Outcome::Stay }
+        }
+    }
+
+    // Why row `row` did not change.
+    fn why(&self, config: &Config, row: usize, step: i32) -> String {
+        let file = self.file.as_str().trim();
+        let value = match row {
+            3 => format!("{}", config.speed),
+            4 => format!("{}%", config.contrast),
+            5 => format!("{}", config.complexity),
+            6 => format!("{}%", config.info),
+            _ => String::new(),
+        };
+        match row {
+            FILE if file.is_empty() => String::from("Type the image's file here (BMP, PNG or JPEG), then Enter"),
+            FILE => format!("{} is the picture already", file),
+            3..=6 => format!("{} is at its {} already: {}", ROWS[row], if step < 0 { "lowest" } else { "highest" }, value),
+            _ => format!("{} stays as it is", ROWS[row]),
         }
     }
 
     /// The window's frame on a screen of the given cells.
     pub fn area(&self) -> Rect { Rect::new(0, 0, self.screen.0, self.screen.1).centered(WIDTH, HEIGHT) }
 
-    /// A click at cell (x, y): a page's name opens it, a row of the background page is chosen and changed, a click
-    /// outside the window closes it.
+    /// A click at cell (x, y): a page's name opens it, a row of the background page is chosen and changed, a click on
+    /// a page to read says so, a click outside the window closes it.
     pub fn click(&mut self, x: usize, y: usize, config: &Config) -> Outcome {
         let inner = self.area().inner();
         if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() { return Outcome::Close; }
         let (cx, cy) = (x - inner.x, y - inner.y);
         if cx < LIST {
-            if cy < PAGES.len() { self.page = cy; self.on_pages = true; }
+            if cy < PAGES.len() { self.open(cy); self.on_pages = true; }
             return Outcome::Stay;
         }
         if self.page == 0 && (1..=ROWS.len()).contains(&cy) {
-            self.row = cy - 1;
-            self.on_pages = false;
-            if self.row != FILE { return self.change(config, self.row, 0).map_or(Outcome::Stay, Outcome::Changed); }
+            (self.row, self.on_pages, self.message) = (cy - 1, false, None);
+            if self.row != FILE { return self.changed(config, self.row, 0); }
         }
+        // A page to read says so.
+        if self.page != 0 && self.page != DATE { self.to_read(); }
         // The date page: a field is chosen (← → change it), the button sets the clock.
         if self.page == DATE && (1..=CLOCK_ROWS.len()).contains(&cy) {
             (self.clock_row, self.on_pages, self.typed) = (cy - 1, false, None);
@@ -232,6 +272,7 @@ impl Settings {
                 grid.text_padded(x, inner.y + 1 + i, &line, w, if chosen { theme.selected } else { theme.dialog });
                 if chosen && i == FILE { cursor = Some((x + 12 + self.file.cursor_chars(), inner.y + 1 + i)); }
             }
+            if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + ROWS.len(), message, w, theme.accent); }
         } else if self.page == DATE {
             let now = match self.now { Some(((y, mo, d), s)) => format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, s / 3600, s / 60 % 60, s % 60), None => String::from("cannot be read") };
             grid.text_max(x, inner.y, &format!("The clock (it keeps no time zone): {}", now), w, theme.dialog);
@@ -244,24 +285,27 @@ impl Settings {
             }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 2 + CLOCK_ROWS.len(), message, w, theme.accent); }
         } else {
-            for (i, line) in self.page_text().iter().enumerate() { grid.text_max(x, inner.y + i, line, w, theme.dialog); }
+            let lines = self.page_text();
+            for (i, line) in lines.iter().enumerate() { grid.text_max(x, inner.y + i, line, w, if i == 0 { theme.accent } else { theme.dialog }); }
+            if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
-        let help = if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
+        let help = if self.on_pages && self.page != 0 && self.page != DATE { "↑↓: page · this page is to read · Esc: close" }
+            else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
             else if self.row == FILE { "type the file · Enter: use it · ↑↓: rows · Esc: close" } else { "↑↓: rows · ← → Space: change · Tab: pages · Esc: close" };
         grid.text_max(inner.x + 1, inner.bottom() - 1, help, inner.w - 2, theme.dialog);
         cursor
     }
 
-    // The system's pages: where the setting is made today.
-    fn page_text(&self) -> Vec<String> {
-        let later = "From here once the shell's channel is in (211-APP-0044).";
-        let lines: Vec<String> = match self.page {
-            1 => ["The keyboard's layout and its switch:", "  keymap us|ru [--switch both|ctrl-shift|alt-shift|caps|none]", "in the shell's window (Ctrl+Alt+F5) or on its screen.", "", later].iter().map(|s| String::from(*s)).collect(),
-            3 => ["The network: addresses, flow grants and the policy:", "  ip, netgrants, netrevoke <program>, netpolicy", "in the shell's window (Ctrl+Alt+F5) or on its screen.", "", later].iter().map(|s| String::from(*s)).collect(),
-            4 => ["The sound has no volume to set yet: audio.wit has none", "(asked of the drivers track for this page).", "beep and say play at the level they make."].iter().map(|s| String::from(*s)).collect(),
-            _ => Vec::from([format!("The screen: {} × {} cells of 8 × 16 pixels,", self.screen.0, self.screen.1), String::from("in the mode the firmware set at boot."), String::from("It is not changed from here yet.")]),
+    /// The pages to read: a first line that says so, then where the setting is made today.
+    pub fn page_text(&self) -> Vec<String> {
+        let shell = ["in the shell's window, which Shell in the menu opens", "(a right click on the desktop, Alt+P), as Ctrl+Alt+F5 does."];
+        let lines: Vec<&str> = match self.page {
+            1 => Vec::from(["To read: the keyboard is set in the shell.", "The layout and its switch:", "  keymap us|ru [--switch both|ctrl-shift|alt-shift|caps|none]", shell[0], shell[1]]),
+            3 => Vec::from(["To read: the network is set in the shell.", "Addresses, flow grants and the policy:", "  ip, netgrants, netrevoke <program>, netpolicy", shell[0], shell[1]]),
+            4 => Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]),
+            _ => return Vec::from([String::from("To read: the screen is not changed from here yet."), format!("{} × {} cells of 8 × 16 pixels,", self.screen.0, self.screen.1), String::from("in the mode the firmware set at boot.")]),
         };
-        lines
+        lines.iter().map(|s| String::from(*s)).collect()
     }
 }
 
