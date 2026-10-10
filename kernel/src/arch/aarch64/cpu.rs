@@ -41,16 +41,16 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
     Ok(())
 }
 
-// This CPU's exception stack (TPIDR_EL1 holds its top), the vectors, no FP/SIMD at EL0 or EL1, and the counter
-// readable but nothing else of the timer at EL0.
+// This CPU's exception stack (TPIDR_EL1 holds its top), FP/SIMD for programs (250-KRN-0056; enabled before the vectors,
+// whose common entry saves the registers), the vectors, and the counter readable but nothing else of the timer at EL0.
 unsafe fn load() -> Result<(), &'static str> {
     // From the frame pool: many CPUs would otherwise take a large part of the arena (issue 171).
     let stack = Region::task(STACK, 16)?;
     let top = stack.ptr() as usize + STACK;
     core::mem::forget(stack);
     asm!("msr tpidr_el1, {}", in(reg) top);
+    asm!("msr cpacr_el1, {}", "isb", in(reg) 3u64 << 20); // FPEN: no trap at EL0 or EL1
     asm!("msr vbar_el1, {}", "isb", in(reg) core::ptr::addr_of!(super::context::exception_vectors) as usize);
-    asm!("msr cpacr_el1, {}", "isb", in(reg) 0u64);
     asm!("msr cntkctl_el1, {}", in(reg) 0b10u64); // EL0VCTEN
     // The kernel never reads or writes a program's page through the program's address (PAN) where the core has it; each
     // exception entry sets it again (SPAN clear). Programs' pages are PXN already (000-KRN-0039).

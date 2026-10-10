@@ -93,7 +93,7 @@ fn fail(message: &str) -> ! { mind::println!("camera: {}", message); mind::proce
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("camera — what a camera sees, through the video gateway (the shell asks you first): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: 320x240 at 10 per second)\nEsc or q: stop.");
+    mind::about!("camera — what a camera sees, through the video gateway (lent by the shell as it starts): on its screen or in a\nwindow, a still (BMP) or a recording (AVI, Motion JPEG). A green mark in the screen's corner shows a camera is on.\nUsage: camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]   (default: 320x240 at 10 per second)\nEsc or q: stop.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let options = match options(mind::process::args_str()) { Ok(o) => o, Err(e) => fail(&e) };
     if mind::dev::cap_info(SLOT_CAMERA).0 != CAP_KIND_ENDPOINT { fail("no camera was granted (start camera from the shell and allow it)") }

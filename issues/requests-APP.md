@@ -321,3 +321,51 @@ The `tools` suite sets a date and reads it back with `date`, on x86 and aarch64.
 
 The kernel track added `unreadable` to the loader's errors. The shell's match on loader errors is exhaustive, so the interface change took the shell's mapping with it: `ERR_IO` → `CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)` in `shell/src/main.rs`. The tools track may word it otherwise. `wm`, `fm` and `console` print loader errors with `{:?}` and show `Unreadable`.
 
+## Russian speech is barely intelligible on the MacBook Pro (252)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, at the maintainer's request after a run on the MacBook Pro: "Russian audio output is barely understandable, very poor, with clicks". The task is to find out whether it can be fixed.
+
+### Problem
+
+`tts` runs its 16 kHz formant synthesizer and upsamples to 48 kHz for `audio_gw`. On the Mac's speakers Russian is hard to follow. The clicks are looked for in the driver (551-DRV-0010: polled playback without an interrupt). How intelligible the voice is, is the synthesizer's.
+
+### Plan (a proposal; the tools track decides)
+
+- Measure first. Run the Vosk check of 252 on the phrases the maintainer used, on the 16 kHz output and on the upsampled 48 kHz stream, to tell the synthesis from the upsampling.
+- Then the cheapest gains: the upsampler's filter, and the Russian rules and voice parameters. 252's neural synthesis is the larger step.
+
+### Acceptance criteria
+
+A measured intelligibility before and after, and on the Mac the maintainer understands a Russian test sentence without clicks.
+
+## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
+
+The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
+
+## Note: the hiss and the clicks in Russian speech, measured (252-APP-0041)
+
+**Recorded by:** the kernel track (KRN), 2026-10-09, for the tools track's 252-APP-0041.
+
+The maintainer hears not only clicks but a periodic hiss in the synthesized sounds themselves.
+
+**Measured by the kernel track** on the `tts` suite's recording (`/tmp/mind-core-tts.wav`, QEMU's wav backend at 44.1 kHz; the averaged spectrum of the loud frames):
+
+| Band | Share of the energy |
+|---|---|
+| 0–4 kHz | −0.1 dB |
+| 4–8 kHz | −16.7 dB |
+| 8–12 kHz | −24.7 dB |
+| 12–16 kHz | −46.3 dB |
+| 16–24 kHz | about −40 dB |
+
+- **The hiss is likely the upsampler's images.** A 16 kHz synthesizer has nothing above 8 kHz. Yet 8–12 kHz holds energy only 8 dB below the sibilants' 4–8 kHz.
+  - `tts` upsamples 16 → 48 kHz by linear interpolation (`tts/src/main.rs`, `Upsampler`). Its response, sinc² of f / 16 kHz, leaves the image of each component at 16 kHz − f only 4 to 21 dB down.
+  - So every fricative and burst gets a mirrored hiss at 8–12 kHz, which a laptop's small speakers make prominent.
+- **The clicks are likely the onsets.** After the synthesizer's pauses (exact silences of 23, 65, 123 and 285 ms), several onsets rise from 0 to 3000–5000 within two or three samples, with no ramp. Examples: 450.9 ms, 2698.0 ms and 4130.0 ms of the recording.
+  - The driver's path showed no underrun in QEMU: no silences of a buffer's length inside the speech.
+  - The polled playback on the Mac is still looked at in 551-DRV-0010.
+
+What the kernel track would try (the tools track decides):
+
+- The upsampler: a polyphase low-pass FIR instead of linear interpolation. For example, 48 taps (16 a phase) of a windowed sinc with its cutoff near 7 kHz at 48 kHz, which puts the images 50 dB or more down. Measure the 8–12 kHz band again: it should fall well below −40 dB.
+- The onsets: a ramp of a few milliseconds where a segment starts or ends at silence, and bursts limited in their slope.

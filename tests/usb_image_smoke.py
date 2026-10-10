@@ -44,6 +44,23 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
 
+def debug_mode(vm, name):
+    # 211-KRN-0053: with log:debug.txt the loader gives programs a log client, so what uptime prints reaches this boot's
+    # log file; without it, a program's lines stay on its console.
+    require(vm.command("run uptime"), "up ")
+    require(vm.command("write log:debug.txt on"), "WROTE")
+    require(vm.command("run uptime"), "up ")
+    for _ in range(20):
+        saved = vm.command(f"cat log:{name}", raw=True)
+        if re.search(r"uptime\(\d+\) up \d", saved):
+            break
+        time.sleep(.5)
+    assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
+    assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
+    require(saved, "DEBUG MODE ON (log:debug.txt)")
+    require(vm.command("rm log:debug.txt"), "OK")
+
+
 def unplugged(vm, booted, name):
     # 211-KRN-0050: with the boot disk unplugged, a program on it is refused soon, with the reason, and the shell answers;
     # plugged in again, programs start again. memmap was not run before, so none of it is in vfs_server's cache.
@@ -136,6 +153,7 @@ def run(args, booted):
         require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
         require(vm.command("sync"), "OK")
         time.sleep(3)  # the journal's last save, flushed
+        debug_mode(vm, name)
         unplugged(vm, booted, name)
     finally:
         vm.close()

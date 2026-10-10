@@ -366,9 +366,9 @@ impl Shell {
         // The TLS service's client (351-APP-0017), lent only with a flow grant: without a flow it reaches nothing.
         let tls = network_wanted && requests & mind::process::REQUEST_TLS != 0 && mind::dev::cap_info(SLOT_TLS).0 != 0 && granted("tls");
         let firmware_granted = granted("firmware");
-        // The camera only when the user agrees, asked every time (MC-11.4, issue 158); a script must have declared it.
-        let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera")
-            && msh::ask(self, &alloc::format!("{} ASKS FOR THE CAMERA. ALLOW?", name.to_ascii_uppercase()));
+        // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
+        // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
+        let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera");
         // The firmware's variables (the boot order) only when the user agrees, asked every time (351-KRN-0027).
         let firmware = requests & mind::process::REQUEST_FIRMWARE != 0 && mind::dev::cap_info(SLOT_FIRMWARE).0 != 0 && firmware_granted
             && msh::ask(self, &alloc::format!("{} ASKS TO READ AND CHANGE THE FIRMWARE'S BOOT SETTINGS. ALLOW?", name.to_ascii_uppercase()));

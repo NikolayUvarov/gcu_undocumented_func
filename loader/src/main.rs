@@ -63,6 +63,20 @@ fn request_flags(read: &mut dyn FnMut(usize, &mut [u8]) -> usize) -> (u32, u32) 
     (0, 0)
 }
 
+// Whether debug mode is on, asked at every launch; the log says when it changes.
+fn debug_mode() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    static SEEN: AtomicU8 = AtomicU8::new(0); // 0: not looked at yet, 1: off, 2: on
+    let on = mind::debug::check();
+    let now = if on { 2 } else { 1 };
+    let before = SEEN.swap(now, Ordering::Relaxed);
+    if before != now && (on || before != 0) {
+        mind::println!("[LOADER] DEBUG MODE {} ({}): {}", if on { "ON" } else { "OFF" }, mind::debug::FILE,
+                       if on { "WHAT PROGRAMS PRINT GOES TO THE SYSTEM LOG" } else { "PROGRAMS LOG AS BEFORE" });
+    }
+    on
+}
+
 // A file error as the loader reports it: a drive that does not answer stays ERR_IO, not an invalid program (211-KRN-0050).
 fn file_error(error: fs::Error) -> Error { if error == fs::Error::Io { Error::Other(ERR_IO) } else { error.into() } }
 
@@ -95,6 +109,9 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     grants[..5].copy_from_slice(&standard);
     let mut count = 5;
     for &(child, handle) in extra { grants[count] = grant_moved(child as usize, handle, u8::MAX); count += 1; }
+    // Debug mode (log:debug.txt, 211-KRN-0053): a program its launcher gave no log client gets a copy of the loader's,
+    // so what it prints reaches the system log and this boot's log file.
+    if debug_mode() && !extra.iter().any(|&(child, _)| child as usize == SLOT_LOG) && count < grants.len() { grants[count] = grant(SLOT_LOG, SLOT_LOG, client); count += 1; }
     // SPAWN takes `name\0arguments`.
     let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
     let args = &args[..args.len().min(ARGS_MAX)];
