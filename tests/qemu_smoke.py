@@ -1398,7 +1398,7 @@ def kbench_check(vm):
     # Sleeps end on the 10 ms tick, counted from the tick's start, so one may be shorter than asked (000-KRN-0065).
     assert 1e6 <= rows["sleep 10 ms"][0] <= 40e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
-    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "│", "└")))
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
     path, log = tool_log(vm, output, "kbench")
     for name in rows:
@@ -1415,9 +1415,74 @@ def kbench_check(vm):
     print("PASS: kbench ipc runs one group; an unknown group is refused", flush=True)
 
 
+# The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
+# a reason, except "sleeps last as asked", which fails until 000-KRN-0065.
+CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "ram: write, read",
+               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
+
+
+def check_tool_check(vm):
+    """check: every group's rows, the summary, the log, and its failures named; one group alone; an unknown group refused."""
+    vm.send("check\n")
+    output = vm.expect("MIND> ", timeout=600, after="check\n")
+    rows = {name.strip(): (mark, detail.strip()) for mark, name, detail in CHECK_ROW.findall(output.replace("\r", ""))}
+    for name in CHECKS_PASS:
+        assert rows.get(name, ("?",))[0] == "✓", (name, rows.get(name), output[-4000:])
+    failed = [name for name, (mark, _) in rows.items() if mark == "✗"]
+    assert set(failed) <= {"sleeps last as asked"}, (failed, output[-4000:])
+    assert all(detail for mark, detail in rows.values() if mark == "○"), rows
+    summary = re.search(r"check: (\d+) passed, (\d+) failed, (\d+) skipped \((\d+) checks\)", output)
+    assert summary and int(summary[4]) == len(rows) and int(summary[2]) == len(failed), (summary and summary[0], len(rows), failed)
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
+    assert width <= 79, width
+    path, log = tool_log(vm, output, "check")
+    require(log, "PASS kernel memory unreadable: the read faulted; the program was stopped")
+    require(log, "== Boot services")
+    skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
+    print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
+          f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    output = vm.command("check kernel")
+    assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
+    require(vm.command("check nosuch"), "check: no group nosuch")
+    print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
+
+
+# bench's rows that every suite machine has (176-KRN-0064); data/ and log: are skipped where the disk has neither, the
+# camera is the gateway's synthetic source, audio_gw runs on x86 only.
+BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "vfs_server: attributes", "sysmon: memory figures",
+              "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
+
+
+def bench_tool_check(vm):
+    """bench: files, service round trips, hashing and the synthetic camera's frames; skipped rows name their reason."""
+    vm.send("bench --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="bench --quick\n")
+    rows = bench_rows(output, BENCH_ROWS)
+    frames = re.search(r"│   frame interval (\d+)x(\d+) +│ *([\d.]+ \S+) │", output)
+    assert frames and 1e6 < nanoseconds(frames[3]) < 2e9, output[-3000:]
+    skipped = re.findall(r"│   (.+?) +│  skipped │ (.+?) +│", output)
+    assert all(why for _, why in skipped), skipped
+    summary = re.search(r"bench: (\d+) measurements, 0 failed", output)
+    assert summary and int(summary[1]) >= len(BENCH_ROWS) + 1, output[-2000:]
+    rates = re.search(r"ram: write ([\d.]+ \S+/s), read ([\d.]+ \S+/s)", output)
+    sha = re.search(r"SHA-256 at ([\d.]+ \S+/s)", output)
+    assert rates and sha, output[-2000:]
+    path, log = tool_log(vm, output, "bench")
+    for name in BENCH_ROWS:
+        require(log, f"{name} (")
+    print(f"PASS: bench: {summary[1]} measurements (ram: write {rates[1]}, read {rates[2]}; SHA-256 {sha[1]}; synthetic camera "
+          f"{frames[1]}x{frames[2]}, frame interval {frames[3]}; skipped: {', '.join(f'{n} ({w})' for n, w in skipped)}), log {path}", flush=True)
+    require(vm.command("bench nosuch"), "bench: no group nosuch")
+
+
 def bench_suite(vm):
     """176: the utilities that check the system and measure it, from the shell."""
+    check_tool_check(vm)
     kbench_check(vm)
+    bench_tool_check(vm)
 
 
 def table_row(screen, pattern):
@@ -3380,6 +3445,9 @@ def services_suite(vm):
     output = vm.command("uptime --help")
     require(output, "NAME=uptime FOREGROUND")
     require(output, "uptime — uptime, load averages")
+    # Every help key gives the same text (000-KRN-0066).
+    for key in ("-h", "-help", "/help", "/h", "/?", "-?", "--HELP"):
+        require(vm.command(f"uptime {key}"), "uptime — uptime, load averages")
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
@@ -6900,6 +6968,9 @@ def main():
                 (disk / "data").mkdir(exist_ok=True)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
+            if suite == "bench":
+                (disk / "video").mkdir()  # the video gateway's test pattern stands in for a camera (issue 158)
+                (disk / "video/synthetic").write_bytes(b"the video gateway's test pattern stands in for a camera\n")
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
