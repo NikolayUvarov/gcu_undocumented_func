@@ -55,6 +55,8 @@ mod ipc {
     impl Endpoint {
         /// No server answers: only receivers are fuzzed here.
         pub fn call(&self, _message: &Message, _receive: usize) -> crate::sys::Result<Received> { Err(crate::sys::Error::Peer) }
+        /// `wire::call` waits with a timeout when a client sets one (`wire::with_timeout`, 211-APP-0044).
+        pub fn call_timeout(&self, message: &Message, receive: usize, _ms: u32) -> crate::sys::Result<Received> { self.call(message, receive) }
     }
     pub const SERVER_SLOT: usize = 9;
     thread_local! {
@@ -88,6 +90,7 @@ mod idl {
     #[path = "../../libmind/src/idl/netpolicy.rs"] pub mod netpolicy;
     #[path = "../../libmind/src/idl/parse.rs"] pub mod parse;
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
+    #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
     #[path = "../../libmind/src/idl/sysinfo.rs"] pub mod sysinfo;
     #[path = "../../libmind/src/idl/tls.rs"] pub mod tls;
@@ -345,7 +348,7 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(usb), borrowed!(vfs),
+        owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(window),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -419,8 +422,10 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant;
     parse: Error HttpHead;
+    rtc: Error;
+    shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram;
-    sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load;
+    sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer;
     tpm: Error Info;
     vfs: Error Entry Volume Report;
