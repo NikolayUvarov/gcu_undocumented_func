@@ -13,7 +13,7 @@ use mind::usb::Host;
 
 const CBW: usize = 0; const CSW: usize = 64; const DATA: usize = 4096; // in the buffer lent to usb_host
 const PROBE: usize = 512; // probes and sense data: never where a write's data waits for a retry
-const CLAIM_TRIES: usize = 20; // at start: usb_host may still be setting the device up
+const CLAIM_TRIES: usize = 20; // usb_host may still be setting the device up
 
 // The claimed interface and its Bulk-Only Transport state.
 struct Bot { handle: u32, out: u8, input: u8, tag: u32 }
@@ -71,10 +71,10 @@ fn name(operation: u8) -> &'static str {
     match operation { 0x00 => "TEST UNIT READY", 0x1A => "MODE SENSE", 0x25 => "READ CAPACITY", 0x28 => "READ", 0x2A => "WRITE", 0x35 => "SYNCHRONIZE CACHE", _ => "A COMMAND" }
 }
 
-// The next mass storage interface (SCSI over Bulk-Only: 08/06/50) and its bulk endpoints, in up to `tries` tries
+// The next mass storage interface (SCSI over Bulk-Only: 08/06/50) and its bulk endpoints, in up to CLAIM_TRIES tries
 // 100 ms apart.
-fn claim(host: &mut Host, tries: usize) -> Option<Bot> {
-    for attempt in 0..tries {
+fn claim(host: &mut Host) -> Option<Bot> {
+    for attempt in 0..CLAIM_TRIES {
         match host.claim() {
             Ok((handle, info)) => {
                 let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
@@ -82,7 +82,7 @@ fn claim(host: &mut Host, tries: usize) -> Option<Bot> {
                 if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, out, input, tag: 0 }); }
                 let _ = host.release(handle);
             }
-            Err(_) => if attempt + 1 < tries { mind::time::sleep(100); },
+            Err(_) => if attempt + 1 < CLAIM_TRIES { mind::time::sleep(100); },
         }
     }
     None
@@ -111,7 +111,7 @@ const SEEN: usize = 16;
 impl Storage {
     fn probe() -> Option<Self> {
         let mut host = Host::new(Endpoint(SLOT_DEV0)).ok()?;
-        let mut bot = claim(&mut host, CLAIM_TRIES)?;
+        let mut bot = claim(&mut host)?;
         let (sectors, _) = capacity(&mut host, &mut bot)?; // a reset at power-on is expected
         // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
         // writable; a write it refuses fails anyway.
@@ -142,8 +142,8 @@ impl Storage {
             Cycle::Gone => {}
         }
         if !self.lost { mind::println!("[USB] STORAGE: NO ANSWER TO {}: THE DEVICE IS GONE OR WAS RESET; CLAIMING IT AGAIN", name(command[0])); }
-        // One try per request: while the device is gone a request fails at once, not after 2 s (211-DRV-0021).
-        let found = claim(&mut self.host, 1).and_then(|mut bot| capacity(&mut self.host, &mut bot).map(|c| (bot, c)));
+        // Every request gets the tries: a device plugged in again or reset may still be set up by usb_host (211-DRV-0021).
+        let found = claim(&mut self.host).and_then(|mut bot| capacity(&mut self.host, &mut bot).map(|c| (bot, c)));
         let Some((bot, (sectors, reset))) = found else {
             if !self.lost { mind::println!("[USB] STORAGE: THE DEVICE IS GONE"); self.lost = true; }
             return None;

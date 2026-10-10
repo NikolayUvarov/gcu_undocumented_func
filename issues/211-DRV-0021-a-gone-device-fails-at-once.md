@@ -1,6 +1,6 @@
 # 211-DRV-0021 — A request to a USB device that has gone fails at once
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (`usb_storage`'s part done; `usb_host`'s part waits, see Plan) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.1, MC-6.6
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (`usb_storage` needs no change; `usb_host`'s part waits, see Plan) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-6.1, MC-6.6
 
 Numbered from the kernel track's request in `requests-DRV.md` ("A transfer to a device that has gone ends at once", for [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md)).
 
@@ -15,10 +15,9 @@ So each block request to the gone disk cost about 32 s.
 
 ## Plan
 
-- **`usb_storage`, done:**
-  - claims a lost interface once per request, without the loop, so a request fails at once while nothing is there;
-  - finds the disk again on the first request after it is plugged in;
-  - keeps the 20 tries at start only, where `usb_host` may still be setting the device up.
+- **`usb_storage`: no change in the end.** It keeps claiming a lost interface for 2 s (20 tries) on every request:
+  - `vfs_server` (211-KRN-0050) stops asking a drive for 10 s after a request that failed after more than 1 s, so the 2 s are spent once in 10 s, not on every request;
+  - a device plugged in again or reset is found within them while `usb_host` sets it up.
 - **`usb_host`, xHCI and EHCI:**
   - `transfer_for` checks the device's port (PORTSC's connect bit, through the hub for a device behind one) and handles port change events while it waits;
   - a disconnected device's transfer ends at once with an error, and its handle answers `NotFound` from then on;
@@ -28,11 +27,13 @@ So each block request to the gone disk cost about 32 s.
 
 ## Acceptance criteria
 
-With the boot disk unplugged (`device_del` in `tests/usb_image_smoke.py`), a block read fails within 1 s, and `usb_host` logs the disconnection. Plugged in again, the disk reads as before.
+With the boot disk unplugged (`device_del` in `tests/usb_image_smoke.py`), `usb_host` logs the disconnection, a block read fails within about 2 s (the time `usb_storage` tries the interface), and later ones fail at once for the 10 s `vfs_server` does not ask the drive. Plugged in again, the disk reads as before.
 
 ## Progress
 
 **2026-10-09.** `usb_storage`: one claim per request after a loss. With the earlier logging (211-DRV-0019), the MacBook Pro's run on d3da6d0 logged the 2-second loop as `NO ANSWER TO READ` at 56.70 s and `THE DEVICE IS GONE` at 58.70 s. Those two seconds are now gone from every later request.
+
+**2026-10-10.** The one claim per request is withdrawn. In the local gate it broke 211-KRN-0050's test: `vfs_server` takes only a failure that lasted over 1 s for a drive that does not answer, so it never said so, and it asked the gone drive on every request. One claim after the first loss only could fail a request on a device plugged in again that `usb_host` had not set up yet. `usb_storage` claims as on `main`; this task keeps `usb_host`'s part.
 
 ## Related
 
