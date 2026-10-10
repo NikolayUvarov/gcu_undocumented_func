@@ -71,6 +71,8 @@ Each now opens a window, ends with a status `wm` keeps on view, or ends when its
 
 The local gate's host tests and every x86 QEMU group (2026-10-10) passed with the walk.
 
+**After `main` brought `check`, `bench` and `kbench` (866b5bc).** The menu has 52 entries. Closing their `console` window does not end these three, and in the first run after the merge they went on measuring beside the rest of the walk, which then missed a key. The walk now waits for console's note `(kbench ended)` before it closes their window. Ending a console program with its console is requested from the kernel track (`requests-KRN.md`). The walk also waits for the state line that holds a new window, which may come after the window's own line. The wm suite passed with 52 entries (8965a70).
+
 ## Related
 
 [requests-APP.md](../issues/requests-APP.md) (where it was recorded).

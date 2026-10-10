@@ -1,0 +1,39 @@
+# 000-APP-0054 — The shell's and `console`'s commands answer the help keys — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+
+Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request: "`date` prints the date but answers none of `/help`, `--help`, `-help`; all programs must answer the help keys in the same way."
+
+## Problem
+
+- **Programs.** Since 000-KRN-0066, every program built with `libmind` answers `--help`, `-help`, `-h`, `/help`, `/h`, `/?` and `-?` (any case) with its text (`mind::process::HELP_KEYS`, `asks_help`).
+- **The shell's commands.** `date`, `time`, `ps`, `ls` and the rest answer none of them. `date --help` gets "THIS COMMAND TAKES NO ARGUMENTS", and `ls --help` looks for a file. The same holds for the commands of `wm`'s `console`.
+- **Programs with a screen.** The shell's `help_instead` (`shell/src/main.rs`) shows a screen program's text from its file only for `--help`. With `fm -h`, the program now prints its text and exits, out of sight.
+
+## Plan
+
+- **In the shell and in `console`.** Before a command parses its arguments, `asks_help(args)` turns `<command> <help key>` into `help <command>`: the command's lines from `HELP`.
+- **`help_instead`.** It uses `asks_help` in place of `args != b"--help"`.
+- **`docs/tools` (EN, RU).** One line on the help keys.
+
+## Acceptance criteria
+
+- In the shell and in `console`, `date -h`, `date /?`, `ls --help` and `ps -help` print their lines from `help`.
+- `fm /?` shows fm's text without starting it.
+- The shell suite checks a few.
+
+## Resolution
+
+- **The shell.** A help key alone after one of the shell's commands prints the command's lines of `help` (`programs::is_command`, `programs::help`), before the command parses its arguments: `date -h`, `date /?`, `ls --help`, `ps -help`, `kill /H`. `help_instead` uses `asks_help`, so any key after a program with a screen shows its text from its file, unstarted (`fm /?`). The client of the shell's commands gets `help` at once: it only reads the shell's lines and the program's file (`shell/src/clients.rs`).
+- **`console`.** `console/src/screen.rs` has a line for each of its own commands (`LINES`). `parse` turns `help <command>` and `<command> <help key>` into `About`: console's line for its commands, and for the shell's it asks the shell's `help` (`free /?`). A program started with a help key runs as a console program, so one with a screen prints its text into console and ends before it opens a window (`fm --help`, `help fm`).
+- **`help`, docs.** `console`'s help names the keys; `docs/tools` (EN, RU) §4.8 and §4.10 describe them.
+- **Evidence (QEMU x86, on the branch at 8965a70).**
+  - The services suite: `PASS: the shell's commands answer the help keys with their lines of help (date -h, date /?, ls --help, ps -help, kill /H); fm /? shows fm's text without starting it`.
+  - The wm suite, in a `console` joined to the shell: `date -h` shows console's line, `free /?` the shell's, `fm --help` fm's text, then `(fm ended)`.
+- **Host tests.** `tests/console_host.rs` checks the parsing of the keys and `help <name>`, that each of console's commands has its line, and that its copy of the keys is libmind's; `tests/shell_host.rs` that a client gets `help` at once.
+
+## Related
+
+[requests-APP.md](../issues/requests-APP.md) (where it was recorded).
