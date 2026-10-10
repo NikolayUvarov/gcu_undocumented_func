@@ -5542,10 +5542,10 @@ def wm_suite(vm):
             time.sleep(.02)
         raise AssertionError(f"Timeout waiting for {text!r}: {vm.log[read[0]:][-3000:]}")
 
-    def until(text):
+    def until(text, timeout=12):
         # `text` was logged already, or comes.
         if text not in "".join(seen):
-            wait(text, lines=0)
+            wait(text, lines=0, timeout=timeout)
 
     def state():
         # The windows bottom to top as {id: (x, y, w, h)}, the focus and the mode, from the last state line.
@@ -6182,6 +6182,7 @@ def wm_suite(vm):
                 break
         close_menu()
         started, said, unseen = [], [], []
+        RUN_TO_END = {"check", "bench", "kbench"}
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6203,6 +6204,10 @@ def wm_suite(vm):
                     wait(lines=0)
                 if not any(m[1] == pid for m in windows_re.findall("".join(seen))):
                     unseen.append(name)
+                # The self-test and the benchmarks go on after their console closes (libmind keeps a program whose
+                # launcher ended), so the walk lets them finish rather than run the rest of the suite beside them.
+                if name.split(">")[-1] in RUN_TO_END:
+                    until(f"[CONSOLE] ENDED {name.split('>')[-1]} PID", timeout=900)
             else:
                 said.append(f"{name}: {line}")
             close_menu()
