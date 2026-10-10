@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
 TARGET=aarch64-unknown-none-softfloat
-X86_ONLY=" ata ps2_kbd audio_gw " # crate directories: port I/O (docs/legacy.md)
+X86_ONLY=" ata ps2_kbd audio_gw bcm_wifi " # crate directories: port I/O (docs/legacy.md); bcm_wifi: no aarch64 target has the chip
 mapfile -t CRATES < <(sed -n '/^USER_CRATES=(/,/^)/{s/^ *"\([^"]*\)"$/\1/p}' "$ROOT/02_build.sh")
 [[ ${#CRATES[@]} -gt 20 ]] || { echo "USER_CRATES not found in 02_build.sh" >&2; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice"

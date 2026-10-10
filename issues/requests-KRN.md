@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (6 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -45,47 +45,13 @@ All 70 crates fail, and the build reports them as failures of the code. A single
 
 On a machine whose rustup lacks a component the toolchain file names, `02_build.sh` installs it once and the build succeeds. A failed install is reported as such, not as 70 failed crates.
 
-## `bcm_wifi` as a boot service (550-DRV-0020)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-09, for [550-DRV-0020](550-DRV-0020-bcm4331-read-only-probe.md), stage 1 of the MacBook Pro's Wi-Fi ([550-DRV-0006](550-DRV-0006-broadcom-wifi.md)). The maintainer put Wi-Fi first among the network tasks.
-
-### Problem
-
-`bcm_wifi/` is the driver for the MacBook Pro's Broadcom BCM4331 (`14E4:4331`, class `028000`). Its stage 1 is written and builds, and only reads the chip. Three things in the kernel track's files keep it from running:
-
-- it is not in `BOOT_SERVICES`/`BOOT_FILES`;
-- `init` does not start it;
-- `02_build.sh` does not build it.
-
-`BOOT_IMAGES` is 32 and sizes `BootInfo.programs`, so one more boot image is an ABI change.
-
-### Plan (a proposal; the kernel track decides)
-
-- **`common/abi.rs`:** `bcm_wifi` and `bcm_wifi.elf` in the boot lists, `BOOT_IMAGES` one larger, with the ABI version and its transition as the track does them.
-- **`02_build.sh`:** `"bcm_wifi:bcm_wifi:bcm_wifi.elf"` in the crate list (x86 only; there is no such chip on the aarch64 targets).
-- **`init`:**
-  - start `bcm_wifi` when `DEVICE_FIND` finds vendor `14E4` device `4331`, or class `02:80:00` from vendor `14E4`; otherwise `bcm_wifi NOT STARTED: NO DEVICE`, as for the other drivers;
-  - grant BAR0 (16 KiB MMIO) in `SLOT_DEV0`. Stage 1 needs nothing more.
-- **Later stages, for the same grant list when they come** (requests then):
-  - the MSI (or INTx) line;
-  - a DMA region for the transmit and receive rings (about 256 KiB);
-  - a read-only `vfs` client for the microcode file (`firmware/` on the boot volume, put there by the maintainer's build);
-  - a service endpoint for `NET`'s station.
-- **A configuration write limited to the BCMA window registers** (0x80, 0xAC, 0x84) of the driver's own function may be asked for later, if moving BAR0's windows turns out to be needed. Stage 1 does not move them.
-
-### Acceptance criteria
-
-On the MacBook Pro, `init` starts `bcm_wifi` with BAR0, and its stage-1 lines are in the boot log. On QEMU, which has no such chip, it is not started and says so.
-
-**Seen on the MacBook Pro (2026-10-10):** the kernel session's `fast-test` a00618b started `bcm_wifi` with BAR0, and its stage-1 lines are in the boot log ([550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done)). The acceptance criteria hold there; the request waits only for this to reach `main`.
-
 ## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
 
 **Recorded by:** the drivers track (`DRV`), 2026-10-10, from the MacBook Pro's run of [550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done).
 
 ### Problem
 
-The kernel turns bus mastering on when it grants a device's resource to a driver (`pci::enable`) and off before a driver is restarted (`pci::quiesce`). It leaves every other function's command register as the firmware set it. On the MacBook Pro the firmware leaves the BCM4331 with bus mastering on and its 802.11 core running (command `0006` in `hw0001.txt`). `bcm_wifi` now holds that core in reset when it starts ([550-DRV-0022](550-DRV-0022-bcm4331-core-reset-and-sprom.md)), about 5 s into the boot. Until then, and for any device no driver is given, a device the firmware left running may write to memory. The profile declares no IOMMU (MC-1.5), so nothing else stops it.
+The kernel turns bus mastering on when it grants a device's resource to a driver (`pci::enable`) and off before a driver is restarted (`pci::quiesce`). It leaves every other function's command register as the firmware set it. On the MacBook Pro the firmware leaves the BCM4331 with bus mastering on and its 802.11 core running (command `0006` in `hw0001.txt`). `bcm_wifi` now holds that core in reset when it starts ([550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done)), about 5 s into the boot. Until then, and for any device no driver is given, a device the firmware left running may write to memory. The profile declares no IOMMU (MC-1.5), so nothing else stops it.
 
 ### Plan (a proposal; the kernel track decides)
 
