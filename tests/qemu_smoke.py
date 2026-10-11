@@ -4876,7 +4876,14 @@ def voice_control(vm):
     output = turn("VOICE: STOPPED rtc")
     require(output, 'VOICE: "да" (')
     require(output, "-> Останавливаю службу rtc")
-    assert "rtc" not in vm.services()
+    # Stopped: no row of rtc in ps, or one that has EXITED and is not reaped yet (within 5 s).
+    for _ in range(20):
+        rows = re.findall(r"^\d+ rtc (\w+) ", vm.command("ps"), re.M)
+        if all(state == "EXITED" for state in rows):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(rows)
     require(vm.command("date"), "RTC NOT AVAILABLE")
     require(vm.command("run rtc &"), "NAME=rtc")
     # A file read aloud: its first lines.
