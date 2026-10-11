@@ -53,7 +53,7 @@ MC-11.11 forbids a domain that parses untrusted external input from also holding
 
 ## Related
 
-[351-NET-0001](351-NET-0001-http-downloads.done), [351-UPD-0007](../issues/351-UPD-0007-updater-service.md), [docs/network/downloads.md](../docs/network/downloads.md).
+[351-NET-0001](351-NET-0001-http-downloads.done), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), [docs/network/downloads.md](../docs/network/downloads.md).
 
 ## Resolution
 
@@ -64,5 +64,5 @@ All three tasks are done, with the kernel and tools tracks' parts made for them:
 
 The recorded items:
 - **Per-session parser instances:** [109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md).
-- **The updater's metadata through `parse`:** a plan item of [351-UPD-0007](../issues/351-UPD-0007-updater-service.md).
+- **The updater's metadata through `parse`:** a plan item of [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 - **B.6's external medium path:** recorded as a gap in the authority map; it is not the network track's, and no task has it yet.

@@ -22,7 +22,7 @@ Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (
 
 ## Related
 
-[351-NET-0001](351-NET-0001-http-downloads.done), [351-UPD-0007](../issues/351-UPD-0007-updater-service.md), issue 103.
+[351-NET-0001](351-NET-0001-http-downloads.done), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), issue 103.
 
 ## Resolution
 
@@ -37,7 +37,7 @@ Numbered from the request "HTTPS downloads for a service" of `requests-NET.md` (
   - a certificate or a denied port is final, a refused or timed-out connection is retried;
   - without a TLS client `https://` is refused.
 - **The TLS service holds at most 64 KiB of decrypted data a session** (`PLAIN_MAX`) before it reads the socket again. Before, it drained the socket into its memory however slowly the client read. The first 30 MiB download into `data/`, which writes slowly, filled the service's memory and crashed it. Now a slow client slows the sender through the stack's receive window.
-- **Trust for the update server:** the pin. Roots shipped with a release and covered by its signature are not done. The pin's source (the channel configuration) is the updater's, [351-UPD-0007](../issues/351-UPD-0007-updater-service.md).
+- **Trust for the update server:** the pin. Roots shipped with a release and covered by its signature are not done. The pin's source (the channel configuration) is the updater's, [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 
 **Tested** in the `net` suite's download check, against the release server (`scripts/serve_release.py`) over HTTPS with the TLS suite's test certificates; the VM's processor has RDRAND:
 - 30 MiB on x86 (8 MiB on aarch64), cut at 10 MiB (3 MiB) and resumed with `Range`, the SHA-256 matching, the server verified by its pinned key;

@@ -1,0 +1,44 @@
+# 351-UPD-0016 — Images built with slots — done
+
+**Type:** update (images) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-10-11) · **Blocked by:** — ([351-UPD-0007](351-UPD-0007-updater-service.done), the updater, done) · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.1, MC-9.3
+
+Split from 351-UPD-0007, which took it over from 351-UPD-0006.
+
+## Problem
+
+The USB images and the volumes of the QEMU suites boot from the volume's root. Such a system has no update zone, so the updater has no slot to fill. Only an image laid out with `scripts/boot_slots.py layout` can be updated, and its slot A shows no version (it keeps no channel), so the updater takes it as version 0.
+
+## Plan
+
+- `scripts/make_usb_image.py --slots`: the build in slot A, confirmed, with an empty slot B, as `boot_slots.py layout` does. Later this becomes the default.
+- With `--release DIR --channel NAME`, the image is made from a staged and published release: its channel file is kept in `MIND/A/CHANNEL`, so the updater knows the running version.
+- `update.txt` and the policy line for `updater`, from options of the image script.
+- The programs and guides that name `kernel.elf` at the root follow: `files`, the disk-writing guides.
+
+## Acceptance criteria
+
+- An image made with `--slots` boots from slot A in QEMU, and `vfs_server` names slot B as the update zone.
+- Made from a release, the updater reports its version at start.
+- The USB image check passes with it.
+
+## Related
+
+[351-UPD-0007](351-UPD-0007-updater-service.done), [docs/update/slots.md](../docs/update/slots.md), [docs/update/updater.md](../docs/update/updater.md).
+
+## Resolution
+
+Done on 2026-10-11 by the storage session for the update track.
+
+- `scripts/make_usb_image.py --slots`: the kernel, the boot services and the signed manifest go into `MIND/A/`, confirmed in `MIND/BOOT0`, with `MIND/BOOT1` empty. The applications, the licences and the voice stay at the root, shared.
+- `--channel FILE` keeps a release's signed channel in `MIND/A/CHANNEL`. It is refused unless it verifies with the release key the updater is built with and names this build's manifest.
+- `--update FILE` puts an `update.txt` at the root.
+- The packing is a function, `pack()`, so `tests/usb_image_smoke.py` packs a slot image after the root one and boots it from USB. The check passed in the `x86: USB image` group of the local gate of 646af75 with main at dde9418:
+  - slot A loaded;
+  - `vfs_server` names slot B as the update zone;
+  - the updater shows version 1 from the kept channel.
+- The guides `docs/write-disk.md` and `write-disk_RU.md`, and `slots.md` (EN, RU), describe the options.
+
+Not done here:
+- **Slots as the default layout.** That changes every guide and the root-layout suites, and is left for a later decision.
+- **`files`.** It reads `kernel.elf` at the root; the request is in [requests-APP.md](../issues/requests-APP.md).
+- **An aarch64 image with slots.** It is built the same way but not booted in a check, since the USB image group runs on x86 only.

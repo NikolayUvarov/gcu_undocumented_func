@@ -22,6 +22,7 @@ pub mod sysinfo;
 pub mod tls;
 pub mod tpm;
 pub mod tts;
+pub mod update;
 pub mod usb;
 pub mod vfs;
 pub mod video;

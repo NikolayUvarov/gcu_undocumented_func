@@ -26,6 +26,8 @@ It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has 
 
 The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
+With `--slots` the kernel, the services and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
+
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
 ```bash
