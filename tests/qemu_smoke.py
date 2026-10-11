@@ -4141,6 +4141,24 @@ def updater_suite(args, updater_elf):
         listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
         assert "kept" in listing and "reboot" in listing, listing
     print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+    # A policy broker that never answers (the stand-in in its place receives nothing) on a machine without a network
+    # card, as the MacBook Pro's boot of 2026-10-11: init gives up after its limit, and the updater and the shell start
+    # (000-KRN-0075).
+    with tempfile.TemporaryDirectory(prefix="smoke-silent-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"updater.elf": updater_elf, "netpolicy.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-nic", "none"])
+        try:
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("init", "[INIT] STARTED shell")
+            for line in ["[INIT] updater: THE POLICY BROKER DID NOT ANSWER IN 10 S", "[INIT] updater: NO NETWORK GRANT", "[INIT] STARTED shell"]:
+                require(log, line)
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and " 18:" not in held[1] and " 3:1" in held[1], report  # no flow grant (slot 18); its file client
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-silent-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
