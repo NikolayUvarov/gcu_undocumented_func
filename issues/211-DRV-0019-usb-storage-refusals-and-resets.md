@@ -52,7 +52,7 @@ So the real device behaved in a way the log cannot show:
 
 **2026-10-10, the local gate** (`claude/ASR-DRV` 5c5bfc0 and after): `tests/usb_image_smoke.py` fails at the first `sync` after the disk is plugged in again (`ERROR: SYNC: I/O ERROR`; a second `sync` says `OK`), in all five runs; on `main` it passed in all three. `usb_storage`'s new lines about the loss give the journal something to save while the drive is gone, and `vfs_server` reports that failed flush again at the next one. The change waits for the kernel track; the rest of the branch goes to `main` without it.
 
-**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [requests-KRN.md](requests-KRN.md), "A drive that comes back…"): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
+**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md)): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
 
 ## Related
 
