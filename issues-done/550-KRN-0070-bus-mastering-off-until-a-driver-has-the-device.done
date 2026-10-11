@@ -1,6 +1,6 @@
-# 550-KRN-0070 — Bus mastering off at boot until a driver has the device
+# 550-KRN-0070 — Bus mastering off at boot until a driver has the device — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested in QEMU and gated; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** tracks A, D (main task [550](550-network-on-real-hardware.md)) · **Constitution:** MC-1.5, MC-6.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Roadmap:** tracks A, D (main task [550](../issues/550-network-on-real-hardware.md)) · **Constitution:** MC-1.5, MC-6.3
 
 ## Problem
 
@@ -37,6 +37,16 @@ The drivers track's request, from the MacBook Pro's run of 550-DRV-0020:
 **2026-10-10: gated.** In main with e2f2b1c. Host and x86 ran locally; aarch64 ran on PCU through Effector, except the boot group, which ran locally (000-KRN-0067).
 
 **Still exposed: display controllers.** Their bus mastering stays as the firmware left it, because turning it off could blank the boot screen. That is safe only once a display driver owns the device, or once the MacBook Pro shows the screen survives it.
+
+## Resolution
+
+- **What was done.** At enumeration the kernel turns off bus mastering that the firmware left on, on every function but bridges and display controllers, until a driver has the device (`stop_mastering` in `kernel/src/pci.rs`). The hardware report notes "(bus mastering, on at boot, turned off)".
+- **Evidence.**
+  - **QEMU x86.** The `x86: USB image` group reads this boot's hardware report from the log volume and finds no ungranted function with bus mastering on, bridges and display controllers aside. Gated with e2f2b1c: host and x86 locally, aarch64 on PCU through Effector, the boot group locally.
+  - **The MacBook Pro.** Build fast-test 2bceac7, `log:hw0001.txt` of 2026-10-11:
+    - the kernel turned bus mastering off on seven functions: 00:16.0 (MEI), 00:1A.0 and 00:1D.0 (EHCI), 00:1F.2 (AHCI), 03:00.1 (the SD controller), 04:00.0 (the BCM4331) and 07:00.0;
+    - when the report was made, the functions with bus mastering on were the bridges, the two display controllers and those granted to a driver (xHCI, both EHCI, HDA, AHCI, and the BCM4331 once `bcm_wifi` had it).
+- **What is left.** Display controllers keep the bus mastering the firmware left. That is safe only once a display driver owns the device. An IOMMU confining each device's DMA is main task 174's.
 
 ## Related
 
