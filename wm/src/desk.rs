@@ -428,7 +428,9 @@ enum Drag {
 
 /// `List`: the window list (211-APP-0014), the selected window and its place in the list (kept when it closes).
 /// `Settings`: one window for what can be configured (000-APP-0048).
-pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings) }
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings),
+    /// `more ▼`'s menu under the top bar (000-APP-0061): the items moved there, the chosen one, and its column.
+    More { items: Vec<Bar>, row: usize, at: usize } }
 
 pub const HELP: [&str; 20] = [
     "Alt+Tab, Alt+Shift+Tab — the next window, the previous one",
@@ -443,7 +445,7 @@ pub const HELP: [&str; 20] = [
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
     "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU)",
-    "The items of the top bar can be clicked instead of their keys (\"wm\": the programs)",
+    "The items of the top bar can be clicked instead of their keys (\"wm\": the programs; those with no room: in more ▼)",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
     "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
     "  the ◆ corner to resize it; [▲] maximizes, [⇕] gives the size back; [×] closes",
@@ -456,37 +458,54 @@ pub const HELP: [&str; 20] = [
 /// What a click on an item of the top bar does (issue u008): the same as its key — for a host that keeps Alt+Tab and
 /// the like for itself. "wm" at the left opens the programs, as Alt+P does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full, Settings, Fit }
+pub enum Bar { Programs, Next, Run, Move, Close, Help, Leave, List, Full, Settings, Fit, More }
 
 pub const BAR: [(&str, Bar); 11] = [("Alt+Tab next", Bar::Next), ("Alt+P programs", Bar::Programs), ("Alt+R run", Bar::Run), ("Alt+M move", Bar::Move),
                                     ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave), ("Alt+L windows", Bar::List),
                                     ("Alt+F full", Bar::Full), ("Alt+0 fit", Bar::Fit), ("Alt+S settings", Bar::Settings)];
 
-/// An item's label on a bar `cols` wide: its key and word when every item fits so (160 cells), its word alone when
-/// not (a grid of larger cells, 000-APP-0061).
-pub fn bar_label(cols: usize, item: Bar) -> &'static str {
-    let label = BAR.iter().find(|b| b.1 == item).map_or("", |b| b.0);
-    let whole = 4 + BAR.iter().map(|b| b.0.chars().count() + 3).sum::<usize>() <= cols;
-    if whole { label } else { label.split_once(' ').map_or(label, |(_, word)| word) }
+/// The bar's last item when not every item fits; its menu holds the rest (000-APP-0061).
+pub const MORE: &str = "more ▼";
+/// The most cells the title of the window in front takes at the bar's right.
+pub const TITLE_MAX: usize = 24;
+
+/// An item's label: its key and word (`Alt+S settings`), or `more ▼`.
+pub fn bar_label(item: Bar) -> &'static str { if item == Bar::More { MORE } else { BAR.iter().find(|b| b.1 == item).map_or("", |b| b.0) } }
+
+/// The top bar on a screen `cols` wide, `title` cells kept at its right for the window in front's title: the cells
+/// each item covers (x, width) and what it does, "wm" first and then `│ label ` for each item; and the items moved
+/// into `more ▼`'s menu (000-APP-0061). When every item fits, all are on the bar; when not, the items with a key leave
+/// first, from the right, until the rest and `more ▼` fit.
+pub fn bar_layout(cols: usize, title: usize) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) {
+    let width = |label: &str| label.chars().count() + 3;
+    let room = cols.saturating_sub(title);
+    let mut used = 4 + BAR.iter().map(|b| width(b.0)).sum::<usize>();
+    let mut moved = Vec::new();
+    if used > room {
+        used += width(MORE);
+        let keyed = |i: &usize| BAR[*i].0.starts_with("Alt+");
+        let order: Vec<usize> = (0..BAR.len()).rev().filter(keyed).chain((0..BAR.len()).rev().filter(|i| !keyed(i))).collect();
+        for i in order {
+            if used <= room { break; }
+            used -= width(BAR[i].0);
+            moved.push(i);
+        }
+        moved.sort();
+    }
+    let mut items = alloc::vec![(0, 3.min(cols), Bar::Programs)];
+    let mut x = 4;
+    let shown = (0..BAR.len()).filter(|i| !moved.contains(i)).map(|i| BAR[i].1).chain((!moved.is_empty()).then_some(Bar::More));
+    for bar in shown {
+        let w = width(bar_label(bar)) - 1;
+        if x + 1 + w > cols { break; }
+        items.push((x + 1, w, bar));
+        x += 1 + w;
+    }
+    (items, moved.iter().map(|&i| BAR[i].1).collect())
 }
 
-/// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
-/// then `│ label ` for each item that fits, Settings always last (000-APP-0061: where the scale is set).
-pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> {
-    let mut items = alloc::vec![(0, 3.min(cols), Bar::Programs)];
-    let settings = bar_label(cols, Bar::Settings).chars().count() + 2;
-    let (mut x, mut full) = (4, false);
-    for (_, bar) in BAR {
-        let width = bar_label(cols, bar).chars().count() + 2;
-        let room = if bar == Bar::Settings { 0 } else { 1 + settings };
-        full = full || x + 1 + width + room > cols;
-        if full && bar != Bar::Settings { continue; }
-        if x + 1 + width > cols { break; }
-        items.push((x + 1, width, bar));
-        x += 1 + width;
-    }
-    items
-}
+/// The top bar's items on a screen `cols` wide with no title at its right (`bar_layout`).
+pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> { bar_layout(cols, 0).0 }
 
 /// The window manager's state over the desk: modes, the drag of the mouse, the notice on the status line.
 pub struct Wm {
@@ -567,6 +586,16 @@ impl Wm {
                 return Action::Redraw;
             }
             Mode::List { .. } => return self.list_key(key),
+            Mode::More { items, row, at } => {
+                let (count, at) = (items.len(), *at);
+                // ↑↓ choose, Enter does it, an Alt key closes the menu and does its own, any other closes it.
+                match key.code() {
+                    Code::Up => { *row = row.saturating_sub(1); return Action::Redraw; }
+                    Code::Down => { *row = (*row + 1).min(count.saturating_sub(1)); return Action::Redraw; }
+                    Code::Enter => { let item = items[*row]; self.mode = Mode::Normal; return self.bar(item, at); }
+                    _ => { self.mode = Mode::Normal; if !key.alt() { return Action::Redraw; } }
+                }
+            }
             Mode::Settings(settings) => {
                 return match settings.key(key, &self.background) {
                     Outcome::Stay => Action::Redraw,
@@ -667,7 +696,19 @@ impl Wm {
             return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
         }
         if pressed && y == 0 && self.desk.full_screen().is_none() {
-            if let Some(&(at, _, item)) = bar_items(self.desk.cols).iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
+            if let Some(&(at, _, item)) = self.top_bar().0.iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
+        }
+        // `more ▼`'s menu: a click on an item does it, elsewhere closes the menu; the mouse over one chooses it.
+        if let (Some(area), Mode::More { items, row, at }) = (self.more_area(), &mut self.mode) {
+            let inner = area.inner();
+            let over = (x >= inner.x && x < inner.right() && y >= inner.y && y < inner.bottom()).then(|| y - inner.y);
+            if let Some(index) = over { *row = index; }
+            if pressed || other_pressed {
+                let (item, at) = (over.map(|i| items[i]), *at);
+                self.mode = Mode::Normal;
+                if let Some(item) = item.filter(|_| pressed) { return self.bar(item, at); }
+            }
+            return Action::Redraw;
         }
         // The keys' help closes on a click too.
         if pressed && matches!(self.mode, Mode::Help) { self.mode = Mode::Normal; return Action::Redraw; }
@@ -766,7 +807,25 @@ impl Wm {
             Bar::Full => { if let Some(id) = self.window_for("Full screen") { self.desk.toggle_full(id); } Action::Redraw }
             Bar::Settings => { if !matches!(before, Mode::Settings(_)) { self.open_settings(); } Action::Redraw }
             Bar::Fit => { self.fit(); Action::Redraw }
+            Bar::More => { if !matches!(before, Mode::More { .. }) { self.mode = Mode::More { items: self.top_bar().1, row: 0, at }; } Action::Redraw }
         }
+    }
+
+    /// The title of the window in front as the top bar shows it, at most `TITLE_MAX` cells (000-APP-0061).
+    pub fn title_chip(&self) -> Option<String> {
+        let w = self.desk.focused()?;
+        let title: String = w.title.chars().take(TITLE_MAX - 2).collect();
+        Some(format!(" {}{} ", title, if w.title.chars().count() > TITLE_MAX - 2 { "…" } else { "" }).chars().take(TITLE_MAX).collect())
+    }
+
+    /// The top bar now: its items and those in `more ▼`'s menu, the title kept at its right (`bar_layout`).
+    pub fn top_bar(&self) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) { bar_layout(self.desk.cols, self.title_chip().map_or(0, |t| t.chars().count())) }
+
+    /// `more ▼`'s menu on the screen: its frame, under the bar's item and inside the screen.
+    pub fn more_area(&self) -> Option<Rect> {
+        let Mode::More { items, at, .. } = &self.mode else { return None };
+        let w = items.iter().map(|&i| bar_label(i).chars().count()).max().unwrap_or(0) + 4;
+        Some(Rect::new((*at).min(self.desk.cols.saturating_sub(w)), 1, w, items.len() + 2))
     }
 
     // Alt+L: the list, with the window in front selected.
@@ -833,7 +892,7 @@ impl Wm {
         Some(Action::Pointer { id, x, y, buttons, wheel })
     }
 
-    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS" } }
+    fn mode_name(&self) -> &'static str { match self.mode { Mode::Normal => "NORMAL", Mode::Move { .. } => "MOVE", Mode::Run(_) => "RUN", Mode::Help => "HELP", Mode::Menu(_) => "MENU", Mode::List { .. } => "LIST", Mode::Settings(_) => "SETTINGS", Mode::More { .. } => "MORE" } }
 
     /// Settings (000-APP-0048), at the page of the background.
     pub fn open_settings(&mut self) {
@@ -859,23 +918,25 @@ impl Wm {
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
         // The items can be clicked (issue u008); the one under the mouse is lit.
         let lit = Style::new(0xFFFFFF, 0x305070);
-        for (index, &(at, width, item)) in bar_items(cols).iter().enumerate() {
+        let title = self.title_chip();
+        for (index, &(at, width, item)) in self.top_bar().0.iter().enumerate() {
             let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x >= at && x < at + width);
             if index == 0 {
                 grid.fill(Rect::new(at, 0, width, 1), ' ', if hovered { lit } else { bar });
                 grid.text(1, 0, "wm", if hovered { lit } else { Style::new(0x000000, 0x80A0C0) });
             } else {
                 grid.put(at - 1, 0, '│', bar);
-                grid.text_max(at, 0, &format!(" {} ", bar_label(cols, item)), width, if hovered { lit } else { bar });
+                grid.text_max(at, 0, &format!(" {} ", bar_label(item)), width, if hovered || (item == Bar::More && matches!(self.mode, Mode::More { .. })) { lit } else { bar });
             }
         }
-        if let Some(w) = self.desk.focused() { let title = format!(" {} ", w.title); grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
+        if let Some(title) = title { grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
         let status_y = grid.rows.saturating_sub(1);
         let status = match (&self.mode, &self.notice) {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
             (Mode::Menu(_), _) => String::from("PROGRAMS: a click or Enter starts one in a window; arrows move; Esc or a click elsewhere: close"),
             (Mode::List { .. }, _) => String::from("WINDOWS: arrows and Enter or a click bring one to the front; Alt+W closes it; Esc: back"),
             (Mode::Settings(_), _) => String::from("SETTINGS: changes show at once and are kept in data/wm.conf; Esc or Alt+S: close"),
+            (Mode::More { .. }, _) => String::from("MORE: what the top bar has no room for; a click or Enter does it, as its key does; Esc: close"),
             (_, Some(notice)) => notice.clone(),
             _ if self.desk.windows.is_empty() => String::from("No windows. Enter or Alt+R: run a program in a window; F1 or Alt+H: keys; Alt+Q: leave"),
             _ => format!("{} windows; keys go to \"{}\"", self.desk.windows.len(), self.desk.focused().map_or("", |w| w.title.as_str())),
@@ -909,6 +970,16 @@ impl Wm {
             Mode::Run(line) => { *shown = Some(crate::tui::widgets::input_dialog(grid, "Run in a window", "Program and arguments:", line, 60, theme)); }
             Mode::Menu(open) => { open.draw(&self.programs, grid, theme); *shown = None; }
             Mode::Settings(settings) => { *shown = settings.draw(grid, theme, &self.background); }
+            Mode::More { .. } => {
+                let (Some(area), Mode::More { items, row, .. }) = (self.more_area(), &self.mode) else { return };
+                grid.fill(area, ' ', theme.dialog);
+                grid.frame(area, Line::Single, theme.dialog);
+                let inner = area.inner();
+                for (index, &item) in items.iter().enumerate() {
+                    grid.text_padded(inner.x, inner.y + index, &format!(" {}", bar_label(item)), inner.w, if index == *row { theme.selected } else { theme.dialog });
+                }
+                *shown = None;
+            }
             _ => {}
         }
     }
@@ -919,6 +990,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
+            Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
             Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
