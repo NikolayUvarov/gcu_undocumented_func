@@ -1,6 +1,6 @@
-# 000-APP-0060 — The clock set from `wm`'s Settings at once, without the shell's question
+# 000-APP-0060 — The clock set from `wm`'s Settings at once, without the shell's question — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 **Recorded by:** the maintainer, 2026-10-11: "the clock setting in wm's menu does work in the end, but it must not open a new shell window asking whether to set the time. It must set the time itself, at once, with no extra question."
 
@@ -27,6 +27,17 @@ The user already chose the time in Settings, so the question repeats a decision 
 - Enter on each of the date page's six fields sets the clock at once.
 - A client of the shell's commands that is not its window manager is still asked (unchanged path; the `wm` suite's `console` checks `kill` that way).
 
+## Resolution
+
+- **The shell** (`shell/src/main.rs`). It records the PID of each window manager it starts with its commands. `set-clock` from such a PID is set at once through the shell's RTC client, and the shell logs `FOR PID n THE SHELL RAN "date set …" AT ONCE: ITS WINDOW MANAGER'S SETTINGS`. Any other client of its commands is still asked in its window.
+- **`shell.wit` 1.3** states it; `docs/idl`, `docs/tools` (EN, RU) and the profile's line on the shell's clients follow.
+- **`wm`** (`wm/src/main.rs`, `desk.rs`, `settings.rs`). It no longer opens the shell's window. Settings stay open, and the date page shows the clock read anew and `The clock is set to …`, or why not.
+- **Evidence (QEMU x86, the `wm` suite on the branch at ba80d5c).**
+  - `the date page set the year to 2027 and back at once through the shell, with no question and no window of the shell's; the page stayed open and showed it`;
+  - `Enter on each of the date page's six fields set the clock at once, with no window of the shell's`;
+  - `reboot` and `kill` typed in `console` are still asked in the shell's window.
+- **Host test.** `tests/wm_host.rs`: Enter on the button gives `SetClock` and Settings stay open with the new lines.
+
 ## Related
 
-[000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) (the date page and `set-clock`), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (the shell's commands).
+[000-APP-0055](../issues/000-APP-0055-date-and-time-from-wms-settings.md) (the date page and `set-clock`), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (the shell's commands).
