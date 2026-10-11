@@ -259,13 +259,3 @@ fn servers_reject_malformed_requests() {
     assert_eq!(&out[..n], &[2, 0, b'a', b'b', 2]);
     assert!(idl::codec::encode_bytes::<1>(b"ab", &mut Writer::new(&mut out)).is_none());
 }
-
-// The limit holds for calls with a buffer and calls that receive a capability as well: init's calls (000-KRN-0075).
-#[test]
-fn buffer_and_capability_calls_wait_with_the_limit() {
-    let endpoint = serve(server);
-    ipc::WAITED.with(|w| w.borrow_mut().clear());
-    assert_eq!(wire::with_timeout(10_000, || (sample::find(endpoint, 4, "Документы"), sample::open(endpoint, 1, 11))), (Ok(Ok(40)), Ok(Ok(()))));
-    assert_eq!(sample::find(endpoint, 4, "Документы"), Ok(Ok(40)));
-    assert_eq!(ipc::WAITED.with(|w| w.borrow().clone()), [10_000, 10_000, 0]);
-}

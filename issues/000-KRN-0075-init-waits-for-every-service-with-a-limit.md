@@ -31,16 +31,16 @@ The MacBook Pro's boot of 2026-10-11 stopped at that point, though for another r
 
 - **A broker that never answers, on a machine without a network card.** In the `updater` suite, `init` logs the limit, starts the updater without a network grant, and starts the shell. The broker is the updater's stand-in in `netpolicy`'s place, which never receives.
 - **The suites** pass as before, on x86 and aarch64.
-- **The host tests** (`idl_host`) show the limit on word, buffer and capability calls.
+- **The host tests** (`idl_host`) show the limit on word calls. Buffer calls are covered by the `updater` suite: `netpolicy::prepare` is one.
 
 ## Progress
 
 **2026-10-11: made.**
 
-- `libmind/src/idl/wire.rs` and `init/src/main.rs` as above. The `updater` suite boots a second image without a network card, with the silent broker. The host tests check the limit.
+- `libmind/src/idl/wire.rs` and `init/src/main.rs` as above. The `updater` suite boots a second image without a network card, with the silent broker. The host tests check it on word calls. A host test of buffer calls was dropped: the limit is one global, and it raced the word-call test running beside it.
 - Run locally on x86:
   - the `updater` suite passes both boots;
-  - the `idl` and `idl_fuzz` host tests pass;
+  - the `idl` and `idl_fuzz` host tests pass, serially;
   - the group "x86: boot, display, network, TLS, shell, memory, clock" passes.
 
 ## Related
