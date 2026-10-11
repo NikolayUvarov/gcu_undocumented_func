@@ -20,6 +20,9 @@ The decision:
   - with a plain push, never forced, so a commit made in the showcase stops the copy rather than being lost.
 
   Anyone with write access to the showcase may run it by hand.
+- **The maintainer's scripts** (the maintainer, 2026-10-11: "make a script for me, I will run the sync"), run from any clone with their own git access:
+  - `06_sync_showcase.sh` (Linux, macOS, WSL, Git Bash), which calls `scripts/mirror_showcase.sh` with the showcase's SSH address;
+  - `06_sync_showcase_windows.ps1` (PowerShell), the same steps.
 - **The workflow `.github/workflows/mirror.yml`:**
   - looks once a day and runs the script with `--every-hours 48`: the showcase changes at most every 48 hours, and only when something changed (the maintainer, 2026-10-11);
   - run by hand (Actions → Run workflow), it copies any change at once;
@@ -42,6 +45,7 @@ The decision:
 - The maintainer made both repositories and gave the GitHub app access.
 - `main` (f7e7a8a, no tags yet) was pushed to `mind-core-os` once by hand.
 - `mind-core` got its first README.
+- Both of the maintainer's scripts were run against a local bare repository: the first copy, then "nothing changed"; the PowerShell one (7.4) refused to overwrite a commit made in the showcase.
 - `tests/mirror_test.py` checks the script on local repositories:
   - the first copy;
   - nothing done without a change;

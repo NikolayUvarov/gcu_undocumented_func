@@ -33,7 +33,7 @@ if ((hours > 0)); then
     if [[ -z $last ]]; then
         repo=$(sed -E 's#^(https://([^@/]*@)?github\.com/|git@github\.com:)##; s#\.git$##' <<<"$TARGET")
         auth=(); [[ -n ${GITHUB_TOKEN:-} ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
-        last=$(curl -fsS "${auth[@]}" "https://api.github.com/repos/$repo" | python3 -c 'import json, sys; print(json.load(sys.stdin)["pushed_at"])')
+        last=$(curl -fsS ${auth[@]+"${auth[@]}"} "https://api.github.com/repos/$repo" | python3 -c 'import json, sys; print(json.load(sys.stdin)["pushed_at"])')
     fi
     age=$((($(date -u +%s) - $(date -u -d "$last" +%s)) / 3600))
     if ((age < hours)); then
