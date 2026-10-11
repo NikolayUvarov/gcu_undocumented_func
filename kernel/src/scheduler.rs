@@ -1316,17 +1316,22 @@ impl Scheduler {
             SYSCALL_MEM_MAP => {
                 // The mapping remembers the capability's node: revoking that capability unmaps it.
                 let (cap, node) = (self.cap(slot, request.arg1), self.index(slot, request.arg1).map_or(0, |i| task.nodes[i].id));
-                let (physical, size, writable, device) = match cap {
-                    Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 => (physical, size, rights & CAP_WRITE != 0, false),
-                    Some(Capability::Dma(physical, size)) => (physical, size, true, false),
-                    Some(Capability::Mmio(physical, size)) => (physical, size, true, true),
-                    _ => (0, 0, false, false),
+                // The boot framebuffer, or a part of it, is mapped write-combining (000-KRN-0081).
+                let (fb, fb_bytes) = (self.boot.fb_ptr as usize, frame_bytes(&self.boot));
+                let screen = |physical: usize, size: usize| fb != 0 && physical >= fb && physical.saturating_add(size) <= fb + fb_bytes;
+                let (physical, size, writable, caching) = match cap {
+                    Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 =>
+                        (physical, size, rights & CAP_WRITE != 0, if screen(physical, size) { paging::Caching::WriteCombining } else { paging::Caching::Memory }),
+                    Some(Capability::Dma(physical, size)) => (physical, size, true, paging::Caching::Memory),
+                    Some(Capability::Mmio(physical, size)) => (physical, size, true, paging::Caching::Device),
+                    _ => (0, 0, false, paging::Caching::Memory),
                 };
+                let device = caching == paging::Caching::Device;
                 // Registers that start inside a page: the page is mapped, the address of the first register returned.
                 let within = if device { physical % 4096 } else { 0 };
                 if size == 0 { Err(ERR_RIGHTS) } else {
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // mapping size for the client
-                    task.heap.map_shared(&mut task.space, physical - within, size + within, device, writable, node).map(|address| address + within).ok_or(ERR_NO_MEMORY)
+                    task.heap.map_shared(&mut task.space, physical - within, size + within, caching, writable, node).map(|address| address + within).ok_or(ERR_NO_MEMORY)
                 }
             }
             SYSCALL_MEM_PHYS => match self.cap(slot, request.arg1) { Some(Capability::Dma(physical, _)) => Ok(physical), _ => Err(ERR_RIGHTS) },

@@ -94,3 +94,35 @@ On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel
 
 - **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
 - **In `wm`.** The menu entry is there.
+
+## `wm`'s moving background: drawn by rows, paced to a deadline (000-KRN-0081)
+
+**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "the moving background jerks when the bright screen is on, and redrawing is slow".
+
+### Problem
+
+The kernel's part is 000-KRN-0081:
+
+- the framebuffer was mapped uncached;
+- `compositor` scanned the whole stride.
+
+`wm`'s own part, read from the code at fast-test 76bae52 (estimates for the MacBook Pro's 2880×1800, 5.2 Mpx, 20.7 MB a frame):
+
+- **`paint()`** (`wm/src/main.rs:397-402`) copies every background cell to `wm`'s screen one pixel at a time, through `backdrop.pixel()` with a division by `unit` (`wm/src/background.rs:480-483`) and bounds checks per pixel. That is about 50–90 ms a frame.
+- **`pattern()`** (`background.rs:166-237`) computes 324 000 blocks a frame, with divisions per block. Rings also takes a square root per centre. That is about 5–85 ms by pattern.
+- **Pacing.** `sleep(if busy {5} else {30})` (`main.rs:646`) comes after the work. Since 000-KRN-0065 a sleep of 30 ms lasts 30–40 ms. The phase moves in whole steps (`p/8`, `p/12`, …), so a slow frame jumps.
+- **Mouse moves.** Every one redraws everything and re-copies every pixel window (`main.rs:463, 635`).
+- **Contrast.** At high contrast more pixels change each frame, so the compositor writes more.
+
+All told, `wm` runs at about 5–11 frames a second, unevenly.
+
+### Plan (a proposal; the tools track decides)
+
+- **`paint()` by rows.** Runs of background cells are filled row by row with one loop for each unit size and no division: 5–10 ms instead of 50–90. A row helper in `libmind` (`Screen::span`, the core of `libmind`) can be asked of the kernel track.
+- **Pacing to a deadline.** Sleep until the next frame's deadline less one tick (10 ms), not a fixed 30 ms after the work. A finer phase, with interpolated sine values, moves every term every frame.
+- **A cheaper pattern.** Per-column and per-row terms computed once a frame, and a table or incremental distances instead of the square root.
+- **Only what changed.** Cells whose colour did not change are not repainted. Mouse moves redraw the cursor's surroundings only.
+
+### Acceptance criteria
+
+On the MacBook Pro with 000-KRN-0081, the moving background runs evenly at full contrast. `wm` records the time a frame takes; the `wm` suite reads it in QEMU.

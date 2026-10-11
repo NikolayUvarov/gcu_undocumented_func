@@ -67,6 +67,7 @@ fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire
 }
 
 const SOURCE_SLOT: usize = 9; // the kernel puts the active screen capability here
+const GROUP: usize = 8; // pixels compared and written together
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
@@ -89,11 +90,23 @@ fn main(info: &'static BootInfo) {
         }
         if let (Some(screen), Frame::Dirty | Frame::NewSource) = (source.as_ref(), frame) {
             let screen = screen.as_ptr::<u32>();
-            for i in 0..pixels {
-                let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
-                if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
-                    let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
-                    unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+            // The visible width of each row only (the stride may be far wider: 4096 for 2880 on the MacBook Pro), in
+            // groups of 8 pixels: a changed group is written whole, which the write-combining framebuffer sends to the
+            // bus as one burst (000-KRN-0081).
+            for y in 0..info.height {
+                let mut x = 0;
+                while x < info.width {
+                    let (at, n) = (y * info.stride + x, (info.width - x).min(GROUP));
+                    let mut group = [0u32; GROUP];
+                    for (k, pixel) in group[..n].iter_mut().enumerate() { *pixel = unsafe { core::ptr::read_volatile(screen.add(at + k)) }; }
+                    let old = unsafe { core::slice::from_raw_parts(shadow.add(at), n) };
+                    if !valid || group[..n] != *old {
+                        for (k, &pixel) in group[..n].iter().enumerate() {
+                            let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+                            unsafe { core::ptr::write_volatile(gop.add(at + k), device); core::ptr::write(shadow.add(at + k), pixel); }
+                        }
+                    }
+                    x += n;
                 }
             }
             valid = true;
