@@ -1,4 +1,34 @@
-# MIND CORE
+# MIND Core OS — a capability-based microkernel operating system in Rust
+
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+![Language: Rust](https://img.shields.io/badge/language-Rust%20(no__std)-orange.svg)
+![Platforms: x86_64, aarch64](https://img.shields.io/badge/platforms-x86__64%20%7C%20aarch64-lightgrey.svg)
+![Boot: UEFI](https://img.shields.io/badge/boot-UEFI-green.svg)
+
+**MIND Core** is an operating system written from scratch in Rust (`no_std`). It is a capability-based microkernel: every driver and service, the file system and the network stack among them, runs as an isolated user-space task with only the capabilities it was granted. It boots with its own UEFI bootloader on x86_64 and aarch64 (ARM64) and uses every processor (SMP). It runs in QEMU and boots on real hardware, a MacBook Pro among them.
+
+MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
+
+**What is there today**, each part with its tests (details below):
+
+- **Kernel:** capabilities with derivation and revocation, synchronous IPC with lent pages, SMP scheduling with CPU budgets, a 1 ms tick on x86, memory quotas, SMEP, SMAP, UMIP and PAN.
+- **Boot and update:** its own UEFI bootloader, a signed boot manifest, A/B slots with a trial boot and fallback, reproducible builds, Secure Boot with our own keys (tested in QEMU).
+- **Drivers in user space:** AHCI (SATA), NVMe, VirtIO (block, network, input), xHCI and EHCI USB (keyboards, mice, storage, a UVC camera), Intel HDA sound, PS/2, TPM 2.0.
+- **Network:** a TCP/IP stack in user space with DHCP and DNS, a TLS 1.3 client, HTTPS downloads, a network policy that grants flows.
+- **Storage:** FAT12/16/32 with writes, a content-addressed block store (Merkle DAG), checkpoints.
+- **User space:** a shell with its own script language (msh), a window manager, a file manager, an editor, text-to-speech and voice commands, system monitors.
+- **Assurance:** a [Constitution](constitution/EN/MIND_CORE_Constitution_v1.6.md) of numbered requirements; QEMU test suites on x86_64 and aarch64; TLA+ models checked with TLC.
+
+**Quick start** (Ubuntu or WSL; details in [How to Build and Run](#how-to-build-and-run)):
+
+```bash
+sudo scripts/setup_build_env.sh                     # Ubuntu or WSL: QEMU, OVMF, the tools, Rust's pinned nightly
+./02_build.sh && ./03_run_qemu.sh                   # x86_64 in QEMU
+ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64 (ARM64) in QEMU
+./04_make_usb_image.sh                              # a USB image for real hardware
+```
+
+### Why "MIND Core"
 
 The Minds of the Culture's spaceships — the ultra-powerful AIs controlling General Contact Units and Orbitals — must reside somewhere. No matter how multidimensional and advanced their hardware substrate may be, at a fundamental level, any computing architecture needs two basic things to wake up and become self-aware: a bootloader and an operating system.
 
