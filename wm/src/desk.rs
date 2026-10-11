@@ -84,6 +84,23 @@ impl Desk {
 
     /// Where windows go: below the top bar, above the status line.
     pub fn area(&self) -> Rect { Rect::new(0, 1, self.cols, self.rows.saturating_sub(2)) }
+
+    /// A grid of `cols` × `rows` after wm's scale changed (000-APP-0061): each frame keeps its place and its share of
+    /// the screen, within the new area; a maximized one stays maximized. Every frame counts as changed.
+    pub fn rescale(&mut self, cols: usize, rows: usize) {
+        let (old_cols, old_rows, old_area) = (self.cols.max(1), self.rows.max(1), self.area());
+        (self.cols, self.rows) = (cols, rows);
+        let area = self.area();
+        let frames: Vec<(u32, Rect)> = self.windows.iter().map(|w| (w.id, w.rect)).collect();
+        for (id, r) in frames {
+            let rect = if r == old_area { area } else {
+                Rect::new(r.x * cols / old_cols, r.y * rows / old_rows, (r.w * cols / old_cols).max(MIN.0), (r.h * rows / old_rows).max(MIN.1))
+            };
+            let rect = self.fit(rect);
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) { w.rect = rect; }
+            if !self.changed.contains(&id) { self.changed.push(id); }
+        }
+    }
     pub fn index(&self, id: u32) -> Option<usize> { self.windows.iter().position(|w| w.id == id) }
     pub fn get(&self, id: u32) -> Option<&Win> { self.windows.iter().find(|w| w.id == id) }
     /// The window in front, which gets the keys.
@@ -478,6 +495,9 @@ pub struct Wm {
     pub shell: bool,
     /// The time in ms, as the caller last gave it: two presses on a title within `DOUBLE_MS` are a double click.
     pub now: usize,
+    /// The screen in pixels and wm's scale in percent, which Settings' screen page shows and changes (000-APP-0061).
+    pub pixels: (usize, usize),
+    pub scale: u16,
     // The last press on a title: the window, the cell and when.
     title_press: Option<(u32, usize, usize, usize)>,
 }
@@ -486,7 +506,16 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, now: 0, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+
+    /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
+    /// window too; the pointer is placed again by the next mouse event.
+    pub fn rescale(&mut self, cols: usize, rows: usize, scale: u16) {
+        self.desk.rescale(cols, rows);
+        self.scale = scale;
+        (self.pointer, self.drag) = (None, None);
+        if let Mode::Settings(settings) = &mut self.mode { settings.resize((cols, rows), scale); }
+    }
 
     /// A key press (`wm` keys are Alt combinations; others go to the focused window).
     pub fn key(&mut self, key: Key) -> Action {
@@ -798,6 +827,7 @@ impl Wm {
     pub fn open_settings(&mut self) {
         let mut settings = Settings::new(&self.background, (self.desk.cols, self.desk.rows));
         settings.shell = self.shell;
+        (settings.pixels, settings.scale) = (self.pixels, self.scale);
         self.mode = Mode::Settings(settings);
     }
 
@@ -877,7 +907,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { String::from(":Scale") } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)

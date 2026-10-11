@@ -37,6 +37,21 @@ impl Screen {
             }
         }
     }
+    /// One character of the 8x16 font stretched over a cell of `width` × `height` pixels (wm's scale, 000-APP-0061):
+    /// each pixel takes the font's pixel under it; at 8 × 16 it is `glyph16`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn glyph_cell(&self, x: usize, y: usize, width: usize, height: usize, ch: char, color: u32, background: Option<u32>) {
+        if (width, height) == (8, 16) { return self.glyph16(x, y, ch, color, background); }
+        let rows = crate::font16::glyph(ch);
+        for py in 0..height.min(self.height.saturating_sub(y)) {
+            let bits = rows[py * 16 / height];
+            for px in 0..width.min(self.width.saturating_sub(x)) {
+                let lit = bits & (0x80 >> (px * 8 / width)) != 0;
+                let Some(pixel) = (if lit { Some(color) } else { background }) else { continue };
+                unsafe { core::ptr::write_volatile(self.fb.add((y + py) * self.stride + x + px), pixel) }
+            }
+        }
+    }
     /// UTF-8 text in the 8x16 font, one 8-pixel cell per character; returns the number of characters drawn.
     pub fn text16(&self, x: usize, y: usize, text: &str, color: u32, background: Option<u32>) -> usize {
         let mut count = 0;

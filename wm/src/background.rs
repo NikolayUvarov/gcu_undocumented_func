@@ -35,11 +35,13 @@ pub const INFO: (u8, u8) = (0, 100);
 pub struct Config {
     pub picture: Picture, pub pattern: Pattern, pub speed: u8, pub contrast: u8, pub complexity: u8, pub info: u8,
     pub time: bool, pub date: bool, pub cpu: bool, pub net: bool, pub place: Place,
+    /// wm's scale in percent (000-APP-0061); None: `auto`, chosen from the screen at each start.
+    pub scale: Option<u16>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, net: false, place: Place::BottomRight }
+        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, net: false, place: Place::BottomRight, scale: None }
     }
 }
 
@@ -47,7 +49,8 @@ impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
     /// `complexity = 1..5`, `info = 0..100`, `show = time, date, cpu, net` (or `none`),
-    /// `place = top-left | top-right | center | bottom-left | bottom-right`. What is not said stays the default; each
+    /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`
+    /// (wm's, 000-APP-0061). What is not said stays the default; each
     /// part not understood is named in the second value.
     pub fn parse(text: &str) -> (Self, Vec<String>) {
         let mut config = Self::default();
@@ -89,6 +92,13 @@ impl Config {
                         Some(&(_, place)) => config.place = place,
                         None => wrong("place is top-left, top-right, center, bottom-left or bottom-right"),
                     },
+                    "scale" => match value.trim_end_matches('%').trim_end() {
+                        "auto" => config.scale = None,
+                        n => match n.parse::<u16>().ok().filter(|n| crate::scale::SCALES.contains(n)) {
+                            Some(n) => config.scale = Some(n),
+                            None => wrong("scale is auto, 100, 150, 200, 250, 300, 400, 500 or 600"),
+                        },
+                    },
                     _ => wrong(&format!("unknown key {}", key)),
                 }
             }
@@ -102,12 +112,14 @@ impl Config {
         let shown: Vec<&str> = [(self.time, "time"), (self.date, "date"), (self.cpu, "cpu"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
-        format!("# wm's desktop background (000-APP-0047, 000-APP-0050)\n\
+        let scale = self.scale.map_or(String::from("auto"), |s| format!("{}", s));
+        format!("# wm's desktop background (000-APP-0047, 000-APP-0050) and scale (000-APP-0061)\n\
                  # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
                  # show = time, date, cpu, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
-                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\nplace = {}\n",
-                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") }, place)
+                 # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
+                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\nplace = {}\nscale = {}\n",
+                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") }, place, scale)
     }
 }
 
@@ -351,21 +363,23 @@ fn text(frame: &mut [u32], width: usize, height: usize, x: usize, y: usize, text
     }
 }
 
-/// Where the information goes on a frame of `width` × `height` pixels, each `unit` screen pixels wide: its rectangle
-/// (x, y, w, h), and the scales of the time's and the other lines' glyphs. None when it shows nothing.
-pub fn layout(config: &Config, width: usize, height: usize, unit: usize) -> Option<((usize, usize, usize, usize), usize, usize)> {
+/// Where the information goes on a frame of `width` × `height` pixels, each `unit` screen pixels wide, at wm's scale
+/// `zoom` (percent, 000-APP-0061): its rectangle (x, y, w, h), and the scales of the time's and the other lines'
+/// glyphs. None when it shows nothing.
+pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: usize) -> Option<((usize, usize, usize, usize), usize, usize)> {
     if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.net) { return None; }
     let unit = unit.max(1);
-    let (big, small, gap) = ((6 / unit).max(1), (2 / unit).max(1), 8 / unit);
+    let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit;
+    let (big, small, gap) = (z(6).max(1), z(2).max(1), z(8));
     let mut w = 0;
     let mut h = 0;
     let mut add = |line_w: usize, line_h: usize| { w = w.max(line_w); h += if h > 0 { gap } else { 0 } + line_h; };
     if config.time { add(5 * 8 * big, 16 * big); }
     if config.date { add(10 * 8 * small, 16 * small); }
-    if config.cpu { add(5 * 8 * big, 16 * small + gap / 2 + 48 / unit); }
+    if config.cpu { add(5 * 8 * big, 16 * small + gap / 2 + z(48)); }
     if config.net { add(24 * 8 * small, 16 * small); }
     // Two cells from the edges: clear of the top bar and the status line.
-    let (mx, my) = (32 / unit, 32 / unit);
+    let (mx, my) = (z(32), z(32));
     if w + 2 * mx > width || h + 2 * my > height { return None; }
     let x = match config.place { Place::TopLeft | Place::BottomLeft => mx, Place::Center => (width - w) / 2, _ => width - mx - w };
     let y = match config.place { Place::TopLeft | Place::TopRight => my, Place::Center => (height - h) / 2, _ => height - my - h };
@@ -373,9 +387,11 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize) -> Opti
 }
 
 /// Draws the information `config` asks for over `frame`, at its place.
-pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, config: &Config, info: &Info, glyph: Glyph) {
-    let Some(((x, mut y, w, _), big, small)) = layout(config, width, height, unit) else { return };
-    let gap = 8 / unit.max(1);
+#[allow(clippy::too_many_arguments)]
+pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom: usize, config: &Config, info: &Info, glyph: Glyph) {
+    let Some(((x, mut y, w, _), big, small)) = layout(config, width, height, unit, zoom) else { return };
+    let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit.max(1);
+    let gap = z(8);
     let (colour, graph, shadow) = ink(config.info);
     let ink = (colour, shadow);
     // Each line right-aligned in the block on the right, left-aligned elsewhere.
@@ -396,7 +412,7 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, conf
         let label = match info.cpu.last() { Some(p) => format!("CPU {:3}%", p), None => String::from("CPU    -") };
         text(frame, width, height, start(graph_w), y, &label, small, ink, glyph);
         y += 16 * small + gap / 2;
-        let (gx, gh) = (start(graph_w), 48 / unit.max(1));
+        let (gx, gh) = (start(graph_w), z(48));
         // A bar a sample, the newest at the right; a line along the bottom.
         let samples = &info.cpu[info.cpu.len().saturating_sub(CPU_SAMPLES)..];
         let bar = (graph_w / CPU_SAMPLES).max(1);
@@ -416,7 +432,8 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, conf
 
 /// The background's state in `wm`: its frame (the screen's pixels, or half of them each way when that would not fit
 /// in 4 MiB), the picture scaled once, the pattern's phase and the CPU samples.
-pub struct Backdrop { pub config: Config, pub width: usize, pub height: usize, pub unit: usize, pub frame: Vec<u32>, base: Option<Vec<u32>>, pub phase: u32, carry: usize, pub cpu: Vec<u8> }
+/// `zoom`: wm's scale in percent, which the information's glyphs and margins follow (000-APP-0061).
+pub struct Backdrop { pub config: Config, pub width: usize, pub height: usize, pub unit: usize, pub zoom: usize, pub frame: Vec<u32>, base: Option<Vec<u32>>, pub phase: u32, carry: usize, pub cpu: Vec<u8> }
 
 impl Backdrop {
     /// For a screen of `screen` pixels; `image` reads the file `image <file>` names (None: the pattern is drawn instead,
@@ -424,7 +441,7 @@ impl Backdrop {
     pub fn new(config: Config, screen: (usize, usize), image: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> (Self, Option<String>) {
         let unit = if screen.0 * screen.1 * 4 <= 4 << 20 { 1 } else { 2 };
         let (width, height) = (screen.0 / unit, screen.1 / unit);
-        let mut backdrop = Self { config: Config { picture: Picture::None, ..config.clone() }, width, height, unit, frame: Vec::new(), base: None, phase: 0, carry: 0, cpu: Vec::new() };
+        let mut backdrop = Self { config: Config { picture: Picture::None, ..config.clone() }, width, height, unit, zoom: 100, frame: Vec::new(), base: None, phase: 0, carry: 0, cpu: Vec::new() };
         let problem = backdrop.change(config, image);
         (backdrop, problem)
     }
@@ -473,7 +490,7 @@ impl Backdrop {
         if !self.shown() { return; }
         match &self.base { Some(base) => self.frame.copy_from_slice(base), None => pattern(&mut self.frame, self.width, self.height, &self.config, self.phase) }
         let info = Info { cpu: &self.cpu, ..*info };
-        overlay(&mut self.frame, self.width, self.height, self.unit, &self.config, &info, glyph);
+        overlay(&mut self.frame, self.width, self.height, self.unit, self.zoom, &self.config, &info, glyph);
     }
 
     /// The colour of the screen's pixel (x, y).

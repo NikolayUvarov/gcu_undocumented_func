@@ -321,18 +321,21 @@ def canon(text):
     return "".join(lookup[tuple(glyphs[ord(ch)][1])] if ord(ch) in glyphs else "?" for ch in text)
 
 
-def screen_text(vm):
-    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs."""
+def screen_text(vm, cell=(8, 16)):
+    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs. A larger
+    `cell` (wm's scale, 000-APP-0061) is read at the first screen pixel each font pixel was stretched to."""
     lookup = glyph_lookup()
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     width, height = map(int, size.split())
+    cw, ch = cell
     # mind::tui centers the text grid: a screen not a multiple of the cell (800x600 on aarch64) has margins.
-    x0, y0 = width % 8 // 2, height % 16 // 2
+    x0, y0 = width % cw // 2, height % ch // 2
+    xs, ys = [(c * cw + 7) // 8 for c in range(8)], [(r * ch + 15) // 16 for r in range(16)]
     lines = []
-    for cy in range(height // 16):
+    for cy in range(height // ch):
         line = []
-        for cx in range(width // 8):
-            rows = [[pixels[((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3:((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+        for cx in range(width // cw):
+            rows = [[pixels[((y0 + cy * ch + ys[r]) * width + x0 + cx * cw + xs[c]) * 3:((y0 + cy * ch + ys[r]) * width + x0 + cx * cw + xs[c]) * 3 + 3] for c in range(8)] for r in range(16)]
             colours = {p for row in rows for p in row}
             found = " " if len(colours) == 1 else "?"
             for fg in colours if len(colours) == 2 else ():
@@ -6304,6 +6307,44 @@ def wm_suite(vm):
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
         return counts
 
+    def scale_from_settings():
+        # 000-APP-0061: wm started at auto, 100% on the suite's 1280 × 800 screen. Settings' screen page steps to 100%,
+        # then 150%: the grid is made anew of 12 × 24 cells, the frames keep their share of the screen, the text is read
+        # at that cell, and data/wm.conf keeps it; then back to 100% and auto.
+        require("".join(seen), "[WM] SCALE 100% (AUTO): CELLS OF 8X16 PIXELS ON 1280X800")
+        before = state()[2]
+        keys("alt-s", text="MODE=SETTINGS")
+        keys(*["down"] * 5, text="SETTINGS=Screen")
+        keys("ret", text="SETTINGS=Screen:Scale")
+        screen_has("Scale       < auto (100%) >")
+        keys("right", text="; scale = 100; SAVED")
+        keys("right", text="[WM] SCALE 150%: CELLS OF 12X24 PIXELS, 106X33 OF THEM")
+        require("".join(seen), "; scale = 150; SAVED")
+        wait(lines=0)
+        after = state()[2]
+        for id, (x, y, w, h) in before.items():
+            ax, ay, aw, ah = after[id]
+            # The frame's middle at the same share of the screen (within a tenth), and the frame inside the new grid.
+            assert abs((ax + aw / 2) / 106 - (x + w / 2) / 160) < .1 and abs((ay + ah / 2) / 33 - (y + h / 2) / 50) < .1, (id, before[id], after[id])
+            assert ax + aw <= 106 and ay + ah <= 32, (id, after[id])
+        rows = []
+        for _ in range(20):
+            time.sleep(.3)
+            rows = screen_text(vm, (12, 24))
+            vm.serial(enter=False)
+            if any(canon("Scale       < 150% >") in row for row in rows) and any(canon("Alt+S settings") in row for row in rows):
+                break
+        else:
+            raise AssertionError(rows)
+        assert len(rows) == 33 and len(rows[0]) == 106, (len(rows), len(rows[0]))
+        keys("left", text="[WM] SCALE 100%: CELLS OF 8X16 PIXELS, 160X50 OF THEM")
+        keys("left", text="; scale = auto; SAVED")
+        screen_has("Scale       < auto (100%) >")
+        keys("esc", text="MODE=NORMAL")
+        print("PASS: wm scale: auto gives 100% on 1280 × 800; Settings' screen page set 150% (12 × 24 cells, 106 × 33 of "
+              "them, the frames in the same share of the screen, the text read at that cell, kept in data/wm.conf), then "
+              "100% and auto again", flush=True)
+
     def screen_has(text):
         # `text` on the screen within 6 s; the screen.
         for _ in range(20):
@@ -6485,11 +6526,11 @@ def wm_suite(vm):
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        for page in ("Keyboard", "Network", "Sound", "Screen"):
+        for page in ("Keyboard", "Network", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
             keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
             keys("ret")
             screen_has(f"{page}: a page to read; nothing is set here yet")
-        keys("up", "up", "up", text="SETTINGS=Date and time")
+        keys("up", "up", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
         # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
         # stays as it was; no window of the shell's opens, and Settings stay open on the field.
@@ -6648,7 +6689,7 @@ def wm_suite(vm):
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
     keys("right", text="[WM] SETTINGS background = none")
-    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; SAVED")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; SAVED")
     keys("esc")
     time.sleep(.5)
     screen = screen_text(vm)
@@ -6661,6 +6702,7 @@ def wm_suite(vm):
     every_entry_reacts()
     settings_react()
     full_screen_and_list(fm, clock, top)
+    scale_from_settings()
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
     assert set(places) == {fm, clock, top}, places

@@ -1,7 +1,8 @@
 //! `wm`'s Settings (000-APP-0048): one window for what can be configured, opened from the top bar or with Alt+S. Its
 //! first page is the desktop background (000-APP-0047, 000-APP-0050), kept in `data/wm.conf`. The date and time page
-//! sets the clock through the shell, at once and without a question (000-APP-0055, 000-APP-0060). The other system pages
-//! are to read and say where each setting is made. Every row and page answers Enter and a click: it changes, or a line
+//! sets the clock through the shell, at once and without a question (000-APP-0055, 000-APP-0060). The screen page sets
+//! wm's scale (000-APP-0061), kept in `data/wm.conf` too. The other system pages are to read and say where each setting
+//! is made. Every row and page answers Enter and a click: it changes, or a line
 //! says why not (000-APP-0056). Host-tested in tests/wm_host.rs.
 use crate::background::{Config, Picture, Place, COMPLEXITY, PATTERNS};
 use crate::keys::{Code, Key};
@@ -20,6 +21,8 @@ const PLACES: [Place; 5] = [Place::TopLeft, Place::TopRight, Place::Center, Plac
 const SPEEDS: [u8; 10] = [1, 2, 3, 5, 8, 10, 15, 20, 30, 50];
 /// The date and time page, and its rows: the fields, then the button.
 pub const DATE: usize = 2;
+/// The screen page: wm's scale (000-APP-0061).
+pub const SCREEN: usize = 5;
 pub const CLOCK_ROWS: [&str; 7] = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds", "Set the clock"];
 const SET: usize = 6;
 // Each field's range and digits.
@@ -31,11 +34,12 @@ const LIST: usize = 17; // the pages' column
 /// The window's state: the page, the row on it, whether the keys move in the pages' list, and the image's file as typed.
 /// On the date and time page: the clock as last read (`now`: year, month, day; seconds since midnight), the fields
 /// being set, whether the user changed them, digits being typed, its row, and whether `wm` holds the shell's commands
-/// (`shell`), through which the clock is set. `message`: a line about the last try on any page.
+/// (`shell`), through which the clock is set. On the screen page: the screen in pixels and wm's scale in use.
+/// `message`: a line about the last try on any page.
 pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
     pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize,
-    pub message: Option<String>, pub shell: bool,
+    pub message: Option<String>, pub shell: bool, pub pixels: (usize, usize), pub scale: u16,
 }
 
 /// What a key or a click did.
@@ -58,7 +62,27 @@ impl Settings {
     pub fn new(config: &Config, screen: (usize, usize)) -> Self {
         let mut file = InputLine::new();
         if let Picture::Image(name) = &config.picture { for ch in name.chars() { file.insert(ch); } }
-        Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, message: None, shell: false }
+        Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, message: None, shell: false,
+               pixels: (screen.0 * 8, screen.1 * 16), scale: 100 }
+    }
+
+    /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
+    pub fn resize(&mut self, screen: (usize, usize), scale: u16) { (self.screen, self.scale) = (screen, scale); }
+
+    /// The scale's choices on this screen: auto, then each scale offered (`crate::scale::offered`).
+    pub fn scales(&self) -> Vec<Option<u16>> { core::iter::once(None).chain(crate::scale::offered(self.pixels).map(Some)).collect() }
+
+    // The configuration with the scale stepped by `step` (+1, -1; 0 on, back to auto after the last).
+    fn rescaled(&self, config: &Config, step: i32) -> Option<Config> {
+        let choices = self.scales();
+        let at = choices.iter().position(|&c| c == config.scale).unwrap_or(0);
+        let next = if step < 0 { (at + choices.len() - 1) % choices.len() } else { (at + 1) % choices.len() };
+        (choices.len() > 1).then(|| Config { scale: choices[next], ..config.clone() })
+    }
+
+    // The screen page's value as shown: auto with what it picks here, or the percentage chosen.
+    fn scale_text(&self, chosen: Option<u16>) -> String {
+        match chosen { None => format!("auto ({}%)", crate::scale::auto(self.pixels)), Some(s) => format!("{}%", s) }
     }
 
     /// The clock as `wm` read it: the fields follow it until the user changes one.
@@ -147,7 +171,7 @@ impl Settings {
     /// change it on (and tick a box), typing edits the image's file on its row (Enter takes it), Esc or Alt+S closes.
     pub fn key(&mut self, key: Key, config: &Config) -> Outcome {
         if key.code() == Code::Esc || (key.alt() && key.letter() == Some('s')) { return Outcome::Close; }
-        let enterable = self.page == 0 || self.page == DATE;
+        let enterable = self.page == 0 || self.page == DATE || self.page == SCREEN;
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
         if self.on_pages {
             match key.code() {
@@ -160,6 +184,13 @@ impl Settings {
             return Outcome::Stay;
         }
         if self.page == DATE { return self.clock_key(key); }
+        if self.page == SCREEN {
+            let step = match key.code() { Code::Left => -1, Code::Right | Code::Enter => 1, Code::Char if key.char() == Some(' ') => 1, _ => return Outcome::Stay };
+            return match self.rescaled(config, step) {
+                Some(c) => { self.message = None; Outcome::Changed(c) }
+                None => { self.message = Some(String::from("This screen offers 100% alone: larger scales leave too few cells for Settings")); Outcome::Stay }
+            };
+        }
         match key.code() {
             Code::Up => { (self.row, self.message) = (self.row.saturating_sub(1), None); Outcome::Stay }
             Code::Down => { (self.row, self.message) = ((self.row + 1).min(ROWS.len() - 1), None); Outcome::Stay }
@@ -231,7 +262,12 @@ impl Settings {
             if self.row != FILE { return self.changed(config, self.row, 0); }
         }
         // A page to read says so.
-        if self.page != 0 && self.page != DATE { self.to_read(); }
+        if ![0, DATE, SCREEN].contains(&self.page) { self.to_read(); }
+        // The screen page: a click on the scale steps it on.
+        if self.page == SCREEN && cy == 1 {
+            self.on_pages = false;
+            return match self.rescaled(config, 1) { Some(c) => { self.message = None; Outcome::Changed(c) } None => Outcome::Stay };
+        }
         // The date page: a field is chosen (← → change it), the button sets the clock.
         if self.page == DATE && (1..=CLOCK_ROWS.len()).contains(&cy) {
             (self.clock_row, self.on_pages, self.typed) = (cy - 1, false, None);
@@ -273,6 +309,20 @@ impl Settings {
                 if chosen && i == FILE { cursor = Some((x + 12 + self.file.cursor_chars(), inner.y + 1 + i)); }
             }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + ROWS.len(), message, w, theme.accent); }
+        } else if self.page == SCREEN {
+            let (cw, ch) = crate::scale::cell(self.scale);
+            let (cols, rows) = crate::scale::cells(self.scale, self.pixels);
+            let offered: Vec<String> = self.scales().iter().map(|&c| self.scale_text(c)).collect();
+            grid.text_max(x, inner.y, "wm's scale, kept in data/wm.conf:", w, theme.dialog);
+            grid.text_padded(x, inner.y + 1, &format!("{:<11} < {} >", "Scale", self.scale_text(config.scale)), w, if self.on_pages { theme.dialog } else { theme.selected });
+            let lines = [format!("The screen: {} × {} pixels.", self.pixels.0, self.pixels.1),
+                         format!("At {}%: cells of {} × {} pixels, {} × {} of them.", self.scale, cw, ch, cols, rows),
+                         format!("auto: the largest scale leaving {} × {} pixels at 100%.", crate::scale::AUTO_ROOM.0, crate::scale::AUTO_ROOM.1),
+                         format!("Here: {}.", offered.join(", ")),
+                         format!("Each leaves {} × {} cells or more. Windows, the pointer", crate::scale::FEWEST.0, crate::scale::FEWEST.1),
+                         String::from("and the background's lines grow with the scale.")];
+            for (i, line) in lines.iter().enumerate() { grid.text_max(x, inner.y + 3 + i, line, w, theme.dialog); }
+            if let Some(message) = &self.message { grid.text_max(x, inner.y + 4 + lines.len(), message, w, theme.accent); }
         } else if self.page == DATE {
             let now = match self.now { Some(((y, mo, d), s)) => format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, s / 3600, s / 60 % 60, s % 60), None => String::from("cannot be read") };
             grid.text_max(x, inner.y, &format!("The clock (it keeps no time zone): {}", now), w, theme.dialog);
@@ -289,7 +339,8 @@ impl Settings {
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, inner.y + i, line, w, if i == 0 { theme.accent } else { theme.dialog }); }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
-        let help = if self.on_pages && self.page != 0 && self.page != DATE { "↑↓: page · this page is to read · Esc: close" }
+        let help = if self.on_pages && ![0, DATE, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if !self.on_pages && self.page == SCREEN { "← → Enter Space: the scale, used at once · Tab: pages · Esc: close" }
             else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
             else if self.row == FILE { "type the file · Enter: use it · ↑↓: rows · Esc: close" } else { "↑↓: rows · ← → Space: change · Tab: pages · Esc: close" };
         grid.text_max(inner.x + 1, inner.bottom() - 1, help, inner.w - 2, theme.dialog);
@@ -302,8 +353,7 @@ impl Settings {
         let lines: Vec<&str> = match self.page {
             1 => Vec::from(["To read: the keyboard is set in the shell.", "The layout and its switch:", "  keymap us|ru [--switch both|ctrl-shift|alt-shift|caps|none]", shell[0], shell[1]]),
             3 => Vec::from(["To read: the network is set in the shell.", "Addresses, flow grants and the policy:", "  ip, netgrants, netrevoke <program>, netpolicy", shell[0], shell[1]]),
-            4 => Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]),
-            _ => return Vec::from([String::from("To read: the screen is not changed from here yet."), format!("{} × {} cells of 8 × 16 pixels,", self.screen.0, self.screen.1), String::from("in the mode the firmware set at boot.")]),
+            _ => Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]),
         };
         lines.iter().map(|s| String::from(*s)).collect()
     }

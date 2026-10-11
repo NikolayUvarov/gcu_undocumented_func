@@ -27,6 +27,8 @@ mod jpegdec;
 mod background;
 #[path = "../wm/src/settings.rs"]
 mod settings;
+#[path = "../wm/src/scale.rs"]
+mod scale;
 #[path = "../common/font16.rs"]
 mod font16;
 
@@ -935,27 +937,27 @@ fn png_and_jpeg_pictures_cover_the_desktop() {
 fn the_information_has_its_place() {
     let c = Config::default();
     // 1280 × 800: a block two cells from the right and the bottom edges.
-    let ((x, y, w, h), big, small) = layout(&c, 1280, 800, 1).unwrap();
+    let ((x, y, w, h), big, small) = layout(&c, 1280, 800, 1, 100).unwrap();
     assert_eq!((big, small), (6, 2));
     assert_eq!((x + w, y + h), (1280 - 32, 800 - 32));
     assert!(w >= 5 * 8 * 6 && h >= 16 * 6 + 32);
     // Half the pixels each way (a 2560 × 1600 screen): the same block on the screen.
-    let ((x2, y2, w2, h2), big2, _) = layout(&c, 1280, 800, 2).unwrap();
+    let ((x2, y2, w2, h2), big2, _) = layout(&c, 1280, 800, 2, 100).unwrap();
     assert_eq!(big2, 3);
     assert!(x2 * 2 >= 1280 && w2 <= w && h2 <= h && y2 > 0);
     for place in [Place::TopLeft, Place::Center] {
-        let ((x, y, _, _), _, _) = layout(&Config { place, ..c.clone() }, 1280, 800, 1).unwrap();
+        let ((x, y, _, _), _, _) = layout(&Config { place, ..c.clone() }, 1280, 800, 1, 100).unwrap();
         assert!(if place == Place::TopLeft { x == 32 && y == 32 } else { x > 300 && y > 200 });
     }
     // Nothing to show, or no room: no block.
-    assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1).is_none());
-    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1).is_none());
-    assert!(layout(&c, 200, 120, 1).is_none());
+    assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&c, 200, 120, 1, 100).is_none());
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
-    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1).unwrap();
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
+    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
     let (text, graph, _) = ink(c.info);
@@ -966,7 +968,7 @@ fn the_information_has_its_place() {
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -1259,7 +1261,7 @@ fn every_page_and_row_of_settings_reacts() {
         let mut s = Settings::new(&config, (160, 50));
         for _ in 0..page { s.key(key(KEY_DOWN), &config); }
         assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-        if page == 0 || page == DATE { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        if page == 0 || page == DATE || page == settings::SCREEN { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
         assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
         assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
         assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
@@ -1360,4 +1362,92 @@ fn a_window_back_to_its_contents_size() {
     wm.desk.place(2, Rect::new(0, 1, 100, 40));
     wm.key(alt_char('0'));
     assert_eq!((rect(&wm.desk, 2).2, rect(&wm.desk, 2).3), (82, 27));
+}
+
+// 000-APP-0061: wm's scale: auto from the screen, the scales offered, the configuration's key, the frames that follow a
+// new grid, and Settings' screen page.
+#[test]
+fn the_scale_follows_the_screen_and_settings() {
+    use settings::{Outcome, Settings, SCREEN};
+    // Cells and auto: the largest scale leaving 1280 × 720 pixels at 100%.
+    assert_eq!(scale::cell(100), (8, 16));
+    assert_eq!(scale::cell(150), (12, 24));
+    assert_eq!(scale::cell(250), (20, 40));
+    for (screen, auto) in [((1024, 768), 100), ((1280, 800), 100), ((1366, 768), 100), ((1920, 1080), 150), ((2560, 1600), 200),
+                           ((2880, 1800), 200), ((3840, 2160), 300), ((5120, 2880), 400), ((7680, 4320), 600), ((640, 480), 100)] {
+        assert_eq!(scale::auto(screen), auto, "{:?}", screen);
+        assert!(scale::fits(auto, screen));
+    }
+    // What a user may choose leaves 84 × 26 cells for Settings: a MacBook Pro up to 400%, the suites' 1280 × 800 to 150%.
+    assert_eq!(scale::offered((2880, 1800)).collect::<Vec<_>>(), [100, 150, 200, 250, 300, 400]);
+    assert_eq!(scale::offered((1280, 800)).collect::<Vec<_>>(), [100, 150]);
+    assert_eq!(scale::offered((3840, 2160)).collect::<Vec<_>>(), [100, 150, 200, 250, 300, 400, 500]);
+    assert_eq!(scale::resolve(Some(150), (1280, 800)), 150);
+    assert_eq!(scale::resolve(Some(400), (1280, 800)), 100, "too large for the screen: auto");
+    assert_eq!(scale::resolve(Some(175), (2880, 1800)), 200, "not a scale offered: auto");
+    assert_eq!(scale::resolve(None, (2880, 1800)), 200);
+    // data/wm.conf's key: auto by default, a percentage kept, a wrong one named.
+    let (c, problems) = background::Config::parse("scale = 250\n");
+    assert!(problems.is_empty() && c.scale == Some(250), "{:?}", problems);
+    assert_eq!(background::Config::parse(&c.format()).0, c);
+    assert!(background::Config::default().format().contains("scale = auto"));
+    assert_eq!(background::Config::parse("scale = 150%").0.scale, Some(150));
+    let (_, problems) = background::Config::parse("scale = 175");
+    assert!(problems.iter().any(|p| p.contains("scale is auto, 100, 150")), "{:?}", problems);
+    // A new grid: each frame keeps its place and share of the screen, a maximized one stays maximized.
+    let mut desk = Desk::new(160, 50);
+    desk.add(text(1, "fm"));
+    desk.add(text(2, "top"));
+    desk.maximize(2);
+    let area = desk.area();
+    desk.take_changed();
+    let before = desk.get(1).unwrap().rect;
+    desk.rescale(80, 25);
+    let after = desk.get(1).unwrap().rect;
+    assert_eq!((after.x, after.w), (before.x / 2, (before.w / 2).max(desk::MIN.0)), "{:?} -> {:?}", before, after);
+    assert_eq!(desk.get(2).unwrap().rect, desk.area(), "maximized");
+    assert_ne!(desk.area(), area);
+    let changed = desk.take_changed();
+    assert!(changed.contains(&1) && changed.contains(&2), "{:?}", changed);
+    for w in &desk.windows { let r = w.rect; assert!(r.right() <= 80 && r.bottom() <= desk.area().bottom(), "{:?}", r); }
+    // Settings' screen page: ← → step through auto and the scales offered, at once; the page says what each gives.
+    let config = background::Config::default();
+    let mut s = Settings::new(&config, (240, 75));
+    (s.pixels, s.scale) = ((2880, 1800), 200);
+    for _ in 0..SCREEN { s.key(key(KEY_DOWN), &config); }
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    assert!(!s.on_pages);
+    let mut seen = Vec::new();
+    let mut now = config.clone();
+    for _ in 0..7 {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { seen.push(c.scale); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(seen, [Some(100), Some(150), Some(200), Some(250), Some(300), Some(400), None], "on, and back to auto");
+    match s.key(key(KEY_LEFT), &now) { Outcome::Changed(c) => assert_eq!(c.scale, Some(400)), other => panic!("{:?}", other) }
+    let mut cells = vec![Cell::BLANK; 240 * 75];
+    let mut grid = Grid::new(&mut cells, 240, 75);
+    s.draw(&mut grid, &DARK, &now);
+    let shown: String = (0..75).map(|y| (0..240).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n");
+    for text in ["Scale       < auto (200%) >", "The screen: 2880 × 1800 pixels.", "At 200%: cells of 16 × 32 pixels, 180 × 56 of them.",
+                 "Here: auto (200%), 100%, 150%, 200%, 250%, 300%, 400%.", "and the background's lines grow with the scale."] {
+        assert!(shown.contains(text), "{}\n{}", text, shown);
+    }
+    // A screen with room for 100% alone says so.
+    let mut small = Settings::new(&config, (80, 30));
+    (small.pixels, small.scale) = ((640, 480), 100);
+    for _ in 0..SCREEN { small.key(key(KEY_DOWN), &config); }
+    small.key(key(KEY_ENTER), &config);
+    match small.key(key(KEY_RIGHT), &config) { Outcome::Changed(c) => assert_eq!(c.scale, Some(100)), other => panic!("{:?}", other) }
+    // Wm: the status names the row, and a new scale moves an open Settings window with the grid.
+    let mut wm = Wm::new(240, 75);
+    (wm.pixels, wm.scale) = ((2880, 1800), 150);
+    wm.key(alt_char('s'));
+    for _ in 0..SCREEN { wm.key(key(KEY_DOWN)); }
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().contains("SETTINGS=Screen:Scale"), "{}", wm.status());
+    assert!(matches!(wm.key(key(KEY_RIGHT)), Action::Settings(_)));
+    wm.rescale(180, 56, 200);
+    assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
+    let Mode::Settings(open) = &wm.mode else { panic!() };
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 17));
 }
