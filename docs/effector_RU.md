@@ -15,6 +15,7 @@
 | ID агента | Что это | Пользователь для работы | Для чего |
 |---|---|---|---|
 | `PCU_585240b00e8a` | Ubuntu 22.04.5, x86-64, 4 CPU, 15 ГБ ОЗУ | `un` | Сборки, тесты на хосте, наборы QEMU, гейты. **Без перезагрузок.** |
+| `i9_4e6882212251` | Ubuntu 24.04.3 под WSL2 в Windows, Intel Core i9-9900K (16 потоков), 31 ГБ ОЗУ, 920 ГБ свободно | собственный пользователь агента, `un`: **`run_as` не указывать** (агент не root, `runuser` не сработает) | Сборки, тесты на хосте, наборы QEMU под TCG. **Без перезагрузок**: это WSL2. |
 
 - **Что установлено на `PCU_585240b00e8a`** (кто и когда — в разделе 6):
   - Rust через rustup в `~un/.cargo`, с инструментарием из `rust-toolchain.toml`;
@@ -29,6 +30,18 @@
   - Его проверка окружения требует Java, а группе Secure Boot нужен `python3-virt-firmware`.
   - Весь гейт длиннее, чем может идти одна операция (раздел 3).
   - Сборки, тесты на хосте и отдельные группы QEMU там идут.
+
+- **Что есть на `i9_4e6882212251`** (раздел 6):
+  - из Ubuntu 24.04: `git`, Python 3.12, OpenJDK 21;
+  - Rust через rustup в `~un/.cargo`, с инструментарием из `rust-toolchain.toml`; ядро там собирается для x86 и aarch64;
+  - клон трека ядра в `/home/un/mind-core/KRN/gcu_undocumented_func`.
+- **Чего там пока нет:** QEMU, OVMF и AAVMF, `dosfstools`, `mtools`, `swtpm`, `sbsigntool`, `python3-virt-firmware`. `sudo` там спрашивает пароль, поэтому агент их поставить не может.
+  - [`scripts/setup_build_env.sh`](../scripts/setup_build_env.sh) ставит всё, что нужно для сборки и `scripts/ci_local.sh`, и проверяет это. Скрипт идемпотентный: то, что уже есть, он не трогает.
+  - Копия лежит в `/home/un/mind-core/setup_build_env.sh`. Сопровождающий запускает её один раз от root: внутри WSL — `sudo bash /home/un/mind-core/setup_build_env.sh un /home/un/mind-core/KRN/gcu_undocumented_func`, или из Windows — `wsl -u root -- bash /home/un/mind-core/setup_build_env.sh un /home/un/mind-core/KRN/gcu_undocumented_func`.
+- **`/dev/kvm` там нет.** QEMU работает под TCG, как в CI, и ни один набор не просит KVM, так что гейтам он не нужен.
+  - В WSL2 KVM появляется со вложенной виртуализацией (Windows 11): `nestedVirtualization=true` в разделе `[wsl2]` файла `%UserProfile%\.wslconfig`, затем `wsl --shutdown`. Это останавливает агент Effector внутри, пока WSL не запустится снова.
+  - Затем `scripts/setup_build_env.sh` добавит `un` в группу `kvm`.
+- **Пакеты на ней после установки — те же, что в CI**: QEMU 8.2.2 из Ubuntu 24.04, OVMF и AAVMF 2024.02, `swtpm` 0.7. Так и пишите в отчёте о прогоне: «i9 через Effector, Ubuntu 24.04 под WSL2, QEMU 8.2.2 (Ubuntu), TCG».
 
 ## 2. Ключ
 
@@ -158,3 +171,4 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-10 | `PCU_585240b00e8a` | Ubuntu Cloud Archive (caracal) добавлен ради QEMU 8.2 и убран: QEMU для 22.04 в нём нет | KRN, по просьбе сопровождающего |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 из релизного архива qemu.org, подпись проверена (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), собран для `x86_64` и `aarch64` с утилитами, в `/opt/qemu-8.2.2`, ссылки в `/usr/local/bin`. Зависимости сборки из Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, по просьбе сопровождающего (та же версия QEMU, что в CI) |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 из релиза qemu.org (тот же подписавший) собран в `~un/qemu-upstream/stage`, чтобы проверить тест загрузки aarch64 (000-KRN-0067), **не установлен**; список патчей QEMU из Ubuntu noble в `~un/qemu-noble-patches` (только чтение) | KRN |
+| 2026-10-11 | `i9_4e6882212251` | rustup 1.29.1 в `~un/.cargo` (профиль оболочки не менялся: `. ~/.cargo/env`) с инструментарием из `rust-toolchain.toml` (nightly-2026-10-02 и четыре его цели); клон трека ядра в `/home/un/mind-core/KRN/gcu_undocumented_func`; `/home/un/mind-core/setup_build_env.sh`, копия `scripts/setup_build_env.sh`, пока не запускалась (`sudo` спрашивает пароль) | KRN, по просьбе сопровождающего |

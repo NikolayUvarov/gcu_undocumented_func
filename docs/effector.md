@@ -15,6 +15,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 | Agent ID | What it is | User for work | Use |
 |---|---|---|---|
 | `PCU_585240b00e8a` | Ubuntu 22.04.5, x86-64, 4 CPUs, 15 GB RAM | `un` | Builds, host tests, QEMU suites, gates. **No reboots.** |
+| `i9_4e6882212251` | Ubuntu 24.04.3 under WSL2 on Windows, Intel Core i9-9900K (16 threads), 31 GB RAM, 920 GB free | the agent's own, `un`: give **no `run_as`** (the agent is not root, so `runuser` fails) | Builds, host tests, QEMU suites under TCG. **No reboots**: it is WSL2. |
 
 - **What is installed on `PCU_585240b00e8a`** (and who did it is in section 6):
   - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
@@ -29,6 +30,18 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - Its prerequisites name a Java runtime, and the Secure Boot group needs `python3-virt-firmware`.
   - The whole gate takes longer than one operation may run (section 3).
   - Builds, host tests and single QEMU groups do run there.
+
+- **What is on `i9_4e6882212251`** (section 6):
+  - from Ubuntu 24.04: `git`, Python 3.12, OpenJDK 21;
+  - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`; the kernel builds there for x86 and aarch64;
+  - the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`.
+- **Not yet on it:** QEMU, OVMF and AAVMF, `dosfstools`, `mtools`, `swtpm`, `sbsigntool`, `python3-virt-firmware`. There `sudo` asks for a password, so an agent cannot install them.
+  - [`scripts/setup_build_env.sh`](../scripts/setup_build_env.sh) installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone.
+  - A copy is in `/home/un/mind-core/setup_build_env.sh`. The maintainer runs it once as root, either inside WSL with `sudo bash /home/un/mind-core/setup_build_env.sh un /home/un/mind-core/KRN/gcu_undocumented_func`, or from Windows with `wsl -u root -- bash /home/un/mind-core/setup_build_env.sh un /home/un/mind-core/KRN/gcu_undocumented_func`.
+- **No `/dev/kvm` there.** QEMU runs under TCG, as in CI, and no suite asks for KVM, so the gates do not need it.
+  - Under WSL2, KVM comes with nested virtualization (Windows 11): `nestedVirtualization=true` under `[wsl2]` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`, which stops the Effector agent inside until WSL starts again.
+  - `scripts/setup_build_env.sh` then adds `un` to the `kvm` group.
+- **Its packages, once installed, are CI's**: Ubuntu 24.04's QEMU 8.2.2, OVMF and AAVMF 2024.02, `swtpm` 0.7. Say so where you report a run: "i9 through Effector, Ubuntu 24.04 under WSL2, QEMU 8.2.2 (Ubuntu), TCG".
 
 ## 2. The key
 
@@ -158,3 +171,4 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 from the qemu.org release tarball, its signature verified (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), built for `x86_64` and `aarch64` with the tools, in `/opt/qemu-8.2.2`, links in `/usr/local/bin`. Its build dependencies from Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, at the maintainer's request (the same QEMU version as CI) |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 from the qemu.org release (the same signer) built in `~un/qemu-upstream/stage` to try the aarch64 boot test (000-KRN-0067), **not installed**; Ubuntu noble's QEMU patch list in `~un/qemu-noble-patches` (read only) | KRN |
+| 2026-10-11 | `i9_4e6882212251` | rustup 1.29.1 in `~un/.cargo` (no change to the shell's profile: `. ~/.cargo/env`) with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02, its four targets); the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`; `/home/un/mind-core/setup_build_env.sh`, a copy of `scripts/setup_build_env.sh`, not run yet (`sudo` asks for a password) | KRN, at the maintainer's request |
