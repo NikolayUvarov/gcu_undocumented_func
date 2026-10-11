@@ -43,6 +43,17 @@ The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pr
   - "sleep 1 ms" is between 1 and 2 ms;
   - "sleep 10 ms" is between 10 and 11 ms.
 
+## Progress
+
+**2026-10-11, QEMU x86, 4 CPUs (TCG).** These groups passed: "boot, display, network, TLS, shell, memory, clock", "scheduling, isolation, heap" (the `busy` budget among them) and "keys, shell, tools" (the `bench` and `wm` suites). `kbench`:
+
+| | median | shortest | longest |
+|---|---|---|---|
+| sleep 1 ms | 1.96 ms | 1.22 ms | 17.7 ms |
+| sleep 10 ms | 21.1 ms | 10.6 ms | 27.9 ms |
+
+A sleep of 1 ms now ends in about 2 ms. A sleep of 10 ms still often took two slices here. The sleep ends on time, but the task woken on a CPU that runs another task waits for that task's 10 ms slice to end, as it always did. Preempting the running task for the one woken is the next step, if the MacBook Pro shows the same.
+
 ## Related
 
 [000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [clocks.md](../docs/profile/clocks.md).
