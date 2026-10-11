@@ -217,12 +217,20 @@ fn microcode(bar: &Mmio) {
     if size < 12 || image[0] != b'u' || image[1] != 1 || (size - 8) % 4 != 0 { mind::println!("[BCM] NOT A MICROCODE FILE OF VERSION 1 (TYPE {:02X}, VERSION {})", image.first().copied().unwrap_or(0), image.get(1).copied().unwrap_or(0)); return; }
     let words = image[8..].chunks_exact(4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
 
-    step(1, "THE AGENT'S ERROR LOG READ, THE CORE DISABLED AND ENABLED");
+    step(1, "THE AGENT'S REGISTERS AND ERROR LOG READ");
     wrapper(bar, "BEFORE");
     let errors = AI_ERROR_LOG.map(|r| bar.read32(WRAPPER + r));
     mind::println!("[BCM] AGENT READ AND WRITE IDS {:08X} {:08X}; ERROR LOG CONTROL {:08X}, DONE {:08X}, STATUS {:08X}, ADDRESS {:08X}{:08X}, ID {:08X}, USER {:08X}, FLAGS {:08X}; INTERRUPT STATUS {:08X}",
                    bar.read32(WRAPPER + 0x808), bar.read32(WRAPPER + 0x80C), errors[0], errors[1], errors[2], errors[4], errors[3], errors[5], errors[6], errors[7], bar.read32(WRAPPER + 0xA00));
-    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A BACKPLANE OPERATION STILL PENDING, STAGE 2 NOT ATTEMPTED", v); return; }
+    // The simplest access first: two registers of the core as the reset pulse left it, nothing else changed.
+    step(2, "TWO REGISTERS OF THE IDLE CORE READ (MAC CONTROL, CLOCK CONTROL)");
+    if bar.read32(WRAPPER + AI_RESET_CONTROL) & RESET == 0 {
+        let mac = bar.read32(D11_MAC_CONTROL);
+        mind::println!("[BCM] IDLE CORE: MAC CONTROL {:08X}, CLOCK CONTROL {:08X}", mac, bar.read32(D11_CLOCK));
+    } else { mind::println!("[BCM] THE CORE IS HELD IN RESET: NOT READ"); }
+    step(3, "THE CORE DISABLED AND ENABLED");
+    // A pending operation the agent reports is logged; the stage goes on, as a test the maintainer asked for.
+    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A BACKPLANE OPERATION STILL PENDING; GOING ON", v); }
     // Disabled first if it runs: held in reset with its clock off.
     if bar.read32(WRAPPER + AI_RESET_CONTROL) & RESET == 0 {
         bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
@@ -239,11 +247,11 @@ fn microcode(bar: &Mmio) {
     pause(bar, 2);
     wrapper(bar, "AFTER");
     // From here the core's registers answer.
-    step(2, "THE CORE'S CLOCK CONTROL READ, HIGH-THROUGHPUT CLOCK FORCED");
+    step(4, "THE CORE'S CLOCK CONTROL READ, HIGH-THROUGHPUT CLOCK FORCED");
     let clock = bar.read32(D11_CLOCK);
     bar.write32(D11_CLOCK, clock | CLOCK_FORCE_HT);
     if let Err(v) = wait(bar, D11_CLOCK, 10, |v| v & CLOCK_HAVE_HT != 0) { mind::println!("[BCM] NO HIGH-THROUGHPUT CLOCK (CLOCK CONTROL {:08X})", v); return stop(bar); }
-    step(3, "THE PHY RESET");
+    step(5, "THE PHY RESET");
     // The PHY reset at 20 MHz, then out of reset with its clock forced for a moment.
     let io = bar.read32(WRAPPER + AI_IOCONTROL);
     bar.write32(WRAPPER + AI_IOCONTROL, io | IO_PHY_RESET | IO_PHY_20MHZ); pause(bar, 3);
@@ -251,13 +259,13 @@ fn microcode(bar: &Mmio) {
     bar.write32(WRAPPER + AI_IOCONTROL, (io & !(IO_PHY_RESET | IO_PHY_CLOCK)) | IO_FORCE_GATED); pause(bar, 2);
     let io = bar.read32(WRAPPER + AI_IOCONTROL);
     bar.write32(WRAPPER + AI_IOCONTROL, (io & !IO_FORCE_GATED) | IO_PHY_CLOCK); pause(bar, 2);
-    step(4, "THE 802.11 AND PHY PLLS REQUESTED");
+    step(6, "THE 802.11 AND PHY PLLS REQUESTED");
     let clock = bar.read32(D11_CLOCK);
     bar.write32(D11_CLOCK, clock | CLOCK_PLL_REQUEST);
     if let Err(v) = wait(bar, D11_CLOCK, 100, |v| v & CLOCK_PLL_RUNNING == CLOCK_PLL_RUNNING) { mind::println!("[BCM] THE 802.11 AND PHY PLLS DO NOT RUN (CLOCK CONTROL {:08X})", v); return stop(bar); }
     let io = bar.read32(WRAPPER + AI_IOCONTROL);
     bar.write32(WRAPPER + AI_IOCONTROL, io | IO_MAC_PHY_CLOCK);
-    step(5, "THE PHY AND RADIO VERSIONS READ");
+    step(7, "THE PHY AND RADIO VERSIONS READ");
     let phy = bar.read16(D11_PHY_VERSION);
     let mut radio = [0u16; 3];
     for (i, r) in radio.iter_mut().enumerate() { bar.write16(D11_RADIO_CONTROL, i as u16); *r = bar.read16(D11_RADIO_DATA); }
@@ -266,17 +274,17 @@ fn microcode(bar: &Mmio) {
                    bar.read32(WRAPPER + AI_IOCONTROL), bar.read32(D11_CLOCK), phy, phy >> 8 & 0xF, phy & 0xFF, phy >> 12,
                    radio[2] << 8 | radio[1] & 0xFF, radio[0] & 0xF, radio[0], radio[1], radio[2]);
 
-    step(6, "SHARED MEMORY CLEARED");
+    step(8, "SHARED MEMORY CLEARED");
     // The processor held at address 0; scratch registers and shared memory cleared; the words written with auto-increment.
     bar.write32(D11_MAC_CONTROL, MAC_IHR | MAC_SHM | MAC_GMODE | MAC_INFRA);
     bar.write32(D11_MAC_CONTROL, bar.read32(D11_MAC_CONTROL) | MAC_PSM_JUMP0);
     for i in 0..64 { shm_select(bar, SHM_SCRATCH, i); bar.write16(D11_SHM_DATA, 0); }
     for i in 0..1024 { shm_select(bar, SHM_SHARED, i); bar.write32(D11_SHM_DATA, 0); }
-    step(7, "THE MICROCODE WRITTEN");
+    step(9, "THE MICROCODE WRITTEN");
     shm_select(bar, SHM_UCODE | SHM_AUTOINC_WRITE, 0);
     let mut count = 0;
     for word in words { bar.write32(D11_SHM_DATA, word); pause(bar, 10); count += 1; }
-    step(8, "THE MICROCODE STARTED");
+    step(10, "THE MICROCODE STARTED");
     bar.write32(D11_IRQ_REASON, u32::MAX);
     bar.write32(D11_MAC_CONTROL, (bar.read32(D11_MAC_CONTROL) & !MAC_PSM_JUMP0) | MAC_PSM_RUN);
     // The running microcode answers by suspending the MAC, which is not enabled.

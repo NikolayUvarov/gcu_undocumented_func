@@ -44,6 +44,10 @@ Since then:
 - waits run by the clock, not by counted sleeps;
 - stage 2 logs the agent's error log first, disables the core if it runs, and still does not release the reset while the status is set.
 
+**2026-10-11, MacBook Pro, on request, with the reset pulse:** the machine ran on. The status read `00000002` before the pulse and after it; the agent's error log read all zeros; stage 2 refused as meant. Whether the status really blocks the core's registers is not known: it was set in every boot so far that touched them.
+
+Since then, on request only, stage 2 first reads two registers of the core as the pulse left it (nothing else changed), then goes on through the enable with the status logged, not obeyed. The last step in the log tells which access stops the machine, if one does.
+
 ## Related
 
 [550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), `bcm_wifi/`, `scripts/proprietary.sh`.
