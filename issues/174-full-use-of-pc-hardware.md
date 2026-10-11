@@ -18,7 +18,7 @@ What MIND Core uses of a PC today, checked in the code on 2026-10-09:
 - **GPUs.**
   - No GPU driver: the screen is the firmware's framebuffer (GOP), drawn by the CPU.
   - Intel, AMD and NVIDIA GPUs (`devices` lists them on the MacBook Pro: Intel HD 4000 and an NVIDIA GK107) compute nothing for programs.
-  - Graphics memory is mapped uncached, not write-combining.
+  - Graphics memory is mapped uncached, not write-combining (the boot framebuffer is write-combining since [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md); other graphics memory is not).
 
 ## Plan
 

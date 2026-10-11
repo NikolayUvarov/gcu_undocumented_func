@@ -252,11 +252,31 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
     for &(number, name) in if intel { intel_msrs } else { amd_msrs } {
         match msr(number) { Some(v) => { let _ = writeln!(out, "  MSR {:08X} {:<26} {:016X}", number, name, v); } None => { let _ = writeln!(out, "  MSR {:08X} {:<26} (absent)", number, name); } }
     }
+    memory_types(out);
     if intel {
         if let Some(v) = msr(0xCE) { let _ = writeln!(out, "  ratios            maximum non-turbo {} (x100 MHz), minimum {}", (v >> 8) & 0xFF, (v >> 40) & 0xFF); }
         if let Some(v) = msr(0x1AD) { let _ = writeln!(out, "  turbo ratios      1 core {}, 2 cores {}, 3 cores {}, 4 cores {} (x100 MHz)", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF); }
         if let Some(v) = msr(0x771) { let _ = writeln!(out, "  HWP performance   highest {}, guaranteed {}, most efficient {}, lowest {}", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF); }
     }
+}
+
+// The firmware's MTRRs, which decide how device memory such as the framebuffer is cached where a page does not say
+// otherwise, and the PAT the kernel set (000-KRN-0081: entry 1 write-combining for the framebuffer).
+fn memory_types(out: &mut String) {
+    let name = |t: u64| match t & 0xFF { 0 => "UC", 1 => "WC", 4 => "WT", 5 => "WP", 6 => "WB", 7 => "UC-", _ => "?" };
+    let Some(cap) = msr(0xFE) else { out.push_str("  MTRR              (no MSR FE)\n"); return };
+    let default = msr(0x2FF).unwrap_or(0);
+    let _ = writeln!(out, "  MTRR              {} variable ranges{}{}; default {}, {}", cap & 0xFF, if cap & 1 << 8 != 0 { ", fixed ranges" } else { "" },
+        if cap & 1 << 10 != 0 { ", WC supported" } else { "" }, name(default), if default & 1 << 11 != 0 { "enabled" } else { "disabled" });
+    let bits = if cpuid(0x8000_0000, 0).eax >= 0x8000_0008 { cpuid(0x8000_0008, 0).eax & 0xFF } else { 36 };
+    let top = (1u64 << bits.clamp(32, 52)) - 1;
+    for n in 0..(cap & 0xFF).min(32) as u32 {
+        let (Some(base), Some(mask)) = (msr(0x200 + 2 * n), msr(0x201 + 2 * n)) else { continue };
+        if mask & 1 << 11 == 0 { continue; }
+        let size = (!(mask & top & !0xFFF) & top) + 1;
+        let _ = writeln!(out, "  MTRR {:<2}           {:#011X} size {:#X} {}", n, base & top & !0xFFF, size, name(base));
+    }
+    if let Some(pat) = msr(0x277) { let _ = writeln!(out, "  PAT               {:016X}", pat); }
 }
 
 /// The platform section: what the kernel chose on this machine.

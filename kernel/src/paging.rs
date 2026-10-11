@@ -5,6 +5,9 @@ use crate::mmu;
 pub use crate::mmu::{activate, init, kernel_root, uncached};
 
 pub const PAGE: usize = 4096;
+/// How a user page is cached: memory (write-back), device registers (uncached), a framebuffer (write-combining).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Caching { Memory, Device, WriteCombining }
 pub const USER_IMAGE: usize = mmu::USER_IMAGE; // the start of a task's window: the architecture's
 pub const USER_STACK: usize = USER_IMAGE + 0x0100_1000;
 pub const USER_SCREEN: usize = USER_IMAGE + 0x0200_0000;
@@ -129,12 +132,17 @@ impl Space {
         writable: bool,
         executable: bool,
     ) -> Result<(), &'static str> {
-        self.map_with(virtual_start, physical, size, writable, executable, false)
+        self.map_with(virtual_start, physical, size, writable, executable, Caching::Memory)
     }
 
     // MMIO registers are mapped uncached (RW+NX).
     pub fn map_device(&mut self, virtual_start: usize, physical: usize, size: usize) -> Result<(), &'static str> {
-        self.map_with(virtual_start, physical, size, true, false, true)
+        self.map_with(virtual_start, physical, size, true, false, Caching::Device)
+    }
+
+    // A framebuffer: write-combining where the architecture has it (000-KRN-0081).
+    pub fn map_framebuffer(&mut self, virtual_start: usize, physical: usize, size: usize, writable: bool) -> Result<(), &'static str> {
+        self.map_with(virtual_start, physical, size, writable, false, Caching::WriteCombining)
     }
 
     fn map_with(
@@ -144,7 +152,7 @@ impl Space {
         size: usize,
         writable: bool,
         executable: bool,
-        device: bool,
+        caching: Caching,
     ) -> Result<(), &'static str> {
         if virtual_start < USER_IMAGE
             || virtual_start >= USER_END
@@ -165,7 +173,7 @@ impl Space {
                 return Err("OVERLAPPING USER PAGES");
             }
         }
-        let result = self.map_pages(virtual_start, physical, size, writable, executable, device);
+        let result = self.map_pages(virtual_start, physical, size, writable, executable, caching);
         if result.is_err() {
             self.unmap(virtual_start, size);
         } else {
@@ -181,7 +189,7 @@ impl Space {
         size: usize,
         writable: bool,
         executable: bool,
-        device: bool,
+        caching: Caching,
     ) -> Result<(), &'static str> {
         for offset in (0..size).step_by(PAGE) {
             let address = virtual_start + offset;
@@ -200,7 +208,8 @@ impl Space {
                 if entry.read() & mmu::VALID != 0 {
                     return Err("OVERLAPPING USER PAGES");
                 }
-                entry.write(mmu::leaf((physical + offset) as u64, writable, executable, device));
+                let leaf = mmu::leaf((physical + offset) as u64, writable, executable, caching == Caching::Device);
+                entry.write(if caching == Caching::WriteCombining { mmu::write_combining(leaf) } else { leaf });
             }
         }
         Ok(())
