@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the packaged files, then boot the actual RAW image as a USB device (x86_64, or aarch64 with --arch aarch64)."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -91,6 +92,29 @@ def unplugged(vm, booted, name):
         time.sleep(1)
     require(saved, "DRIVE DOES NOT ANSWER")
     time.sleep(3)  # the journal's save after the replug, flushed
+    # 000-KRN-0079: another medium in its place, as a stick rewritten elsewhere and put back (here its disk signature
+    # differs). vfs_server finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    other = booted.with_name(booted.stem + "-other" + booted.suffix)
+    shutil.copyfile(booted, other)
+    with other.open("r+b") as image:
+        image.seek(440); image.write(b"\x5a\xa5\x5a\xa5")
+    before = hashlib.sha256(other.read_bytes()).hexdigest()
+    vm.hmp(f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}")
+    vm.hmp("device_add usb-storage,drive=usbdisk3,id=usbstick")
+    for _ in range(40):  # vfs_server asks the drive again after its quiet time
+        time.sleep(2)
+        vm.command("ls log:", raw=True)
+        log = vm.service_logs("vfs_server")
+        if "ANOTHER MEDIUM" in log:
+            break
+    require(log, "CAME BACK WITH ANOTHER MEDIUM")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    vm.command("sync")
+    time.sleep(3)
+    assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
+    other.unlink()
 
 
 def run(args, booted):
@@ -185,7 +209,7 @@ def run(args, booted):
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
-          "and plugged in again; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
+          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":
