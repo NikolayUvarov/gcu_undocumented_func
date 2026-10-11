@@ -7,7 +7,7 @@
 
 **MIND Core** is an operating system written from scratch in Rust (`no_std`). It is a capability-based microkernel: every driver and service, the file system and the network stack among them, runs as an isolated user-space task with only the capabilities it was granted. It boots with its own UEFI bootloader on x86_64 and aarch64 (ARM64) and uses every processor (SMP). It runs in QEMU and boots on real hardware, a MacBook Pro among them.
 
-**По-русски.** MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
+MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
 
 **What is there today**, each part with its tests (details below):
 
