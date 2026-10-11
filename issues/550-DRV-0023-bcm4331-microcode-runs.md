@@ -30,6 +30,13 @@ Since then:
 - stage 2 runs only when `data/wifitest.txt` exists on the boot volume, so an ordinary boot does not run it;
 - each step is logged and then waited for 3 s, longer than the journal's save period, so a stop leaves its step as the last line.
 
+**2026-10-11, MacBook Pro, on request** (`data/wifitest.txt`): the file was read (43224 bytes, the expected SHA-256) and step 1, the core out of reset, passed. The machine stopped in step 2, the first access to a register of the core itself after the reset. In both boots that stopped, the agent's reset status read `00000002` before `bcm_wifi` did anything; in the boot that ran (stage 1b only) it read `00000000`. Stage 1b had asserted the reset without waiting for that status to clear.
+
+Since then:
+- stage 1b waits up to 300 ms for the reset status to clear before it asserts the reset, and turns the core's clock off once the core is held;
+- stage 2 does not release the reset while the status is not clear, and logs the agent's registers before and after;
+- stage 1 also logs ChipCommon's clock control, the PMU's registers and the PCI Express link's power state (reads only).
+
 ## Related
 
 [550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), `bcm_wifi/`, `scripts/proprietary.sh`.

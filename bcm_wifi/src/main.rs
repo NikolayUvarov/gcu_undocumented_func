@@ -19,6 +19,10 @@ const BASE: u32 = 0x1800_0000; const WRAPPERS: u32 = 0x1810_0000;
 const CC_CHIP_ID: usize = 0x000; const CC_CAPABILITIES: usize = 0x004; const CC_CHIP_CONTROL: usize = 0x028;
 const CC_CHIP_STATUS: usize = 0x02C; const CC_SROM_CONTROL: usize = 0x190; const CC_EROM: usize = 0x0FC;
 const CAP_SPROM: u32 = 1 << 30; // a serial SPROM is fitted
+const CAP_PMU: u32 = 1 << 28; // a power management unit
+// ChipCommon's clock control and the PMU: control, capabilities, status, resources up, pending, and the min and max masks.
+const CC_CLOCK: usize = 0x1E0;
+const CC_PMU: [usize; 7] = [0x600, 0x604, 0x608, 0x60C, 0x610, 0x618, 0x61C];
 // Chip control bits that give the SPROM's pins to the external amplifier lines (BCM4331): cleared while it is read.
 const CHIPCTL_EXTPA: u32 = 1 << 4 | 1 << 7 | 1 << 12;
 // Where the SPROM's contents appear in ChipCommon; which one depends on revisions, so both are tried.
@@ -92,6 +96,12 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[BCM] CHIPCOMMON CAPABILITIES {:08X}, CHIP CONTROL {:08X}, STATUS {:08X}, SROM CONTROL {:08X}, EROM AT {:08X}",
                    capabilities, bar.read32(CC + CC_CHIP_CONTROL), bar.read32(CC + CC_CHIP_STATUS), bar.read32(CC + CC_SROM_CONTROL), bar.read32(CC + CC_EROM));
     if number != 0x4331 || bus != 1 { mind::println!("[BCM] NOT A BCM4331 ON AN AI BACKPLANE: STOPPED"); return idle(); }
+    if capabilities & CAP_PMU != 0 {
+        let pmu = CC_PMU.map(|r| bar.read32(CC + r));
+        mind::println!("[BCM] CLOCK CONTROL {:08X}; PMU CONTROL {:08X}, CAPABILITIES {:08X}, STATUS {:08X}, RESOURCES UP {:08X}, PENDING {:08X}, MIN {:08X}, MAX {:08X}",
+                       bar.read32(CC + CC_CLOCK), pmu[0], pmu[1], pmu[2], pmu[3], pmu[4], pmu[5], pmu[6]);
+    }
+    link_power();
 
     // The windows are used as the firmware left them; a core index and its wrapper must match.
     let index = window.wrapping_sub(BASE) / 0x1000;
@@ -106,7 +116,12 @@ fn main(_info: &'static BootInfo) {
                    index, control, if control & 1 != 0 { "ON" } else { "OFF" }, status, reset, if reset & 1 != 0 { "IN RESET" } else { "RUNNING" }, reset_status);
     // The firmware may leave the 802.11 core running, receiving into memory it no longer owns: held in reset until set up.
     if index == CORE_80211 && reset & RESET == 0 {
-        bar.write32(WRAPPER + AI_RESET_CONTROL, RESET);
+        // A reset the agent reports in progress ends first (up to 300 ms); the clock goes off once the core is held.
+        let settled = wait(&bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0);
+        if let Err(v) = settled { mind::println!("[BCM] RESET STATUS STAYS {:08X} AFTER 300 MS; THE CORE IS HELD IN RESET ANYWAY", v); }
+        bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
+        pause(&bar, 2);
+        bar.write32(WRAPPER + AI_IOCONTROL, IO_GMODE); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
         mind::time::sleep(1);
         let (now, io) = (bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
         mind::println!("[BCM] THE 802.11 CORE WAS LEFT RUNNING BY THE FIRMWARE: {} (RESET {:08X}, IO CONTROL {:08X})",
@@ -163,6 +178,30 @@ fn wait(bar: &Mmio, register: usize, ms: u32, done: impl Fn(u32) -> bool) -> Res
     if done(v) { Ok(v) } else { Err(v) }
 }
 
+// The 802.11 core's agent: readable whatever the core's state.
+fn wrapper(bar: &Mmio, when: &str) {
+    mind::println!("[BCM] AGENT {}: IO CONTROL {:08X}, IO STATUS {:08X}, RESET {:08X}, RESET STATUS {:08X}", when,
+                   bar.read32(WRAPPER + AI_IOCONTROL), bar.read32(WRAPPER + AI_IOSTATUS), bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_RESET_STATUS));
+}
+
+// The PCI Express link's control and status from configuration space: ASPM in control bits 0-1.
+fn link_power() {
+    let status = device_config(SLOT_DEV0, 0x04).unwrap_or(0) >> 16;
+    let mut at = if status & 0x10 != 0 { device_config(SLOT_DEV0, 0x34).unwrap_or(0) as usize & 0xFC } else { 0 };
+    for _ in 0..48 {
+        if at < 0x40 { break; }
+        let header = device_config(SLOT_DEV0, at).unwrap_or(0);
+        if header & 0xFF == 0x10 {
+            let link = device_config(SLOT_DEV0, at + 0x10).unwrap_or(0);
+            let aspm = ["OFF", "L0S", "L1", "L0S AND L1"][(link & 3) as usize];
+            mind::println!("[BCM] PCIE LINK CONTROL {:04X} (ASPM {}), LINK STATUS {:04X}", link & 0xFFFF, aspm, link >> 16);
+            return;
+        }
+        at = (header >> 8) as usize & 0xFC;
+    }
+    mind::println!("[BCM] NO PCI EXPRESS CAPABILITY FOUND");
+}
+
 fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTROL, routing << 16 | offset); }
 
 // Stage 2 (550-DRV-0023): the microcode read from the disk, the core enabled, the microcode loaded and started; its
@@ -184,6 +223,8 @@ fn microcode(bar: &Mmio) {
     let words = image[8..].chunks_exact(4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
 
     step(1, "THE CORE OUT OF RESET");
+    wrapper(bar, "BEFORE");
+    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A RESET IS STILL IN PROGRESS, STAGE 2 NOT ATTEMPTED", v); return; }
     // The core out of reset with its clock forced, then running on its own clock, in G-mode.
     let flags = IO_GMODE;
     bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | IO_FORCE_GATED | flags); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
@@ -191,6 +232,7 @@ fn microcode(bar: &Mmio) {
     pause(bar, 2);
     bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | flags); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
     pause(bar, 2);
+    wrapper(bar, "AFTER");
     // From here the core's registers answer.
     step(2, "THE CORE'S CLOCK CONTROL READ, HIGH-THROUGHPUT CLOCK FORCED");
     let clock = bar.read32(D11_CLOCK);
