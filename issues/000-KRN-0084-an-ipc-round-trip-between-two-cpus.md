@@ -1,6 +1,6 @@
 # 000-KRN-0084 — An IPC round trip between two CPUs: 60 µs on the MacBook Pro
 
-**Type:** kernel (`scheduler.rs`, `arch/x86_64/cpu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (measured once; the cause to be found) · **Blocked by:** — · **Roadmap:** track A, main task [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** kernel (`scheduler.rs`, `arch/x86_64/cpu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (the report reads `MSR_POWER_CTL`; the cause to be found) · **Blocked by:** — · **Roadmap:** track A, main task [174](174-full-use-of-pc-hardware.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -39,6 +39,10 @@ On this Ivy Bridge, `HLT` may become C1E (`MSR_POWER_CTL` bit 1, not in the repo
 - `kbench` shows the round trip on one CPU and between two.
 - On the MacBook Pro, the median round trip between two CPUs is within twice the one-CPU figure, or the task says why it cannot be.
 - An idle machine's package power is no more than 10 % above today's.
+
+## Progress
+
+**2026-10-11.** The hardware report lists `MSR_POWER_CTL` (0x1FC) with the other Intel MSRs; bit 1 is C1E. The MacBook Pro's next report says whether `HLT` there becomes C1E.
 
 ## Related
 
