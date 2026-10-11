@@ -20,11 +20,13 @@ The drivers track asked for the same (a request in `requests-KRN.md`, 2026-10-11
   - **Any differs:** another medium. The cache is dropped with its changed sectors, which belonged to the old medium. The drive's volumes fail from then on, and the log says `[VFS] THE USB DRIVE CAME BACK WITH ANOTHER MEDIUM: ITS VOLUMES ARE CLOSED, <n> CHANGED SECTORS OF THE OLD ONE NOT WRITTEN TO IT`.
 - **To use the new medium,** restart. Mounting it in place is later work.
 - **What is not claimed.** A medium rewritten with exactly the same sectors that were read at mount and the same cached sectors is taken for the old one: the same build, written again, is. A reproducible build writes the same partition table each time; another build's manifest differs (its commit and hashes), and that tells the media apart.
+- **A swap `vfs_server` did not see.** The check runs when the drive answers again after `vfs_server` saw it not answer. If `vfs_server` asks nothing while the stick is out, `usb_storage` runs its next request on the new stick. That needs the driver to report the return: [000-KRN-0085](000-KRN-0085-a-returned-device-reported-to-its-block-client.md) and a request to the drivers track.
 
 ## Acceptance criteria
 
 - **In the `x86: USB image` group:**
-  - the stick is unplugged and a copy put in its place with the same sector 0 (disk signature, partitions) and another commit in its boot manifests, as another build written onto it;
+  - the stick is unplugged and `vfs_server` sees it not answer (a program run from it is refused);
+  - a copy is put in its place with the same sector 0 (disk signature, partitions) and another commit in its boot manifests, as another build written onto it;
   - `vfs_server` logs the other medium, and a program on the disk is refused;
   - the copy is unchanged afterwards.
 - **The same stick plugged in again** still "ANSWERS AGAIN".
