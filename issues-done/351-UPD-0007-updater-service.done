@@ -89,3 +89,8 @@ Against the acceptance criteria:
 Split off:
 - images with slots: [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done);
 - `init` telling the updater of its confirmation: a request in [requests-KRN.md](../issues/requests-KRN.md).
+
+Reached `main` on 2026-10-11 through local gates (`scripts/ci_local.sh`), with 351-UPD-0016:
+- gate 7, 83b052a on `main` e3046d2: every group PASS but "aarch64: boot and fault containment" (QEMU's vvfat assertion, [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md)); the last aarch64 groups were run again after the run hit its time limit;
+- gate 8, 646af75 with `main` dde9418 (the badge right, ABI 6): every group of 31 PASS but the same vvfat failure;
+- the catch-up run, 7642f30 with `main` 30b29fc (000-KRN-0065): the builds, host tests, and the groups services, files and block writes, USB image (x86), programs and files, network and TLS (aarch64) PASS. `main`'s next commit, fb93879, changed issues only.
