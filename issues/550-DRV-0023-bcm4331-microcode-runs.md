@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; skipped until `init` gives the file access) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (stopped the MacBook Pro once; now run only on request, step by step) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -21,6 +21,14 @@ The facts come from published register descriptions (the b43 specifications) and
 ## Acceptance criteria
 
 On the MacBook Pro, one boot logs the microcode's size and SHA-256, the PHY and radio versions, and either the microcode's revision and patch level, or the interrupt reason it saw instead. The core is in reset afterwards, and the machine runs on as before. This is evidence for this machine only (MC-12.1), not of Wi-Fi working.
+
+## Progress
+
+**2026-10-11, MacBook Pro** (`fast-test` with 550-KRN-0061's file access): the machine stopped. Stage 1b's lines end at 5.81 s; `vfs_server` mounted the boot volume at 6.96 s, so the microcode file could be read only then; the last saved line is 7.04 s, and the journal saves every 2 s. So the stop came between about 7 and 9 s, while stage 2 enabled the core. Which step did it is not known.
+
+Since then:
+- stage 2 runs only when `data/wifitest.txt` exists on the boot volume, so an ordinary boot does not run it;
+- each step is logged and then waited for 3 s, longer than the journal's save period, so a stop leaves its step as the last line.
 
 ## Related
 
