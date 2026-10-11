@@ -1427,6 +1427,8 @@ def kbench_check(vm):
     # A sleep is never shorter than asked and at most a tick longer, give or take QEMU's timing (000-KRN-0065).
     assert "shorter than asked" not in output, output[-3000:]
     assert rows["sleep 1 ms"][1] >= 1e6 and rows["sleep 10 ms"][1] >= 10e6 and rows["sleep 10 ms"][0] <= 40e6, rows
+    # The 1 ms tick on x86 (000-KRN-0083): a sleep of 1 ms no longer waits for a 10 ms tick.
+    assert vm.arch != "x86_64" or rows["sleep 1 ms"][0] < 8e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
     width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
@@ -3890,13 +3892,11 @@ def vfs_suite(args):
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
-            # Power off (issue 203): PSCI SYSTEM_OFF ends QEMU on aarch64; x86 has no ACPI sleep states yet.
-            if vm.arch == "aarch64":
-                vm.send("reboot -f --off\n")
-                vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF", timeout=30)
-                vm.process.wait(timeout=30)
-            else:
-                require(vm.command("reboot -f --off"), "ERROR: POWER OFF REFUSED")
+            # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
+            require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+            vm.send("reboot -f --off\n")
+            vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+            vm.process.wait(timeout=30)
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
@@ -4386,6 +4386,24 @@ def updater_suite(args, updater_elf):
         listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
         assert "kept" in listing and "reboot" in listing, listing
     print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+    # A policy broker that never answers (the stand-in in its place receives nothing) on a machine without a network
+    # card, as the MacBook Pro's boot of 2026-10-11: init gives up after its limit, and the updater and the shell start
+    # (000-KRN-0075).
+    with tempfile.TemporaryDirectory(prefix="smoke-silent-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"updater.elf": updater_elf, "netpolicy.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-nic", "none"])
+        try:
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("init", "[INIT] STARTED shell")
+            for line in ["[INIT] updater: THE POLICY BROKER DID NOT ANSWER IN 10 S", "[INIT] updater: NO NETWORK GRANT", "[INIT] STARTED shell"]:
+                require(log, line)
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and " 18:" not in held[1] and " 3:1" in held[1], report  # no flow grant (slot 18); its file client
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-silent-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
 def update_suite(args):

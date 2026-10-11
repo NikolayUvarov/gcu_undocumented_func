@@ -89,11 +89,16 @@ fn main(info: &'static BootInfo) {
         }
         if let (Some(screen), Frame::Dirty | Frame::NewSource) = (source.as_ref(), frame) {
             let screen = screen.as_ptr::<u32>();
-            for i in 0..pixels {
-                let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
-                if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
-                    let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
-                    unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+            // The visible width of each row only: the stride may be far wider (4096 for 2880 on the MacBook Pro). Pixels
+            // are compared one by one, as a slice comparison is a byte-wise memcmp here (000-KRN-0081).
+            for y in 0..info.height {
+                let row = y * info.stride;
+                for i in row..row + info.width {
+                    let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
+                    if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
+                        let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+                        unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+                    }
                 }
             }
             valid = true;

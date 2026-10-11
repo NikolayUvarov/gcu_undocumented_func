@@ -168,7 +168,8 @@ unsafe fn frame(sp: usize) -> &'static mut [u64; 37] { &mut *(sp as *mut [u64; 3
 pub enum Event {
     Stop,
     KernelFault { code: u64, pc: u64, error: u64 },
-    Tick,
+    Tick, // a time slice's end
+    Clock, // the boot CPU's tick within a time slice: sleeps and deadlines only (000-KRN-0083)
     Irq(usize),
     Wake,
     Fault { code: u64, error: u64, pc: u64, address: u64 },

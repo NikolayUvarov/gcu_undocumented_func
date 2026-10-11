@@ -121,7 +121,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | Группа | Машина сессии ядра | PCU |
 |---|---|---|
 | build (aarch64) | 214 с | 248 с |
-| aarch64: boot and fault containment | 90 с | 8 с, не прошла: QEMU падает в `vvfat` |
+| aarch64: boot and fault containment | 90 с | 8 с, не прошла: QEMU падал в `vvfat` (106 с и проходит после 000-KRN-0067) |
 | aarch64: programs, shell and four CPUs | 339 с | 394 с |
 | aarch64: files, network and TLS | 1121 с | 1819 с |
 | aarch64: RAM, ACPI and PCI above 4 GiB | 826 с | 1063 с |
@@ -139,10 +139,10 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
   4. **Журналы.** Нужное скопируйте в каталог своего трека в той же операции. Следующий запуск чьего угодно `ci_local.sh` удаляет `/tmp/mind-core-*.log` и переписывает `/tmp/mind-ci-local`.
 - **В отчёте** указывается, где шла каждая часть: «x86-часть локально; aarch64-часть на PCU через Effector (Ubuntu 22.04, QEMU 8.2.x с qemu.org, AAVMF 2022.02)». Вместе они составляют один локальный гейт в смысле [AGENTS.md](../AGENTS.md), раздел 4, если все группы обеих частей прошли на одном и том же коммите.
 - **Всего около 86 минут на PCU** против 64 на машине сессии ядра, для проходящих групп.
-- **Известно: «aarch64: boot and fault containment» на PCU не проходит.**
-  - Драйвер `vvfat` в QEMU аварийно завершается, когда гостевая система пишет на свой загрузочный том (`fat:rw:`): `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
-  - Так ведут себя и QEMU 8.2.2, и 8.2.10 с qemu.org. На машине сессии ядра тот же тест проходит под 8.2.2 из Ubuntu, в которой нет патчей `vvfat`.
-  - Причину ищет [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Пока она не найдена, эту одну группу запускайте на своей машине.
+- **«aarch64: boot and fault containment» теперь тоже идёт на PCU** (с 2026-10-11, [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)).
+  - Раньше она там не проходила: драйвер `vvfat` в QEMU аварийно завершался, когда гостевая система писала на свой загрузочный том (`fat:rw:`): `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - Теперь тест загружается с готовых образов FAT, а `vvfat` обслуживает только подставной диск, открытый только для чтения. На PCU группа прошла за 106 с (cf0283f), на машине сессии ядра тоже.
+  - Запускайте её в aarch64-части вместе с остальными группами (шаг 3).
 
 ## 5. Если что-то пошло не так
 

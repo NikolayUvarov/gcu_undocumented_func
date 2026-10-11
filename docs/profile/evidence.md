@@ -97,6 +97,21 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 | Audio gateway (AC97 DMA, IRQ over IPC) and text to speech | `audio`, `tts` suites |
 | ELF images: fresh `.bss`, relocations, malformed images rejected; user page tables | Host tests `tests/runtime.rs` |
 
+## Measurements on the MacBook Pro (176)
+
+These measure one machine and one build. They are not evidence for `x86-64/QEMU-0` (MC-12.1, 12.9).
+
+- **The machine.** Intel Core i7-3615QM (Ivy Bridge, 4 cores, 8 threads), TSC 2294 MHz, a 2880×1800 screen, booted from a USB 2 stick.
+- **The build.** `fast-test` 19b531ff8835, ABI 6, 2026-10-11.
+
+| Run | Result |
+|---|---|
+| `check` | 62 passed, 0 failed, 31 skipped: services for devices the machine lacks, PCI functions without a driver, the network without a flow grant |
+| `kbench --quick` | an empty system call 417 ns; IPC call and reply 60.4 µs median, 7.09 µs at best, 110 µs with a lent page; a page taken and freed 12.6 µs; a process started in 7.01 ms; "sleep 1 ms" 9.99 ms and "sleep 10 ms" 20.0 ms (the 10 ms tick, before 000-KRN-0083) |
+| `bench --quick` | 2 MiB written at 1.57 MiB/s on `ram:`, 1.75 on `data/`, 1.60 on `log:`, and read at 46.8, 32.4 and 32.3 MiB/s; SHA-256 at 99 MiB/s; round trips of 439 µs to `vfs_server` and 101 µs to `rtc`; the camera at 640×480, 24.9 frames a second |
+
+The full tables are in the resolutions of [176-KRN-0062](../../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../../issues-done/176-KRN-0063-check.done) and [176-KRN-0064](../../issues-done/176-KRN-0064-bench.done).
+
 ## Not covered by any test
 
 - Behaviour under a malicious DMA device or driver (not claimed).

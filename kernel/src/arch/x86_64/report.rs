@@ -243,7 +243,7 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
     if max >= 0x16 { let r = cpuid(0x16, 0); if r.eax != 0 { let _ = writeln!(out, "  nominal           base {} MHz, maximum {} MHz, bus {} MHz", r.eax & 0xFFFF, r.ebx & 0xFFFF, r.ecx & 0xFFFF); } }
     let intel_msrs: &[(u32, &str)] = &[(0x17, "IA32_PLATFORM_ID"), (0x1B, "IA32_APIC_BASE"), (0x3A, "IA32_FEATURE_CONTROL"), (0xCE, "MSR_PLATFORM_INFO"), (0xE2, "MSR_PKG_CST_CONFIG_CONTROL"),
         (0x198, "IA32_PERF_STATUS"), (0x199, "IA32_PERF_CTL"), (0x19C, "IA32_THERM_STATUS"), (0x1A0, "IA32_MISC_ENABLE"), (0x1A2, "MSR_TEMPERATURE_TARGET"), (0x1AD, "MSR_TURBO_RATIO_LIMIT"),
-        (0x1B0, "IA32_ENERGY_PERF_BIAS"), (0x1B1, "IA32_PACKAGE_THERM_STATUS"), (0x606, "MSR_RAPL_POWER_UNIT"), (0x610, "MSR_PKG_POWER_LIMIT"), (0x614, "MSR_PKG_POWER_INFO"),
+        (0x1B0, "IA32_ENERGY_PERF_BIAS"), (0x1B1, "IA32_PACKAGE_THERM_STATUS"), (0x1FC, "MSR_POWER_CTL"), (0x606, "MSR_RAPL_POWER_UNIT"), (0x610, "MSR_PKG_POWER_LIMIT"), (0x614, "MSR_PKG_POWER_INFO"),
         (0x770, "IA32_PM_ENABLE"), (0x771, "IA32_HWP_CAPABILITIES"), (0x774, "IA32_HWP_REQUEST"), (0x10A, "IA32_ARCH_CAPABILITIES")];
     let amd_msrs: &[(u32, &str)] = &[(0x1B, "IA32_APIC_BASE"), (0xC001_0010, "SYS_CFG"), (0xC001_0015, "HWCR"), (0xC001_001A, "TOP_MEM"), (0xC001_001D, "TOP_MEM2"),
         (0xC001_0061, "P-STATE CURRENT LIMIT"), (0xC001_0062, "P-STATE CONTROL"), (0xC001_0063, "P-STATE STATUS"), (0xC001_0064, "P-STATE 0"), (0xC001_0065, "P-STATE 1"),
@@ -252,11 +252,31 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
     for &(number, name) in if intel { intel_msrs } else { amd_msrs } {
         match msr(number) { Some(v) => { let _ = writeln!(out, "  MSR {:08X} {:<26} {:016X}", number, name, v); } None => { let _ = writeln!(out, "  MSR {:08X} {:<26} (absent)", number, name); } }
     }
+    memory_types(out);
     if intel {
         if let Some(v) = msr(0xCE) { let _ = writeln!(out, "  ratios            maximum non-turbo {} (x100 MHz), minimum {}", (v >> 8) & 0xFF, (v >> 40) & 0xFF); }
         if let Some(v) = msr(0x1AD) { let _ = writeln!(out, "  turbo ratios      1 core {}, 2 cores {}, 3 cores {}, 4 cores {} (x100 MHz)", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF); }
         if let Some(v) = msr(0x771) { let _ = writeln!(out, "  HWP performance   highest {}, guaranteed {}, most efficient {}, lowest {}", v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF); }
     }
+}
+
+// The firmware's MTRRs, which decide how device memory such as the framebuffer is cached where a page does not say
+// otherwise, and the PAT the kernel set (000-KRN-0081: entry 1 write-combining for the framebuffer).
+fn memory_types(out: &mut String) {
+    let name = |t: u64| match t & 0xFF { 0 => "UC", 1 => "WC", 4 => "WT", 5 => "WP", 6 => "WB", 7 => "UC-", _ => "?" };
+    let Some(cap) = msr(0xFE) else { out.push_str("  MTRR              (no MSR FE)\n"); return };
+    let default = msr(0x2FF).unwrap_or(0);
+    let _ = writeln!(out, "  MTRR              {} variable ranges{}{}; default {}, {}", cap & 0xFF, if cap & 1 << 8 != 0 { ", fixed ranges" } else { "" },
+        if cap & 1 << 10 != 0 { ", WC supported" } else { "" }, name(default), if default & 1 << 11 != 0 { "enabled" } else { "disabled" });
+    let bits = if cpuid(0x8000_0000, 0).eax >= 0x8000_0008 { cpuid(0x8000_0008, 0).eax & 0xFF } else { 36 };
+    let top = (1u64 << bits.clamp(32, 52)) - 1;
+    for n in 0..(cap & 0xFF).min(32) as u32 {
+        let (Some(base), Some(mask)) = (msr(0x200 + 2 * n), msr(0x201 + 2 * n)) else { continue };
+        if mask & 1 << 11 == 0 { continue; }
+        let size = (!(mask & top & !0xFFF) & top) + 1;
+        let _ = writeln!(out, "  MTRR {:<2}           {:#011X} size {:#X} {}", n, base & top & !0xFFF, size, name(base));
+    }
+    if let Some(pat) = msr(0x277) { let _ = writeln!(out, "  PAT               {:016X}", pat); }
 }
 
 /// The platform section: what the kernel chose on this machine.

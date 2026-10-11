@@ -2,7 +2,10 @@ use super::port::outb;
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 
-const TICK_MS: u64 = 10;
+// The boot CPU's tick: every millisecond for the clock, sleeps and deadlines; every QUANTUM_MS also a time slice's end
+// on every CPU (000-KRN-0083).
+const TICK_MS: u64 = 1;
+const QUANTUM_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
@@ -60,8 +63,9 @@ static LAPIC_TICK: AtomicBool = AtomicBool::new(false);
 pub fn tick_from_pit() -> bool { !LAPIC_TICK.load(Ordering::Relaxed) }
 pub fn tick_from_lapic() { LAPIC_TICK.store(true, Ordering::Relaxed); }
 
-pub fn advance() {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+/// Counts a tick; true when it ends a time slice.
+pub fn advance() -> bool {
+    (TICKS.fetch_add(1, Ordering::Relaxed) + 1) % (QUANTUM_MS / TICK_MS) == 0
 }
 extern "x86-interrupt" fn spurious_master(_frame: &mut InterruptFrame) {}
 extern "x86-interrupt" fn spurious_slave(_frame: &mut InterruptFrame) {
@@ -126,7 +130,7 @@ pub unsafe fn init() {
         outb(0x80, 0);
     }
 
-    let divisor: u16 = 11932;
+    let divisor = (1_193_182 * TICK_MS / 1000) as u16;
     outb(0x43, 0x36);
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
@@ -157,8 +161,9 @@ pub unsafe fn load() {
 
 pub fn milliseconds_per_tick() -> u64 { TICK_MS }
 
+// Uptime: the monotonic clock once it is calibrated (a tick the CPU took late is not lost), else the ticks.
 pub fn milliseconds() -> u64 {
-    TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS)
+    match super::clock::tsc_hz() { 0 => TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS), _ => super::clock::now_ns() / 1_000_000 }
 }
 
 pub fn without<T>(f: impl FnOnce() -> T) -> T {

@@ -76,6 +76,21 @@ pub fn calibrate() {
 }
 
 pub fn tsc_hz() -> u64 { TSC_HZ.load(Ordering::Acquire) }
+
+/// Waits at least `us` microseconds; usable before the tick runs. The ACPI PM timer, bounded by the TSC as at most
+/// 10 GHz (a PM timer that does not count still ends); without the PM timer, the TSC bound alone.
+pub fn spin_us(us: u64) {
+    let deadline = unsafe { _rdtsc() }.saturating_add(us.saturating_mul(10_000));
+    let pm = super::acpi::pm_timer().map(|(port, mask)| (port, mask, unsafe { inl(port) } & mask));
+    let ticks = (us.saturating_mul(PM_HZ).div_ceil(1_000_000) + 1).min(0x7F_FFFF) as u32;
+    loop {
+        if unsafe { _rdtsc() } >= deadline { return; }
+        if let Some((port, mask, start)) = pm {
+            if (unsafe { inl(port) } & mask).wrapping_sub(start) & mask >= ticks { return; }
+        }
+        core::hint::spin_loop();
+    }
+}
 pub fn resolution_ns() -> u64 { match tsc_hz() { 0 => interrupts::milliseconds_per_tick() * 1_000_000, hz => (1_000_000_000 / hz).max(1) } }
 
 // Nanoseconds since boot on the calling CPU.
