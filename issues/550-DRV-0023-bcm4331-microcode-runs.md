@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (stopped the MacBook Pro once; now run only on request, step by step) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (run only on request, step by step; the core's agent reports a pending operation since stage 1b's first reset) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` reads its microcode") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -36,6 +36,13 @@ Since then:
 - stage 1b waits up to 300 ms for the reset status to clear before it asserts the reset, and turns the core's clock off once the core is held;
 - stage 2 does not release the reset while the status is not clear, and logs the agent's registers before and after;
 - stage 1 also logs ChipCommon's clock control, the PMU's registers and the PCI Express link's power state (reads only).
+
+**2026-10-11, MacBook Pro, on request, after those changes:** the machine ran on. The reset status stayed `00000002` (the wait meant as 300 ms took 3 s: a 1 ms sleep lasts about 10 ms), and stage 2 refused to release the reset, as meant. Read as "a backplane operation still pending", that status explains the stops: an access to the core's own registers does not complete while it is set. It read `00000000` in the first two runs, before stage 1b's first reset, and `00000002` in every boot since, a forced power-off included: the card seems to keep it on standby power. Linux stops this card on such Macs with a reset pulse (pending operations given up to 300 µs, the reset asserted and released at once), not by holding the core in reset.
+
+Since then:
+- stage 1b pulses the reset the same way, and logs the status before and after;
+- waits run by the clock, not by counted sleeps;
+- stage 2 logs the agent's error log first, disables the core if it runs, and still does not release the reset while the status is set.
 
 ## Related
 
