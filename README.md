@@ -112,7 +112,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8); `Key::latin()` gives letter commands in either layout |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
-| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull` (and `_frame`, `compositor_release`), `cap_info` — for drivers |
 | `keyboard` | the keyboard service (`idl/keyboard.wit`) and key delivery over the PS/2 decoder, shared by `ps2_kbd`, `virtio_input` and `usb_hid` |
 | `hid`, `usb` | USB HID reports (boot keyboards to PS/2 codes with key repeat, report descriptors of mice and tablets); a class driver's client of `usb_host` (`idl/usb.wit`: badges, the interface description, the lent buffer) |
 | `uvc` | USB video class (issue 158, with `alloc`): a camera's descriptors (formats, frame sizes, intervals, the streaming interface's alternate settings), the probe and commit controls, the choice of a YUY2 frame size, rate and setting, and frames assembled from payloads |
@@ -633,7 +633,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 52 | SCHED_SET | PID, budget µs; msg[0] = period µs, msg[1] = band or `BAND_KEEP` → 0 — lifecycle owner or process control (band changes: control/platform/restart) |
 | 51 | STAT | class, buffer; msg[0] = capacity, msg[1] = PID for VMAP/CAPS → records written (header: version, record size, count, total) — observe or control privilege; classes TASKS, CPUS, MEMORY, PHYSMAP, VMAP, CAPS, ENDPOINTS, IRQS, DEVICES (`common/abi.rs`) |
 | 50 | READ_INPUT | → next input event word of the focused task (key, modifiers, pressed, character, legacy byte; see `common/abi.rs`), 0 if none |
-| 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
+| 21 | COMPOSITOR_PULL | slot, mode → 0 unchanged, 1 dirty, 2 new screen in slot; in frame mode 3 while the focused task draws, and on 1 the task waits until the copy is released (000-KRN-0086) — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |

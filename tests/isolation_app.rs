@@ -95,7 +95,7 @@ static MIND_REQUEST: [u8; 16] = [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1',
 
 #[no_mangle]
 #[link_section = ".text._start"]
-pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
+pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
     unsafe {
         let cs: u16;
         let flags: usize;
@@ -118,6 +118,26 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             call(mb, 5, 10, 0);
         };
         match mode {
+            b'F' => {
+                // 000-KRN-0086: for 5 s, frames numbered in their colour (R, G = the number, B = 0x80), the bottom half
+                // drawn 3 ms before the top: a copy made between the two shows a bottom half newer than the top.
+                let (fb, width, height, stride) = (info.fb_ptr, info.width, info.height, info.stride);
+                if fb.is_null() { fail(); }
+                let fill = |rows: core::ops::Range<usize>, color: u32| for y in rows { for x in 0..width { core::ptr::write_volatile(fb.add(y * stride + x), color); } };
+                let start = call(mb, abi::SYSCALL_UPTIME, 0, 0);
+                let mut frame = 1u32;
+                while call(mb, abi::SYSCALL_UPTIME, 0, 0) - start < 5000 {
+                    let color = (frame & 0xFFFF) << 8 | 0x80;
+                    fill(height / 2..height, color);
+                    let drawn = call(mb, abi::SYSCALL_UPTIME, 0, 0);
+                    while call(mb, abi::SYSCALL_UPTIME, 0, 0) - drawn < 3 { core::hint::spin_loop(); }
+                    fill(0..height / 2, color);
+                    sleep(mb, 2);
+                    frame += 1;
+                }
+                print(mb, b"FRAMES DONE\r\n");
+                return;
+            }
             b'r' => {
                 let _ = core::ptr::read_volatile(0x100000 as *const u64);
             }
