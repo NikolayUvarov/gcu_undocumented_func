@@ -1,6 +1,6 @@
-# 211-DRV-0019 — `usb_storage`: refusals explained, a lost device and a reset logged
+# 211-DRV-0019 — `usb_storage`: refusals explained, a lost device and a reset logged — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (done on `claude/ASR-DRV` and `fast-test`; not in `main`) · **Blocked by:** — (the flush fix is [211-KRN-0068](../issues-done/211-KRN-0068-a-flush-after-a-failed-one.done)) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-4.8, MC-6.6, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-4.8, MC-6.6, MC-12.1
 
 ## Problem
 
@@ -52,8 +52,21 @@ So the real device behaved in a way the log cannot show:
 
 **2026-10-10, the local gate** (`claude/ASR-DRV` 5c5bfc0 and after): `tests/usb_image_smoke.py` fails at the first `sync` after the disk is plugged in again (`ERROR: SYNC: I/O ERROR`; a second `sync` says `OK`), in all five runs; on `main` it passed in all three. `usb_storage`'s new lines about the loss give the journal something to save while the drive is gone, and `vfs_server` reports that failed flush again at the next one. The change waits for the kernel track; the rest of the branch goes to `main` without it.
 
-**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md)): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
+**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [000-KRN-0079](../issues/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md)): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
+
+## Resolution
+
+`usb_storage/src/main.rs`, in `main` through 8747904 (a local gate of 30 groups of 31; QEMU's `vvfat` crash in the aarch64 boot group excepted by the maintainer):
+- a command the device refuses (CSW status 1) is followed by REQUEST SENSE and logged once per operation and sense, with what it means; after a unit attention it is repeated once;
+- a lost interface is claimed again; the loss, the return with the same capacity, another medium and a reset the device reports are logged;
+- probes and sense data use their own part of the buffer, so a repeated write sends its own data.
+
+Evidence:
+- **QEMU** (`tests/usb_image_smoke.py`): `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `THE DEVICE IS BACK, THE SAME CAPACITY; IT WAS RESET …` around `device_del` and `device_add`; the log goes on, and `sync` answers `OK` after the return (with 211-KRN-0068).
+- **MacBook Pro**, two hot plugs (2026-10-09 on d3da6d0 and 2026-10-11): the adapter refused nothing and reported no reset; the loss and the return are in the log.
+
+The second run showed a limit: "the same capacity" cannot tell a disk rewritten elsewhere, which is the kernel track's request in [requests-KRN.md](../issues/requests-KRN.md) ("A drive that comes back…").
 
 ## Related
 
-[211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log on `log:`), `usb_storage/src/main.rs`, `idl/block.wit`.
+[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log on `log:`), `usb_storage/src/main.rs`, `idl/block.wit`.

@@ -37,4 +37,4 @@ With the boot disk unplugged (`device_del` in `tests/usb_image_smoke.py`), `usb_
 
 ## Related
 
-[211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](211-DRV-0019-usb-storage-refusals-and-resets.md), `usb_storage/src/main.rs`, `usb_host/src/xhci.rs`, `usb_host/src/ehci.rs`.
+[211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done), `usb_storage/src/main.rs`, `usb_host/src/xhci.rs`, `usb_host/src/ehci.rs`.
