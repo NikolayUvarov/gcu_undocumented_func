@@ -1,6 +1,6 @@
-# 000-APP-0061 — `wm`'s scale and pointer: auto on each start, 100 to 600% from Settings, the pointer's size and colour
+# 000-APP-0061 — `wm`'s scale and pointer: auto on each start, 100 to 600% from Settings, the pointer's size and colour — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5, MC-12.3
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5, MC-12.3
 
 **Recorded by:** the maintainer, 2026-10-11: "Scaling wm's output. On high-resolution screens everything is tiny and hard to hit with a trackpad. Add scaling and its configuration to wm. The default is auto (pick a sensible scale on the first start); offer the user 100 150 200 250 300 400 (and higher if reasonable)." And then: "about the mouse pointer: its size and colour must change too."
 
@@ -69,3 +69,24 @@
 - 000-APP-0047, 000-APP-0050: the background and `data/wm.conf`.
 - 000-APP-0048: Settings.
 - The maintainer's MacBook Pro (2880 × 1800), where the grid was too fine.
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9`, built for x86 and aarch64 and merged into `fast-test`.
+
+- **The grid.** `libmind`:
+  - `Terminal::scaled` draws cells of any size;
+  - `Screen::glyph_cell` stretches the 8 × 16 font over them;
+  - `input::pointer_area_cells` gives the pointer's cell.
+
+  `Terminal::new` is still 8 × 16 for every other program.
+- **The scales.** `wm/src/scale.rs` holds them, `auto`, what Settings offers and the fallback. `wm` stretches the pixel windows' content and the background's lines, rebuilds its grid when the scale changes (`Desk::rescale`, `Wm::rescale`) and logs `[WM] SCALE …`.
+- **The pointer.** `wm/src/pointer.rs` holds its sizes (`auto` at the scale, or 100 to 800%) and eight colours with edges.
+- **The configuration.** `data/wm.conf` keeps `scale`, `pointer` and `pointer-colour`. Settings' Screen page has the rows Scale, Pointer and Colour.
+- **The top bar.** `bar_layout` and `Mode::More` (`wm/src/desk.rs`) do the folding: when the items and the title of the window in front (at most 24 cells) do not fit, the items with a key go into `more ▼`'s menu, from the right.
+- **The evidence.** It covers QEMU's 1280 × 800 screen; the MacBook Pro's 2880 × 1800 is reckoned in the host tests only and not run.
+  - `tests/wm_host.rs`, 34 tests: `the_scale_follows_the_screen_and_settings`, `the_pointer_has_a_size_and_a_colour`, `the_top_bar_folds_into_more`, and `every_item_of_the_top_bar_and_every_alt_key_reacts` reaching moved items through the menu.
+  - The QEMU suite `wm`, x86, 4 CPUs: Settings opened from `more ▼` by clicks; the scale stepped auto → 100% → 150%, with 106 × 33 cells of 12 × 24 read off the screen, the frames keeping their share and `more ▼` on the bar; then 100% and auto again; the pointer at 200% and yellow, with 108 yellow pixels in a 12 × 18 box; then auto and white.
+  - The QEMU suites `tablet` and `windows`: no change in what they see.
+- **Docs.** `docs/tools/README.md` and `README_RU.md`.
+
