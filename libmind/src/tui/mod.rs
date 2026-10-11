@@ -52,6 +52,8 @@ pub struct Theme {
     pub panel: Style, pub frame: Style, pub header: Style, pub selected: Style, pub marked: Style, pub directory: Style,
     pub menu: Style, pub menu_selected: Style, pub dialog: Style, pub dialog_frame: Style, pub input: Style,
     pub fkey_number: Style, pub fkey_label: Style, pub status: Style, pub accent: Style, pub dim: Style, pub error: Style,
+    /// What was done, beside `error` for what failed (000-APP-0063: edit's "Saved").
+    pub ok: Style,
 }
 
 /// Norton Commander colours.
@@ -61,7 +63,7 @@ pub const CLASSIC: Theme = Theme {
     menu: Style::new(0x000000, 0x00AAAA), menu_selected: Style::new(0xFFFFFF, 0x000000), dialog: Style::new(0x000000, 0xAAAAAA),
     dialog_frame: Style::new(0xFFFFFF, 0xAAAAAA), input: Style::new(0x000000, 0x00AAAA), fkey_number: Style::new(0xFFFFFF, 0x000000),
     fkey_label: Style::new(0x000000, 0x00AAAA), status: Style::new(0x000000, 0x00AAAA), accent: Style::new(0xFFFF55, 0x0000AA),
-    dim: Style::new(0x5555FF, 0x0000AA), error: Style::new(0xFFFFFF, 0xAA0000),
+    dim: Style::new(0x5555FF, 0x0000AA), error: Style::new(0xFFFFFF, 0xAA0000), ok: Style::new(0x000000, 0x00AA00),
 };
 
 /// Dark colours (monitors, viewer).
@@ -71,7 +73,7 @@ pub const DARK: Theme = Theme {
     menu: Style::new(0x101820, 0x80A0C0), menu_selected: Style::new(0xFFFFFF, 0x305070), dialog: Style::new(0xE0E0E0, 0x283848),
     dialog_frame: Style::new(0x80D0FF, 0x283848), input: Style::new(0xFFFFFF, 0x405060), fkey_number: Style::new(0xE0E0E0, 0x000000),
     fkey_label: Style::new(0x101820, 0x80A0C0), status: Style::new(0x101820, 0x80A0C0), accent: Style::new(0xA6E3A1, 0x101820),
-    dim: Style::new(0x708090, 0x101820), error: Style::new(0xFFFFFF, 0xA03030),
+    dim: Style::new(0x708090, 0x101820), error: Style::new(0xFFFFFF, 0xA03030), ok: Style::new(0x101820, 0xA6E3A1),
 };
 
 // Box-drawing characters: [horizontal, vertical, top-left, top-right, bottom-left, bottom-right].
