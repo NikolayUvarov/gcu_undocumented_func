@@ -358,7 +358,7 @@ Three console programs of the crate `bench/`.
 | `kbench` | the kernel's performance: the median with a bar on a log scale, the minimum and the 99th percentile; `--quick` runs a tenth of the repetitions | `syscall`, `ipc` (a call and its reply between two processes, with and without a lent page), `caps`, `memory`, `timer`, `process` (start and exit) |
 | `bench` | the components' performance in the same table, with the rates under it | `files` (2 MiB written and read, a small file's life, on `ram:`, `data/`, `log:`), `services` (round trips to `vfs_server`, `sysmon`, `rtc`, the loader, `audio_gw`), `crypto` (SHA-256), `camera` (frame intervals from the first camera) |
 
-These are measurements of one machine in one configuration, not proofs (MC-12.1, 12.2). The QEMU suite `bench` runs all three on x86 and aarch64. There, `check` fails one check by design until 000-KRN-0065 is done: a sleep can be shorter than asked.
+These are measurements of one machine in one configuration, not proofs (MC-12.1, 12.2). The QEMU suite `bench` runs all three on x86 and aarch64. There, every check of `check` passes or is skipped with its reason; a sleep is never shorter than asked since 000-KRN-0065.
 
 ## 5. Phases
 

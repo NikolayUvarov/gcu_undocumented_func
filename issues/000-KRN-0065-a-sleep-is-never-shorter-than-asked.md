@@ -1,6 +1,6 @@
 # 000-KRN-0065 — A sleep is never shorter than asked
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and tested in QEMU x86; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
 
 ## Problem
 
@@ -25,6 +25,25 @@ The cause is in `SYSCALL_WAIT` (`kernel/src/scheduler.rs`):
 1. On QEMU x86 and aarch64, `kbench timer` shows no sleep shorter than asked; the `bench` suite checks it.
 2. The suites that time polling loops still pass.
 3. On the MacBook Pro, `kbench timer` is recorded before and after.
+
+## Progress
+
+**2026-10-10: made.**
+
+- **`WAIT`.** The deadline is the monotonic clock at the call, plus the time asked, plus the clock's resolution (a tick where the clock counts ticks). The boot CPU's tick wakes a sleeper on the first tick after it (`kernel/src/scheduler.rs`, `task_state.rs`). At least 1 ms, at most 60 s.
+- **A wait in a window.** `mind::windowed::wait` measures on the monotonic clock, not on the tick's uptime.
+- **IPC timeouts are left as they were.** They count from the tick's start and may end up to a tick early. Drivers poll with them once a tick: `usb_hid` waits 10 ms for a request between polls. Under the new rule that would turn every 20 ms, and input would lag. `docs/profile/clocks.md` says so.
+- **What changes for programs.** A loop that sleeps 10 ms just after a tick now turns every 20 ms, not 10:
+  - the shell's idle and network waits (`shell/src/main.rs`, `net.rs`, `msh.rs`);
+  - `init`'s wait for a stopped service, up to 200 turns;
+  - `usb_host`'s port resets and `rtc`'s settling;
+  - `ahci`'s slow wait.
+
+  None of these is on the input path: input still wakes a sleeper at once. A program that wants one turn a tick asks for 1 ms. Short settling pauses now last as asked, such as `usb_host`'s two EHCI frames (`sleep(2)`), which could end at once before.
+- **The tests.**
+  - The `bench` suite (x86): `kbench` reports no sleep shorter than asked; `sleep 10 ms` has a median of 19.9 ms.
+  - `check` passes "sleeps last as asked", so its test now requires every check to pass or be skipped.
+  - `docs/api`, `docs/profile` (`clocks.md`, the MC-5.6 row) and `docs/tools` (EN, RU) say the same.
 
 ## Related
 
