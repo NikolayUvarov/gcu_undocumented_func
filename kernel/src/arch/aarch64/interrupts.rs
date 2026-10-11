@@ -17,9 +17,9 @@ fn timer_ppi() -> u32 { super::board::get(&super::board::TIMER_PPI) as u32 }
 fn v2() -> bool { super::board::get(&super::board::GIC_VERSION) == 2 }
 fn gicc() -> usize { super::board::get(&super::board::GICC) }
 static V2M_SPI: AtomicU64 = AtomicU64::new(0); // GICv2m: the first SPI of its frame, and how many (bits 16-31); 0 unread
-// The boot CPU's tick: every millisecond for the clock, sleeps and deadlines; every QUANTUM_MS also a time slice's end
-// on every CPU (000-KRN-0083).
-const TICK_MS: u64 = 1;
+// The boot CPU's tick, each one a time slice's end: 100 Hz, as a 1 ms tick cost an idle QEMU (TCG) 0.4 s of host time
+// a second (000-KRN-0083); with a shorter TICK_MS the ticks between are Event::Clock, as on x86.
+const TICK_MS: u64 = 10;
 const QUANTUM_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TIMER_STEP: AtomicU64 = AtomicU64::new(0);

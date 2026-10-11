@@ -19,7 +19,7 @@ The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pr
 
 - **The tick.** The boot CPU's timer ticks every millisecond:
   - x86: the LAPIC timer as measured on the ACPI PM timer, or the PIT, now with a 1 ms divisor;
-  - aarch64: the virtual timer, its compare value set a step after the last tick, not after the time it was taken. Late ticks are counted rather than lost, and the tick does not drift.
+  - aarch64 keeps 100 Hz: under QEMU's TCG the 1 ms tick cost an idle machine 0.4 s of host time a second, which failed the idle checks on PCU (0.96 and 1.21 s against 0.85). Its virtual timer's compare value is now set a step after the last tick, not after the time it was taken, so late ticks are counted rather than lost and the tick does not drift.
 - **The time slice stays 10 ms.** Only every tenth tick ends a time slice. That tick is the old `Event::Tick`: it is forwarded to the CPUs that run a task, runs `select`, counts task ticks and enforces the budgets (C7).
 - **The ticks in between.** They are a new `Event::Clock`, on the boot CPU only:
   - the sleeps due end;
@@ -34,14 +34,25 @@ The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pr
 
 ## Acceptance criteria
 
-- In QEMU, in the `bench` suite on x86 and aarch64, `kbench`'s "sleep 1 ms" has a median below 8 ms (it was a tick, 10 ms), and no sleep is shorter than asked.
+- In QEMU, in the `bench` suite, `kbench`'s "sleep 1 ms" has a median below 8 ms on x86 (it was a tick, 10 ms), and no sleep is shorter than asked on x86 or aarch64.
 - These checks pass as before:
   - the `busy` suite's budget, 20 ms per 100 ms near 20 %;
-  - the idle checks (HLT on x86, QEMU's processor time on aarch64);
+  - the idle checks (HLT on x86, QEMU's processor time on aarch64, which keeps its 100 Hz tick);
   - every other suite.
 - On the MacBook Pro, `kbench timer`:
   - "sleep 1 ms" is between 1 and 2 ms;
   - "sleep 10 ms" is between 10 and 11 ms.
+
+## Progress
+
+**2026-10-11, QEMU x86, 4 CPUs (TCG).** These groups passed: "boot, display, network, TLS, shell, memory, clock", "scheduling, isolation, heap" (the `busy` budget among them) and "keys, shell, tools" (the `bench` and `wm` suites). `kbench`:
+
+| | median | shortest | longest |
+|---|---|---|---|
+| sleep 1 ms | 1.96 ms | 1.22 ms | 17.7 ms |
+| sleep 10 ms | 21.1 ms | 10.6 ms | 27.9 ms |
+
+A sleep of 1 ms now ends in about 2 ms. A sleep of 10 ms still often took two slices here. The sleep ends on time, but the task woken on a CPU that runs another task waits for that task's 10 ms slice to end, as it always did. Preempting the running task for the one woken is the next step, if the MacBook Pro shows the same.
 
 ## Related
 
