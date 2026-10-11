@@ -364,6 +364,22 @@ Three console programs of the crate `bench/`.
 
 These are measurements of one machine in one configuration, not proofs (MC-12.1, 12.2). The QEMU suite `bench` runs all three on x86 and aarch64. There, every check of `check` passes or is skipped with its reason; a sleep is never shorter than asked since 000-KRN-0065.
 
+**The runs on real hardware** ([176-KRN-0087](../../issues/176-KRN-0087-runs-on-real-hardware.md)) are two msh scripts on the boot volume. Each collects what debugging needs, with one command typed in the shell; Esc stops it.
+
+| Script | What it runs |
+|---|---|
+| `diag/quick.msh` | the system's state (clocks, processors, memory, tasks, services, faults, devices, interrupts, volumes, the log's warnings) and only what the open tasks need from a real machine now, each step naming its task: `check kernel clock files sound`, `kbench timer ipc`, `bench files`, the drivers' log records. About a minute. |
+| `diag/full.msh` | everything: every view of the state (every `stat` class, physical memory, quotas, endpoints, `fsck`, every volume's listing, the network, the TPM, the whole system log), each task's details, capabilities, address space and buffered output, then `check`, `kbench` and `bench` with all their groups (the camera's too). |
+
+- **Where the output goes.** Each step's output goes to a file of its own in a new directory, `log:quickNNNN/` or `log:fullNNNN/` (NNNN: this boot's number, then `-2`, `-3` …; `ram:quick-001/` without the log volume).
+- **`summary.txt`.** It is there and names:
+  - the build (init's `BUILD:` line) and the date;
+  - every step with its result, time, file and the task it serves;
+  - the checks only the maintainer can make by eye.
+- **If the machine stops mid-run.** Before each step, the summary on the disk names the step running now, and the system log has a line for it.
+- **What to send back.** The log volume: the run's directory, beside `bootNNNN.log`, `hwNNNN.txt` and the tools' own logs.
+- **Changing the quick run.** Its steps are this stage's. A step goes when its task no longer needs it, and a new task's step is added with the task named.
+
 ## 5. Phases
 
 ```mermaid

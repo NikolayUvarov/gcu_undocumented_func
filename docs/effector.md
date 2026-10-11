@@ -43,6 +43,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 - **Its packages are CI's** (Ubuntu 24.04), unlike PCU's. Say so where you report a run: "i9 through Effector, Ubuntu 24.04 under WSL2, QEMU 8.2.2 (Ubuntu), TCG".
 - **WSL's settings** (`%UserProfile%\.wslconfig`, the maintainer's): 48 GB of memory, all 16 threads, nested virtualization on.
 - **KVM.** `/dev/kvm` is there and `un` is in the `kvm` group, but the suites run under TCG, as in CI: none asks for KVM.
+- **A proxy.** The agent runs with `HTTPS_PROXY` and `HTTP_PROXY` set and no `NO_PROXY`. A test that serves on `127.0.0.1` is then reached through the proxy and fails: `release_test.py`'s HTTPS server failed the host tests with "Tunnel connection failed: 503". Start an operation with `export NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1`.
 - **Measured on 2026-10-11** (762907d merged with `main` b0ca713, one operation):
 
   | Group | i9 | The kernel session's machine |

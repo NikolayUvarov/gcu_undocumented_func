@@ -1,0 +1,174 @@
+#!msh
+requires: files sysinfo log lifecycle
+# diag/quick.msh — the short run on real hardware (176-KRN-0087): the state of the system and only what the open
+# tasks need from a real machine now. Each step's output goes to a file of its own in log:quickNNNN/ (NNNN: this
+# boot's number), and summary.txt there names every step, its result and its time. Run it from the shell:
+# diag/quick.msh. Esc stops it. The full run, everything there is: diag/full.msh.
+#
+# The steps of this stage: when a task no longer needs its step, the step goes; a new task's step comes here, with
+# the task named in `why`.
+let kind = "quick"
+let steps = [
+    {name: "time", cmd: "time", why: "the clocks: the uptime, the monotonic clock and its resolution"},
+    {name: "uptime", cmd: "uptime", why: "load averages and the task count"},
+    {name: "cpus", cmd: "cpus", why: "each processor's busy and idle time (000-KRN-0084)"},
+    {name: "free", cmd: "free", why: "kernel memory by use"},
+    {name: "ps", cmd: "ps", why: "the tasks"},
+    {name: "svc", cmd: "svc list", why: "the boot services: PID, starts, quarantine"},
+    {name: "faults", cmd: "faults", why: "the programs that faulted"},
+    {name: "devices", cmd: "devices", why: "PCI functions and their drivers"},
+    {name: "irqs", cmd: "irqs", why: "interrupt lines and their holders (USB input: 211-DRV-0017, 211-DRV-0018)"},
+    {name: "df", cmd: "df", why: "the volumes"},
+    {name: "warnings", cmd: "dmesg -l warn", why: "the system log's warnings and errors"},
+    {name: "wifi", cmd: "dmesg -s bcm_wifi", why: "the Wi-Fi card's driver (550-DRV-0023)"},
+    {name: "usb", cmd: "dmesg -s usb_host", why: "the USB host controllers (211-DRV-0017, 211-DRV-0018)"},
+    {name: "sound", cmd: "dmesg -s audio_gw", why: "the sound device (551-DRV-0010)"},
+    {name: "check", cmd: "check kernel clock files sound", why: "self-tests: sleeps not shorter than asked (000-KRN-0065), the volumes, sound (551-DRV-0010); its full log: log:checkNNNN.txt"},
+    {name: "kbench", cmd: "kbench timer ipc", why: "sleeps (000-KRN-0083, 000-KRN-0065), IPC round trips between CPUs (000-KRN-0084); its full log: log:kbenchNNNN.txt"},
+    {name: "bench", cmd: "bench files", why: "writes and reads on ram:, data/ and log: (000-KRN-0078); its full log: log:benchNNNN.txt"},
+    {name: "cpus-after", cmd: "cpus", why: "the processors' time after the measurements"},
+    {name: "faults-after", cmd: "faults", why: "faults during the run"},
+]
+# What only the maintainer can see or do, named in the summary.
+let by_eye = [
+    "the pointer moved over wm's desktop and over the graphical clock: no flicker, no black square (000-KRN-0086)",
+    "wm's moving background: smooth (000-KRN-0081)",
+    "reboot --off turns the machine off (000-KRN-0080)",
+]
+
+# ---- The runner: the same in quick.msh and full.msh (keep them alike). ----
+
+# This boot's number: the highest NNNN of log:bootNNNN.log; 0 without the log volume.
+fn boot_number() {
+    let best = 0
+    let found = glob("log:boot*.log") or []
+    for path in found {
+        let n = int(replace(replace(lower(path), "log:boot", ""), ".log", "")) or 0
+        if n > best { best = n }
+    }
+    return best
+}
+
+# `n` with zeros in front, `width` digits.
+fn pad(n, width) {
+    let s = str(n)
+    while len(s) < width { s = "0" + s }
+    return s
+}
+
+# A new directory for this run: log:<kind>NNNN, then -2, -3 …; ram:<kind>-001 … without the log volume.
+fn run_dir(kind, boot) {
+    let volume = "log:"
+    if boot == 0 { volume = "ram:" }
+    let taken = []
+    let listing = files(volume) or []
+    for f in listing { taken = push(taken, lower(f.name)) }
+    for k in range(1, 1000) {
+        let name = "{kind}-{pad(k, 3)}"
+        if boot > 0 { name = "{kind}{pad(boot, 4)}" }
+        if boot > 0 && k > 1 { name = "{name}-{k}" }
+        if !contains(taken, name) {
+            capture("mkdir {volume}{name}")?
+            return "{volume}{name}"
+        }
+    }
+    fail("no free name for this run's directory on {volume}")
+}
+
+# Writes `text` to `path` as it is (`write` adds a newline).
+fn save(path, text) {
+    if trim(text) == "" { text = "(nothing printed)" }
+    capture("write {path} {text}") or { print("      not written to {path}: {error}") }
+}
+
+# A line in the system log, where there is one.
+fn note(text) {
+    log(text) or { nil }
+}
+
+# The name of a step's file: the first part keeps `path`, the next ones get -2, -3 ….
+fn part_name(path, part) {
+    if part == 1 { return path }
+    return replace(path, ".txt", "-{part}.txt")
+}
+
+# Runs a step's command, or each of its commands, and writes what they printed under `path` (60 000 bytes a file at
+# most: a string holds 64 KiB); returns the failures, each with its reason.
+fn run_step(cmd, path) {
+    let commands = [cmd]
+    if type(cmd) == "list" { commands = cmd }
+    let text = ""
+    let part = 1
+    let failures = []
+    for line in commands {
+        let result = capture(line)
+        let out = result or { "FAILED: {error}" }
+        if is_err(result) { failures = push(failures, "{line}: " + (result or { "{error}" })) }
+        if len(commands) > 1 { out = "== {line}\n{out}" }
+        if text != "" && len(text) + len(out) > 60000 {
+            save(part_name(path, part), text)
+            part = part + 1
+            text = ""
+        }
+        text = text + out + "\n"
+    }
+    save(part_name(path, part), text)
+    return failures
+}
+
+let boot = boot_number()
+let dir = run_dir(kind, boot)
+let started = now()
+let date = capture("date") or { "date: {error}" }
+# The build init named at boot: from the system log's ring, or from this boot's log file once the ring moved on.
+let build = "BUILD: not found in the system log"
+let sources = ["dmesg -s init"]
+if boot > 0 { sources = push(sources, "grep BUILD: log:boot{pad(boot, 4)}.log") }
+let found_in = ""
+for source in sources {
+    if found_in != "" { break }
+    let found = capture(source) or { "" }
+    for line in lines(found) {
+        if contains(line, "BUILD:") {
+            build = trim(line)
+            found_in = source
+        }
+    }
+}
+let total = len(steps)
+let summary = "MIND Core: the {kind} run on real hardware (diag/{kind}.msh, 176-KRN-0087)\n{build}\n{trim(date)}\nstarted {started} ms after boot; {total} steps, each in its own file in {dir}\n\n"
+let failed = 0
+note("DIAG {upper(kind)}: {total} STEPS INTO {dir}")
+print("DIAG {upper(kind)}: {total} STEPS INTO {dir} (ESC STOPS)")
+for i in range(1, total + 1) {
+    let step = steps[i - 1]
+    let file = "{pad(i, 2)}-{step.name}.txt"
+    let label = step.cmd
+    if type(step.cmd) == "list" { label = join(step.cmd, "; ") }
+    # The step running now stays on the disk, in case the machine stops in it.
+    capture("write {dir}/summary.txt {summary}RUNNING NOW: {pad(i, 2)} {label}") or { print("      the summary was not written: {error}") }
+    note("DIAG {upper(kind)}: STEP {i} OF {total}: {label}")
+    print("[{i}/{total}] {label}")
+    let begun = now()
+    let failures = []
+    try { failures = run_step(step.cmd, "{dir}/{file}") } catch e { failures = ["the step stopped: {e}"] }
+    let ms = now() - begun
+    let status = "ok"
+    if len(failures) > 0 {
+        status = "FAILED"
+        failed = failed + 1
+    }
+    summary = summary + "{pad(i, 2)} {status} {ms} ms  {file}  {label}  ({step.why})\n"
+    for f in failures { summary = summary + "     {f}\n" }
+    print("      {status}, {ms} ms")
+}
+let seconds = (now() - started) / 1000
+summary = summary + "\n{total} steps, {failed} failed, {seconds} s\n"
+if len(by_eye) > 0 {
+    summary = summary + "\nNot run here, to be seen or done by the maintainer:\n"
+    for item in by_eye { summary = summary + "- {item}\n" }
+}
+capture("write {dir}/summary.txt {summary}") or { print("the summary was not written: {error}") }
+note("DIAG {upper(kind)}: DONE: {failed} OF {total} STEPS FAILED IN {seconds} S")
+print("DIAG {upper(kind)}: {total} STEPS, {failed} FAILED, {seconds} S. THE FILES: {dir} (SUMMARY.TXT FIRST)")
+for item in by_eye { print("BY EYE: {item}") }

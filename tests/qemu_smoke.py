@@ -1511,10 +1511,26 @@ def bench_tool_check(vm):
 
 
 def bench_suite(vm):
-    """176: the utilities that check the system and measure it, from the shell."""
+    """176: the utilities that check the system and measure it, from the shell, and the runs on real hardware."""
     check_tool_check(vm)
     kbench_check(vm)
     bench_tool_check(vm)
+    diag_check(vm)
+
+
+def diag_check(vm):
+    """176-KRN-0087: the quick run on real hardware runs here too, every step in its own file and a summary that names
+    each; the shell accepts the full run's script (the host test diag_host.rs runs it against a mock shell)."""
+    vm.send("diag/quick.msh\n")
+    output = vm.expect("MIND> ", timeout=900, after="diag/quick.msh\n")
+    done = re.search(r"DIAG QUICK: (\d+) STEPS, (\d+) FAILED, (\d+) S\. THE FILES: (\S+)", output)
+    assert done and done[2] == "0", output[-3000:]
+    steps, where = int(done[1]), done[4]
+    summary = vm.command(f"cat {where}/summary.txt")
+    assert len(re.findall(r"^\d\d ok \d+ ms ", summary, re.M)) == steps and "BUILD:" in summary and "RUNNING NOW" not in summary, summary[-3000:]
+    require(vm.command(f"cat {where}/16-kbench.txt"), "kbench: 4 measurements, 0 failed")
+    require(vm.command("msh --check diag/full.msh"), "OK, REQUIRES: files sysinfo log lifecycle network camera")
+    print(f"PASS: diag/quick.msh: {steps} steps in {done[3]} s, each in its file under {where} with summary.txt; diag/full.msh accepted", flush=True)
 
 
 def table_row(screen, pattern):
@@ -7618,6 +7634,7 @@ def main():
             for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
                 shutil.copyfile(ROOT / IMAGE / name, disk / name)
             shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
+            shutil.copytree(ROOT / IMAGE / "diag", disk / "diag")  # the runs on real hardware (176-KRN-0087)
             if suite == "services":
                 # 12 KiB for cat: three times the console's queue (000-KRN-0030).
                 (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
