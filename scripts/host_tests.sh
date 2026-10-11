@@ -21,4 +21,5 @@ python3 tests/manifest_test.py
 python3 tests/release_test.py
 python3 tests/test_usb_writer.py
 python3 tests/gate_test.py
+python3 tests/mirror_test.py
 python3 tests/usb_image_test.py
