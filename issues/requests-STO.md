@@ -1,6 +1,6 @@
 # Requests for the state and recovery track (STO), not numbered yet
 
-**Owner:** state and recovery track · **Status:** open (1 request waiting, 2026-10-10)
+**Owner:** state and recovery track · **Status:** open (1 request and a note waiting, 2026-10-11)
 
 The STO track numbers its own tasks (`NNN-STO-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -22,3 +22,9 @@ The STO track numbers its own tasks (`NNN-STO-MMMM`), so requests from other tra
 
 - The store suite lists the names after publishing several, by prefix and in pages of 16.
 - `fm`'s `store:` panel shows a name that `blocks` published.
+
+## Note: the block store's `READY` and the aarch64 boot check (requests-KRN.md)
+
+**Recorded by:** the tools track (APP), 2026-10-11.
+
+Since 251-STO-0013 the block store's `[BLOCKSTORE] READY` line does not reach the serial line in `tests/aarch64_smoke.py`, on `main` (dde9418) too, though the store suite on aarch64 finds it in the service's log. The kernel track is asked to change the check (`requests-KRN.md`, "The aarch64 boot check waits for `[BLOCKSTORE] READY` on the serial line"). If the mount now takes longer than it should on aarch64, that part is the storage track's.
