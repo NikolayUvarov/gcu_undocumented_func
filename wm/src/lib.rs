@@ -8,4 +8,5 @@ pub use mind::{jpegdec, keys, png, tui};
 pub mod background;
 pub mod desk;
 pub mod menu;
+pub mod scale;
 pub mod settings;

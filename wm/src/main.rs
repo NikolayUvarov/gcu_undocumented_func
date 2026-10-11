@@ -332,22 +332,25 @@ impl Manager {
     }
 }
 
-// Copies the visible cells of pixel window `index` from its surface to the screen.
-fn blit(screen: &Screen, origin: (usize, usize), owner: &[u16], cols: usize, index: usize, inner: Rect, surface: &Surface) {
+// Copies the visible cells of pixel window `index` from its surface to the screen. The content has 8 × 16 pixels a
+// cell; each cell of `cell` screen pixels shows its 8 × 16 stretched (wm's scale, 000-APP-0061).
+#[allow(clippy::too_many_arguments)]
+fn blit(screen: &Screen, origin: (usize, usize), cell: (usize, usize), owner: &[u16], cols: usize, index: usize, inner: Rect, surface: &Surface) {
     let Some((Kind::Pixels, width, height)) = surface.check() else { return };
     let pixels = surface.content() as *const u32;
     let tag = index as u16 + 1;
+    let (cw, ch) = cell;
     for cy in inner.y..inner.bottom() {
         for cx in inner.x..inner.right() {
             if owner.get(cy * cols + cx) != Some(&tag) { continue; }
             let (sx, sy) = ((cx - inner.x) * 8, (cy - inner.y) * 16);
-            for row in 0..16 {
-                let y = sy + row;
-                for col in 0..8 {
-                    let x = sx + col;
+            for row in 0..ch {
+                let y = sy + row * 16 / ch;
+                for col in 0..cw {
+                    let x = sx + col * 8 / cw;
                     // Inside the size the header had when it was checked: within the surface's memory.
                     let color = if x < width && y < height { unsafe { core::ptr::read_volatile(pixels.add(y * width + x)) } } else { 0 };
-                    screen.pixel(origin.0 + cx * 8 + col, origin.1 + cy * 16 + row, color);
+                    screen.pixel(origin.0 + cx * cw + col, origin.1 + cy * ch + row, color);
                 }
             }
         }
@@ -391,18 +394,23 @@ fn cpu_times() -> Option<(u64, u64)> {
     Some(list.as_slice().iter().filter(|c| c.online).fold((0, 0), |(busy, idle), c| (busy + c.busy_ns, idle + c.idle_ns)))
 }
 
-// The background's pixels in the cells `cells` (indices in a grid `cols` wide).
-fn paint(screen: &Screen, origin: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
+// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels).
+fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
     for index in cells {
-        let (x, y) = (origin.0 + index % cols * 8, origin.1 + index / cols * 16);
-        for py in y..y + 16 { for px in x..x + 8 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
+        let (x, y) = (origin.0 + index % cols * cell.0, origin.1 + index / cols * cell.1);
+        for py in y..y + cell.1 { for px in x..x + cell.0 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
     }
 }
 
-fn draw_pointer(screen: &Screen, x: usize, y: usize) {
-    for (row, line) in ARROW.iter().enumerate() {
-        for (col, &b) in line.iter().enumerate() {
-            match b { b'X' => screen.pixel(x + col, y + row, 0), b'W' => screen.pixel(x + col, y + row, 0xFFFFFF), _ => {} }
+// The pointer's size in pixels at a cell of `cell`: the arrow's 8 × 12 grows with the cell's 8 × 16.
+fn arrow_size(cell: (usize, usize)) -> (usize, usize) { (cell.0, cell.1 * 12 / 16) }
+
+fn draw_pointer(screen: &Screen, x: usize, y: usize, cell: (usize, usize)) {
+    let (w, h) = arrow_size(cell);
+    for row in 0..h {
+        let line = ARROW[row * 12 / h];
+        for col in 0..w {
+            match line[col * 8 / w] { b'X' => screen.pixel(x + col, y + row, 0), b'W' => screen.pixel(x + col, y + row, 0xFFFFFF), _ => {} }
         }
     }
 }
@@ -418,10 +426,16 @@ fn main(info: &'static BootInfo) {
     }
     if holds(SLOT_FILE) { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(screen) = Screen::new(info) else { return };
-    let Some(mut term) = Terminal::new(screen) else { return };
-    let (_, x0, y0) = term.screen().unwrap();
-    let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
+    let pixels = (screen.width, screen.height);
+    // The scale as data/wm.conf says, or auto for this screen (000-APP-0061).
     let (mut backdrop, problem) = backdrop(&screen);
+    let mut scale = wm::scale::resolve(backdrop.config.scale, pixels);
+    let mut cell = wm::scale::cell(scale);
+    let Some(mut term) = Terminal::scaled(screen, cell) else { return };
+    let (_, mut x0, mut y0) = term.screen().unwrap();
+    let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
+    (manager.wm.pixels, manager.wm.scale, backdrop.zoom) = (pixels, scale, scale as usize);
+    mind::println!("[WM] SCALE {}%{}: CELLS OF {}X{} PIXELS ON {}X{}", scale, if backdrop.config.scale.is_none() { " (AUTO)" } else { "" }, cell.0, cell.1, pixels.0, pixels.1);
     if let Some(problem) = problem { mind::println!("[WM] {}", problem); manager.wm.notice = Some(problem); }
     manager.wm.desk.background = backdrop.shown();
     manager.wm.background = backdrop.config.clone();
@@ -543,6 +557,21 @@ fn main(info: &'static BootInfo) {
                     (next_pattern, next_info) = (0, 0);
                     mind::println!("[WM] SETTINGS {}{}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "), if saved { "; SAVED" } else { "; NOT SAVED" });
                     manager.wm.notice = Some(problem.unwrap_or_else(|| String::from(if saved { "Settings: the background is kept in data/wm.conf" } else { "Settings: the background could not be written to data/wm.conf" })));
+                    // A new scale (000-APP-0061): the grid is made anew at its cells, the frames keep their share of
+                    // the screen, and everything is drawn again.
+                    let wanted = wm::scale::resolve(backdrop.config.scale, pixels);
+                    if wanted != scale {
+                        if let Some(grid) = Terminal::scaled(screen, wm::scale::cell(wanted)) {
+                            (scale, cell, term) = (wanted, wm::scale::cell(wanted), grid);
+                            if let Some((_, gx, gy)) = term.screen() { (x0, y0) = (gx, gy); }
+                            manager.wm.rescale(term.cols(), term.rows(), scale);
+                            backdrop.zoom = scale as usize;
+                            (shown_background, shown_pointer, px, py) = (Vec::new(), None, screen.width / 2, screen.height / 2);
+                            screen.clear(0);
+                            mind::println!("[WM] SCALE {}%{}: CELLS OF {}X{} PIXELS, {}X{} OF THEM", scale, if backdrop.config.scale.is_none() { " (AUTO)" } else { "" }, cell.0, cell.1, term.cols(), term.rows());
+                            manager.wm.notice = Some(format!("Settings: the scale is {}%{}, kept in data/wm.conf", scale, if backdrop.config.scale.is_none() { " (auto)" } else { "" }));
+                        }
+                    }
                 }
                 Action::Pointer { id, x, y, buttons, wheel } => {
                     manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel));
@@ -623,7 +652,8 @@ fn main(info: &'static BootInfo) {
             let mut touched = Vec::new();
             // The cells under the pointer drawn last time are drawn again (pixel windows: all of them below).
             if let Some((sx, sy)) = shown_pointer.take() {
-                for cy in (sy.saturating_sub(y0) / 16)..=((sy + 11).saturating_sub(y0) / 16) { for cx in (sx.saturating_sub(x0) / 8)..=((sx + 7).saturating_sub(x0) / 8) { term.touch(cx, cy); touched.push(cy * term.cols() + cx); } }
+                let (aw, ah) = arrow_size(cell);
+                for cy in (sy.saturating_sub(y0) / cell.1)..=((sy + ah - 1).saturating_sub(y0) / cell.1) { for cx in (sx.saturating_sub(x0) / cell.0)..=((sx + aw - 1).saturating_sub(x0) / cell.0) { term.touch(cx, cy); touched.push(cy * term.cols() + cx); } }
                 relayout = true;
             }
             term.present();
@@ -631,19 +661,19 @@ fn main(info: &'static BootInfo) {
             // The background in the cells that just became the desktop's, those under the pointer, or all when it moved.
             if !cells.is_empty() {
                 let fresh = |i: &usize| cells[*i] && (background_moved || !shown_background.get(*i).copied().unwrap_or(false) || touched.contains(i));
-                paint(&screen, (x0, y0), cols, (0..cells.len()).filter(fresh), &backdrop);
+                paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop);
             }
             shown_background = cells;
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
                 let (Some(index), Some(live)) = (manager.wm.desk.index(id), manager.live(id)) else { continue };
-                blit(&screen, (x0, y0), &owner, cols, index, manager.wm.desk.content(id), &live.surface);
+                blit(&screen, (x0, y0), cell, &owner, cols, index, manager.wm.desk.content(id), &live.surface);
             }
-            if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py); shown_pointer = Some((px, py)); }
+            if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py, cell); shown_pointer = Some((px, py)); }
         } else if background_moved && !shown_background.is_empty() {
             // Nothing else changed: the background's cells only, and the pointer over them again.
-            paint(&screen, (x0, y0), term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
-            if let Some((sx, sy)) = shown_pointer { draw_pointer(&screen, sx, sy); }
+            paint(&screen, (x0, y0), cell, term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
+            if let Some((sx, sy)) = shown_pointer { draw_pointer(&screen, sx, sy, cell); }
         }
         mind::time::sleep(if busy { 5 } else { 30 });
     }

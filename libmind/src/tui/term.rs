@@ -8,7 +8,8 @@ use crate::gfx::Screen;
 use crate::mem::Pages;
 use crate::window::{Kind, Surface, MAX_COLUMNS, MAX_ROWS};
 
-enum Output { Screen { screen: Screen, x0: usize, y0: usize }, Window(Surface) }
+// On a screen: where the grid starts and its cell's size in pixels (8 × 16, or larger at wm's scale, 000-APP-0061).
+enum Output { Screen { screen: Screen, x0: usize, y0: usize, cell: (usize, usize) }, Window(Surface) }
 
 pub struct Terminal {
     output: Output, back: Pages, front: Pages, cols: usize, rows: usize, capacity: usize, cursor: Option<(usize, usize)>, shown: Option<(usize, usize)>, valid: bool,
@@ -27,11 +28,16 @@ const STALE: Cell = Cell { ch: '\u{FFFF}', style: Style { fg: 0, bg: 0 } };
 
 impl Terminal {
     /// A grid covering the screen in 8x16 cells (centred if the screen is not a multiple of the cell size).
-    pub fn new(screen: Screen) -> Option<Self> {
-        let (cols, rows) = (screen.width / 8, screen.height / 16);
-        let (x0, y0) = ((screen.width - cols * 8) / 2, (screen.height - rows * 16) / 2);
-        crate::input::pointer_area((screen.width, screen.height), x0, y0, cols * 8, rows * 16);
-        Self::buffers(Output::Screen { screen, x0, y0 }, cols, rows, cols * rows)
+    pub fn new(screen: Screen) -> Option<Self> { Self::scaled(screen, (8, 16)) }
+
+    /// A grid covering the screen in cells of `cell` pixels, the 8 × 16 font stretched over each (wm's scale,
+    /// 000-APP-0061); centred if the screen is not a multiple of the cell.
+    pub fn scaled(screen: Screen, cell: (usize, usize)) -> Option<Self> {
+        let cell = (cell.0.max(1), cell.1.max(1));
+        let (cols, rows) = (screen.width / cell.0, screen.height / cell.1);
+        let (x0, y0) = ((screen.width - cols * cell.0) / 2, (screen.height - rows * cell.1) / 2);
+        crate::input::pointer_area_cells((screen.width, screen.height), x0, y0, cols * cell.0, rows * cell.1, cell);
+        Self::buffers(Output::Screen { screen, x0, y0, cell }, cols, rows, cols * rows)
     }
 
     /// The program's grid: in a text window titled `title` when its launcher started it in one (`mind::windowed`),
@@ -95,13 +101,15 @@ impl Terminal {
     /// The window's title (nothing on a screen).
     pub fn set_title(&mut self, title: &str) { if let Output::Window(surface) = &self.output { surface.set_title(title); } }
     /// The screen and where the grid starts on it, for a program that draws pixels between the cells (`wm`).
-    pub fn screen(&self) -> Option<(Screen, usize, usize)> { match self.output { Output::Screen { screen, x0, y0 } => Some((screen, x0, y0)), Output::Window(_) => None } }
+    pub fn screen(&self) -> Option<(Screen, usize, usize)> { match self.output { Output::Screen { screen, x0, y0, .. } => Some((screen, x0, y0)), Output::Window(_) => None } }
+    /// The size of a cell in pixels on a screen (8 × 16 unless scaled); None in a window.
+    pub fn cell(&self) -> Option<(usize, usize)> { match self.output { Output::Screen { cell, .. } => Some(cell), Output::Window(_) => None } }
 
     /// Puts the back buffer on the screen or into the window; returns the number of cells drawn.
     pub fn present(&mut self) -> usize {
         let count = self.cols * self.rows;
         let full = !core::mem::replace(&mut self.valid, true);
-        if let (true, Output::Screen { screen, x0, y0 }) = (full, &self.output) { if *x0 > 0 || *y0 > 0 { screen.clear(0); } }
+        if let (true, Output::Screen { screen, x0, y0, .. }) = (full, &self.output) { if *x0 > 0 || *y0 > 0 { screen.clear(0); } }
         let back = unsafe { core::slice::from_raw_parts(self.back.as_slice().as_ptr() as *const Cell, count) };
         let front = cells(&mut self.front, count);
         let mut drawn = 0;
@@ -119,7 +127,7 @@ impl Terminal {
                 front[index] = back[index];
                 let cell = back[index];
                 match &self.output {
-                    Output::Screen { screen, x0, y0 } => { let (fg, bg) = colours(cell, (x, y)); screen.glyph16(x0 + x * 8, y0 + y * 16, cell.ch, fg, Some(bg)) }
+                    Output::Screen { screen, x0, y0, cell: (cw, chh) } => { let (fg, bg) = colours(cell, (x, y)); screen.glyph_cell(x0 + x * cw, y0 + y * chh, *cw, *chh, cell.ch, fg, Some(bg)) }
                     Output::Window(surface) => surface.set_cell(x, y, cell.ch, cell.style.fg, cell.style.bg),
                 }
                 (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1));
@@ -127,12 +135,13 @@ impl Terminal {
             }
         }
         match &self.output {
-            Output::Screen { screen, x0, y0 } => if let Some((x, y)) = self.cursor {
+            Output::Screen { screen, x0, y0, cell: (cw, chh) } => if let Some((x, y)) = self.cursor {
                 let cell = back[y * self.cols + x];
-                let (px, py) = (x0 + x * 8, y0 + y * 16);
+                let (px, py) = (x0 + x * cw, y0 + y * chh);
                 let (fg, bg) = colours(cell, (x, y));
-                screen.glyph16(px, py, cell.ch, fg, Some(bg));
-                screen.fill(px, py + 14, 8, 2, fg);
+                screen.glyph_cell(px, py, *cw, *chh, cell.ch, fg, Some(bg));
+                let bar = (chh / 8).max(1); // 2 of 16 pixels
+                screen.fill(px, py + chh - bar, *cw, bar, fg);
             },
             Output::Window(surface) => {
                 surface.set_cursor(self.cursor);
