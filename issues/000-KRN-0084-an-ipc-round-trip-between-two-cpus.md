@@ -44,6 +44,8 @@ On this Ivy Bridge, `HLT` may become C1E (`MSR_POWER_CTL` bit 1, not in the repo
 
 **2026-10-11.** The hardware report lists `MSR_POWER_CTL` (0x1FC) with the other Intel MSRs; bit 1 is C1E. The MacBook Pro's next report says whether `HLT` there becomes C1E.
 
+**2026-10-11, the MacBook Pro** (build 8223d24, `hw0002.txt`): `MSR_POWER_CTL` = 0x300047, so bit 1 is set and C1E is on. An idle CPU's `HLT` may drop it into C1E, which supports the reading above; the `kbench` rows of step 1 are to measure what that costs a round trip.
+
 ## Related
 
 [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [174](174-full-use-of-pc-hardware.md) (step on C-states), [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.md).
