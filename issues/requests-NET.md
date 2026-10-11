@@ -59,3 +59,94 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
+
+## HTTP for a service, a certificate pin and long-lived sessions (501, 750)
+
+**Recorded by:** the maintainer's session for main task [501](501-effector.md), and the Effector agent track (EFF) for main task [750](750-effector-agent.md), both on 2026-10-09 at the maintainer's request; merged into one request the same day.
+
+### Problem
+
+The agent of 750, which 501's tests also use, talks to Effector, a server that already exists.
+
+**What Effector's protocol needs:**
+- it posts JSON with `Authorization: Bearer` (a heartbeat every second, acknowledgements, operation results);
+- it polls with GET and holds a wake-up stream open for up to 55 s;
+- it uploads files of up to 1 GiB with an exact `Content-Length`;
+- it downloads with `Range`.
+
+**What `libmind::http` lacks.** It (351-NET-0001; its head parsed by `parse` since 109) makes one GET per connection with fixed headers and `Connection: close`. It has no POST and refuses a chunked body. A Go server sends a response without `Content-Length` as chunked once the response outgrows its buffer. A new TLS handshake every second would also be costly on the target.
+
+**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) pins the server's public key (SPKI): a different value. `tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name, root or validity period. Effector is asked (its task 75) to publish SPKI pins too, so the agent can start with `connect-pinned` as it is; the second pin is still needed for a key change. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
+
+### Plan (a proposal; the network track decides)
+
+- **`libmind::http` requests:**
+  - methods `GET`, `POST` and `PUT`;
+  - caller headers within a bound, with `Host`, `Content-Length` and `Connection` kept by the library;
+  - a request body streamed from a caller source.
+- **`libmind::http` responses:**
+  - `Content-Length` or chunked, with chunk-size and trailer bounds;
+  - close-delimited bodies when the caller allows them;
+  - a response body read in pieces with an idle timeout chosen by the caller (the stream);
+  - heads still through `parse`;
+  - no redirects.
+- **Kept-alive connections:** several requests over one transport.
+- **The size limits** are stated.
+- **`tls`:** a `connect` that accepts the server by one or two pins, so a pin can rotate.
+  - **Two kinds of pin:**
+    - the SHA-256 of the leaf certificate, as Effector's agents use;
+    - 351-NET-0002's SPKI pin.
+  - **One minor version** of `idl/tls.wit` (1.2) adds both to 1.1's `connect-pinned`.
+  - **Checks kept** with a pin: the SAN, the validity, the server-authentication purpose and `CA:false`.
+  - **TLS 1.3 only, as now.** Effector accepts TLS 1.2 and later.
+- **Long-lived sessions:** a session that stays open between requests, and reads that wait without closing it.
+
+### Acceptance criteria
+
+- **Over one TLS session** to the 750-EFF-0002 test server, in QEMU, a service:
+  - posts a JSON body and reads a chunked response, then 100 more requests;
+  - holds a 55-second stream to its end.
+- **Pins:** a server that matches neither pin is refused; one that matches the next pin is accepted.
+- **Names and dates:** a wrong name and an expired certificate are refused.
+- **An idle session:** a session left without traffic for ten minutes is then used.
+
+## JSON in the parser service (750, 501)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+Effector's commands and replies are JSON. Under MC-11.11 and the authority map ([docs/network/airlock.md](../docs/network/airlock.md)), the process that holds the server's token, the flow and the TLS client must not parse them itself. 109's `parse` service parses HTTP heads only. The updater's channel metadata is also JSON, and the map already plans to parse it in `parse`.
+
+### Plan (a proposal; the network track decides)
+
+- **A `json` call in `idl/parse.wit`** (a new minor version): bounded bytes in, a bounded typed tree out (objects, arrays, strings, integers, booleans, null), with stated limits on depth, members and string length.
+- **The parser itself:** the `mind::json` library of [750-EFF-0004](750-EFF-0004-json.md), so the service and host tests share one implementation.
+- **The client** still checks the typed tree against what it asked for (MC-11.5).
+
+### Acceptance criteria
+
+- `parse` turns a valid Effector command into its typed tree.
+- It refuses malformed, too deep and too large input, and logs the refusal with the client's PID.
+- The authority map gains the row for the agent's stage when 750-EFF-0006 lands.
+
+## A flow for a long-running service (750)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+`init` gives a boot service its flow once, and a grant keeps its term and volume until it ends: by default 3600 s and 16 MiB. The policy line can name longer ones (108). The Effector agent talks to one server for as long as the machine runs. Its heartbeats alone come to several megabytes an hour, and packages and files can reach 1 GiB.
+
+### Plan (a proposal; the network track decides)
+
+- **Bounds.** State the largest term and volume a policy line may give. The owner then sets the agent's line with `netpolicy add` (108), and nothing new is needed for a first version.
+- **Later, if the track agrees:**
+  - a flow the policy marks renewable, renewed by `netpolicy` before its term ends without closing sockets, while the policy still allows it;
+  - a volume counted per period;
+  - a host name resolved again when the service reconnects.
+- **Init's part.** Any change to how `init` hands out the flow is a kernel task.
+
+### Acceptance criteria
+
+The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.

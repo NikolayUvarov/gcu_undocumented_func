@@ -715,3 +715,31 @@ On the MacBook Pro with 000-KRN-0081, the moving background runs evenly at full 
 ### Acceptance criteria
 
 On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.
+
+## The shell's `effector` command: setup, policy, status (750)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+The Effector agent is off by default, and only the owner may turn it on and say what the server may do. Only the shell can write to `data/`, so the owner's commands for the agent belong in the shell.
+
+### Plan (a proposal; the tools track decides)
+
+- `effector setup URL PIN [NEXT-PIN]`:
+  - writes the server's address and certificate pins to `data/effector/`;
+  - reads the token from the console without echoing it;
+  - asks for confirmation and shows what it wrote, except the token.
+- `effector policy show | edit | allow <line> | deny <line>`: the policy of 750-EFF-0003, with confirmation for anything that widens it.
+- `effector enable | disable`: through `svc enable`/`disable` (173) for both services; disabling also revokes the session.
+- `effector status`:
+  - connected or not;
+  - the server and its pin;
+  - the last heartbeat accepted;
+  - the operations in flight;
+  - the last audit lines.
+- The same commands in `msh` under `requires: lifecycle`, and help in `docs/tools/`.
+
+### Acceptance criteria
+
+In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.
