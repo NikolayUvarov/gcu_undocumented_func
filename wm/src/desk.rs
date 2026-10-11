@@ -462,13 +462,25 @@ pub const BAR: [(&str, Bar); 11] = [("Alt+Tab next", Bar::Next), ("Alt+P program
                                     ("Alt+W close", Bar::Close), ("Alt+H help", Bar::Help), ("Alt+Q leave", Bar::Leave), ("Alt+L windows", Bar::List),
                                     ("Alt+F full", Bar::Full), ("Alt+0 fit", Bar::Fit), ("Alt+S settings", Bar::Settings)];
 
+/// An item's label on a bar `cols` wide: its key and word when every item fits so (160 cells), its word alone when
+/// not (a grid of larger cells, 000-APP-0061).
+pub fn bar_label(cols: usize, item: Bar) -> &'static str {
+    let label = BAR.iter().find(|b| b.1 == item).map_or("", |b| b.0);
+    let whole = 4 + BAR.iter().map(|b| b.0.chars().count() + 3).sum::<usize>() <= cols;
+    if whole { label } else { label.split_once(' ').map_or(label, |(_, word)| word) }
+}
+
 /// The items of the top bar on a screen `cols` wide: the cells each covers (x, width) and what it does; "wm" first,
-/// then `│ label ` for each item that fits.
+/// then `│ label ` for each item that fits, Settings always last (000-APP-0061: where the scale is set).
 pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> {
     let mut items = alloc::vec![(0, 3.min(cols), Bar::Programs)];
-    let mut x = 4;
-    for (label, bar) in BAR {
-        let width = label.chars().count() + 2;
+    let settings = bar_label(cols, Bar::Settings).chars().count() + 2;
+    let (mut x, mut full) = (4, false);
+    for (_, bar) in BAR {
+        let width = bar_label(cols, bar).chars().count() + 2;
+        let room = if bar == Bar::Settings { 0 } else { 1 + settings };
+        full = full || x + 1 + width + room > cols;
+        if full && bar != Bar::Settings { continue; }
         if x + 1 + width > cols { break; }
         items.push((x + 1, width, bar));
         x += 1 + width;
@@ -847,14 +859,14 @@ impl Wm {
         grid.fill(Rect::new(0, 0, cols, 1), ' ', bar);
         // The items can be clicked (issue u008); the one under the mouse is lit.
         let lit = Style::new(0xFFFFFF, 0x305070);
-        for (index, &(at, width, _)) in bar_items(cols).iter().enumerate() {
+        for (index, &(at, width, item)) in bar_items(cols).iter().enumerate() {
             let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x >= at && x < at + width);
             if index == 0 {
                 grid.fill(Rect::new(at, 0, width, 1), ' ', if hovered { lit } else { bar });
                 grid.text(1, 0, "wm", if hovered { lit } else { Style::new(0x000000, 0x80A0C0) });
             } else {
                 grid.put(at - 1, 0, '│', bar);
-                grid.text_max(at, 0, &format!(" {} ", BAR[index - 1].0), width, if hovered { lit } else { bar });
+                grid.text_max(at, 0, &format!(" {} ", bar_label(cols, item)), width, if hovered { lit } else { bar });
             }
         }
         if let Some(w) = self.desk.focused() { let title = format!(" {} ", w.title); grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
@@ -907,7 +919,7 @@ impl Wm {
         let menu = match &self.mode {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { String::from(":Scale") } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)

@@ -29,6 +29,8 @@ mod background;
 mod settings;
 #[path = "../wm/src/scale.rs"]
 mod scale;
+#[path = "../wm/src/pointer.rs"]
+mod pointer;
 #[path = "../common/font16.rs"]
 mod font16;
 
@@ -1429,7 +1431,8 @@ fn the_scale_follows_the_screen_and_settings() {
     s.draw(&mut grid, &DARK, &now);
     let shown: String = (0..75).map(|y| (0..240).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n");
     for text in ["Scale       < auto (200%) >", "The screen: 2880 × 1800 pixels.", "At 200%: cells of 16 × 32 pixels, 180 × 56 of them.",
-                 "Here: auto (200%), 100%, 150%, 200%, 250%, 300%, 400%.", "and the background's lines grow with the scale."] {
+                 "Here: auto (200%), 100%, 150%, 200%, 250%, 300%, 400%.", "background's lines grow with the scale.",
+                 "Pointer     < auto (200%) >", "Colour      < white >", "The pointer: 16 × 24 pixels; auto draws it at the scale."] {
         assert!(shown.contains(text), "{}\n{}", text, shown);
     }
     // A screen with room for 100% alone says so.
@@ -1450,4 +1453,99 @@ fn the_scale_follows_the_screen_and_settings() {
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
     assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 17));
+}
+
+// The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from
+// Settings' screen page; the arrow drawn at any size keeps its hot spot, edge and fill.
+#[test]
+fn the_pointer_has_a_size_and_a_colour() {
+    use settings::{Outcome, Settings, SCREEN};
+    // The size: auto follows the scale, a chosen one does not.
+    assert_eq!(pointer::size(pointer::percent(None, 100)), (8, 12));
+    assert_eq!(pointer::size(pointer::percent(None, 150)), (12, 18));
+    assert_eq!(pointer::size(pointer::percent(Some(400), 150)), (32, 48));
+    assert_eq!(pointer::size(800), (64, 96));
+    // At 100% the arrow is the 8 × 12 bitmap; larger, each pixel takes the one under it, the tip at the hot spot.
+    for row in 0..12 { for col in 0..8 {
+        let want = match pointer::ARROW[row][col] { b'X' => Some(0), b'W' => Some(0xFF_FF_FF), _ => None };
+        assert_eq!(pointer::pixel((8, 12), 0, col, row), want, "{},{}", col, row);
+    } }
+    let fill = |size: (usize, usize), colour: usize| (0..size.1).flat_map(|r| (0..size.0).map(move |c| (c, r))).filter(|&(c, r)| pointer::pixel(size, colour, c, r) == Some(pointer::COLOURS[colour].1)).count();
+    assert_eq!(fill((8, 12), 0), 27);
+    assert_eq!(fill((16, 24), 0), 27 * 4, "twice as large: four times the fill");
+    assert_eq!(pointer::pixel((32, 48), 2, 0, 0), Some(0), "yellow's tip is its black edge");
+    assert_eq!(pointer::pixel((32, 48), 2, 8, 20), Some(0xFF_E0_00), "and its fill yellow");
+    assert_eq!(pointer::pixel((32, 48), 1, 8, 20), Some(0), "black's fill");
+    assert_eq!(pointer::pixel((32, 48), 1, 0, 0), Some(0xFF_FF_FF), "with a white edge");
+    assert_eq!(pointer::pixel((32, 48), 0, 31, 0), None, "beside the arrow");
+    // data/wm.conf's keys.
+    let (c, problems) = background::Config::parse("pointer = 300; pointer-colour = cyan\n");
+    assert!(problems.is_empty() && c.pointer == Some(300) && pointer::COLOURS[c.pointer_colour].0 == "cyan", "{:?}", problems);
+    assert_eq!(background::Config::parse(&c.format()).0, c);
+    let text = background::Config::default().format();
+    assert!(text.contains("pointer = auto\npointer-colour = white\n"), "{}", text);
+    let (_, problems) = background::Config::parse("pointer = 175; pointer-colour = blue");
+    assert!(problems.iter().any(|p| p.contains("pointer is auto, 100, 150")) && problems.iter().any(|p| p.contains("pointer-colour is white, black")), "{:?}", problems);
+    // Settings' screen page: ↓ to the pointer's rows; ← → step them, each going round; a click chooses and steps.
+    let config = background::Config::default();
+    let mut s = Settings::new(&config, (160, 50));
+    (s.pixels, s.scale) = ((1280, 800), 100);
+    for _ in 0..SCREEN { s.key(key(KEY_DOWN), &config); }
+    s.key(key(KEY_ENTER), &config);
+    s.key(key(KEY_DOWN), &config);
+    let mut now = config.clone();
+    let mut sizes = Vec::new();
+    for _ in 0..10 {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { sizes.push(c.pointer); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(sizes, [Some(100), Some(150), Some(200), Some(250), Some(300), Some(400), Some(500), Some(600), Some(800), None]);
+    match s.key(key(KEY_LEFT), &now) { Outcome::Changed(c) => assert_eq!(c.pointer, Some(800)), other => panic!("{:?}", other) }
+    s.key(key(KEY_DOWN), &now);
+    let mut colours = Vec::new();
+    for _ in 0..pointer::COLOURS.len() {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { colours.push(pointer::COLOURS[c.pointer_colour].0); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(colours, ["black", "yellow", "orange", "red", "green", "cyan", "magenta", "white"]);
+    assert_eq!(now.scale, None, "the scale stays");
+    let inner = s.area().inner();
+    match s.click(inner.x + 20, inner.y + 2, &now) { Outcome::Changed(c) => assert_eq!(c.pointer, Some(100)), other => panic!("{:?}", other) }
+    assert_eq!(s.screen_row, 1);
+    // The status names the row.
+    let mut wm = Wm::new(160, 50);
+    wm.key(alt_char('s'));
+    for _ in 0..SCREEN { wm.key(key(KEY_DOWN)); }
+    wm.key(key(KEY_ENTER));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().contains("SETTINGS=Screen:Colour"), "{}", wm.status());
+}
+
+// The top bar on a grid of larger cells (000-APP-0061): at 160 cells each item shows its key; narrower, its word
+// alone, and Settings, where the scale is set, is always there, last.
+#[test]
+fn the_top_bar_keeps_settings_on_a_narrow_grid() {
+    let full = desk::bar_items(160);
+    assert_eq!(full.len(), 12);
+    assert_eq!(desk::bar_label(160, desk::Bar::Settings), "Alt+S settings");
+    for cols in [106, 92, 84] {
+        let items = desk::bar_items(cols);
+        let &(at, width, last) = items.last().unwrap();
+        assert_eq!(last, desk::Bar::Settings, "{}", cols);
+        assert!(at + width <= cols, "{}", cols);
+        assert_eq!(desk::bar_label(cols, desk::Bar::Settings), "settings");
+        assert_eq!(desk::bar_label(cols, desk::Bar::Next), "next");
+    }
+    assert_eq!(desk::bar_items(106).len(), 12, "every item's word fits 106 cells");
+    assert!(desk::bar_items(84).len() < 12, "84 cells: the last but Settings left out");
+    // Drawn and clicked: the word is on the bar, a click on it opens Settings.
+    let mut wm = Wm::new(106, 33);
+    let mut cells = vec![Cell::BLANK; 106 * 33];
+    let mut grid = Grid::new(&mut cells, 106, 33);
+    wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+    let bar: String = (0..106).map(|x| grid.get(x, 0).ch).collect();
+    assert!(bar.contains("│ programs │") && bar.trim_end().ends_with("│ settings"), "{}", bar);
+    let (at, _, _) = *desk::bar_items(106).last().unwrap();
+    wm.pointer(at + 2, 0, 1, 0);
+    wm.pointer(at + 2, 0, 0, 0);
+    assert!(matches!(wm.mode, Mode::Settings(_)), "{}", wm.status());
 }

@@ -6332,7 +6332,7 @@ def wm_suite(vm):
             time.sleep(.3)
             rows = screen_text(vm, (12, 24))
             vm.serial(enter=False)
-            if any(canon("Scale       < 150% >") in row for row in rows) and any(canon("Alt+S settings") in row for row in rows):
+            if any(canon("Scale       < 150% >") in row for row in rows) and canon("│ settings ") in rows[0]:
                 break
         else:
             raise AssertionError(rows)
@@ -6340,10 +6340,48 @@ def wm_suite(vm):
         keys("left", text="[WM] SCALE 100%: CELLS OF 8X16 PIXELS, 160X50 OF THEM")
         keys("left", text="; scale = auto; SAVED")
         screen_has("Scale       < auto (100%) >")
-        keys("esc", text="MODE=NORMAL")
         print("PASS: wm scale: auto gives 100% on 1280 × 800; Settings' screen page set 150% (12 × 24 cells, 106 × 33 of "
               "them, the frames in the same share of the screen, the text read at that cell, kept in data/wm.conf), then "
               "100% and auto again", flush=True)
+        # The pointer's rows: 200% and yellow, drawn so where the mouse moved it; then auto and white again.
+        require("".join(seen), "[WM] POINTER SIZE 100% (AUTO): 8X12 PIXELS, WHITE")
+        keys("down", text="SETTINGS=Screen:Pointer")
+        keys("right", text="[WM] POINTER SIZE 100%: 8X12 PIXELS, WHITE")
+        keys("right", text="; pointer = 150; ")
+        keys("right", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, WHITE")
+        keys("down", text="SETTINGS=Screen:Colour")
+        keys("right", text="; pointer-colour = black; SAVED")
+        keys("right", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, YELLOW")
+        screen_has("Pointer     < 200% >")
+        screen_has("Colour      < yellow >")
+        # The mouse to the top left corner, then 600 × 400 pixels in: the arrow is whole on the screen.
+        for move in ["mouse_move -100 -100"] * 20 + mouse_moves(600, 400):
+            vm.hmp(move)
+            time.sleep(.05)
+        found = []
+        for _ in range(20):
+            time.sleep(.3)
+            _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+            width = int(size.split()[0])
+            found = [(i // 3 % width, i // 3 // width) for i in range(0, len(pixels), 3) if pixels[i:i + 3] == b"\xff\xe0\x00"]
+            vm.serial(enter=False)
+            if len(found) == 27 * 4:
+                break
+        else:
+            raise AssertionError(len(found))
+        # The fill of the 8 × 12 arrow at twice its size: 108 pixels within 16 × 24, its rows 2 to 10 and columns 1 to 6.
+        xs, ys = [p[0] for p in found], [p[1] for p in found]
+        assert (max(xs) - min(xs) + 1, max(ys) - min(ys) + 1) == (12, 18), (min(xs), max(xs), min(ys), max(ys))
+        keys("left", text="; pointer-colour = black; SAVED")
+        keys("left", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, WHITE")
+        keys("up", text="SETTINGS=Screen:Pointer")
+        keys("left", text="; pointer = 150; ")
+        keys("left", text="; pointer = 100; ")
+        keys("left", text="[WM] POINTER SIZE 100% (AUTO): 8X12 PIXELS, WHITE")
+        require("".join(seen), "; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+        keys("esc", text="MODE=NORMAL")
+        print("PASS: wm pointer: Settings' screen page set it to 200% and yellow (108 yellow pixels on the screen, the arrow's "
+              "fill at twice its size), kept in data/wm.conf, then auto and white again", flush=True)
 
     def screen_has(text):
         # `text` on the screen within 6 s; the screen.
@@ -6689,7 +6727,7 @@ def wm_suite(vm):
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
     keys("right", text="[WM] SETTINGS background = none")
-    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; SAVED")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")
     time.sleep(.5)
     screen = screen_text(vm)
